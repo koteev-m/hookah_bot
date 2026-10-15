@@ -105,7 +105,7 @@ def configure(fx, request=None, *, native=None):
     return fx
 
 
-def configure_native(fx, request=None):
+def configure_native(fx, request=None, *, current_baseline=False):
     """Actual supported native producer, protected receipts and remote history.
 
     Seed functions only create synthetic metadata. Both the portable validator
@@ -138,6 +138,13 @@ new_state "$CUTOVER_SCRIPT" legacy-native
         state=seed/'state-legacy-native'
         client=load('genesis_native_fixture_client','v126-policy-b-client.py')
         manifest=json.loads((state/'run.json').read_bytes());manifest['created_at']='2026-08-31T23:58:00Z'
+        if current_baseline:
+            manifest.update(format_version=3,v125_image_tag='sha256:'+'b'*64,
+                v125_baseline=dict(source_sha='a'*40,image_id='sha256:'+'b'*64,
+                    registration_sha256='c'*64,state_sha256='d'*64,
+                    database=dict(container_id='e'*64,system_id='12345',database='synthetic',
+                                  user='synthetic',network='synthetic_default')))
+
         raw=g.canonical(manifest);req=client.init_request(state,raw);operation=g.digest(req['identity'])
         attest=dict(format_version=1,operation_id=operation,request_sha256=g.digest(req),manifest_sha256=g.digest(raw),metadata_sha256=g.digest(req['metadata']),writer='ATTENDED_VERIFIER',durable=True)
         completed=dict(format_version=1,identity=req['identity'],operation_id=operation,exit=0,outcome='SUCCEEDED',completion='LOCAL_METADATA_ATTESTED',request_sha256=g.digest(req),attestation=attest,completed_at='2026-08-31T23:59:00+00:00')
@@ -190,6 +197,12 @@ verify_recovery_receipt pre-v126 >/dev/null
             ident=dict(owner,intent_sha256=receipt['intent_sha256'],kind=kind,name=name,action=action)
             op=g.digest(ident);completed=datetime.fromisoformat(receipt['completed_at'].replace('Z','+00:00'))-timedelta(seconds=1)
             save(remote/(op+'.start.json'),dict(identity=ident,operation_id=op,started_at=(completed-timedelta(seconds=1)).isoformat(),boot_id='synthetic-legacy-boot'))
+            if current_baseline:
+                import base64
+                save(remote/(op+'.request.json'),dict(format_version=1,identity=ident,
+                    target_sha256=g.digest(str(fx.target).encode()),args=[str(fx.target),ident['run_id'],ident['release_sha']],
+                    environment={'V126_INTERNAL_REMOTE_V125_BASELINE_B64':base64.b64encode(g.canonical(manifest['v125_baseline'])).decode()}))
+
             log=remote/(op+'.log');log.write_bytes(raw);log.chmod(0o400)
             save(remote/(op+'.result.json'),dict(identity=ident,operation_id=op,exit=0,outcome='SUCCEEDED',children='REAPED',log_sha256=g.digest(raw),completed_at=completed.isoformat()))
         blog=(state/'artifacts/1-BASELINE_VERIFIED.operation.log').read_bytes()
@@ -204,6 +217,9 @@ verify_recovery_receipt pre-v126 >/dev/null
             environment_sha256=H('synthetic-environment-reference'),compose_sha256=H('synthetic-compose'),caddy_runtime_sha256=H('synthetic-caddy'),config_owner='root:root',
             restart_policy='unless-stopped',handoff_approved_and_applied=True,approval_id='synthetic-applied-handoff',
             observed_at=(datetime.fromisoformat(terminal['completed_at'].replace('Z','+00:00'))+timedelta(seconds=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))
+        if current_baseline:
+            handoff.update(format_version=2,v125_baseline=manifest['v125_baseline'],
+                           backend_image=manifest['v125_image_tag'],image_id=manifest['v125_baseline']['image_id'])
         files=[]
         for prefix,directory in (('state',state),('remote',remote)):
             for path in sorted(directory.rglob('*')):
@@ -248,6 +264,21 @@ class GenesisAuthority(unittest.TestCase):
         with mock.patch.object(a.time,'time',side_effect=lambda:self.fx.wall),mock.patch.object(a.time,'monotonic',side_effect=lambda:self.fx.mono),mock.patch.object(subprocess,'run',side_effect=run):
             outcome=self.fx.verifier.verify(challenge(self.fx))
         self.assertEqual(outcome['decision'],'PASS',outcome)
+
+    def test_current_baseline_native_terminal_handoff_is_exact_and_copied_root_bound(self):
+        self.fx=configure_native(self.fx,current_baseline=True);native=self.fx._native_genesis_fixture
+        result=g.verify_native_terminal(native['run'],native['proof'],native['documents'],next_owner=native['next_owner'])
+        self.assertIs(type(result),g.NativeTerminalProof)
+        for field,value in [('state_sha256','e'*64),('source_sha','f'*40),('image_id','sha256:'+'f'*64),('legacy_downgrade',None)]:
+            proof=copy.deepcopy(native['proof']);documents=dict(native['documents'])
+            handoff=json.loads(documents[proof['handoff_sha256']])
+            if field=='legacy_downgrade':
+                handoff.pop('v125_baseline');handoff.update(format_version=1,backend_image='synthetic:f577934691a1a7a79ba327c54e2055425142b7be')
+            else:handoff['v125_baseline'][field]=value
+            if field=='image_id':handoff.update(image_id=value,backend_image=value)
+            raw=g.canonical(handoff);ref=g.digest(raw);documents[ref]=raw;proof['handoff_sha256']=ref
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                g.verify_native_terminal(native['run'],proof,documents,next_owner=native['next_owner'])
 
     def test_native_remote_subsecond_completion_matches_existing_native_precision(self):
         self.fx=configure_native(self.fx);native=self.fx._native_genesis_fixture

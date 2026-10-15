@@ -1,14 +1,16 @@
 # PostgreSQL V126 Staging Cutover Contract
 
-Status (2026-10-14 supplied checkpoint): **STAGING V125 / V126 ABSENT / V126 CUTOVER NOT
-ACCEPTED / NO CUTOVER AUTHORIZATION**. PR #210 and #211 are merged and CI #559 succeeded
-15/15. Published main `cb92c66a545b486f255479db4bc4b4904a927cef` contains
-`V126__support_thread_read_message_cursor.sql`. The ordinary V125 controller and accepted
-QR release do not satisfy migration, protected-input, backup/DR or Policy-B R0 gates.
-Current exact V126 candidate image/artifact, target registry, input authority and R0
-readiness are `NOT_PROVEN` from this local documentation check; they require fresh
-source-bound evidence before any separately authorized operation. Historical
-checkpoints and the state machine below retain their original scope.
+Status (2026-10-15 supplied checkpoint): **STAGING V125 / V126 ABSENT / V126 CUTOVER NOT
+ACCEPTED / NO CUTOVER AUTHORIZATION**. Published base `8e69044d843e23a843592aa5ceb444e0904c1462`
+(tree `6b2040ef36a3cd48bb2b86da69ed6e6a072f8d80`, supplied CI #565 SUCCESS 15/15)
+has a locally verified, undeployed candidate image
+`sha256:8b9a9bd0dd335b3118a32c254cde547f1f519e9c1162dde30313154b500b3b0e`.
+The one-VPS implementation changes source/tool identity: that archive cannot be retagged
+as this changed release. A future integrated SHA needs its own unified application/tool
+build and exact-SHA checks. The ordinary QR acceptance is historical identity evidence,
+not a fresh target observation or migration/DR approval. `LEGACY_EVIDENCE_INSUFFICIENT`
+and `ONE_VPS_SAFE_PATH_NOT_PROVEN` remain; registry absence at the supplied path/time
+does not establish cessation. Historical checkpoints below retain their original scope.
 
 This document is the single policy and state-machine authority for the PostgreSQL V126 staging
 cutover. Tracked executable authority is divided without overlap:
@@ -457,11 +459,52 @@ sidecar collectors, packet capture and patched Caddy remain rejected historical 
 is a transport/drain component, never an identity authority. Runtime `ALLOWLIST` compatibility and
 its tests remain unchanged but are not a normal-staging, V126 or rollback profile.
 
-The exact reviewed pre-V126 rollback identity remains:
+For historical source-bound v1/v2 runs, the reviewed pre-V126 rollback identity remains:
 
 - source `f577934691a1a7a79ba327c54e2055425142b7be`;
 - image ID `sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8`;
 - `PRODUCT`, maintenance `OFF`, and empty PRODUCT and maintenance lists.
+
+### Current accepted V125 baseline for new attempts
+
+New `prepare-init` proposals use manifest version 3. The existing
+`--v125-image-tag` argument now carries the exact accepted immutable `sha256:` image ID;
+`--v125-registration-file` and `--v125-state-file` supply protected mode-0400 local byte-exact
+copies of `/etc/hookah-bot/staging-release.json` and the selected target's
+`.staging-release/state.json`. Preparation derives source/image and database identity
+only from the registered `ACCEPTED` V125 state, with approved image provenance, matching
+migration fingerprint and completed accepted operation. Both original byte hashes are
+bound into the manifest. A historical tag, arbitrary rollback ID, UNKNOWN/APPLYING state
+or another target is rejected. Copies are proposal inputs, not independent observations
+or authority; exact INIT approval and all existing Policy B checks remain mandatory.
+The enrolled R0/Q `data_runtime` and `restore_runtime` must both name this exact
+V125 source and image before INIT or stage dispatch. Internally consistent historical
+backup/restore evidence cannot qualify a different accepted baseline. This equality
+check does not supply missing independent observations or prove legacy cessation.
+
+The remote consumer rechecks protected originals and exact available image/source/platform.
+The existing semantic target validator joins its actual Compose/backend/URI observations
+to the accepted database container/system ID/name/role/network before baseline proof.
+Missing or contradictory observations refuse. Its V3 `database-target-identity` digest
+also retains the observed Docker network ID, so same-name network replacement is drift.
+The same validator and immutable digest run before dependent backup, preflight and
+backend startup/migration operations; the target is checked again before baseline proof.
+Historical runs retain their original semantic-digest format. The original baseline stage still
+proves actual current backend, schema125/no126, queues, configuration, health and poller.
+The selected identity travels with the run through remote dispatch and recovery; it
+cannot be replaced by a caller's rollback image. Historical v1/v2 records retain their
+original source-bound meaning; new INIT cannot reinterpret them using current tooling.
+V3 recovery-to-ordinary transfer currently refuses before immutable append: the accepted
+state does not independently bind the canonical full-SHA tag required by the ordinary
+consumer. See the [handoff boundary](V126_OPERATIONAL_HANDOFF.md#current-ordinary-controller-boundary).
+No migration tree/blob/checksum, twenty-state order, Gate A/B/C or DR proof is replaced.
+
+The [paired ordinary/genesis lock](V126_REPAIR_OPERATION_PROTOCOL.md) closes only that
+known writer race when both reviewed executors are installed. Complete independent
+legacy cessation and writer exclusion are still required. The existing
+`LEGACY_UNKNOWN_FENCED` route remains the only same-target basis; no new proof producer,
+override or prospective-domain relabelling is introduced. New-image ordinary V126
+authority remains a separate [open handoff decision](V126_OPERATIONAL_HANDOFF.md#current-ordinary-controller-boundary).
 
 ## Trusted-operator and secret boundary
 

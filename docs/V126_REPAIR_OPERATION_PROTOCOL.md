@@ -16,6 +16,19 @@ The lock inode is never removed. Its scope is the real target path, independent
 of SSH alias, local state directory or run. The protocol adds no service, account,
 daemon, access grant or lease.
 
+When `.staging-release` exists, genesis also holds the **already existing**
+`.staging-release/deployment.lock` before its first registry creation through completion.
+It never creates/adopts that lock or repairs ordinary state. Existing ordinary state must
+be protected and `ACCEPTED`; busy, missing, replaced, malformed, unreadable or uncertain
+state refuses. The updated ordinary controller checks registry absence under the same
+ordinary lock and refuses any later registry entry. A partial genesis therefore closes
+ordinary mutation as well. This narrowly excludes the updated ordinary writer; it is
+not proof against other executors, pending daemon work, historical UNKNOWN or old installed
+tooling. Missing ordinary state is not independent cessation evidence. The existing
+Policy B inventory/disposition and writer-exclusion contract still applies in full.
+If the enrolled S identity cannot read/lock protected ordinary metadata, execution
+refuses; this code grants no privileges or permission to change ownership.
+
 Each executable leaf action gets create-only, fsynced, mode-0400 start/result JSON plus
 a private operation log, bound to run/release/script/intent/action and a SHA-256
 operation ID. Cutover/recovery retain registry request JSON; ordinary deployment retains
@@ -97,6 +110,15 @@ nonce-bound trusted-console C confirmation, source/tool/runtime/target binding, 
 clock, revocation and bounded observations. Neither a proposal/report hash nor a
 self-asserted fence or approval field grants admission. Producers/acquisition operations
 are not implemented by this consumer.
+
+The 2026-10-15 one-VPS local work adds no alternative genesis. `LEGACY_UNKNOWN_FENCED`
+already represents a new admission basis without changing the historical outcome.
+Complete independently produced discovery, cessation, writer exclusion and accepted
+post-fence state remain `NOT_PROVEN` for this target. The observed absence of
+`/opt/hookah-bot/.v126-target-operations` is limited to that path/time and is not a fence.
+Run724 remains `UNKNOWN`; f782 retains only its attributed disposition above. If no
+enrolled producer can prove the required coverage, a different security contract needs
+an owner/security decision; `PROSPECTIVE_ISOLATED_GENESIS` cannot rename this same domain.
 
 Only the authenticated server-selected launcher reaches this entrypoint. EARLY admission
 and its five-second consumption bound precede the first server mkdir. S exclusively

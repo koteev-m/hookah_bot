@@ -309,6 +309,7 @@ def verify_native_terminal(run, proof, documents, *, source_path=None, next_owne
             (state/name).mkdir(mode=0o700,exist_ok=True)
         (remote/'lock').write_bytes(b'');(remote/'lock').chmod(0o600)
         current,owners,identities,has_recovery=bindings.binding_history(remote,Path(proof['target']['path']))
+        bindings.binding_handoff_baseline(remote,Path(proof['target']['path']),owner,handoff)
         if current != owner or owners != [owner]: refuse()
         initializations=[x for x in identities if x['kind']=='INIT']
         if len(initializations)!=1: refuse()

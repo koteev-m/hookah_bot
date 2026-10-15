@@ -193,6 +193,8 @@ class Evidence:
                 # it has no action args, process log or predecessor artifacts.
                 continue
             original, original_request, _, artifacts = operation(self.root, path.name.removesuffix('.start.json'), self.target)
+            require(original_request['environment'].get('V126_INTERNAL_REMOTE_V125_BASELINE_B64') ==
+                    request['environment'].get('V126_INTERNAL_REMOTE_V125_BASELINE_B64'), 'predecessor_v125_baseline_mismatch')
             self.original_requests.append((original, original_request))
             for name, value in artifacts.items():
                 require(name not in self.artifacts, 'ambiguous_original_artifact')
@@ -658,7 +660,7 @@ def run_observer(source_bytes, request, evidence, calls, expected_id):
             for name, code in [('derive.py', derive), ('execute.py', execute)]:
                 (root / name).write_text(code)
                 (root / name).chmod(0o400)
-        body = 'set -Eeuo pipefail\nsource "$1"\n' + READ_ONLY_HELPERS
+        body = 'set -Eeuo pipefail\nsource "$1"\nremote_select_v125_baseline\n' + READ_ONLY_HELPERS
         for name in evidence.proofs:
             body += quoted_call('remote_verify_proof', evidence.run_root / (PROOF_FILENAMES.get(name, name) + '.proof')) + '\n'
         for name, command in calls:

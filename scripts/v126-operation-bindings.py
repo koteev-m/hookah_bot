@@ -184,6 +184,109 @@ def binding_inventory(root, owner, target=None):
     return files, unknown, identities
 
 
+def binding_v125_baseline(value):
+    """V3 baseline identity, approved with INIT; never itself legacy admission."""
+    keys = {'source_sha', 'image_id', 'registration_sha256', 'state_sha256', 'database'}
+    if (type(value) is not dict or set(value) != keys or
+            not re.fullmatch('[0-9a-f]{40}', value.get('source_sha', '')) or
+            not re.fullmatch('sha256:[0-9a-f]{64}', value.get('image_id', '')) or
+            any(not re.fullmatch('[0-9a-f]{64}', value.get(k, ''))
+                for k in ('registration_sha256', 'state_sha256'))):
+        raise BindingError('v125_baseline_schema')
+    db = value['database']
+    if (type(db) is not dict or set(db) != {'container_id', 'system_id', 'database', 'user', 'network'} or
+            any(type(v) is not str or not v or any(c in v for c in '\x00\r\n') for v in db.values()) or
+            not re.fullmatch('[0-9a-f]{64}', db['container_id']) or
+            not re.fullmatch('[0-9]+', db['system_id'])):
+        raise BindingError('v125_baseline_database')
+    return value
+
+
+def binding_v125_baseline_documents(registration_raw, state_raw, target):
+    """Bind existing accepted ordinary authority; live consumers still observe runtime."""
+    def read(raw):
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result: raise BindingError('v125_baseline_duplicate_field')
+                result[key] = value
+            return result
+        if not isinstance(raw, bytes) or not 0 < len(raw) <= 1024 * 1024:
+            raise BindingError('v125_baseline_input_bound')
+        return json.loads(raw, object_pairs_hook=pairs,
+                          parse_constant=lambda _: (_ for _ in ()).throw(BindingError('v125_baseline_nonfinite')))
+    registered, state = read(registration_raw), read(state_raw)
+    scope = registered['scope']
+    if (registered.get('transition_approved') is not True or scope.get('project_id') != 'Hookah_Tootah' or
+            scope.get('directory') != str(target) or scope.get('compose_file') != str(Path(target)/'docker-compose.yml') or
+            type(scope.get('postgresql_head', 125)) is not int or scope.get('postgresql_head', 125) != 125 or
+            state.get('scope') != hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest() or
+            state.get('status') != 'ACCEPTED' or state.get('reason') is not None):
+        raise BindingError('v125_baseline_not_accepted_target')
+    accepted = state['accepted']
+    if (accepted.get('source') != 'https://github.com/koteev-m/hookah_bot' or
+            accepted.get('platform') != 'linux/amd64' or accepted.get('ci_sha') != accepted.get('revision') or
+            accepted.get('ci_status') != 'success' or accepted.get('approved') is not True or
+            accepted.get('available') is not True or type(accepted.get('postgresql_head')) is not int or
+            accepted.get('postgresql_head') != 125 or
+            not re.fullmatch('[0-9a-f]{64}', scope.get('migration_fingerprint', '')) or
+            accepted.get('migration_fingerprint') != scope['migration_fingerprint']):
+        raise BindingError('v125_baseline_image_not_approved')
+    operation = state.get('operation')
+    if operation is not None and (type(operation) is not dict or operation.get('to') != accepted):
+        raise BindingError('v125_baseline_operation_not_accepted')
+    database = {k: scope['protected']['postgres'][k]
+                for k in ('container_id', 'system_id', 'database', 'user', 'network')}
+    return binding_v125_baseline(dict(source_sha=accepted['revision'], image_id=accepted['id'],
+        registration_sha256=hashlib.sha256(registration_raw).hexdigest(),
+        state_sha256=hashlib.sha256(state_raw).hexdigest(), database=database))
+
+
+def binding_v125_current(baseline, target):
+    """Read unchanged root-owned ordinary authority. No writes or auto-rebaseline."""
+    def protected(path):
+        path = Path(path)
+        if not path.is_absolute() or path.resolve(strict=True) != path:
+            raise BindingError('v125_baseline_protected_path')
+        for parent in path.parents:
+            info = parent.stat()
+            if info.st_uid != 0 or info.st_mode & 0o022:
+                raise BindingError('v125_baseline_protected_parent')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or before.st_gid != 0 or
+                    stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1 or
+                    not 0 < before.st_size <= 1024 * 1024):
+                raise BindingError('v125_baseline_protected_file')
+            with os.fdopen(os.dup(fd), 'rb') as handle: raw = handle.read(1024 * 1024 + 1)
+            after = os.fstat(fd)
+            if ((before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) !=
+                    (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) or
+                    path.stat().st_ino != before.st_ino):
+                raise BindingError('v125_baseline_file_changed')
+            return raw
+        finally: os.close(fd)
+    observed = binding_v125_baseline_documents(protected('/etc/hookah-bot/staging-release.json'),
+        protected(Path(target)/'.staging-release/state.json'), target)
+    if observed != baseline:
+        raise BindingError('v125_baseline_accepted_identity_changed')
+
+
+def binding_v125_runtime(baseline, image, postgres, database):
+    binding_v125_baseline(baseline)
+    labels = image.get('Config', {}).get('Labels', {})
+    if (image.get('Id') != baseline['image_id'] or image.get('Os') != 'linux' or
+            image.get('Architecture') != 'amd64' or labels.get('org.opencontainers.image.revision') != baseline['source_sha'] or
+            labels.get('org.opencontainers.image.source') != 'https://github.com/koteev-m/hookah_bot'):
+        raise BindingError('v125_baseline_runtime_image')
+    expected = baseline['database']
+    if (postgres.get('Id') != expected['container_id'] or postgres.get('State', {}).get('Running') is not True or
+            expected['network'] not in postgres.get('NetworkSettings', {}).get('Networks', {}) or
+            database != [expected['system_id'], expected['database'], expected['user']]):
+        raise BindingError('v125_baseline_runtime_database')
+
+
 def binding_handoff(doc, owner, next_owner, receipt_sha, target):
     binding_owner(owner)
     binding_owner(next_owner)
@@ -192,8 +295,12 @@ def binding_handoff(doc, owner, next_owner, receipt_sha, target):
             'operational_version', 'backend_image', 'image_id', 'environment_sha256',
             'compose_sha256', 'caddy_runtime_sha256', 'config_owner', 'restart_policy',
             'handoff_approved_and_applied', 'approval_id', 'observed_at'}
+    baseline = doc.get('v125_baseline') if isinstance(doc, dict) else None
+    if baseline is not None:
+        binding_v125_baseline(baseline)
+        keys.add('v125_baseline')
     if (not isinstance(doc, dict) or set(doc) != keys or type(doc['format_version']) is not int or
-            doc['format_version'] != 1 or doc['owner'] != owner or doc['next_owner'] != next_owner or
+            doc['format_version'] != (2 if baseline is not None else 1) or doc['owner'] != owner or doc['next_owner'] != next_owner or
             doc['terminal_receipt_sha256'] != receipt_sha or
             doc['target_sha256'] != hashlib.sha256(str(target).encode()).hexdigest() or
             doc['operational_version'] not in ('V125', 'V126') or
@@ -206,10 +313,43 @@ def binding_handoff(doc, owner, next_owner, receipt_sha, target):
             raise BindingError('handoff_digest')
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', doc['image_id']):
         raise BindingError('handoff_image')
-    release = owner['release_sha'] if doc['operational_version'] == 'V126' else 'f577934691a1a7a79ba327c54e2055425142b7be'
-    if not re.fullmatch(r'[a-z0-9][a-z0-9._/-]*:' + release, doc['backend_image']):
-        raise BindingError('handoff_image_source')
+    if baseline is not None:
+        if (doc['operational_version'] != 'V125' or doc['image_id'] != baseline['image_id'] or
+                doc['backend_image'] != baseline['image_id']):
+            raise BindingError('handoff_accepted_v125_image')
+    else:
+        release = owner['release_sha'] if doc['operational_version'] == 'V126' else 'f577934691a1a7a79ba327c54e2055425142b7be'
+        if not re.fullmatch(r'[a-z0-9][a-z0-9._/-]*:' + release, doc['backend_image']):
+            raise BindingError('handoff_image_source')
     datetime.datetime.strptime(doc['observed_at'], '%Y-%m-%dT%H:%M:%SZ')
+
+
+def binding_handoff_baseline(root, target, owner, handoff):
+    baseline = handoff.get('v125_baseline')
+    if handoff['operational_version'] != 'V125':
+        return
+    initial = []
+    for path in root.glob('*.start.json'):
+        identity = binding_read(path).get('identity', {})
+        if all(identity.get(k) == v for k, v in owner.items()) and identity.get('kind') == 'INIT':
+            request = binding_request(root/(path.name.removesuffix('.start.json')+'.request.json'), identity, target)
+            initial.append(request.get('v125_baseline'))
+    if len(initial) > 1 or baseline != (initial[0] if initial else None):
+        raise BindingError('handoff_v125_baseline_differs_from_init')
+    if baseline is None:
+        return
+    import base64
+    matches = []
+    for path in root.glob('*.start.json'):
+        start = binding_read(path)
+        identity = start.get('identity', {})
+        if (all(identity.get(k) == v for k, v in owner.items()) and
+                (identity.get('kind'), identity.get('name'), identity.get('action')) ==
+                ('STAGE', 'BASELINE_VERIFIED', 'baseline')):
+            _, _, request = binding_operation_evidence(root, path.name.removesuffix('.start.json'), target)
+            matches.append(request['environment'].get('V126_INTERNAL_REMOTE_V125_BASELINE_B64'))
+    if matches != [base64.b64encode(binding_canonical(baseline)).decode()]:
+        raise BindingError('handoff_accepted_v125_baseline_not_proven')
 
 
 def binding_chain(root, target):
@@ -248,6 +388,7 @@ def binding_chain(root, target):
             raise BindingError('retired_outcome_not_proven')
         handoff = transfer['handoff']
         binding_handoff(handoff, owner, next_owner, handoff['terminal_receipt_sha256'], target)
+        binding_handoff_baseline(root, target, owner, handoff)
         ordinary = version == 2 and transfer['terminal_kind'] == 'ORDINARY_DEPLOY_PROOF'
         required = ('DEPLOY', 'ORDINARY_DEPLOY') if ordinary else (('STAGE', 'FINAL_PUBLIC_GATES_PASSED') if handoff['operational_version'] == 'V126' else ('RECOVERY', 'pre-v126'))
         if not any((identity['kind'], identity['name']) == required for identity in identities):
@@ -330,6 +471,7 @@ def binding_entry(mode):
         if current != owner:
             raise BindingError('retirement_requires_known_completed_current_run')
         binding_handoff(handoff, owner, next_owner, receipt_sha, target)
+        binding_handoff_baseline(root, target, owner, handoff)
         if handoff['image_id'] != sys.argv[11]:
             raise BindingError('terminal_handoff_image_mismatch')
         if handoff['operational_version'] != sys.argv[10]:
@@ -339,10 +481,6 @@ def binding_entry(mode):
             raise BindingError('terminal_remote_operation_missing')
         if any(previous['run_id'] == next_owner['run_id'] for previous in owners):
             raise BindingError('run_id_reuse')
-        directory = root / 'transfers'
-        if not directory.exists():
-            directory.mkdir(mode=0o700)
-        binding_protected(directory, 0o700, True)
         transfer = dict(format_version=1, previous_owner=owner, next_owner=next_owner,
                         inventory=inventory, handoff=handoff)
         if len(sys.argv) > 13:
@@ -358,6 +496,10 @@ def binding_entry(mode):
                 raise BindingError('cutover_transfer_has_no_deploy_request')
             transfer.update(format_version=2, next_kind=next_kind,
                             request_sha256=request_sha, terminal_kind=terminal_kind)
+        directory = root / 'transfers'
+        if not directory.exists():
+            directory.mkdir(mode=0o700)
+        binding_protected(directory, 0o700, True)
         recordfd = os.open(directory / (binding_owner_id(owner) + '.json'),
                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
         with os.fdopen(recordfd, 'wb') as handle:
@@ -428,6 +570,13 @@ def binding_deploy_proof(path, identity, target):
 
 
 def binding_next_request(request, next_owner, handoff, target):
+    # Accepted V3 baseline evidence binds an image ID and source revision, but
+    # supplies no independently verified canonical full-SHA tag. The ordinary
+    # consumer requires that tag; neither a digest nor an asserted tag proves an
+    # executable same-image descriptor. Keep this route closed before either
+    # retirement writer appends immutable authority. Historical readers stay intact.
+    if handoff.get('v125_baseline') is not None:
+        raise BindingError('accepted_v125_ordinary_handoff_requires_verified_canonical_tag')
     # Full descriptor/source/file validation belongs to the single deploy consumer.
     # A transfer binds its exact bytes; these joins preserve the applied authority.
     if (request.get('owner') != next_owner or
@@ -831,6 +980,7 @@ def binding_retire_deploy(target, owner, proof_sha, handoff_path, next_request_p
         next_owner = binding_owner(request['owner'])
         binding_predecessor_denied(root, next_owner)
         binding_handoff(handoff, owner, next_owner, proof_sha, target)
+        binding_handoff_baseline(root, target, owner, handoff)
         binding_deploy_handoff(proof, proof_sha, handoff)
         binding_next_request(request, next_owner, handoff, target)
         if any(previous['run_id'] == next_owner['run_id'] for previous in owners):
@@ -848,8 +998,12 @@ def binding_init_request(doc, identity, target):
     binding_identity(identity)
     keys = {'format_version', 'identity', 'target_sha256', 'manifest_sha256', 'manifest_size',
             'local_state_sha256', 'metadata'}
+    baseline = doc.get('v125_baseline') if isinstance(doc, dict) else None
+    if baseline is not None:
+        binding_v125_baseline(baseline)
+        keys.add('v125_baseline')
     if (not isinstance(doc, dict) or set(doc) != keys or type(doc['format_version']) is not int or
-            doc['format_version'] != 1 or doc['identity'] != identity or
+            doc['format_version'] != (2 if baseline is not None else 1) or doc['identity'] != identity or
             (identity['kind'], identity['name'], identity['action']) != ('INIT', 'RUN_INITIALIZED', 'initialize-run') or
             doc['target_sha256'] != hashlib.sha256(str(target).encode()).hexdigest() or
             not isinstance(doc['manifest_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', doc['manifest_sha256']) or
@@ -1493,6 +1647,85 @@ def binding_genesis_created(watchfd, watch):
         binding_refuse('genesis_namespace_observation')
 
 
+def binding_ordinary_state(directoryfd):
+    fd = os.open('state.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directoryfd)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or
+                stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+            binding_refuse('ordinary_state_metadata')
+        with os.fdopen(fd, 'rb', closefd=False) as stream:
+            raw = stream.read(1024 * 1024 + 1)
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    binding_refuse('ordinary_state_duplicate_key')
+                result[key] = value
+            return result
+        if len(raw) > 1024 * 1024:
+            binding_refuse('ordinary_state_bound')
+        state = json.loads(raw, object_pairs_hook=pairs)
+        if not isinstance(state, dict) or state.get('status') != 'ACCEPTED':
+            binding_refuse('ordinary_operation_not_accepted')
+        return hashlib.sha256(raw).hexdigest(), (info.st_dev, info.st_ino)
+    finally:
+        os.close(fd)
+
+
+def binding_ordinary_lock_check(held):
+    directory = held['directory']
+    if held['directoryfd'] is None:
+        if os.path.lexists(directory):
+            binding_refuse('ordinary_registration_appeared')
+        return
+    binding_protected(directory, 0o700, True)
+    actual, named = os.fstat(held['directoryfd']), directory.lstat()
+    if (actual.st_dev, actual.st_ino) != (named.st_dev, named.st_ino):
+        binding_refuse('ordinary_directory_changed')
+    binding_protected(directory / 'deployment.lock', 0o600)
+    actual, named = os.fstat(held['lockfd']), (directory / 'deployment.lock').lstat()
+    if (actual.st_dev, actual.st_ino) != (named.st_dev, named.st_ino):
+        binding_refuse('ordinary_lock_changed')
+    if binding_ordinary_state(held['directoryfd']) != held['state']:
+        binding_refuse('ordinary_state_changed')
+
+
+def binding_ordinary_lock_close(held):
+    if held is not None:
+        for key in ('lockfd', 'directoryfd'):
+            if held[key] is not None:
+                os.close(held[key])
+                held[key] = None
+
+
+def binding_ordinary_lock(target):
+    """Exclude the installed ordinary writer without creating/adopting its state.
+
+    This local lock is not legacy fencing or admission evidence. All independent
+    LEGACY_GENESIS/Policy B observations remain required, including when absent.
+    """
+    held = dict(directory=Path(target) / '.staging-release', directoryfd=None, lockfd=None)
+    if not os.path.lexists(held['directory']):
+        return held
+    try:
+        binding_protected(held['directory'], 0o700, True)
+        held['directoryfd'] = os.open(held['directory'], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        held['lockfd'] = os.open('deployment.lock', os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=held['directoryfd'])
+        binding_protected(held['directory'] / 'deployment.lock', 0o600)
+        try:
+            fcntl.flock(held['lockfd'], fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            binding_refuse('ordinary_deployment_busy')
+        held['state'] = binding_ordinary_state(held['directoryfd'])
+        binding_ordinary_lock_check(held)
+        return held
+    except BaseException:
+        binding_ordinary_lock_close(held)
+        raise
+
+
 def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=None, timeout=300):
     """Only authenticated caller may invoke this create-once metadata transaction.
 
@@ -1517,6 +1750,7 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
     previous = {sig: signal.getsignal(sig) for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)}
     cancelled = False
     lockfd = None
+    ordinary_lock = None
     root_identity = None
     targetfd = rootfd = watchfd = None
     deadline = time.monotonic() + 630
@@ -1525,6 +1759,8 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
         cancelled = True
     def current():
         binding_genesis_target(target, request)
+        if ordinary_lock is not None:
+            binding_ordinary_lock_check(ordinary_lock)
         if cancelled or time.monotonic() >= deadline:
             binding_refuse('genesis_cancelled_or_expired')
         if targetfd is not None:
@@ -1551,6 +1787,7 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
         targetfd = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         current()
         early, early_admission = check(None)
+        ordinary_lock = binding_ordinary_lock(target)
         current()
         if root.exists() or root.is_symlink():
             binding_refuse('genesis_registry_already_exists')
@@ -1632,6 +1869,7 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
         for fd in (lockfd, rootfd, watchfd, targetfd):
             if fd is not None:
                 os.close(fd)
+        binding_ordinary_lock_close(ordinary_lock)
         for sig, handler in previous.items():
             signal.signal(sig, handler)
 
@@ -1811,6 +2049,26 @@ def binding_policy_b_check(gate, identity, target, lockfd, timeout):
         binding_refuse('policy_b_admission_refused')
 
 
+def binding_operation_baseline(root, target, identity, current, context):
+    """The locked INIT fixes rollback identity even for raw recovery transport."""
+    if identity['kind'] not in ('STAGE', 'RECOVERY'):
+        return
+    initialized = [item for item in current if item['kind'] == 'INIT']
+    supplied = (context or {}).get('environment', {}).get('V126_INTERNAL_REMOTE_V125_BASELINE_B64') or None
+    if not initialized and identity['kind'] == 'RECOVERY' and supplied is None:
+        return  # Historical separately authorized recovery predates native INIT.
+    if len(initialized) != 1:
+        binding_refuse('operation_baseline_requires_exact_init')
+    init = initialized[0]
+    operation_id = hashlib.sha256(binding_canonical(init)).hexdigest()
+    request = binding_request(root/(operation_id+'.request.json'), init, target)
+    baseline = request.get('v125_baseline')
+    import base64
+    expected = base64.b64encode(binding_canonical(baseline)).decode() if baseline is not None else None
+    if supplied != expected:
+        binding_refuse('operation_v125_baseline_differs_from_init')
+
+
 def binding_supervise(target, identity, worker_argv, *, input_data=None, input_fd=None,
                       env=None, timeout=300, request_sha256=None, pass_fds=(), request_context=None,
                       policy_b_gate=None, init_completion=None, prepare_payload=None):
@@ -1862,6 +2120,7 @@ def binding_supervise(target, identity, worker_argv, *, input_data=None, input_f
         if owner != requested_owner:
             binding_refuse('target_bound_to_another_run')
         binding_admit_operation(root, target, identity, current_operations, request_sha256)
+        binding_operation_baseline(root, target, identity, current_operations, request_context)
         if identity['kind'] == 'STAGE':
             binding_require_init_completion(root, target, current_operations, init_completion)
         if recovery_seen and identity['kind'] != 'RECOVERY':

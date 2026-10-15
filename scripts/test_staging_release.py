@@ -158,6 +158,25 @@ class ReleaseTests(unittest.TestCase):
                 self.candidate[key] = original
         self.assertEqual(self.runtime.commands, [])
 
+    def test_schema_flag_or_handoff_assertion_cannot_open_v126(self):
+        scope = copy.deepcopy(self.scope)
+        scope.update(postgresql_head=126, handoff_approved_and_applied=True)
+        for head in (126, "126", True, None):
+            with self.subTest(head=head):
+                scope["postgresql_head"] = head
+                with self.assertRaisesRegex(release.Refused, "^V126_ORDINARY_AUTHORITY_TRANSFER_REQUIRED$"):
+                    release.Controller(scope, self.store, self.runtime)
+        self.assertEqual(self.runtime.commands, [])
+        self.assertEqual(self.store.read()["status"], "ACCEPTED")
+
+    def test_v126_schema_cannot_be_relabelled_as_v125_or_rolled_back(self):
+        self.deploy()
+        self.controller.accept(smoke_passed=True)
+        self.runtime.snapshot["schema"] = {"head": 126, "v126_count": 1, "failed_count": 0}
+        self.refused("V125_SCHEMA_REQUIRED", lambda: self.controller.rollback(owner_approved=True))
+        self.assertEqual(len(self.runtime.commands), 1)
+        self.assertEqual(self.store.read()["accepted"], self.candidate)
+
     def test_observed_image_record_cannot_change(self):
         self.runtime.images[self.candidate["id"]]["revision"] = "c" * 40
         self.runtime.images[self.candidate["id"]]["ci_sha"] = "c" * 40
@@ -1159,6 +1178,150 @@ class ExecutorTests(unittest.TestCase):
                         {"target": "staging", "transition_approved": True, "scope": scope}, files=self.files)
             self.assertEqual(outcome, {"status": "FAILED", "reason": "DEPLOYMENT_BUSY"})
         self.assertEqual(store.read()["status"], "APPLYING")
+
+    def registered_fixture(self, *, initialized=True):
+        data = fixture()
+        scope = data["scope"]
+        scope.update(directory=str(self.directory), compose_file=str(self.directory / "docker-compose.yml"))
+        data["snapshot"].update(directory=scope["directory"], compose_file=scope["compose_file"])
+        store = release.Store(self.directory / ".staging-release", migration_target=self.directory)
+        with store.locked():
+            if initialized:
+                store.write({"scope": release.fingerprint(scope), "status": "ACCEPTED",
+                             "accepted": data["current"], "operation": None, "reason": None})
+        runtime = release.FixtureRuntime(data["snapshot"],
+                                         {r["id"]: r for r in (data["current"], data["candidate"])})
+        return data, store, runtime, {"target": "staging", "transition_approved": True, "scope": scope}
+
+    def test_any_migration_registry_blocks_ordinary_without_changing_history(self):
+        data, store, runtime, registered = self.registered_fixture()
+        before = store.path.read_bytes()
+        registry = self.directory / ".v126-target-operations"
+        for kind in ("directory", "file", "dangling_symlink"):
+            with self.subTest(kind=kind):
+                if kind == "directory":
+                    registry.mkdir(mode=0o700)
+                    (registry / "run724.json").write_text('{"outcome":"UNKNOWN"}\n')
+                    historical = (registry / "run724.json").read_bytes()
+                elif kind == "file":
+                    registry.write_bytes(b"partial creation")
+                else:
+                    registry.symlink_to(self.directory / "missing")
+                for action in ("initialize", "deploy", "rollback", "accept", "status"):
+                    request = {"target": "staging", "action": action, "owner_approved": True,
+                               "smoke_passed": True, "candidate": data["candidate"],
+                               "expected_current": data["current"]["id"]}
+                    with mock.patch.object(release, "CommandRuntime", return_value=runtime):
+                        outcome = release.registered_action(request, registered, files=self.files)
+                    self.assertEqual(outcome, {"status": "FAILED", "reason": "MIGRATION_TARGET_REQUIRES_SEQUENCER"})
+                self.assertEqual(store.path.read_bytes(), before)
+                self.assertEqual(runtime.commands, [])
+                if kind == "directory":
+                    self.assertEqual((registry / "run724.json").read_bytes(), historical)
+                    (registry / "run724.json").unlink()
+                    registry.rmdir()
+                else:
+                    registry.unlink()
+
+    def test_registry_created_during_checks_prevents_intent_and_recreate(self):
+        data, store, runtime, registered = self.registered_fixture()
+        before = store.path.read_bytes()
+
+        def ready(*args, **kwargs):
+            (self.directory / ".v126-target-operations").mkdir(mode=0o700)
+            return True
+
+        runtime.ready = ready
+        with mock.patch.object(release, "CommandRuntime", return_value=runtime):
+            outcome = release.registered_action({"target": "staging", "action": "deploy",
+                        "candidate": data["candidate"], "expected_current": data["current"]["id"],
+                        "owner_approved": True}, registered, files=self.files)
+        self.assertEqual(outcome, {"status": "FAILED", "reason": "MIGRATION_TARGET_REQUIRES_SEQUENCER"})
+        self.assertEqual(store.path.read_bytes(), before)
+        self.assertEqual(runtime.commands, [])
+
+    def test_registry_created_during_initialize_does_not_seed_new_authority(self):
+        data, store, runtime, registered = self.registered_fixture(initialized=False)
+
+        def ready(*args, **kwargs):
+            (self.directory / ".v126-target-operations").mkdir(mode=0o700)
+            return True
+
+        runtime.ready = ready
+        with mock.patch.object(release, "CommandRuntime", return_value=runtime):
+            outcome = release.registered_action({"target": "staging", "action": "initialize",
+                        "candidate": data["current"], "owner_approved": True}, registered, files=self.files)
+        self.assertEqual(outcome, {"status": "FAILED", "reason": "MIGRATION_TARGET_REQUIRES_SEQUENCER"})
+        self.assertFalse(store.path.exists())
+        self.assertEqual(runtime.commands, [])
+
+    def test_unknown_is_not_reclassified_when_migration_registry_appears(self):
+        data, store, runtime, registered = self.registered_fixture()
+        state = store.read()
+        state["status"] = "UNKNOWN"
+        store.write(state)
+        before = store.path.read_bytes()
+        (self.directory / ".v126-target-operations").mkdir(mode=0o700)
+        with mock.patch.object(release, "CommandRuntime", return_value=runtime):
+            outcome = release.registered_action({"target": "staging", "action": "rollback",
+                        "owner_approved": True}, registered, files=self.files)
+        self.assertEqual(outcome, {"status": "UNKNOWN", "state": "UNKNOWN",
+                                   "reason": "OPERATOR_RECONCILIATION_REQUIRED"})
+        self.assertEqual(store.path.read_bytes(), before)
+        self.assertEqual(runtime.commands, [])
+
+    def test_genesis_publication_and_ordinary_share_existing_lock_inode(self):
+        _, store, _, _ = self.registered_fixture()
+        lock = store.directory / "deployment.lock"
+        inode = lock.stat().st_ino
+        publisher = '''import importlib.util,pathlib,sys
+target=pathlib.Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location('genesis_bindings',sys.argv[2])
+bindings=importlib.util.module_from_spec(spec);spec.loader.exec_module(bindings)
+try: held=bindings.binding_ordinary_lock(target)
+except bindings.BindingError: sys.exit(73)
+try:
+ bindings.binding_ordinary_lock_check(held)
+ (target/'.v126-target-operations').mkdir(mode=0o700)
+finally: bindings.binding_ordinary_lock_close(held)
+'''
+        command = [sys.executable, "-B", "-c", publisher, str(self.directory),
+                   str(Path(__file__).with_name("v126-operation-bindings.py"))]
+        with store.locked():
+            blocked = subprocess.run(command, capture_output=True, timeout=5)
+            self.assertEqual(blocked.returncode, 73, blocked.stderr)
+            self.assertFalse((self.directory / ".v126-target-operations").exists())
+        published = subprocess.run(command, capture_output=True, timeout=5)
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertEqual(lock.stat().st_ino, inode)
+        with self.assertRaisesRegex(release.Refused, "^MIGRATION_TARGET_REQUIRES_SEQUENCER$"):
+            with store.locked():
+                self.fail("migration publication must exclude ordinary operations")
+
+    def test_replaced_lock_after_recreate_is_unknown_and_cannot_retry(self):
+        data, store, runtime, registered = self.registered_fixture()
+        replace = runtime.replace
+
+        def replace_lock(*args, **kwargs):
+            result = replace(*args, **kwargs)
+            lock = store.directory / "deployment.lock"
+            lock.rename(store.directory / "original.lock")
+            lock.touch(mode=0o600)
+            return result
+
+        runtime.replace = replace_lock
+        request = {"target": "staging", "action": "deploy", "candidate": data["candidate"],
+                   "expected_current": data["current"]["id"], "owner_approved": True}
+        with mock.patch.object(release, "CommandRuntime", return_value=runtime):
+            outcome = release.registered_action(request, registered, files=self.files)
+            self.assertEqual(outcome["status"], "UNKNOWN")
+            self.assertEqual(store.read()["diagnostic"], {"phase": "POSTSTATE", "reason": "DEPLOYMENT_LOCK_CHANGED"})
+            before = store.path.read_bytes()
+            for action in ("deploy", "rollback", "accept"):
+                request["action"] = action
+                self.assertEqual(release.registered_action(request, registered, files=self.files)["status"], "UNKNOWN")
+            self.assertEqual(store.path.read_bytes(), before)
+        self.assertEqual(len(runtime.commands), 1)
 
     def test_initialize_does_not_accept_backend_stopped_after_health(self):
         data = fixture()

@@ -5,11 +5,44 @@ recovery and final automated gates retain `restart=no` and RestartCount=0. A com
 stage20 or restored HTTP availability does not transfer image/configuration authority
 or promise service recovery after reboot.
 
-Current checkpoint (2026-10-14): staging is confirmed at V125 without V126;
+Current supplied checkpoint (2026-10-15): staging is confirmed at V125 without V126;
 ordinary V125 controller and the QR release are accepted. No V126 cutover or applied
-V126 handoff is confirmed. Fresh V126 candidate, protected-input, Policy-B R0 and DR
-evidence remain `NOT_PROVEN`; the ordinary controller does not transfer migration
-authority. The following PR #198 paragraph is the preserved historical checkpoint.
+V126 handoff is confirmed. The local candidate at source `8e69044d843e23a843592aa5ceb444e0904c1462`
+was verified but not deployed; changed tooling needs a new unified source-bound image
+after future integration. Protected-input authority, Policy-B R0, DR and complete legacy
+disposition remain `NOT_PROVEN`. The following PR #198 paragraph is historical.
+
+## Current ordinary controller boundary
+
+`deploy-staging.sh` now invokes `staging_release.py`, the installed V125 image-selection
+controller described in [ordinary releases](STAGING_ORDINARY_RELEASE.md). It does not
+invoke the older `v126-ordinary-deploy.py` contract below. These are distinct consumers:
+the latter supports **only the already accepted image**, using a terminal receipt,
+applied handoff and exact immutable next-request transfer under the V126 target lock.
+It is not permission to select a subsequent new image through the V125 controller.
+
+The local one-VPS changes reject ordinary execution when any V126 registry entry
+exists, including partial/UNKNOWN history. Genesis excludes an existing ordinary
+writer through its existing deployment lock before creating that registry. This
+does not settle unknown daemon effects or replace independent legacy writer exclusion.
+
+`HT-V126-ONE-VPS-REVIEW-FIX-03` closes the new V3 accepted-baseline recovery-to-ordinary
+path before immutable transfer append. The accepted source revision and immutable
+image ID do not independently establish the canonical full-SHA image tag required
+by `v126-ordinary-deploy.py`. A digest or caller-asserted tag therefore refuses with
+`accepted_v125_ordinary_handoff_requires_verified_canonical_tag`, even after completed
+pre-V126 recovery and an approved/applied handoff. Existing historical readers and valid
+V125 ordinary behavior remain unchanged. Reopening this same-image path requires a
+separate reviewed binding of canonical tag to accepted image ID/source and executable
+descriptor validation before transfer; no positive V3 handoff is claimed locally.
+
+`V126_ORDINARY_AUTHORITY_TRANSFER_REQUIRED` remains a closed boundary. Supporting new
+ordinary V126 images needs an explicitly reviewed transfer from the complete cutover
+history/applied handoff to the image-selection controller, preserving exact database,
+schema/migration fingerprint, source/image, rollback and UNKNOWN semantics. A schema
+parameter or handoff boolean cannot establish that transfer. No new executor, override,
+registry deletion or automatic rebaseline is introduced. Until that contract is settled,
+post-V126 ordinary **new-image** releases remain `DECISION_REQUIRED`.
 
 Historical integration status (2026-09-17): PR #198 is merged at authoritative `main`
 `465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge CI #506
@@ -40,7 +73,7 @@ The accepted policy has distinct V125 and V126 completion boundaries:
 | Target binding | Preserve lock inode and immutable history; explicit retirement of a known completed run requires terminal receipt and approved/applied handoff | UNKNOWN remains blocked; no reset/adoption/expiry |
 | Recovery point/data loss | Operator selects a proven consistent point and accepts its loss boundary after whole-DB/globals/auth/settings review | DECISION_REQUIRED; no RPO or loss default |
 
-Ordinary deploy uses the same persistent target supervisor as the sequencer. A
+The historical `v126-ordinary-deploy.py` consumer uses the same persistent target supervisor as the sequencer. A
 standalone read-only handoff guard still refuses an existing operation registry; only
 the deploy worker holding that registry's lock calls its actual authority consumer.
 The worker revalidates complete immutable history and the exact approved next-request
@@ -60,9 +93,10 @@ digest; root:root, unless-stopped; approved/applied handoff identity/time; expli
 hashes; public URL/check policy. Credentials do not enter the descriptor. The next
 owner and descriptor are named by an explicit immutable transfer, not by HTTP200.
 
-`deploy-staging.sh` additionally requires `APPROVED_DEPLOYMENT_FILE` and a fresh
-`DEPLOY_STATE_DIR`. Its existing exact local build/artifact gate remains. One supervised
-source-bound transport carries the reviewed files and image; the fixed `.env` is absent
+The earlier wrapper required `APPROVED_DEPLOYMENT_FILE` and a fresh
+`DEPLOY_STATE_DIR`; these are not arguments to the current V125 wrapper. The retained
+`v126-ordinary-deploy.py` implementation uses one supervised
+source-bound transport that carries the reviewed files and image; the fixed `.env` is absent
 from the upload list. Actual protected root ownership, effective env/Compose, semantic
 DB equality, Caddy disk/admin/systemd state and current accepted image are checked before
 mutation and after bounded backend-only recreate (`--no-build --pull never --no-deps`).

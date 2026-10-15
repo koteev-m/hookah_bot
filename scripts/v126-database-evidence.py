@@ -4,6 +4,7 @@
 The sequencer embeds this exact source for its remote consumers. The regression suite
 checks byte equality, so source binding covers the helper as well as its caller.
 """
+import base64
 import hashlib
 import json
 import os
@@ -284,7 +285,7 @@ def assert_compose_source_labels(source_labels, backend_labels):
             fail('database containers belong to another Compose working directory or config source')
 
 
-def assert_live_target(uri_path, backend_image, expected_uri_sha):
+def assert_live_target(uri_path, backend_image, expected_uri_sha, accepted_baseline=None):
     # All credential-bearing configuration and inspect output stays in this process.
     raw_uri = Path(uri_path).read_bytes()
     if (not re.fullmatch('[0-9a-f]{64}', expected_uri_sha)
@@ -375,6 +376,21 @@ def assert_live_target(uri_path, backend_image, expected_uri_sha):
     host = command(['python3', '-c', LIBPQ_IDENTITY_WORKER],
                    payload=json.dumps({'uri': uri, 'sql': IDENTITY_SQL}).encode())
     digest = equal_identities([native, host])
+    if accepted_baseline is not None:
+        # Reuse the observations above: separately healthy accepted and actual
+        # databases are insufficient. Bind the same semantic target to INIT.
+        identity = database_identity(native)
+        observed = dict(container_id=source_id, system_id=identity['system_identifier'],
+                        database=identity['database'], user=identity['current_role'], network=name)
+        if accepted_baseline.get('database') != observed:
+            fail('actual database target differs from the accepted V125 baseline')
+        network_id = planned_network.get('Id')
+        if not isinstance(network_id, str) or not re.fullmatch('[0-9a-f]{64}', network_id):
+            fail('accepted database network lacks a canonical identity')
+        # The ordinary registration binds a network name. Preserve the observed
+        # Docker identity too, so same-name replacement cannot survive baseline.
+        bound = dict(semantic_sha256=digest, database=observed, network_id=network_id)
+        digest = hashlib.sha256(json.dumps(bound, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     # Inspect again to reject container replacement/config drift during the reads.
     def stable(container):
         return {key: container[key] for key in ('Id', 'Config', 'RestartCount', 'HostConfig')} | {
@@ -390,8 +406,13 @@ def assert_live_target(uri_path, backend_image, expected_uri_sha):
 def main(argv):
     if argv == ['identity-sql']:
         print(IDENTITY_SQL, end='')
-    elif len(argv) == 4 and argv[0] == 'live-target':
-        assert_live_target(argv[1], argv[2], argv[3])
+    elif len(argv) in (4, 5) and argv[0] == 'live-target':
+        baseline = None
+        if len(argv) == 5 and argv[4]:
+            baseline = strict_json(base64.b64decode(argv[4], validate=True))
+            if not isinstance(baseline, dict) or not isinstance(baseline.get('database'), dict):
+                fail('accepted database identity is missing')
+        assert_live_target(argv[1], argv[2], argv[3], baseline)
     elif len(argv) == 2 and argv[0] == 'preflight':
         preflight_outcome(Path(argv[1]).read_bytes())
     elif len(argv) == 5 and argv[0] == 'toc':

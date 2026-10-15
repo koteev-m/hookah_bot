@@ -601,15 +601,37 @@ with fixture.git_observations():raise SystemExit(client.main())
         self.outer_env=dict(os.environ,PATH=str(bin_dir)+':/usr/sbin:/usr/bin:/sbin:/bin',PYTHONDONTWRITEBYTECODE='1')
         return self.source_root/'scripts/v126-cutover.sh'
 
+    def current_baseline_fixture(self):
+        runtime=self.fx.anchor['data_runtime']
+        database=dict(container_id='d'*64,system_id='12345',database='synthetic',user='synthetic',network='synthetic_default')
+        scope=dict(project_id='Hookah_Tootah',directory=str(self.fx.target),
+            compose_file=str(self.fx.target/'docker-compose.yml'),migration_fingerprint='e'*64,
+            protected=dict(postgres=database))
+        registration=dict(transition_approved=True,target='owned-fixture-only',scope=scope)
+        accepted=dict(id='sha256:'+runtime['image_sha256'],revision=runtime['source_sha'],
+            source='https://github.com/koteev-m/hookah_bot',platform='linux/amd64',
+            ci_sha=runtime['source_sha'],ci_status='success',approved=True,available=True,
+            postgresql_head=125,migration_fingerprint='e'*64)
+        state=dict(scope=hashlib.sha256(json.dumps(scope,sort_keys=True).encode()).hexdigest(),
+            status='ACCEPTED',accepted=accepted,operation=None,reason=None)
+        paths=[]
+        for name,doc in [('registration',registration),('state',state)]:
+            path=self.root/('accepted-'+name+'.json');path.write_bytes(T.canonical(doc));path.chmod(0o400);paths.append(path)
+        baseline=self.bindings.binding_v125_baseline_documents(paths[0].read_bytes(),paths[1].read_bytes(),self.fx.target)
+        return baseline,paths
+
     def outer_prepare(self):
         script=self.outer_cli_fixture()
         self.proposal=self.root/'reviewed-init-proposal.json'
         doc=json.loads(self.manifest)
+        baseline,paths=self.current_baseline_fixture()
+        doc['v125_image_tag']=baseline['image_id']
         args=['bash',str(script),'prepare-init','--proposal-file',str(self.proposal),'--state-dir',str(self.state)]
         for key in ('run_id','release_sha','release_tree','release_parents','main_actions_run_id','release_worktree',
                     'remote','staging_path','database_url_file','maintenance_identities_file','v126_image_tag','v126_image_id','v125_image_tag'):
             value=doc[key]
             args.extend(['--'+key.replace('_','-'),','.join(value) if isinstance(value,list) else str(value)])
+        args.extend(['--v125-registration-file',str(paths[0]),'--v125-state-file',str(paths[1])])
         before={x.name:x.read_bytes() for x in self.history.iterdir() if x.is_file()}
         result=subprocess.run(args,env=self.outer_env,capture_output=True,timeout=30)
         self.assertEqual(result.returncode,0,result.stderr.decode(errors='replace'))
@@ -711,6 +733,10 @@ with fixture.git_observations():raise SystemExit(client.main())
     def test_internal_client_init_retains_independent_foreground_tty(self):
         # The client reads its manifest from a pipe, and U/C answers exclusively
         # from the independently controlled foreground PTY. No Console stub.
+        baseline,_=self.current_baseline_fixture()
+        doc=json.loads(self.manifest);doc.update(format_version=3,v125_baseline=baseline,v125_image_tag=baseline['image_id'])
+        self.manifest=T.canonical(doc);self.request=self.client.init_request(self.state,self.manifest)
+        self.fx.identity=self.request['identity'];self.fx.catalogue['actions'][0]['identity']=self.fx.identity;self.fx.save('catalogue')
         locator=self.root/'transport.json'
         locator.write_bytes(T.canonical(dict(remote_alias='owned-fixture-only',ssh=self.ssh.options())));locator.chmod(0o600)
         read_fd,write_fd=os.pipe()
