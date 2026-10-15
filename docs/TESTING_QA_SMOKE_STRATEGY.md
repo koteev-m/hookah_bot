@@ -904,6 +904,45 @@ and AP-00 crypto/S3 behavior are unchanged; AP-07 is included by the existing
 
 ### HT-12P executable V126 cutover quality gate
 
+The local `HT-V126-ONE-VPS-SAFE-IMPLEMENT-01` changes additionally require accepted
+V125 baseline/INIT/envelope/rollback regressions and ordinary/genesis mutual exclusion:
+
+```bash
+python3 -B -m unittest discover -s scripts -p test_staging_release.py
+python3 -B scripts/test-v126-genesis-history.py --portable-safety
+python3 -B scripts/test-v126-current-baseline.py
+python3 -B scripts/test-v126-database-evidence.py --unit
+python3 -B scripts/test-v126-isolated-inventory.py
+python3 -B scripts/test-v126-policy-b-client.py
+python3 -B scripts/test-v126-policy-b-transport.py
+python3 -B scripts/test-v126-bindings.py
+python3 -B scripts/test-v126-reconciliation.py
+python3 -B scripts/test-v126-reconcile-poststate.py
+python3 -B scripts/test-v126-ordinary-deploy.py
+```
+
+Use synthetic accepted registration/state and exact source/image/DB identities; reject
+old-baseline substitution, arbitrary rollback, malformed/unapproved/uncertain state,
+changed snapshot hashes, omitted/changed run baseline and missing applied handoff.
+The review-fix regressions additionally join actual Compose/URI/backend target evidence
+to the accepted database and reject network-ID drift before backup/preflight/startup.
+V3 recovery ordinary transfer must refuse before append until canonical-tag provenance
+is implemented. The existing isolated harness copies `staging_release.py`; its inventory
+regression imports and runs consumers from that copied source, and a disposable fixture
+without the module must fail. Portable execution covers OrdinaryExclusion; Linux also
+runs the new Genesis cases, with the existing full Genesis gate retained.
+Both enrolled R0/Q runtime identities must match the selected baseline; a historical
+data runtime or mismatched restore runtime refuses before admission transport.
+Ordinary V125 must retain its release/rollback behavior while schema126 flags cannot
+open new-image V126 authority. The retained V126 ordinary consumer's positive result
+means accepted-image recreation under its full transfer, not new-image selection.
+Portable tests use real filesystem/flock/process contention; the Linux full-genesis
+suite additionally checks exclusion before mkdir through ACK and late uncertainty.
+Both updated executors must be exercised together. Missing Linux/Docker/PG capabilities
+are an unexecuted integration gate, never a skipped operational PASS. Existing legacy,
+Policy B/DR, runtime and recovery regressions below remain mandatory; no new admission
+producer or real writer-exclusion evidence is supplied by these fixtures.
+
 `scripts/test-v126-cutover.sh` is the executable fixture authority for the sequencer; the canonical
 policy and state meanings remain in `docs/V126_STAGING_CUTOVER_CONTRACT.md`. Local and CI validation
 must run:

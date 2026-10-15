@@ -10,8 +10,10 @@ readonly V126_H2_MIGRATION_TREE='07b5ba6ccf25e79c9cc419b9095bb664f2cfae18'
 readonly V126_MIGRATION_BLOB='6f39f7d33b1976d0f5eb7a70051bfc5351d12e56'
 readonly V126_MIGRATION_SHA256='ad11b2f95a6c73db226d3cd1ba53ac800a514c72d454b9255f379566195e08b5'
 readonly V126_FLYWAY_CHECKSUM='1701638026'
-readonly V125_SOURCE_SHA='f577934691a1a7a79ba327c54e2055425142b7be'
-readonly V125_IMAGE_ID='sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8'
+readonly LEGACY_V125_SOURCE_SHA='f577934691a1a7a79ba327c54e2055425142b7be'
+readonly LEGACY_V125_IMAGE_ID='sha256:6a8aed7c85374efd89aa2db2e3dbcbed6d84f63087a757ad077856b78bce24a8'
+V125_SOURCE_SHA="${LEGACY_V125_SOURCE_SHA}"
+V125_IMAGE_ID="${LEGACY_V125_IMAGE_ID}"
 
 readonly -a V126_STAGES=(
   BASELINE_VERIFIED
@@ -72,6 +74,7 @@ MAINTENANCE_IDENTITIES_FILE=''
 V126_IMAGE_TAG=''
 V126_IMAGE_ID=''
 V125_IMAGE_TAG=''
+V125_BASELINE_B64=''
 SCRIPT_SHA256=''
 ACTIVE_OPERATION_KIND=''
 ACTIVE_OPERATION_NAME=''
@@ -107,7 +110,8 @@ Usage:
     --staging-path <absolute-path> --database-url-file <absolute-remote-path> \
     --maintenance-identities-file <absolute-remote-path> \
     --v126-image-tag <name:release-sha> --v126-image-id <sha256:id> \
-    --v125-image-tag <name:f577934691a1a7a79ba327c54e2055425142b7be>
+    --v125-image-tag <sha256:accepted-image-id> \
+    --v125-registration-file <protected-local-copy> --v125-state-file <protected-local-copy>
 
   scripts/v126-cutover.sh init --proposal-file <prepared-file> --proposal-sha256 <64-hex> \
     --state-dir <same-absolute-new-dir> --policy-b-anchor <previously-approved-anchor> \
@@ -664,6 +668,7 @@ prepare_state() {
   local v126_image_tag=''
   local v126_image_id=''
   local v125_image_tag=''
+  local v125_registration_file='' v125_state_file=''
 
   shift
   while (( $# > 0 )); do
@@ -685,6 +690,8 @@ prepare_state() {
       --maintenance-identities-file) maintenance_identities_file="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
       --v126-image-tag) v126_image_tag="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
       --v126-image-id) v126_image_id="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --v125-registration-file) v125_registration_file="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
+      --v125-state-file) v125_state_file="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
       --v125-image-tag) v125_image_tag="$(parse_option_value "$1" "${2:-}")"; shift 2 ;;
       *) die "unknown prepare-init option: $1" ;;
     esac
@@ -707,8 +714,9 @@ prepare_state() {
   [[ "${v126_image_tag}" =~ ^[a-z0-9][a-z0-9._/-]*:${release_sha}$ ]] ||
     die 'v126-image-tag must end in the exact release SHA'
   require_image_id v126-image-id "${v126_image_id}"
-  [[ "${v125_image_tag}" =~ ^[a-z0-9][a-z0-9._/-]*:${V125_SOURCE_SHA}$ ]] ||
-    die 'v125-image-tag must end in the exact reviewed V125 source SHA'
+  require_image_id v125-image-tag "${v125_image_tag}"
+  require_absolute_path v125-registration-file "${v125_registration_file}"
+  require_absolute_path v125-state-file "${v125_state_file}"
   [[ ! -e "${state_dir}" && ! -L "${state_dir}" ]] || die 'state-dir must not already exist'
   [[ -d "${release_worktree}" && ! -L "${release_worktree}" ]] ||
     die 'release-worktree must be a real directory, not a symlink'
@@ -725,7 +733,7 @@ prepare_state() {
     "${run_id}" "${release_sha}" "${release_tree}" "${release_parents}" \
     "${main_actions_run_id}" "${release_worktree}" "${remote}" "${staging_path}" \
     "${database_url_file}" "${maintenance_identities_file}" "${v126_image_tag}" \
-    "${v126_image_id}" "${v125_image_tag}" "${script_sha}" "${created_at}" "${epoch_id}" "${domain_identity_sha256}" "${predecessor_index_sha256}" <<'PY' | \
+    "${v126_image_id}" "${v125_image_tag}" "${script_sha}" "${created_at}" "${epoch_id}" "${domain_identity_sha256}" "${predecessor_index_sha256}" "${v125_registration_file}" "${v125_state_file}" "${SCRIPT_DIR}" <<'PY' | \
     python3 "${SCRIPT_DIR}/v126-policy-b-client.py" prepare-init --state-dir "${state_dir}" \
       --proposal-file "${proposal_file}"
 import json
@@ -749,12 +757,22 @@ import sys
     v125_image_tag,
     script_sha256,
     created_at, epoch_id, domain_identity_sha256, predecessor_index_sha256,
+    registration_file, accepted_state_file, script_dir,
 ) = sys.argv[1:]
+import importlib.util
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("v126_prepare_client", os.path.join(script_dir, "v126-policy-b-client.py"))
+client = importlib.util.module_from_spec(spec); spec.loader.exec_module(client)
+baseline = client.module("v126_prepare_bindings", "v126-operation-bindings.py").binding_v125_baseline_documents(
+    client.read_protected(registration_file), client.read_protected(accepted_state_file), staging_path)
+if v125_image_tag != baseline["image_id"]:
+    raise SystemExit("accepted V125 image differs from proposed rollback identity")
 
 document = {
     "created_at": created_at,
     "database_url_file": database_url_file,
-    "format_version": 1,
+    "format_version": 3,
+    "v125_baseline": baseline,
     "main_actions_run_id": int(main_actions_run_id),
     "maintenance_identities_file": maintenance_identities_file,
     "release_parents": release_parents.split(","),
@@ -773,7 +791,7 @@ if any((epoch_id, domain_identity_sha256, predecessor_index_sha256)):
     import re
     if not all(re.fullmatch('[0-9a-f]{64}', x) for x in (epoch_id, domain_identity_sha256, predecessor_index_sha256)):
         raise SystemExit('complete epoch context required')
-    document.update(format_version=2, epoch=dict(epoch_id=epoch_id,
+    document.update(epoch=dict(epoch_id=epoch_id,
         domain_identity_sha256=domain_identity_sha256, predecessor_index_sha256=predecessor_index_sha256))
 payload = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
 sys.stdout.buffer.write(payload)
@@ -813,7 +831,7 @@ PY
     die 'run manifest checksum mismatch'
 
   local fields
-  fields="$(python3 - "${requested_state}/run.json" <<'PY'
+  fields="$(python3 - "${requested_state}/run.json" "${SCRIPT_DIR}" <<'PY'
 import json
 import re
 import sys
@@ -828,13 +846,21 @@ expected = {
     "release_worktree", "remote", "run_id", "script_sha256", "staging_path",
     "v125_image_tag", "v126_image_id", "v126_image_tag",
 }
+baseline = doc.get("v125_baseline")
+if baseline is not None:
+    import importlib.util
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location("load_baseline_client", sys.argv[2] + "/v126-policy-b-client.py")
+    client = importlib.util.module_from_spec(spec); spec.loader.exec_module(client)
+    client.validate_init_manifest(raw)
+    expected.add("v125_baseline")
 epoch = doc.get('epoch')
 if epoch is not None:
     if (type(epoch) is not dict or set(epoch) != {'epoch_id', 'domain_identity_sha256', 'predecessor_index_sha256'}
             or any(type(v) is not str or not re.fullmatch('[0-9a-f]{64}', v) for v in epoch.values())):
         raise SystemExit('invalid manifest epoch')
     expected.add('epoch')
-if set(doc) != expected or type(doc['format_version']) is not int or doc["format_version"] != (2 if epoch else 1):
+if set(doc) != expected or type(doc['format_version']) is not int or doc["format_version"] != (3 if baseline is not None else (2 if epoch else 1)):
     raise SystemExit("invalid run manifest schema")
 canonical = (json.dumps(doc, sort_keys=True, separators=(",", ":")) + "\n").encode()
 if raw != canonical:
@@ -862,7 +888,7 @@ for key in ("release_worktree", "staging_path", "database_url_file", "maintenanc
         raise SystemExit(f"invalid absolute path: {key}")
     if any(component in (".", "..") for component in value.split("/")):
         raise SystemExit(f"dot path component rejected: {key}")
-for key in ("v125_image_tag", "v126_image_tag"):
+for key in (("v126_image_tag",) if baseline is not None else ("v125_image_tag", "v126_image_tag")):
     if not isinstance(doc[key], str) or not re.fullmatch(r"[a-z0-9][a-z0-9._/-]*:[0-9a-f]{40}", doc[key]):
         raise SystemExit(f"invalid image tag: {key}")
 if any("\t" in str(value) or "\n" in str(value) for value in doc.values()):
@@ -881,10 +907,18 @@ for key in ordered:
     print(f"{key}\t{value}")
 for key in ('epoch_id', 'domain_identity_sha256', 'predecessor_index_sha256'):
     print(f"{key}\t{epoch[key] if epoch else ''}")
+import base64
+print("v125_baseline_b64\t" + (base64.b64encode(client.canonical(baseline)).decode() if baseline is not None else ""))
+if baseline is not None:
+    print("v125_source_sha\t" + baseline["source_sha"])
+    print("v125_image_id\t" + baseline["image_id"])
 PY
 )" || die 'run manifest validation failed'
 
   STATE_DIR="${requested_state}"
+  V125_SOURCE_SHA="${LEGACY_V125_SOURCE_SHA}"
+  V125_IMAGE_ID="${LEGACY_V125_IMAGE_ID}"
+  V125_BASELINE_B64=''
   while IFS=$'\t' read -r key value; do
     case "${key}" in
       run_id) RUN_ID="${value}" ;;
@@ -900,6 +934,9 @@ PY
       v126_image_tag) V126_IMAGE_TAG="${value}" ;;
       v126_image_id) V126_IMAGE_ID="${value}" ;;
       v125_image_tag) V125_IMAGE_TAG="${value}" ;;
+      v125_baseline_b64) V125_BASELINE_B64="${value}" ;;
+      v125_source_sha) V125_SOURCE_SHA="${value}" ;;
+      v125_image_id) V125_IMAGE_ID="${value}" ;;
       epoch_id) AUTHORITY_EPOCH_ID="${value}" ;;
       domain_identity_sha256) DOMAIN_IDENTITY_SHA256="${value}" ;;
       predecessor_index_sha256) PREDECESSOR_INDEX_SHA256="${value}" ;;
@@ -2602,13 +2639,18 @@ loader_read maintenance_smoke_sha
 loader_read maintenance_off_sha
 envelope_epoch_id=''
 envelope_domain_id=''
-if [[ "${magic}" == V126_INTERNAL_REMOTE_ENVELOPE_V2 ]]; then
+if [[ "${magic}" == V126_INTERNAL_REMOTE_ENVELOPE_V2 || "${magic}" == V126_INTERNAL_REMOTE_ENVELOPE_V4 ]]; then
   loader_read envelope_epoch_id
   loader_read envelope_domain_id
   [[ "${envelope_epoch_id}" =~ ^[0-9a-f]{64}$ && "${envelope_domain_id}" =~ ^[0-9a-f]{64}$ ]] || loader_die 'invalid epoch envelope'
 fi
+envelope_v125_baseline=''
+if [[ "${magic}" == V126_INTERNAL_REMOTE_ENVELOPE_V3 || "${magic}" == V126_INTERNAL_REMOTE_ENVELOPE_V4 ]]; then
+  loader_read envelope_v125_baseline
+  [[ -n "${envelope_v125_baseline}" ]] || loader_die 'missing accepted V125 baseline'
+fi
 loader_read raw_arg_count
-[[ "${magic}" == V126_INTERNAL_REMOTE_ENVELOPE_V1 || "${magic}" == V126_INTERNAL_REMOTE_ENVELOPE_V2 ]] || loader_die 'invalid internal remote envelope magic'
+[[ "${magic}" =~ ^V126_INTERNAL_REMOTE_ENVELOPE_V[1-4]$ ]] || loader_die 'invalid internal remote envelope magic'
 [[ "${raw_arg_count}" =~ ^[1-9][0-9]*$ && "${raw_arg_count}" -le 32 ]] || loader_die 'invalid internal remote argument count'
 remote_args=()
 for ((loader_index = 0; loader_index < raw_arg_count; loader_index++)); do
@@ -2621,6 +2663,7 @@ unset remote_envelope_content
 remote_body_sha="$(printf '%s' "${remote_body_content}" | sha256sum | awk '{print $1}')" ||
   loader_die 'streamed sequencer body could not be hashed'
 [[ "${remote_body_sha}" == "${envelope_script_sha}" ]] || loader_die 'streamed sequencer identity mismatch'
+export V126_INTERNAL_REMOTE_V125_BASELINE_B64="${envelope_v125_baseline}"
 export V126_INTERNAL_REMOTE_AUTHORITY_EPOCH_ID="${envelope_epoch_id}"
 export V126_INTERNAL_REMOTE_DOMAIN_IDENTITY_SHA256="${envelope_domain_id}"
 export V126_INTERNAL_REMOTE_MODE=true
@@ -2663,6 +2706,10 @@ REMOTE_LOADER
     [[ $? == 0 ]] || exit 4
     local envelope_magic=V126_INTERNAL_REMOTE_ENVELOPE_V1
     [[ -z "${AUTHORITY_EPOCH_ID:-}" ]] || envelope_magic=V126_INTERNAL_REMOTE_ENVELOPE_V2
+    if [[ -n "${V125_BASELINE_B64}" ]]; then
+      envelope_magic=V126_INTERNAL_REMOTE_ENVELOPE_V3
+      [[ -z "${AUTHORITY_EPOCH_ID:-}" ]] || envelope_magic=V126_INTERNAL_REMOTE_ENVELOPE_V4
+    fi
     printf '%s\n' \
       "${envelope_magic}" \
       "${action}" \
@@ -2694,6 +2741,9 @@ REMOTE_LOADER
       "${maintenance_off_sha}" || exit 4
     if [[ -n "${AUTHORITY_EPOCH_ID:-}" ]]; then
       printf '%s\n' "${AUTHORITY_EPOCH_ID}" "${DOMAIN_IDENTITY_SHA256}" || exit 4
+    fi
+    if [[ -n "${V125_BASELINE_B64}" ]]; then
+      printf '%s\n' "${V125_BASELINE_B64}" || exit 4
     fi
     printf '%s\n' "$#" || exit 4
     printf '%s\n' "$@" || exit 4
@@ -3520,10 +3570,20 @@ remote_env_value() {
 }
 
 remote_compose() {
-  cutover_bounded_command 600 env -i \
-    PATH="${PATH:?}" \
-    HOME="${HOME:?}" \
-    BACKEND_IMAGE="${REMOTE_BACKEND_IMAGE:?}" \
+  local -a compose_environment=(env -i
+    "PATH=${PATH:?}" "HOME=${HOME:?}" "BACKEND_IMAGE=${REMOTE_BACKEND_IMAGE:?}")
+  if [[ -n "${V126_INTERNAL_REMOTE_V125_BASELINE_B64:-}" ]]; then
+    local revision
+    if [[ "${REMOTE_BACKEND_IMAGE:-}" == "${V125_IMAGE_ID}" ]]; then
+      revision="${V125_SOURCE_SHA}"
+    else
+      revision="${V126_INTERNAL_REMOTE_RELEASE_SHA:-}"
+      [[ "${revision}" =~ ^[0-9a-f]{40}$ && "${REMOTE_BACKEND_IMAGE:-}" =~ :${revision}$ ]] ||
+        die 'Compose image has no accepted source identity'
+    fi
+    compose_environment+=("APP_VERSION=${revision}")
+  fi
+  cutover_bounded_command 600 "${compose_environment[@]}" \
     docker compose --env-file .env --file docker-compose.yml "$@"
 }
 
@@ -4236,6 +4296,68 @@ SQL
   fi
 }
 
+remote_select_v125_baseline() {
+  V125_SOURCE_SHA="${LEGACY_V125_SOURCE_SHA}"
+  V125_IMAGE_ID="${LEGACY_V125_IMAGE_ID}"
+  [[ -n "${V126_INTERNAL_REMOTE_V125_BASELINE_B64:-}" ]] || return 0
+  local selected
+  selected="$(python3 -c "$(remote_operation_bindings_python)
+import base64
+try:
+    raw = base64.b64decode(sys.argv[1], validate=True)
+    baseline = binding_v125_baseline(json.loads(raw))
+    if raw != binding_canonical(baseline): raise BindingError('v125_baseline_noncanonical')
+    print(baseline['source_sha'] + ' ' + baseline['image_id'])
+except (ValueError, KeyError, TypeError):
+    raise SystemExit('accepted V125 baseline identity refused')
+" "${V126_INTERNAL_REMOTE_V125_BASELINE_B64}")" || die 'accepted V125 baseline identity refused'
+  read -r V125_SOURCE_SHA V125_IMAGE_ID <<< "${selected}"
+  [[ "${V125_SOURCE_SHA}" =~ ^[0-9a-f]{40}$ && "${V125_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+    die 'accepted V125 baseline identity refused'
+}
+
+remote_require_backend_reference() {
+  if [[ -n "${V126_INTERNAL_REMOTE_V125_BASELINE_B64:-}" && "$1" == "${V125_IMAGE_ID}" ]]; then
+    return 0
+  fi
+  [[ "$1" =~ ^[a-z0-9][a-z0-9._/-]*:[0-9a-f]{40}$ ]] || die 'remote backend image reference is not exact'
+}
+
+remote_require_v125_reference() {
+  if [[ -n "${V126_INTERNAL_REMOTE_V125_BASELINE_B64:-}" ]]; then
+    [[ "$1" == "${V125_IMAGE_ID}" ]] || die 'accepted V125 immutable image reference differs'
+  else
+    [[ "$1" =~ :${V125_SOURCE_SHA}$ ]] || die 'historical V125 image source differs'
+  fi
+}
+
+remote_assert_accepted_v125_baseline() {
+  [[ -n "${V126_INTERNAL_REMOTE_V125_BASELINE_B64:-}" ]] || return 0
+  local code
+  code="$(remote_operation_bindings_python)"$'\n'"$(cat <<'V125_BASELINE_PY'
+import base64, subprocess
+try:
+    baseline = binding_v125_baseline(json.loads(base64.b64decode(sys.argv[1], validate=True)))
+    target = Path(sys.argv[2])
+    binding_v125_current(baseline, target)
+    def command(args):
+        return subprocess.check_output(args, stderr=subprocess.DEVNULL, timeout=15)
+    image = json.loads(command(['docker', 'image', 'inspect', baseline['image_id']]))
+    postgres = json.loads(command(['docker', 'inspect', baseline['database']['container_id']]))
+    if len(image) != 1 or len(postgres) != 1: raise BindingError('v125_baseline_runtime_inventory')
+    query = 'SELECT json_build_array((SELECT system_identifier::text FROM pg_control_system()), current_database(), current_user);'
+    result = command(['docker', 'exec', baseline['database']['container_id'], 'sh', '-c',
+        ': "${POSTGRES_USER:?}" "${POSTGRES_DB:?}"; PGCONNECT_TIMEOUT=5 PGOPTIONS="-c statement_timeout=10000" psql -X -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At --set=ON_ERROR_STOP=1 -c "$1"', 'v125-baseline', query])
+    binding_v125_runtime(baseline, image[0], postgres[0], json.loads(result))
+    binding_v125_current(baseline, target)
+except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
+    raise SystemExit('accepted V125 baseline changed or runtime identity unavailable')
+V125_BASELINE_PY
+)"
+  python3 -c "${code}" "${V126_INTERNAL_REMOTE_V125_BASELINE_B64}" "$1" ||
+    die 'accepted V125 baseline verification failed'
+}
+
 remote_baseline() {
   local staging_path="$1"
   local run_id="$2"
@@ -4254,7 +4376,7 @@ remote_baseline() {
   [[ "${expected_compose_sha}" =~ ^[0-9a-f]{64}$ ]] || die 'invalid release-bound Compose SHA-256'
   [[ "${expected_maintenance_sha}" =~ ^[0-9a-f]{64}$ ]] || die 'invalid release-bound maintenance guard SHA-256'
   [[ "${expected_admission_sha}" =~ ^[0-9a-f]{64}$ ]] || die 'invalid release-bound admission guard SHA-256'
-  [[ "${v125_image_tag}" =~ :${V125_SOURCE_SHA}$ ]] || die 'remote V125 image tag mismatch'
+  remote_require_v125_reference "${v125_image_tag}"
   cd "${staging_path}"
   remote_require_operator_file .env 600
   remote_require_operator_file "${database_url_file}" 600
@@ -4343,6 +4465,8 @@ SQL
   caddy_sha="$(sudo sha256sum /etc/caddy/Caddyfile | awk '{print $1}')"
   [[ "${caddy_sha}" =~ ^[0-9a-f]{64}$ ]] || die 'baseline Caddy hash is invalid'
   remote_assert_public_live
+  remote_assert_accepted_v125_baseline "${staging_path}"
+  remote_assert_database_target || die 'accepted database equality failed before baseline proof'
   local run_root
   run_root="$(remote_create_run_root "${staging_path}" "${run_id}")"
   local authority_proof="${run_root}/baseline-authority.proof"
@@ -4407,7 +4531,7 @@ remote_backup_rehearsal() {
   remote_require_run_id "${run_id}"
   remote_require_sha "${release_sha}"
   [[ "${phase}" == pre-drain || "${phase}" == quiesced ]] || die 'backup phase must be pre-drain or quiesced'
-  [[ "${backend_image}" =~ ^[a-z0-9][a-z0-9._/-]*:[0-9a-f]{40}$ ]] || die 'invalid backup Compose image tag'
+  remote_require_backend_reference "${backend_image}"
   cd "${staging_path}"
   REMOTE_BACKEND_IMAGE="${backend_image}"
   local run_root
@@ -5148,8 +5272,7 @@ remote_initialize_compose() {
   remote_require_absolute_path staging-path "${staging_path}"
   remote_require_run_id "${run_id}"
   remote_require_sha "${release_sha}"
-  [[ "${backend_image}" =~ ^[a-z0-9][a-z0-9._/-]*:[0-9a-f]{40}$ ]] ||
-    die 'remote backend image tag must end in a full SHA'
+  remote_require_backend_reference "${backend_image}"
   cd "${staging_path}"
   remote_require_operator_file .env 600
   remote_verify_baseline_authority "${staging_path}" "${run_id}" "${release_sha}" \
@@ -5164,7 +5287,7 @@ remote_initialize_reconciled_recovery() {
   remote_require_absolute_path staging-path "${staging_path}"
   remote_require_run_id "${run_id}"
   remote_require_sha "${release_sha}"
-  [[ "${backend_image}" =~ :${V125_SOURCE_SHA}$ ]] || die 'reconciled recovery image source differs'
+  remote_require_v125_reference "${backend_image}"
   cd "${staging_path}"
   remote_require_operator_file .env 600
   remote_verify_baseline_authority "${staging_path}" "${run_id}" "${release_sha}" '' '' '' '' '' '' '' "${proof_sha}"
@@ -5368,6 +5491,7 @@ remote_database_evidence_python() {
 The sequencer embeds this exact source for its remote consumers. The regression suite
 checks byte equality, so source binding covers the helper as well as its caller.
 """
+import base64
 import hashlib
 import json
 import os
@@ -5648,7 +5772,7 @@ def assert_compose_source_labels(source_labels, backend_labels):
             fail('database containers belong to another Compose working directory or config source')
 
 
-def assert_live_target(uri_path, backend_image, expected_uri_sha):
+def assert_live_target(uri_path, backend_image, expected_uri_sha, accepted_baseline=None):
     # All credential-bearing configuration and inspect output stays in this process.
     raw_uri = Path(uri_path).read_bytes()
     if (not re.fullmatch('[0-9a-f]{64}', expected_uri_sha)
@@ -5739,6 +5863,21 @@ def assert_live_target(uri_path, backend_image, expected_uri_sha):
     host = command(['python3', '-c', LIBPQ_IDENTITY_WORKER],
                    payload=json.dumps({'uri': uri, 'sql': IDENTITY_SQL}).encode())
     digest = equal_identities([native, host])
+    if accepted_baseline is not None:
+        # Reuse the observations above: separately healthy accepted and actual
+        # databases are insufficient. Bind the same semantic target to INIT.
+        identity = database_identity(native)
+        observed = dict(container_id=source_id, system_id=identity['system_identifier'],
+                        database=identity['database'], user=identity['current_role'], network=name)
+        if accepted_baseline.get('database') != observed:
+            fail('actual database target differs from the accepted V125 baseline')
+        network_id = planned_network.get('Id')
+        if not isinstance(network_id, str) or not re.fullmatch('[0-9a-f]{64}', network_id):
+            fail('accepted database network lacks a canonical identity')
+        # The ordinary registration binds a network name. Preserve the observed
+        # Docker identity too, so same-name replacement cannot survive baseline.
+        bound = dict(semantic_sha256=digest, database=observed, network_id=network_id)
+        digest = hashlib.sha256(json.dumps(bound, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     # Inspect again to reject container replacement/config drift during the reads.
     def stable(container):
         return {key: container[key] for key in ('Id', 'Config', 'RestartCount', 'HostConfig')} | {
@@ -5754,8 +5893,13 @@ def assert_live_target(uri_path, backend_image, expected_uri_sha):
 def main(argv):
     if argv == ['identity-sql']:
         print(IDENTITY_SQL, end='')
-    elif len(argv) == 4 and argv[0] == 'live-target':
-        assert_live_target(argv[1], argv[2], argv[3])
+    elif len(argv) in (4, 5) and argv[0] == 'live-target':
+        baseline = None
+        if len(argv) == 5 and argv[4]:
+            baseline = strict_json(base64.b64decode(argv[4], validate=True))
+            if not isinstance(baseline, dict) or not isinstance(baseline.get('database'), dict):
+                fail('accepted database identity is missing')
+        assert_live_target(argv[1], argv[2], argv[3], baseline)
     elif len(argv) == 2 and argv[0] == 'preflight':
         preflight_outcome(Path(argv[1]).read_bytes())
     elif len(argv) == 5 and argv[0] == 'toc':
@@ -5793,7 +5937,7 @@ remote_assert_database_target() {
   code="$(remote_database_evidence_python)" || die 'database evidence source unavailable'
   local result
   result="$(cutover_bounded_command 180 python3 -c "${code}" live-target "${database_path}" \
-    "${REMOTE_BACKEND_IMAGE}" "${database_sha}")" ||
+    "${REMOTE_BACKEND_IMAGE}" "${database_sha}" "${V126_INTERNAL_REMOTE_V125_BASELINE_B64:-}")" ||
     die 'actual server/database/schema/intended-role target equality failed'
   [[ "${result}" =~ ^DATABASE_TARGET_EQUALITY=([0-9a-f]{64})$ ]] || die 'database target result is malformed'
   REMOTE_DATABASE_TARGET_IDENTITY_SHA256="${BASH_REMATCH[1]}"
@@ -7930,7 +8074,7 @@ remote_recover_pre_v126() {
   remote_assert_zero_writer '125:0:0'
   remote_recovery_product_off "${staging_path}" "${run_root}"
   REMOTE_BACKEND_IMAGE="${v125_image_tag}"
-  [[ "${v125_image_tag}" =~ :${V125_SOURCE_SHA}$ ]] || die 'pre-V126 rollback source tag mismatch'
+  remote_require_v125_reference "${v125_image_tag}"
   [[ "$(docker image inspect --format '{{.Id}}' "${v125_image_tag}")" == "${V125_IMAGE_ID}" ]] ||
     die 'exact reviewed V125 image is unavailable'
   remote_assert_compose_backend_image "${v125_image_tag}"
@@ -9064,6 +9208,8 @@ class Evidence:
                 # it has no action args, process log or predecessor artifacts.
                 continue
             original, original_request, _, artifacts = operation(self.root, path.name.removesuffix('.start.json'), self.target)
+            require(original_request['environment'].get('V126_INTERNAL_REMOTE_V125_BASELINE_B64') ==
+                    request['environment'].get('V126_INTERNAL_REMOTE_V125_BASELINE_B64'), 'predecessor_v125_baseline_mismatch')
             self.original_requests.append((original, original_request))
             for name, value in artifacts.items():
                 require(name not in self.artifacts, 'ambiguous_original_artifact')
@@ -9529,7 +9675,7 @@ def run_observer(source_bytes, request, evidence, calls, expected_id):
             for name, code in [('derive.py', derive), ('execute.py', execute)]:
                 (root / name).write_text(code)
                 (root / name).chmod(0o400)
-        body = 'set -Eeuo pipefail\nsource "$1"\n' + READ_ONLY_HELPERS
+        body = 'set -Eeuo pipefail\nsource "$1"\nremote_select_v125_baseline\n' + READ_ONLY_HELPERS
         for name in evidence.proofs:
             body += quoted_call('remote_verify_proof', evidence.run_root / (PROOF_FILENAMES.get(name, name) + '.proof')) + '\n'
         for name, command in calls:
@@ -9807,6 +9953,109 @@ def binding_inventory(root, owner, target=None):
     return files, unknown, identities
 
 
+def binding_v125_baseline(value):
+    """V3 baseline identity, approved with INIT; never itself legacy admission."""
+    keys = {'source_sha', 'image_id', 'registration_sha256', 'state_sha256', 'database'}
+    if (type(value) is not dict or set(value) != keys or
+            not re.fullmatch('[0-9a-f]{40}', value.get('source_sha', '')) or
+            not re.fullmatch('sha256:[0-9a-f]{64}', value.get('image_id', '')) or
+            any(not re.fullmatch('[0-9a-f]{64}', value.get(k, ''))
+                for k in ('registration_sha256', 'state_sha256'))):
+        raise BindingError('v125_baseline_schema')
+    db = value['database']
+    if (type(db) is not dict or set(db) != {'container_id', 'system_id', 'database', 'user', 'network'} or
+            any(type(v) is not str or not v or any(c in v for c in '\x00\r\n') for v in db.values()) or
+            not re.fullmatch('[0-9a-f]{64}', db['container_id']) or
+            not re.fullmatch('[0-9]+', db['system_id'])):
+        raise BindingError('v125_baseline_database')
+    return value
+
+
+def binding_v125_baseline_documents(registration_raw, state_raw, target):
+    """Bind existing accepted ordinary authority; live consumers still observe runtime."""
+    def read(raw):
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result: raise BindingError('v125_baseline_duplicate_field')
+                result[key] = value
+            return result
+        if not isinstance(raw, bytes) or not 0 < len(raw) <= 1024 * 1024:
+            raise BindingError('v125_baseline_input_bound')
+        return json.loads(raw, object_pairs_hook=pairs,
+                          parse_constant=lambda _: (_ for _ in ()).throw(BindingError('v125_baseline_nonfinite')))
+    registered, state = read(registration_raw), read(state_raw)
+    scope = registered['scope']
+    if (registered.get('transition_approved') is not True or scope.get('project_id') != 'Hookah_Tootah' or
+            scope.get('directory') != str(target) or scope.get('compose_file') != str(Path(target)/'docker-compose.yml') or
+            type(scope.get('postgresql_head', 125)) is not int or scope.get('postgresql_head', 125) != 125 or
+            state.get('scope') != hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest() or
+            state.get('status') != 'ACCEPTED' or state.get('reason') is not None):
+        raise BindingError('v125_baseline_not_accepted_target')
+    accepted = state['accepted']
+    if (accepted.get('source') != 'https://github.com/koteev-m/hookah_bot' or
+            accepted.get('platform') != 'linux/amd64' or accepted.get('ci_sha') != accepted.get('revision') or
+            accepted.get('ci_status') != 'success' or accepted.get('approved') is not True or
+            accepted.get('available') is not True or type(accepted.get('postgresql_head')) is not int or
+            accepted.get('postgresql_head') != 125 or
+            not re.fullmatch('[0-9a-f]{64}', scope.get('migration_fingerprint', '')) or
+            accepted.get('migration_fingerprint') != scope['migration_fingerprint']):
+        raise BindingError('v125_baseline_image_not_approved')
+    operation = state.get('operation')
+    if operation is not None and (type(operation) is not dict or operation.get('to') != accepted):
+        raise BindingError('v125_baseline_operation_not_accepted')
+    database = {k: scope['protected']['postgres'][k]
+                for k in ('container_id', 'system_id', 'database', 'user', 'network')}
+    return binding_v125_baseline(dict(source_sha=accepted['revision'], image_id=accepted['id'],
+        registration_sha256=hashlib.sha256(registration_raw).hexdigest(),
+        state_sha256=hashlib.sha256(state_raw).hexdigest(), database=database))
+
+
+def binding_v125_current(baseline, target):
+    """Read unchanged root-owned ordinary authority. No writes or auto-rebaseline."""
+    def protected(path):
+        path = Path(path)
+        if not path.is_absolute() or path.resolve(strict=True) != path:
+            raise BindingError('v125_baseline_protected_path')
+        for parent in path.parents:
+            info = parent.stat()
+            if info.st_uid != 0 or info.st_mode & 0o022:
+                raise BindingError('v125_baseline_protected_parent')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or before.st_gid != 0 or
+                    stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1 or
+                    not 0 < before.st_size <= 1024 * 1024):
+                raise BindingError('v125_baseline_protected_file')
+            with os.fdopen(os.dup(fd), 'rb') as handle: raw = handle.read(1024 * 1024 + 1)
+            after = os.fstat(fd)
+            if ((before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) !=
+                    (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) or
+                    path.stat().st_ino != before.st_ino):
+                raise BindingError('v125_baseline_file_changed')
+            return raw
+        finally: os.close(fd)
+    observed = binding_v125_baseline_documents(protected('/etc/hookah-bot/staging-release.json'),
+        protected(Path(target)/'.staging-release/state.json'), target)
+    if observed != baseline:
+        raise BindingError('v125_baseline_accepted_identity_changed')
+
+
+def binding_v125_runtime(baseline, image, postgres, database):
+    binding_v125_baseline(baseline)
+    labels = image.get('Config', {}).get('Labels', {})
+    if (image.get('Id') != baseline['image_id'] or image.get('Os') != 'linux' or
+            image.get('Architecture') != 'amd64' or labels.get('org.opencontainers.image.revision') != baseline['source_sha'] or
+            labels.get('org.opencontainers.image.source') != 'https://github.com/koteev-m/hookah_bot'):
+        raise BindingError('v125_baseline_runtime_image')
+    expected = baseline['database']
+    if (postgres.get('Id') != expected['container_id'] or postgres.get('State', {}).get('Running') is not True or
+            expected['network'] not in postgres.get('NetworkSettings', {}).get('Networks', {}) or
+            database != [expected['system_id'], expected['database'], expected['user']]):
+        raise BindingError('v125_baseline_runtime_database')
+
+
 def binding_handoff(doc, owner, next_owner, receipt_sha, target):
     binding_owner(owner)
     binding_owner(next_owner)
@@ -9815,8 +10064,12 @@ def binding_handoff(doc, owner, next_owner, receipt_sha, target):
             'operational_version', 'backend_image', 'image_id', 'environment_sha256',
             'compose_sha256', 'caddy_runtime_sha256', 'config_owner', 'restart_policy',
             'handoff_approved_and_applied', 'approval_id', 'observed_at'}
+    baseline = doc.get('v125_baseline') if isinstance(doc, dict) else None
+    if baseline is not None:
+        binding_v125_baseline(baseline)
+        keys.add('v125_baseline')
     if (not isinstance(doc, dict) or set(doc) != keys or type(doc['format_version']) is not int or
-            doc['format_version'] != 1 or doc['owner'] != owner or doc['next_owner'] != next_owner or
+            doc['format_version'] != (2 if baseline is not None else 1) or doc['owner'] != owner or doc['next_owner'] != next_owner or
             doc['terminal_receipt_sha256'] != receipt_sha or
             doc['target_sha256'] != hashlib.sha256(str(target).encode()).hexdigest() or
             doc['operational_version'] not in ('V125', 'V126') or
@@ -9829,10 +10082,43 @@ def binding_handoff(doc, owner, next_owner, receipt_sha, target):
             raise BindingError('handoff_digest')
     if not re.fullmatch(r'sha256:[0-9a-f]{64}', doc['image_id']):
         raise BindingError('handoff_image')
-    release = owner['release_sha'] if doc['operational_version'] == 'V126' else 'f577934691a1a7a79ba327c54e2055425142b7be'
-    if not re.fullmatch(r'[a-z0-9][a-z0-9._/-]*:' + release, doc['backend_image']):
-        raise BindingError('handoff_image_source')
+    if baseline is not None:
+        if (doc['operational_version'] != 'V125' or doc['image_id'] != baseline['image_id'] or
+                doc['backend_image'] != baseline['image_id']):
+            raise BindingError('handoff_accepted_v125_image')
+    else:
+        release = owner['release_sha'] if doc['operational_version'] == 'V126' else 'f577934691a1a7a79ba327c54e2055425142b7be'
+        if not re.fullmatch(r'[a-z0-9][a-z0-9._/-]*:' + release, doc['backend_image']):
+            raise BindingError('handoff_image_source')
     datetime.datetime.strptime(doc['observed_at'], '%Y-%m-%dT%H:%M:%SZ')
+
+
+def binding_handoff_baseline(root, target, owner, handoff):
+    baseline = handoff.get('v125_baseline')
+    if handoff['operational_version'] != 'V125':
+        return
+    initial = []
+    for path in root.glob('*.start.json'):
+        identity = binding_read(path).get('identity', {})
+        if all(identity.get(k) == v for k, v in owner.items()) and identity.get('kind') == 'INIT':
+            request = binding_request(root/(path.name.removesuffix('.start.json')+'.request.json'), identity, target)
+            initial.append(request.get('v125_baseline'))
+    if len(initial) > 1 or baseline != (initial[0] if initial else None):
+        raise BindingError('handoff_v125_baseline_differs_from_init')
+    if baseline is None:
+        return
+    import base64
+    matches = []
+    for path in root.glob('*.start.json'):
+        start = binding_read(path)
+        identity = start.get('identity', {})
+        if (all(identity.get(k) == v for k, v in owner.items()) and
+                (identity.get('kind'), identity.get('name'), identity.get('action')) ==
+                ('STAGE', 'BASELINE_VERIFIED', 'baseline')):
+            _, _, request = binding_operation_evidence(root, path.name.removesuffix('.start.json'), target)
+            matches.append(request['environment'].get('V126_INTERNAL_REMOTE_V125_BASELINE_B64'))
+    if matches != [base64.b64encode(binding_canonical(baseline)).decode()]:
+        raise BindingError('handoff_accepted_v125_baseline_not_proven')
 
 
 def binding_chain(root, target):
@@ -9871,6 +10157,7 @@ def binding_chain(root, target):
             raise BindingError('retired_outcome_not_proven')
         handoff = transfer['handoff']
         binding_handoff(handoff, owner, next_owner, handoff['terminal_receipt_sha256'], target)
+        binding_handoff_baseline(root, target, owner, handoff)
         ordinary = version == 2 and transfer['terminal_kind'] == 'ORDINARY_DEPLOY_PROOF'
         required = ('DEPLOY', 'ORDINARY_DEPLOY') if ordinary else (('STAGE', 'FINAL_PUBLIC_GATES_PASSED') if handoff['operational_version'] == 'V126' else ('RECOVERY', 'pre-v126'))
         if not any((identity['kind'], identity['name']) == required for identity in identities):
@@ -9953,6 +10240,7 @@ def binding_entry(mode):
         if current != owner:
             raise BindingError('retirement_requires_known_completed_current_run')
         binding_handoff(handoff, owner, next_owner, receipt_sha, target)
+        binding_handoff_baseline(root, target, owner, handoff)
         if handoff['image_id'] != sys.argv[11]:
             raise BindingError('terminal_handoff_image_mismatch')
         if handoff['operational_version'] != sys.argv[10]:
@@ -9962,10 +10250,6 @@ def binding_entry(mode):
             raise BindingError('terminal_remote_operation_missing')
         if any(previous['run_id'] == next_owner['run_id'] for previous in owners):
             raise BindingError('run_id_reuse')
-        directory = root / 'transfers'
-        if not directory.exists():
-            directory.mkdir(mode=0o700)
-        binding_protected(directory, 0o700, True)
         transfer = dict(format_version=1, previous_owner=owner, next_owner=next_owner,
                         inventory=inventory, handoff=handoff)
         if len(sys.argv) > 13:
@@ -9981,6 +10265,10 @@ def binding_entry(mode):
                 raise BindingError('cutover_transfer_has_no_deploy_request')
             transfer.update(format_version=2, next_kind=next_kind,
                             request_sha256=request_sha, terminal_kind=terminal_kind)
+        directory = root / 'transfers'
+        if not directory.exists():
+            directory.mkdir(mode=0o700)
+        binding_protected(directory, 0o700, True)
         recordfd = os.open(directory / (binding_owner_id(owner) + '.json'),
                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
         with os.fdopen(recordfd, 'wb') as handle:
@@ -10051,6 +10339,13 @@ def binding_deploy_proof(path, identity, target):
 
 
 def binding_next_request(request, next_owner, handoff, target):
+    # Accepted V3 baseline evidence binds an image ID and source revision, but
+    # supplies no independently verified canonical full-SHA tag. The ordinary
+    # consumer requires that tag; neither a digest nor an asserted tag proves an
+    # executable same-image descriptor. Keep this route closed before either
+    # retirement writer appends immutable authority. Historical readers stay intact.
+    if handoff.get('v125_baseline') is not None:
+        raise BindingError('accepted_v125_ordinary_handoff_requires_verified_canonical_tag')
     # Full descriptor/source/file validation belongs to the single deploy consumer.
     # A transfer binds its exact bytes; these joins preserve the applied authority.
     if (request.get('owner') != next_owner or
@@ -10454,6 +10749,7 @@ def binding_retire_deploy(target, owner, proof_sha, handoff_path, next_request_p
         next_owner = binding_owner(request['owner'])
         binding_predecessor_denied(root, next_owner)
         binding_handoff(handoff, owner, next_owner, proof_sha, target)
+        binding_handoff_baseline(root, target, owner, handoff)
         binding_deploy_handoff(proof, proof_sha, handoff)
         binding_next_request(request, next_owner, handoff, target)
         if any(previous['run_id'] == next_owner['run_id'] for previous in owners):
@@ -10471,8 +10767,12 @@ def binding_init_request(doc, identity, target):
     binding_identity(identity)
     keys = {'format_version', 'identity', 'target_sha256', 'manifest_sha256', 'manifest_size',
             'local_state_sha256', 'metadata'}
+    baseline = doc.get('v125_baseline') if isinstance(doc, dict) else None
+    if baseline is not None:
+        binding_v125_baseline(baseline)
+        keys.add('v125_baseline')
     if (not isinstance(doc, dict) or set(doc) != keys or type(doc['format_version']) is not int or
-            doc['format_version'] != 1 or doc['identity'] != identity or
+            doc['format_version'] != (2 if baseline is not None else 1) or doc['identity'] != identity or
             (identity['kind'], identity['name'], identity['action']) != ('INIT', 'RUN_INITIALIZED', 'initialize-run') or
             doc['target_sha256'] != hashlib.sha256(str(target).encode()).hexdigest() or
             not isinstance(doc['manifest_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', doc['manifest_sha256']) or
@@ -11116,6 +11416,85 @@ def binding_genesis_created(watchfd, watch):
         binding_refuse('genesis_namespace_observation')
 
 
+def binding_ordinary_state(directoryfd):
+    fd = os.open('state.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directoryfd)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or
+                stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+            binding_refuse('ordinary_state_metadata')
+        with os.fdopen(fd, 'rb', closefd=False) as stream:
+            raw = stream.read(1024 * 1024 + 1)
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    binding_refuse('ordinary_state_duplicate_key')
+                result[key] = value
+            return result
+        if len(raw) > 1024 * 1024:
+            binding_refuse('ordinary_state_bound')
+        state = json.loads(raw, object_pairs_hook=pairs)
+        if not isinstance(state, dict) or state.get('status') != 'ACCEPTED':
+            binding_refuse('ordinary_operation_not_accepted')
+        return hashlib.sha256(raw).hexdigest(), (info.st_dev, info.st_ino)
+    finally:
+        os.close(fd)
+
+
+def binding_ordinary_lock_check(held):
+    directory = held['directory']
+    if held['directoryfd'] is None:
+        if os.path.lexists(directory):
+            binding_refuse('ordinary_registration_appeared')
+        return
+    binding_protected(directory, 0o700, True)
+    actual, named = os.fstat(held['directoryfd']), directory.lstat()
+    if (actual.st_dev, actual.st_ino) != (named.st_dev, named.st_ino):
+        binding_refuse('ordinary_directory_changed')
+    binding_protected(directory / 'deployment.lock', 0o600)
+    actual, named = os.fstat(held['lockfd']), (directory / 'deployment.lock').lstat()
+    if (actual.st_dev, actual.st_ino) != (named.st_dev, named.st_ino):
+        binding_refuse('ordinary_lock_changed')
+    if binding_ordinary_state(held['directoryfd']) != held['state']:
+        binding_refuse('ordinary_state_changed')
+
+
+def binding_ordinary_lock_close(held):
+    if held is not None:
+        for key in ('lockfd', 'directoryfd'):
+            if held[key] is not None:
+                os.close(held[key])
+                held[key] = None
+
+
+def binding_ordinary_lock(target):
+    """Exclude the installed ordinary writer without creating/adopting its state.
+
+    This local lock is not legacy fencing or admission evidence. All independent
+    LEGACY_GENESIS/Policy B observations remain required, including when absent.
+    """
+    held = dict(directory=Path(target) / '.staging-release', directoryfd=None, lockfd=None)
+    if not os.path.lexists(held['directory']):
+        return held
+    try:
+        binding_protected(held['directory'], 0o700, True)
+        held['directoryfd'] = os.open(held['directory'], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        held['lockfd'] = os.open('deployment.lock', os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=held['directoryfd'])
+        binding_protected(held['directory'] / 'deployment.lock', 0o600)
+        try:
+            fcntl.flock(held['lockfd'], fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            binding_refuse('ordinary_deployment_busy')
+        held['state'] = binding_ordinary_state(held['directoryfd'])
+        binding_ordinary_lock_check(held)
+        return held
+    except BaseException:
+        binding_ordinary_lock_close(held)
+        raise
+
+
 def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=None, timeout=300):
     """Only authenticated caller may invoke this create-once metadata transaction.
 
@@ -11140,6 +11519,7 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
     previous = {sig: signal.getsignal(sig) for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)}
     cancelled = False
     lockfd = None
+    ordinary_lock = None
     root_identity = None
     targetfd = rootfd = watchfd = None
     deadline = time.monotonic() + 630
@@ -11148,6 +11528,8 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
         cancelled = True
     def current():
         binding_genesis_target(target, request)
+        if ordinary_lock is not None:
+            binding_ordinary_lock_check(ordinary_lock)
         if cancelled or time.monotonic() >= deadline:
             binding_refuse('genesis_cancelled_or_expired')
         if targetfd is not None:
@@ -11174,6 +11556,7 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
         targetfd = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         current()
         early, early_admission = check(None)
+        ordinary_lock = binding_ordinary_lock(target)
         current()
         if root.exists() or root.is_symlink():
             binding_refuse('genesis_registry_already_exists')
@@ -11255,6 +11638,7 @@ def binding_genesis(target, identity, request, *, policy_b_gate, ack_genesis=Non
         for fd in (lockfd, rootfd, watchfd, targetfd):
             if fd is not None:
                 os.close(fd)
+        binding_ordinary_lock_close(ordinary_lock)
         for sig, handler in previous.items():
             signal.signal(sig, handler)
 
@@ -11434,6 +11818,26 @@ def binding_policy_b_check(gate, identity, target, lockfd, timeout):
         binding_refuse('policy_b_admission_refused')
 
 
+def binding_operation_baseline(root, target, identity, current, context):
+    """The locked INIT fixes rollback identity even for raw recovery transport."""
+    if identity['kind'] not in ('STAGE', 'RECOVERY'):
+        return
+    initialized = [item for item in current if item['kind'] == 'INIT']
+    supplied = (context or {}).get('environment', {}).get('V126_INTERNAL_REMOTE_V125_BASELINE_B64') or None
+    if not initialized and identity['kind'] == 'RECOVERY' and supplied is None:
+        return  # Historical separately authorized recovery predates native INIT.
+    if len(initialized) != 1:
+        binding_refuse('operation_baseline_requires_exact_init')
+    init = initialized[0]
+    operation_id = hashlib.sha256(binding_canonical(init)).hexdigest()
+    request = binding_request(root/(operation_id+'.request.json'), init, target)
+    baseline = request.get('v125_baseline')
+    import base64
+    expected = base64.b64encode(binding_canonical(baseline)).decode() if baseline is not None else None
+    if supplied != expected:
+        binding_refuse('operation_v125_baseline_differs_from_init')
+
+
 def binding_supervise(target, identity, worker_argv, *, input_data=None, input_fd=None,
                       env=None, timeout=300, request_sha256=None, pass_fds=(), request_context=None,
                       policy_b_gate=None, init_completion=None, prepare_payload=None):
@@ -11485,6 +11889,7 @@ def binding_supervise(target, identity, worker_argv, *, input_data=None, input_f
         if owner != requested_owner:
             binding_refuse('target_bound_to_another_run')
         binding_admit_operation(root, target, identity, current_operations, request_sha256)
+        binding_operation_baseline(root, target, identity, current_operations, request_context)
         if identity['kind'] == 'STAGE':
             binding_require_init_completion(root, target, current_operations, init_completion)
         if recovery_seen and identity['kind'] != 'RECOVERY':
@@ -11831,6 +12236,7 @@ remote_supervise_action() {
 }
 
 remote_validate_envelope() {
+  remote_select_v125_baseline
   local action="${1:-}"
   shift || true
   [[ "${REMOTE_MODE}" == true &&
@@ -12016,6 +12422,10 @@ remote_dispatch_enveloped() {
 remote_dispatch_action() {
   local action="$1"
   shift
+  remote_select_v125_baseline
+  if [[ "${action}" == baseline ]]; then
+    remote_assert_accepted_v125_baseline "$1"
+  fi
   case "${action}" in
     baseline) remote_baseline "$@" ;;
     backup-rehearsal) remote_backup_rehearsal "$@" ;;

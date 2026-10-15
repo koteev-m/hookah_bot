@@ -88,8 +88,14 @@ legacy/prospective mixing, omission or downgrade refuses.
 
 ## Preparation, creation and consumers
 
-`prepare-init` accepts the three explicit epoch hashes and emits native manifest version 2.
-Approval binds that already prepared exact manifest. The public client commands are
+New `prepare-init` proposals use native manifest version 3, binding both the three explicit
+prospective epoch hashes and the current accepted V125 baseline. The baseline binds the
+accepted source, immutable image, database identity and original registration/state byte
+hashes; it is a proposal input, not operational authority. Historical version 2 manifests
+with epoch but without this baseline remain readable under their original meaning, but cannot
+be used for a new INIT proposal or dispatch. Approval binds the exact prepared version 3
+manifest. A `BOOTSTRAP_ONLY` enrollment still cannot authorize INIT or STAGE; synthetic
+baseline documents in tests grant no operational permission. The public client commands are
 `prepare-isolated-target-binding`, `bind-isolated-target` and
 `copy-isolated-target-binding-completion`. Preparation adds an independently retained isolation
 proof digest; it does not acquire authority, create a registry or approve its own proposal.

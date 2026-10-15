@@ -11,6 +11,7 @@ trap 'rm -rf -- "$fixture"' EXIT
 mkdir "$fixture/scripts" "$fixture/scripts/fixtures" "$fixture/docs"
 # Explicit public test-source inventory, never the checkout's .git/config or .env.
 cp "$root"/scripts/v126-* "$root"/scripts/test-v126-* "$fixture/scripts/"
+cp "$root/scripts/staging_release.py" "$fixture/scripts/"
 cp "$root/scripts/fixtures/v126-authority-epoch-fixture.py" "$fixture/scripts/fixtures/"
 cp "$root/docs/V126_DATABASE_RECOVERY_REHEARSAL.md" "$fixture/docs/"
 docker run --rm --init --network none --read-only --cap-drop ALL \
@@ -21,6 +22,7 @@ docker run --rm --init --network none --read-only --cap-drop ALL \
   --mount "type=bind,src=$fixture,dst=/work,readonly" --workdir /work \
   -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 "$image" bash -ceu '
     mkdir -p /run/sshd
+    python3 scripts/test-v126-isolated-inventory.py
     python3 scripts/test-v126-policy-b-linux.py --require-linux-ssh
     python3 scripts/test-v126-policy-b-transport.py --require-linux-ssh
     python3 scripts/test-v126-policy-b-attended.py

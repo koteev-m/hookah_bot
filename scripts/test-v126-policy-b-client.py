@@ -42,6 +42,11 @@ class Client(unittest.TestCase):
             run_id='synthetic-client-run', script_sha256=c.digest(c.SOURCE.read_bytes()), staging_path=str(self.target),
             v125_image_tag='synthetic:f577934691a1a7a79ba327c54e2055425142b7be',
             v126_image_id='sha256:'+'d'*64, v126_image_tag='synthetic:'+'a'*40)
+        self.document.update(format_version=3, v125_image_tag='sha256:'+'a'*64,
+            v125_baseline=dict(source_sha='b'*40, image_id='sha256:'+'a'*64,
+                registration_sha256='c'*64, state_sha256='e'*64,
+                database=dict(container_id='f'*64, system_id='12345', database='synthetic',
+                              user='synthetic', network='synthetic_default')))
         self.manifest = c.canonical(self.document)
         self.request = c.init_request(self.state, self.manifest)
         self.real_run, self.real_popen = subprocess.run, subprocess.Popen
@@ -380,6 +385,9 @@ class Client(unittest.TestCase):
             (owned/'pid').write_text(str(os.getpid())+'\n');(owned/'pid').chmod(0o400)
         enrollment=SimpleNamespace(sha256='a'*64,document=dict(generation=1,principal_fingerprint='synthetic-principal',
             host_fingerprint='synthetic-host',source_tree=self.document['release_tree'],tooling_sha256='b'*64,python_version=sys.version.split()[0]))
+        enrollment.document.update({key:dict(source_sha=self.document['v125_baseline']['source_sha'],
+            image_sha256=self.document['v125_baseline']['image_id'].removeprefix('sha256:'))
+            for key in ('data_runtime','restore_runtime')})
         manifest=self.manifest
         class Verifier:
             def now(self):

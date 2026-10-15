@@ -219,11 +219,18 @@ class ReleaseCiTest(unittest.TestCase):
                 '        run: echo \'verified=true\' >> "$GITHUB_OUTPUT"'))
             self.assertIn('python3 scripts/v126-test-endpoint-guard.py --self-test', body)
         cutover, runtime = jobs['compose-cutover'], jobs['compose-runtime']
+        harness = HARNESS.read_text().split('\nmain() {\n', 1)[1]
         self.assertIn('scripts/test-v126-cutover.sh', cutover)
+        self.assertIn('python3 -B "${SCRIPT_DIR}/test-v126-current-baseline.py"',
+                      [line.strip() for line in harness.splitlines()])
+        policy_step = step_run(cutover, 'Exercise Policy B authority, INIT and exact proposal callers')
+        self.assertIn('python3 -B scripts/test-v126-isolated-inventory.py', policy_step.splitlines())
+        isolated = (ROOT / 'test-v126-policy-b-isolated.sh').read_text()
+        self.assertIn('python3 scripts/test-v126-isolated-inventory.py', isolated)
+        self.assertIn('cp "$root/scripts/staging_release.py" "$fixture/scripts/"', isolated)
         self.assertIn('--require-linux-ssh --before-supervisor-source', cutover)
         self.assertIn("HT12X_REQUIRE_LIBPQ_MAJOR: '18'", cutover)
         self.assertIn('scripts/test-v126-staging-prerequisite-sync.sh', jobs['compose-prerequisite'])
-        harness = HARNESS.read_text().split('\nmain() {\n', 1)[1]
         self.assertIn('show 09e19461cf54376714ae51f2d4c9e480f8365d8e:scripts/v126-cutover.sh', harness)
         self.assertIn('--before-supervisor-source "${TEST_ROOT}/v126-supervisor-before.sh"', harness)
         ordered = ('scripts/test-v126-linux-runtime.py --require-hosted-ci',

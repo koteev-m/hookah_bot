@@ -11,6 +11,23 @@ staging schema — V125 (`V126=0`, `failed=0`). [Разовый переход](
 `deploy-staging-controlmaster.sh` только передаёт ему аргументы. Controller не
 является механизмом V126 migration и не разрешает V126 cutover.
 
+Локальное изменение `HT-V126-ONE-VPS-SAFE-IMPLEMENT-01` сохраняет V125-контракт.
+Любая запись `.v126-target-operations` (включая partial/UNKNOWN, файл или symlink)
+блокирует controller под существующим `deployment.lock`; её нельзя удалять для
+возобновления ordinary release. Genesis перед созданием registry удерживает тот же
+существующий ordinary lock. Неполный/неизвестный ordinary result не становится
+завершённым после освобождения lock. Применение обновлённых исполнителей на VPS
+не выполнено и требует отдельного разрешения; старый установленный код этим diff
+не изменён.
+
+`postgresql_head=126`, даже вместе с `handoff_approved_and_applied=true`, не разрешает
+новые V126 ordinary images: `V126_ORDINARY_AUTHORITY_TRANSFER_REQUIRED`.
+Существующий `v126-ordinary-deploy.py` умеет только повторное развёртывание уже
+принятого image после полного terminal/applied-handoff/transfer chain. Передача
+полномочий от этого контракта новому image-selection controller остаётся
+`DECISION_REQUIRED`; подробности — [operational handoff](V126_OPERATIONAL_HANDOFF.md#current-ordinary-controller-boundary).
+Обычный релиз не применяет 125→126 и не разрешает rollback V125 поверх V126.
+
 ## Подготовка образа и approval
 
 Бот, backend и Mini App обновляются одним immutable image. Для V125 весь PostgreSQL

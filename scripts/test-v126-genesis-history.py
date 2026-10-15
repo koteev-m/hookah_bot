@@ -6,6 +6,7 @@ Owned-SSH tests separately exercise caller/launcher/independent evidence. These
 checks use real Linux flock/inodes, subprocess contention and durable files.
 """
 import copy
+import base64
 import errno
 import fcntl
 import hashlib
@@ -212,6 +213,238 @@ class GenesisDurability(unittest.TestCase):
                 with self.subTest(reader=name), self.assertRaises((b.BindingError, ValueError)): read()
 
 
+class OrdinaryExclusion(unittest.TestCase):
+    """Real ordinary/genesis flock consumers; no operational fencing claim."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='ordinary-genesis-lock-')
+        self.addCleanup(self.tmp.cleanup)
+        self.target = Path(self.tmp.name).resolve()
+        self.release = load('ordinary_release_lock_fixture', ROOT / 'staging_release.py')
+        self.store = self.release.Store(self.target / '.staging-release', migration_target=self.target)
+        with self.store.locked():
+            self.store.write(dict(status='ACCEPTED'))
+        self.lock = self.store.directory / 'deployment.lock'
+
+    def test_same_inode_excludes_both_directions_and_never_recreates_lock(self):
+        inode = self.lock.stat().st_ino
+        with self.store.locked():
+            with self.assertRaisesRegex(b.BindingError, 'ordinary_deployment_busy'):
+                b.binding_ordinary_lock(self.target)
+        held = b.binding_ordinary_lock(self.target)
+        try:
+            with self.assertRaisesRegex(self.release.Refused, 'DEPLOYMENT_BUSY'):
+                with self.store.locked(): self.fail('ordinary entered genesis lock')
+            b.binding_ordinary_lock_check(held)
+        finally:
+            b.binding_ordinary_lock_close(held)
+        with self.store.locked(): pass
+        self.assertEqual(self.lock.stat().st_ino, inode)
+
+    def test_unknown_unfinished_or_malformed_state_is_never_repaired(self):
+        for raw in (b'{"status":"UNKNOWN"}', b'{"status":"APPLYING"}',
+                    b'{"status":"READY_FOR_SMOKE"}', b'{"status":"READINESS_FAILED"}',
+                    b'{"status":"UNKNOWN","status":"ACCEPTED"}', b'not-json'):
+            with self.subTest(raw=raw):
+                self.store.path.write_bytes(raw)
+                with self.assertRaises((b.BindingError, ValueError)):
+                    b.binding_ordinary_lock(self.target)
+                self.assertEqual(self.store.path.read_bytes(), raw)
+                with self.store.locked(): pass
+                self.assertFalse((self.target / '.v126-target-operations').exists())
+
+    def test_missing_or_unsafe_lock_is_not_created_or_adopted(self):
+        self.lock.unlink()
+        with self.assertRaises(FileNotFoundError): b.binding_ordinary_lock(self.target)
+        self.assertFalse(self.lock.exists())
+        self.lock.symlink_to(self.target / 'missing')
+        with self.assertRaises(OSError): b.binding_ordinary_lock(self.target)
+        self.lock.unlink()
+        self.lock.touch(mode=0o644)
+        self.lock.chmod(0o644)
+        with self.assertRaises(b.BindingError): b.binding_ordinary_lock(self.target)
+        self.assertEqual(self.lock.stat().st_mode & 0o777, 0o644)
+
+    def test_nonregular_linked_or_public_state_refuses_without_blocking(self):
+        self.store.path.unlink()
+        os.mkfifo(self.store.path, 0o600)
+        with self.assertRaisesRegex(b.BindingError, 'ordinary_state_metadata'):
+            b.binding_ordinary_lock(self.target)
+        self.store.path.unlink()
+        self.store.path.symlink_to(self.target / 'missing')
+        with self.assertRaises(OSError): b.binding_ordinary_lock(self.target)
+        self.store.path.unlink()
+        self.store.write(dict(status='ACCEPTED'))
+        os.link(self.store.path, self.target / 'state-hardlink')
+        with self.assertRaisesRegex(b.BindingError, 'ordinary_state_metadata'):
+            b.binding_ordinary_lock(self.target)
+        (self.target / 'state-hardlink').unlink()
+        self.store.path.chmod(0o644)
+        with self.assertRaisesRegex(b.BindingError, 'ordinary_state_metadata'):
+            b.binding_ordinary_lock(self.target)
+        self.store.path.chmod(0o600)
+        os.link(self.lock, self.target / 'lock-hardlink')
+        with self.assertRaisesRegex(b.BindingError, 'record_metadata'):
+            b.binding_ordinary_lock(self.target)
+
+    def test_replaced_lock_directory_or_state_is_refused_while_held(self):
+        held = b.binding_ordinary_lock(self.target)
+        try:
+            self.store.path.write_text('{"status":"ACCEPTED","changed":true}')
+            with self.assertRaisesRegex(b.BindingError, 'ordinary_state_changed'):
+                b.binding_ordinary_lock_check(held)
+            self.lock.rename(self.store.directory / 'original.lock')
+            self.lock.touch(mode=0o600)
+            with self.assertRaisesRegex(b.BindingError, 'ordinary_lock_changed'):
+                b.binding_ordinary_lock_check(held)
+            self.store.directory.rename(self.target / 'old-state')
+            self.store.directory.mkdir(mode=0o700)
+            with self.assertRaisesRegex(b.BindingError, 'ordinary_directory_changed'):
+                b.binding_ordinary_lock_check(held)
+        finally:
+            b.binding_ordinary_lock_close(held)
+
+    def test_absent_ordinary_state_neither_created_nor_proves_admission(self):
+        target = self.target / 'without-ordinary'
+        target.mkdir(mode=0o700)
+        held = b.binding_ordinary_lock(target)
+        self.assertEqual(list(target.iterdir()), [])
+        b.binding_ordinary_lock_check(held)
+        (target / '.staging-release').mkdir(mode=0o700)
+        with self.assertRaisesRegex(b.BindingError, 'ordinary_registration_appeared'):
+            b.binding_ordinary_lock_check(held)
+        b.binding_ordinary_lock_close(held)
+
+
+class AcceptedRecoveryHandoff(unittest.TestCase):
+    """Real INIT/retirement consumers, synthetic completed baseline/recovery only.
+
+    Reuse INIT's portable /proc observation fixture and process/network denial.
+    No Linux supervisor, runtime image inspection or operational approval is claimed.
+    """
+    def setUp(self):
+        self.init = i.Init('test_init_positive_exact_history_attestation_and_no_reaped_claim')
+        self.init.setUp()
+        self.addCleanup(self.init.tearDown)
+        self.target, self.root, self.owner = self.init.target, self.init.root, self.init.owner
+        self.baseline = dict(source_sha='c'*40, image_id='sha256:'+'d'*64,
+            registration_sha256='e'*64, state_sha256='f'*64,
+            database=dict(container_id='1'*64, system_id='123456', database='synthetic',
+                          user='synthetic', network='synthetic-network'))
+        manifest = b.binding_canonical(dict(format_version=3, v125_baseline=self.baseline))
+        self.init.identity, self.init.request = i.seed_request(self.target, self.owner, manifest)
+        self.init.request.update(format_version=2, v125_baseline=self.baseline)
+        self.init.run_init()
+        self.completion = b.binding_init_readback(self.target, self.init.identity, digest(self.init.request))
+        self.stage = self.completed('STAGE', 'BASELINE_VERIFIED', 'baseline', '2')
+        self.recovery = self.completed('RECOVERY', 'pre-v126', 'recover-pre-v126', '3')
+        self.next_owner = dict(run_id='synthetic-recovered-ordinary', release_sha=self.baseline['source_sha'],
+                               script_sha256='4'*64)
+        self.handoff = dict(format_version=2, owner=self.owner, next_owner=self.next_owner,
+            terminal_receipt_sha256='5'*64, target_sha256=hashlib.sha256(str(self.target).encode()).hexdigest(),
+            operational_version='V125', backend_image=self.baseline['image_id'], image_id=self.baseline['image_id'],
+            environment_sha256='6'*64, compose_sha256='7'*64, caddy_runtime_sha256='8'*64,
+            config_owner='root:root', restart_policy='unless-stopped', handoff_approved_and_applied=True,
+            approval_id='synthetic-applied', observed_at='2026-10-15T00:00:00Z', v125_baseline=self.baseline)
+        self.ordinary = load('accepted_recovery_ordinary_contract', ROOT / 'v126-ordinary-deploy.py')
+        uri = self.target / 'synthetic-uri'
+        uri.write_bytes(b'postgresql://synthetic:synthetic@fixture.invalid/synthetic\n')
+        self.request = dict(format_version=1, owner=self.next_owner,
+            **{key:self.handoff[key] for key in ('target_sha256', 'operational_version', 'backend_image', 'image_id',
+                'environment_sha256', 'caddy_runtime_sha256', 'config_owner', 'restart_policy',
+                'handoff_approved_and_applied', 'approval_id', 'observed_at')},
+            image_source=self.ordinary.SOURCE, platform='linux/amd64', compose_before_sha256='7'*64,
+            compose_sha256='7'*64, caddy_config_sha256='9'*64, database_url_file=str(uri),
+            database_url_sha256=hashlib.sha256(uri.read_bytes()).hexdigest(), database_identity_sha256='a'*64,
+            files={name:'7'*64 for name in self.ordinary.UPLOADS}, public_url='https://fixture.invalid', public_checks=False)
+
+    def completed(self, kind, name, action, digit):
+        identity = dict(self.owner, intent_sha256=digit*64, kind=kind, name=name, action=action)
+        operation = digest(identity)
+        request = dict(format_version=1, identity=identity,
+            target_sha256=hashlib.sha256(str(self.target).encode()).hexdigest(),
+            args=[str(self.target), self.owner['run_id'], self.owner['release_sha']],
+            environment={'V126_INTERNAL_REMOTE_V125_BASELINE_B64':base64.b64encode(b.binding_canonical(self.baseline)).decode()})
+        b.binding_create(self.root/(operation+'.start.json'), dict(identity=identity, operation_id=operation,
+            started_at='2026-10-15T00:00:00+00:00', boot_id='synthetic'))
+        b.binding_create(self.root/(operation+'.request.json'), request)
+        log = self.root/(operation+'.log'); b.binding_create_raw(log, b'synthetic completed operation\n')
+        b.binding_create(self.root/(operation+'.result.json'), dict(identity=identity, operation_id=operation,
+            exit=0, outcome='SUCCEEDED', children='REAPED', log_sha256=b.binding_hash(log),
+            completed_at='2026-10-15T00:00:00+00:00'))
+        b.binding_operation_evidence(self.root, operation, self.target)
+        return identity
+
+    def refused(self, reason):
+        handoff = self.target/'handoff.json'; request = self.target/'ordinary-request.json'
+        for path, doc in ((handoff, self.handoff), (request, self.request)):
+            if path.exists(): path.unlink()
+            b.binding_create(path, doc)
+        before = {p.name:(p.stat().st_ino,p.stat().st_mode,p.read_bytes()) for p in self.root.iterdir()}
+        argv = ['fixture',str(self.target),*self.owner.values(),self.handoff['terminal_receipt_sha256'],str(handoff),
+                *self.next_owner.values(),'V125',self.handoff['image_id'],'ORDINARY_DEPLOY',str(request),'NATIVE_RECEIPT']
+        with patch.object(sys,'argv',argv), self.assertRaisesRegex(b.BindingError, reason):
+            b.binding_entry('retire')
+        self.assertEqual({p.name:(p.stat().st_ino,p.stat().st_mode,p.read_bytes()) for p in self.root.iterdir()},before)
+        self.assertFalse((self.root/'transfers').exists())
+
+    def test_completed_v3_init_baseline_recovery_digest_refuses_before_transfer(self):
+        self.assertEqual(self.completion['result']['completion'], 'LOCAL_METADATA_ATTESTED')
+        b.binding_handoff(self.handoff,self.owner,self.next_owner,self.handoff['terminal_receipt_sha256'],self.target)
+        b.binding_handoff_baseline(self.root,self.target,self.owner,self.handoff)
+        with self.assertRaisesRegex(self.ordinary.Refused,'exact accepted image required'):
+            self.ordinary.validate_descriptor(self.request,self.target)
+        self.refused('accepted_v125_ordinary_handoff_requires_verified_canonical_tag')
+
+    def test_structurally_executable_tag_cannot_replace_independent_image_provenance(self):
+        self.request['backend_image'] = 'synthetic/backend:'+self.baseline['source_sha']
+        self.assertEqual(self.ordinary.validate_descriptor(self.request,self.target),self.request)
+        self.refused('accepted_v125_ordinary_handoff_requires_verified_canonical_tag')
+        self.handoff['backend_image'] = self.request['backend_image']
+        self.refused('handoff_accepted_v125_image')
+
+    def test_source_tag_and_image_substitution_or_baseline_omission_refuses(self):
+        original = copy.deepcopy(self.handoff)
+        for kind in ('source', 'tag', 'image', 'omitted'):
+            with self.subTest(kind=kind):
+                self.handoff = copy.deepcopy(original)
+                if kind == 'source': self.handoff['v125_baseline']['source_sha'] = '9'*40
+                elif kind == 'tag': self.handoff['backend_image'] = 'unapproved/backend:'+'9'*40
+                elif kind == 'image':
+                    self.handoff['image_id'] = self.handoff['backend_image'] = 'sha256:'+'9'*64
+                    self.handoff['v125_baseline']['image_id'] = self.handoff['image_id']
+                else:
+                    self.handoff.pop('v125_baseline'); self.handoff['format_version'] = 1
+                    self.handoff['backend_image'] = 'synthetic:f577934691a1a7a79ba327c54e2055425142b7be'
+                self.refused('handoff_(accepted_v125_image|v125_baseline_differs_from_init)')
+
+    def test_missing_approved_applied_handoff_refuses(self):
+        self.handoff['handoff_approved_and_applied'] = False
+        self.refused('handoff_contract')
+        self.handoff.pop('handoff_approved_and_applied')
+        self.refused('handoff_contract')
+
+    def test_unknown_incomplete_or_corrupt_recovery_refuses(self):
+        result = self.root/(digest(self.recovery)+'.result.json')
+        original = result.read_bytes()
+        for kind in ('unknown', 'missing', 'corrupt'):
+            with self.subTest(kind=kind):
+                result.unlink()
+                if kind != 'missing':
+                    value = json.loads(original)
+                    if kind == 'unknown': value.update(exit=1,outcome='UNKNOWN')
+                    else: value['operation_id'] = '0'*64
+                    b.binding_create(result,value)
+                self.refused('retirement_requires_known_completed_current_run|result_binding')
+                if not result.exists(): b.binding_create_raw(result,original)
+
+    def test_missing_or_changed_baseline_evidence_refuses(self):
+        request = self.root/(digest(self.stage)+'.request.json')
+        value = b.binding_read(request)
+        value['environment'].clear()
+        request.unlink(); b.binding_create(request,value)
+        self.refused('handoff_accepted_v125_baseline_not_proven')
+
+
 class NamespaceObservation(unittest.TestCase):
     """Portable event-parser controls only; full syscall races are Linux Genesis tests."""
     def event(self, mask, name=b'.v126-target-operations', wd=7):
@@ -268,6 +501,46 @@ class Genesis(unittest.TestCase):
         stage = dict(self.owner, intent_sha256='1' * 64, kind='STAGE', name='BASELINE_VERIFIED', action='baseline')
         with self.assertRaisesRegex(b.BindingError, 'completed_init'):
             b.binding_admit_operation(self.root, self.target, stage, [])
+    def ordinary_store(self):
+        release = load('genesis_live_ordinary_fixture', ROOT / 'staging_release.py')
+        store = release.Store(self.target / '.staging-release', migration_target=self.target)
+        with store.locked(): store.write(dict(status='ACCEPTED'))
+        return release, store
+    def test_existing_ordinary_writer_blocks_genesis_before_registry_creation(self):
+        _, store = self.ordinary_store()
+        before = store.path.read_bytes()
+        with store.locked():
+            with self.assertRaisesRegex(b.BindingError, 'ordinary_deployment_busy'): self.run_genesis()
+        self.assertFalse(self.root.exists())
+        self.assertEqual(store.path.read_bytes(), before)
+        self.assertEqual(self.gate.writes, 0)
+    def test_genesis_holds_ordinary_lock_before_mkdir_through_completion(self):
+        release, store = self.ordinary_store()
+        inode = (store.directory / 'deployment.lock').stat().st_ino
+        real_mkdir = os.mkdir
+        checked = []
+        def assert_busy():
+            with self.assertRaisesRegex(release.Refused, 'DEPLOYMENT_BUSY'):
+                with store.locked(): self.fail('ordinary writer entered genesis')
+            checked.append(True)
+        def mkdir(path, *args, **kwargs):
+            if path == '.v126-target-operations': assert_busy()
+            return real_mkdir(path, *args, **kwargs)
+        with patch.object(os, 'mkdir', mkdir):
+            result = self.run_genesis(ack_genesis=lambda proof: assert_busy())
+        self.assertEqual(len(checked), 2)
+        self.assertEqual(result['result']['outcome'], 'SUCCEEDED')
+        self.assertEqual((store.directory / 'deployment.lock').stat().st_ino, inode)
+        with self.assertRaisesRegex(release.Refused, 'MIGRATION_TARGET_REQUIRES_SEQUENCER'):
+            with store.locked(): self.fail('ordinary entered published registry')
+    def test_ordinary_state_change_during_genesis_retains_partial_registry(self):
+        _, store = self.ordinary_store()
+        self.gate.on_check = lambda round, fd: store.write(dict(status='UNKNOWN')) if round == 2 else None
+        with self.assertRaisesRegex(b.BindingError, 'ordinary_operation_not_accepted'): self.run_genesis()
+        self.assertTrue(self.root.exists())
+        self.assertFalse((self.root / 'genesis.intent.json').exists())
+        self.assertFalse((self.root / 'genesis.result.json').exists())
+        self.assertEqual(store.read()['status'], 'UNKNOWN')
     def test_early_refusal_and_stale_create_do_not_create_registry(self):
         for fail in (1, 'create'):
             self.gate = Transcript(self.request, self.index, fail=fail)
@@ -741,7 +1014,7 @@ def negative_controls():
 
 if __name__ == '__main__':
     if sys.argv[1:] == ['--portable-safety']:
-        unittest.main(argv=[sys.argv[0], 'GenesisDurability', 'NamespaceObservation'])
+        unittest.main(argv=[sys.argv[0], 'GenesisDurability', 'NamespaceObservation', 'OrdinaryExclusion', 'AcceptedRecoveryHandoff'])
         raise SystemExit(0)
     if sys.platform != 'linux':
         raise SystemExit('Linux real flock/process validation required; no skipped PASS')

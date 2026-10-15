@@ -1,5 +1,113 @@
 # Project Status
 
+## HT-V126-PR-CHECKPOINT-FIX-18 — published feature branch, Draft PR preparation (2026-10-15)
+
+This checkpoint supersedes the local, unpublished-status reports below without rewriting
+their historical evidence. The `Hookah_Tootah` feature branch
+`codex/ht-v126-one-vps-safe-implement-01` is published at
+`064b2dcb1e3f6120a56f83c58cd82d3db1f3cb9a`. Its base and merge-base with
+`origin/main` are both `8e69044d843e23a843592aa5ceb444e0904c1462`;
+the feature is five commits ahead and zero behind. The published commits are
+`08b404d`, `f5209be`, `31fbc9a`, `3bcfbb0` and `064b2dc`. The reviewed full
+base-to-HEAD diff is 28 files, +2403/-85.
+
+The supplied exact-HEAD [GitHub Actions run #38781777338](https://github.com/koteev-m/hookah_bot/actions/runs/38781777338)
+completed successfully on attempt 1: 15/15 jobs SUCCESS, including `compose-cutover`;
+GenesisSSH passed 11/11 and ProspectiveSSH passed 6/6. Independent full-branch review
+`HT-V126-FULL-BRANCH-PR-READINESS-17` inspected all five commits and the full diff.
+Its result was `FINDINGS`: no confirmed production-code defects and one P2 finding,
+the stale top-level checkpoint. This new entry addresses that documentation finding;
+the final diff after this edit still needs independent confirmation. A Draft PR has
+not been created. Merge and operational deployment are not authorized.
+
+`run724=UNKNOWN`, `CUTOVER_READY=NOT_PROVEN`, `LEGACY_EVIDENCE_INSUFFICIENT` and
+`ONE_VPS_SAFE_PATH_NOT_PROVEN` remain unchanged. Independent legacy cessation and
+writer-exclusion evidence, staging/cutover/recovery, installation of the updated
+executors, and new-image ordinary authority transfer remain closed. Server operations
+require their own independent evidence and separate authorization; CI and this
+documentation correction do not establish operational readiness.
+
+## HT-V126-LINUX-CI-CANDIDATE-04 — local publication candidate (2026-10-15)
+
+The existing feature worktree remains at `8e69044d843e23a843592aa5ceb444e0904c1462`
+on `codex/ht-v126-one-vps-safe-implement-01`; nothing is staged or published.
+`compose-cutover` already runs the accepted-baseline regressions through
+`test-v126-cutover.sh`. It now also runs the standalone isolated-inventory tests,
+while the existing network-denied Policy B container runs the copied-source
+inventory and Genesis consumers. The release CI contract checks these bindings.
+Local focused fixtures, negative cases, source parity, migration identity, syntax
+and diff checks pass. The hosted Linux PostgreSQL17/18, Docker and owned-SSH gates
+remain unexecuted for this candidate; no CI or cutover PASS is claimed.
+`run724=UNKNOWN`, ordinary V126 new-image promotion and all operational permissions
+remain closed. Next: explicit approval for one exact-file commit and non-force push
+of the same feature branch, followed by independent exact remote SHA verification.
+
+## HT-V126-ONE-VPS-REVIEW-FIX-03 — bounded local review fixes (2026-10-15)
+
+The primary/worktree identity gates passed against the exact task-supplied HEAD/tree/
+parents. Work remains uncommitted in the same worktree and branch below. The initial
+20-file diff (+1588/-66) was preserved; primary checkout, both indexes and `scripts/dev/`
+were not changed. No server, publication or real database operation was performed.
+
+The existing semantic validator now joins actual Compose/backend/URI database evidence
+to the accepted V125 identity and retains the Docker network ID in the baseline digest.
+V3 recovery-to-ordinary transfer is intentionally closed before immutable append until
+independent canonical-tag/source/image provenance and descriptor executability are
+established. Existing V125 ordinary behavior remains covered. The isolated harness now
+copies `staging_release.py` and verifies actual copied-source imports with a missing-module
+negative control. The [current handoff boundary](docs/V126_OPERATIONAL_HANDOFF.md#current-ordinary-controller-boundary)
+supersedes the earlier implementation's implied V3 handoff availability.
+
+Focused offline regressions pass. The full cutover gate is **not PASS** here: its
+PostgreSQL suite cannot find the required Linux client path; PostgreSQL18 and a running
+Docker daemon are unavailable. Portable/source-closure tests do not prove Linux
+flock/inotify/owned-SSH or PostgreSQL17/18 integration. `run724=UNKNOWN`, all admission/
+operational permissions and the closed new-image V126 promotion boundary remain intact.
+Next: run the existing compose-cutover/isolated gates on a provisioned isolated Linux
+test runner; no staging/cutover authorization is implied.
+
+## HT-V126-ONE-VPS-SAFE-IMPLEMENT-01 — local guards, external decisions open (2026-10-15)
+
+**LOCAL_PARTIAL_DECISION_REQUIRED / UNCOMMITTED / NO CUTOVER AUTHORIZATION**.
+The authorized implementation worktree is `/private/tmp/ht-v126-one-vps-safe-implement-01`,
+branch `codex/ht-v126-one-vps-safe-implement-01`, exact base
+`8e69044d843e23a843592aa5ceb444e0904c1462`, tree
+`6b2040ef36a3cd48bb2b86da69ed6e6a072f8d80`. Identity gates passed in the primary
+checkout and this registered Hookah worktree. Primary user changes and `scripts/dev/`
+are outside the implementation scope.
+
+New proposals bind the protected accepted ordinary V125 state, registration and exact
+source/image/database identity, including the enrolled R0/Q data and restore runtimes.
+The same baseline is retained through INIT, dispatch and pre-V126 recovery/handoff;
+historical source-bound records retain their meaning. The ordinary writer and genesis
+now exclude each other through the existing ordinary lock and V126 registry boundary.
+This closes that known race only when both updated executors are installed; it does not
+prove legacy effect cessation. No new genesis route, producer or manual override exists.
+
+Local validation passed 28 offline suites (587 tests), all 43 original shell fixture
+functions, nine portable libpq checks, syntax, embedded-source parity and diff checks.
+This covers synthetic baseline/history, ordinary, Policy B/DR and recovery decisions.
+Non-author code review found no remaining actionable issue in the local diff; it is
+not independent operational/security certification. Full isolated Linux/owned-SSH and PostgreSQL17/18 integration
+remain unverified here: Docker daemon is unavailable, PostgreSQL18 is absent and the
+local PostgreSQL17 installation cannot initialize its test cluster. No actual target,
+database, backup/restore, registry or operational evidence was accessed or changed.
+The supplied old candidate remains locally verified and undeployed; changed tooling
+requires a new unified release build from the future integrated SHA.
+
+`run724=UNKNOWN`, `LEGACY_EVIDENCE_INSUFFICIENT` and `ONE_VPS_SAFE_PATH_NOT_PROVEN`
+remain. Same-target admission needs the existing independently enrolled complete
+inventory, cessation/writer-exclusion and accepted-poststate evidence. The retained
+V126 ordinary consumer can recreate only an already accepted image with its full
+applied handoff; new-image releases through the installed controller remain closed.
+
+Next: owner/security decision on the missing independent legacy evidence acquisition
+and the exact post-V126 ordinary authority transfer, as bounded in the existing
+[cutover contract](docs/V126_STAGING_CUTOVER_CONTRACT.md#current-accepted-v125-baseline-for-new-attempts)
+and [operational handoff](docs/V126_OPERATIONAL_HANDOFF.md#current-ordinary-controller-boundary).
+Linux integration, exact release CI/build and all separately authorized operational
+gates remain required; local checks do not establish `CUTOVER_READY`.
+
 ## HT-DOC-SYNC-01B — current staging and next V126 target (2026-10-14)
 
 The ordinary V125 staging release controller is installed; its initial `initialize/status`

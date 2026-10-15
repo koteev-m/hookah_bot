@@ -1299,6 +1299,10 @@ PY
     fi
     index=$((index + 2))
   done
+  for (( index=0; index<${#changed[@]}; index+=2 )); do
+    if [[ "${changed[${index}]}" == --v125-image-tag ]]; then changed[$((index + 1))]="${V125_IMAGE_ID}"; fi
+  done
+  changed+=(--v125-registration-file "${TEST_ROOT}/unused-registration" --v125-state-file "${TEST_ROOT}/unused-accepted-state")
   expect_failure 'proposal preparation rejects symlink release worktree' 'symlink' \
     invoke_script "${CUTOVER_SCRIPT}" prepare-init --proposal-file "${TEST_ROOT}/symlink.proposal.json" "${changed[@]}"
 }
@@ -7878,7 +7882,7 @@ test_recovery_contract() {
     "[[ \"\${before_flyway}\" == '125:0:0:0' ]]" \
     'remote_recovery_ensure_pre_v126_drain' \
     'remote_compose stop backend' \
-    '[[ "${v125_image_tag}" =~ :${V125_SOURCE_SHA}$ ]]' \
+    'remote_require_v125_reference "${v125_image_tag}"' \
     'remote_assert_compose_backend_image "${v125_image_tag}"' \
     'remote_compose create --force-recreate --no-build --pull never backend' \
     'docker update --restart=no "${recovery_container}"' \
@@ -8392,6 +8396,7 @@ main() {
   python3 "${SCRIPT_DIR}/test-v126-dr-evidence.py"
   python3 -B "${SCRIPT_DIR}/test-v126-policy-b-adapter.py"
   python3 -B "${SCRIPT_DIR}/test-v126-policy-b-dispatch.py"
+  python3 -B "${SCRIPT_DIR}/test-v126-current-baseline.py"
   git -C "${REPO_ROOT}" show 09e19461cf54376714ae51f2d4c9e480f8365d8e:scripts/v126-cutover.sh > \
     "${TEST_ROOT}/v126-supervisor-before.sh" || fail 'exact original supervisor source is unavailable'
   python3 "${SCRIPT_DIR}/test-v126-remote-operation.py" --require-linux-ssh \

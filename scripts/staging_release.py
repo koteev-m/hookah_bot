@@ -52,6 +52,10 @@ def image_id(value):
 
 def validate_scope(scope):
     require(scope["project_id"] == "Hookah_Tootah", "PROJECT_IDENTITY_MISMATCH")
+    # Existing V125 registrations omit this field. A version flag or handoff
+    # assertion cannot transfer the sequencer's immutable target authority.
+    head = scope.get("postgresql_head", 125)
+    require(type(head) is int and head == 125, "V126_ORDINARY_AUTHORITY_TRANSFER_REQUIRED")
     require(re.fullmatch(r"[a-z0-9][a-z0-9_-]+", scope["project"]) is not None,
             "COMPOSE_IDENTITY_INVALID")
     directory = Path(scope["directory"])
@@ -162,14 +166,33 @@ def responses_ready(responses, revision):
 class Store:
     """One lock and one durable current state; no history/authorization ledger."""
 
-    def __init__(self, directory):
+    def __init__(self, directory, *, migration_target=None):
         self.directory = Path(directory)
         self.path = self.directory / "state.json"
+        self.migration_target = Path(migration_target) if migration_target is not None else None
+        self.lock_fd = None
+
+    def ordinary_target(self):
+        if self.lock_fd is not None:
+            held = os.fstat(self.lock_fd)
+            linked = (self.directory / "deployment.lock").lstat()
+            require(stat.S_ISREG(linked.st_mode) and linked.st_uid == os.geteuid()
+                    and stat.S_IMODE(linked.st_mode) == 0o600 and linked.st_nlink == 1
+                    and (held.st_dev, held.st_ino) == (linked.st_dev, linked.st_ino),
+                    "DEPLOYMENT_LOCK_CHANGED")
+        if self.migration_target is not None:
+            registry = self.migration_target / ".v126-target-operations"
+            # Even a partial registry or dangling link belongs to the migration
+            # decision boundary; absence is not a cutover admission proof.
+            require(not os.path.lexists(registry), "MIGRATION_TARGET_REQUIRES_SEQUENCER")
 
     @contextlib.contextmanager
     def locked(self):
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         require(not self.directory.is_symlink(), "UNSAFE_STATE_DIRECTORY")
+        info = self.directory.stat()
+        require(info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700,
+                "UNSAFE_STATE_DIRECTORY")
         fd = os.open(self.directory / "deployment.lock",
                      os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
@@ -177,8 +200,14 @@ class Store:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise Refused("DEPLOYMENT_BUSY") from None
+            self.lock_fd = fd
+            # Legacy genesis takes this same existing lock before publishing its
+            # registry. Never remove/recreate either protocol's lock to continue.
+            self.ordinary_target()
             yield self
         finally:
+            if self.lock_fd == fd:
+                self.lock_fd = None
             os.close(fd)
 
     def read(self):
@@ -226,6 +255,7 @@ class Controller:
         return state
 
     def observe(self, expected, timeout=5):
+        self.store.ordinary_target()
         snapshot = self.runtime.observe(timeout=timeout)
         validate_snapshot(snapshot, self.scope, expected)
         return snapshot
@@ -241,6 +271,7 @@ class Controller:
                         "STAGING_POLICY_MISMATCH", "V125_SCHEMA_REQUIRED", "DOCKER_NOT_COMPLETED",
                         "BACKEND_PRIVILEGES_UNSAFE", "ENVIRONMENT_INVALID", "CONTAINER_INVENTORY_INVALID",
                         "RELEASE_CONFIGURATION_MISMATCH", "RELEASE_CONFIGURATION_CHANGED",
+                        "DEPLOYMENT_LOCK_CHANGED", "MIGRATION_TARGET_REQUIRES_SEQUENCER",
                         "COMMAND_TIMEOUT", "COMMAND_FAILED"}
         reason = "OBSERVATION_OR_COMMAND_FAILED"
         if isinstance(error, Refused) and str(error) in safe_reasons:
@@ -254,6 +285,7 @@ class Controller:
         raise Refused("DOCKER_OUTCOME_UNDEFINED_OPERATOR_REQUIRED")
 
     def apply(self, state):
+        self.store.ordinary_target()
         operation = state["operation"]
         state["status"], state["reason"] = "APPLYING", None
         # Durable intent precedes the only mutation. Crash cannot become a retry.
@@ -840,7 +872,7 @@ def registered_action(request, registered, *, runner=None, files=None, readiness
     require(request.get("target") == registered["target"], "REGISTERED_TARGET_MISMATCH")
     action = request.get("action")
     require(action in ("initialize", "deploy", "rollback", "accept", "status"), "ACTION_INVALID")
-    store = Store(Path(scope["directory"]) / ".staging-release")
+    store = Store(Path(scope["directory"]) / ".staging-release", migration_target=scope["directory"])
     try:
         state = None
         if action != "initialize":
@@ -883,6 +915,7 @@ def registered_action(request, registered, *, runner=None, files=None, readiness
                 require(controller.observe(verified["id"])["backend"]["running"]
                         and runtime.ready(verified, timeout=5), "CURRENT_IMAGE_NOT_READY")
                 require(controller.observe(verified["id"])["backend"]["running"], "CURRENT_IMAGE_NOT_READY")
+                store.ordinary_target()
                 store.write({"scope": fingerprint(scope), "status": "ACCEPTED", "accepted": verified,
                              "operation": None, "reason": None})
             phase = "ACCEPTED"

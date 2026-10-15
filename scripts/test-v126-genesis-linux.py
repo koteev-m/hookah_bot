@@ -51,6 +51,7 @@ class GenesisSSH(linux.LinuxCaller):
                 return result
             with mock.patch.object(shutil,'copyfile',side_effect=copy_public):super().setUp()
         else:super().setUp()
+        self.prepare_current_init()
         self.original={name:copy.deepcopy(getattr(self.fx,name)) for name in ('anchor','catalogue','producer')}
         # Remove only the synthetic preaccepted root created by parent fixture.
         # The production caller has no equivalent cleanup or adopt operation.
@@ -65,6 +66,16 @@ class GenesisSSH(linux.LinuxCaller):
         self.configure(self.fx)
         self.proposal=self.root/'genesis-proposal.json'
         self.completion=self.root/'genesis-completion.json'
+
+    def prepare_current_init(self):
+        baseline,_=self.current_baseline_fixture()
+        document=json.loads(self.manifest)
+        document.update(format_version=3,v125_baseline=baseline,v125_image_tag=baseline['image_id'])
+        self.manifest=T.canonical(document)
+        self.request=self.client.init_request(self.state,self.manifest)
+        self.fx.identity=self.request['identity']
+        self.fx.catalogue['actions'][0]['identity']=self.fx.identity
+        self.fx.save('catalogue')
 
     def outer(self):
         script=self.outer_cli_fixture()

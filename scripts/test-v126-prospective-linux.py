@@ -92,6 +92,15 @@ class ProspectiveSSH(linux.LinuxCaller):
             script_sha256=hashlib.sha256(self.ssh.source).hexdigest(),staging_path=str(self.ssh.target),
             v125_image_tag='synthetic:f577934691a1a7a79ba327c54e2055425142b7be',v126_image_id='sha256:'+'a'*64,v126_image_tag='synthetic:'+linux.SHA))
 
+        self.prepare_current_init()
+
+    def prepare_current_init(self):
+        # Proposal inputs for this isolated target, never bootstrap/full-DR authority.
+        baseline,_=self.current_baseline_fixture(runtime=dict(source_sha='b'*40,image_sha256='b'*64))
+        document=json.loads(self.manifest)
+        document.update(format_version=3,v125_baseline=baseline,v125_image_tag=baseline['image_id'])
+        self.manifest=T.canonical(document)
+
     def build_authority(self, request=None):
         target=self.ssh.target; info=target.stat(); runtime=Path(sys.executable).resolve()
         def runtime_record(doc):
@@ -222,7 +231,19 @@ class ProspectiveSSH(linux.LinuxCaller):
         before={p.name:(p.read_bytes(),p.stat().st_ino,p.stat().st_mode) for p in self.history.iterdir()}
         request=self.client.init_request(self.state,self.manifest)
         enrollment=types.SimpleNamespace(document=self.fx.anchor,sha256=self.e.digest(self.fx.anchor))
-        opened=self.client.make_open(enrollment,self.manifest,request['identity'],request)
+        with self.assertRaisesRegex(ValueError,'ACCEPTED_V125_RECOVERY_RUNTIME_MISMATCH'):
+            self.client.make_open(enrollment,self.manifest,request['identity'],request)
+        # A hostile caller can construct OPEN directly; the server must still refuse
+        # before challenges/writes, without promoting this bootstrap anchor to full U.
+        doc=self.fx.anchor
+        opened=dict(version=2,type='OPEN',mode='EXECUTE',session_id='1'*64,
+            anchor_sha256=enrollment.sha256,anchor_generation=doc['generation'],
+            principal_fingerprint=doc['principal_fingerprint'],host_fingerprint=doc['host_fingerprint'],
+            identity=request['identity'],target=str(self.ssh.target),request_sha256=T.digest(request),
+            manifest_sha256=hashlib.sha256(self.manifest).hexdigest(),manifest_size=len(self.manifest),
+            source_tree=doc['source_tree'],tooling_sha256=doc['tooling_sha256'],runtime=doc['python_version'],
+            worker_args=[],environment={},init_request=request,init_completion=None,payload=None,
+            epoch=self.e.epoch_context(doc))
         T.validate_open(opened)
         challenges=[];writes=[]
         class UnexpectedVerifier:

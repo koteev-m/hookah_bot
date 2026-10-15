@@ -119,10 +119,14 @@ def validate_init_manifest(manifest):
                 'release_worktree', 'remote', 'run_id', 'script_sha256', 'staging_path',
                 'v125_image_tag', 'v126_image_id', 'v126_image_tag'}
     epoch = doc.get('epoch') if type(doc) is dict else None
+    baseline = doc.get('v125_baseline') if type(doc) is dict else None
+    if baseline is not None:
+        module('v126_client_baseline', 'v126-operation-bindings.py').binding_v125_baseline(baseline)
+        expected.add('v125_baseline')
     if epoch is not None:
         module('v126_policy_b_transport', 'v126-policy-b-transport.py').epoch_context(epoch)
         expected.add('epoch')
-    if type(doc) is not dict or set(doc) != expected or type(doc['format_version']) is not int or doc['format_version'] != (2 if epoch is not None else 1):
+    if type(doc) is not dict or set(doc) != expected or type(doc['format_version']) is not int or doc['format_version'] != (3 if baseline is not None else (2 if epoch is not None else 1)):
         fail('INIT_MANIFEST_SCHEMA')
     def match(name, pattern):
         if type(doc[name]) is not str or re.fullmatch(pattern, doc[name]) is None:
@@ -147,7 +151,10 @@ def validate_init_manifest(manifest):
             fail('INIT_MANIFEST_PATH')
     match('v126_image_id', r'sha256:[0-9a-f]{64}')
     match('v126_image_tag', r'[a-z0-9][a-z0-9._/-]*:' + doc['release_sha'])
-    match('v125_image_tag', r'[a-z0-9][a-z0-9._/-]*:f577934691a1a7a79ba327c54e2055425142b7be')
+    if baseline is None:
+        match('v125_image_tag', r'[a-z0-9][a-z0-9._/-]*:f577934691a1a7a79ba327c54e2055425142b7be')
+    elif doc['v125_image_tag'] != baseline['image_id'] or baseline['image_id'] == doc['v126_image_id']:
+        fail('INIT_BASELINE_IMAGE_BINDING')
     return doc
 
 
@@ -163,6 +170,8 @@ def proposal_path(state, path, manifest):
 def prepare_init_proposal(state, path, manifest):
     """Persist a proposal for independent approval; never create canonical state."""
     request = init_request(state, manifest)
+    if strict(manifest).get('format_version') != 3:
+        fail('CURRENT_ACCEPTED_V125_BASELINE_REQUIRED')
     if Path(state).exists() or Path(state).is_symlink():
         fail('INIT_STATE_EXISTS')
     verify_source(manifest)
@@ -196,6 +205,8 @@ def read_init_proposal(state, path, expected_sha256):
             or proposal['state_dir'] != str(state)):
         fail('INIT_PROPOSAL_BINDING')
     manifest = canonical(proposal['manifest'])
+    if validate_init_manifest(manifest).get('format_version') != 3:
+        fail('CURRENT_ACCEPTED_V125_BASELINE_REQUIRED')
     proposal_path(state, path, manifest)
     init_request(state, manifest)
     return manifest
@@ -217,10 +228,13 @@ def init_request(state, manifest):
     metadata = dict(directories=list(STATE_DIRECTORIES), files=[
         dict(path='run.json', sha256=digest(manifest), size=len(manifest), mode=0o400),
         dict(path='run.json.sha256', sha256=digest(checksum), size=len(checksum), mode=0o400)])
-    return dict(format_version=1, identity=identity,
+    request = dict(format_version=1, identity=identity,
                 target_sha256=digest(doc['staging_path'].encode()),
                 manifest_sha256=digest(manifest), manifest_size=len(manifest),
                 local_state_sha256=digest(str(state).encode()), metadata=metadata)
+    if 'v125_baseline' in doc:
+        request.update(format_version=2, v125_baseline=doc['v125_baseline'])
+    return request
 
 
 def write_metadata(state, manifest, request):
@@ -409,12 +423,14 @@ def read_local_stream(path, source):
     """Decode generated data only; the old client-provided shell loader is never executed."""
     with open(path, 'rb') as handle:
         prefix = handle.read(2 * 1024 * 1024)
-        magics = (b'\nV126_INTERNAL_REMOTE_ENVELOPE_V1\n', b'\nV126_INTERNAL_REMOTE_ENVELOPE_V2\n')
+        magics = tuple(('\nV126_INTERNAL_REMOTE_ENVELOPE_V'+str(v)+'\n').encode() for v in (1, 2, 3, 4))
         if sum(prefix.count(m) for m in magics) != 1:
             fail('LOCAL_ENVELOPE_MAGIC')
         magic = next(m for m in magics if m in prefix)
-        prospective = magic == magics[1]
+        prospective = magic in (magics[1], magics[3])
+        current_baseline = magic in (magics[2], magics[3])
         names = ENVELOPE_NAMES + (('AUTHORITY_EPOCH_ID', 'DOMAIN_IDENTITY_SHA256') if prospective else ())
+        names += ('V125_BASELINE_B64',) if current_baseline else ()
         if prefix.count(magic) != 1:
             fail('LOCAL_ENVELOPE_MAGIC')
         start = prefix.index(magic) + len(magic)
@@ -453,7 +469,8 @@ def read_local_stream(path, source):
         identity = dict(run_id=values[1], release_sha=values[2], script_sha256=values[4],
                         intent_sha256=values[12], kind=values[6], name=values[7], action=values[0])
         if prospective:
-            pair = dict(epoch_id=values[-2], domain_identity_sha256=values[-1])
+            pair = dict(epoch_id=environment['V126_INTERNAL_REMOTE_AUTHORITY_EPOCH_ID'],
+                        domain_identity_sha256=environment['V126_INTERNAL_REMOTE_DOMAIN_IDENTITY_SHA256'])
             if any(not re.fullmatch('[0-9a-f]{64}', v) for v in pair.values()):
                 fail('LOCAL_ENVELOPE_EPOCH')
             identity.update(pair)
@@ -586,9 +603,22 @@ def validate_prospective_transport(verifier, options):
         fail('PROSPECTIVE_HOST_MISMATCH')
 
 
+def validate_baseline_recovery_runtime(manifest, enrollment):
+    baseline = strict(manifest).get('v125_baseline')
+    if baseline is None:
+        return
+    for key in ('data_runtime', 'restore_runtime'):
+        runtime = enrollment.document.get(key, {})
+        if (runtime.get('source_sha') != baseline['source_sha'] or
+                runtime.get('image_sha256') != baseline['image_id'].removeprefix('sha256:')):
+            fail('ACCEPTED_V125_RECOVERY_RUNTIME_MISMATCH')
+
+
 def make_open(enrollment, manifest, identity, request, *, arguments=(), environment=None,
               completion=None, payload=None, mode='EXECUTE'):
     doc = enrollment.document
+    if mode == 'EXECUTE' and identity['kind'] in ('INIT', 'STAGE'):
+        validate_baseline_recovery_runtime(manifest, enrollment)
     initializing = identity['kind'] == 'INIT'
     epoch = strict(manifest).get('epoch')
     if epoch != (epoch_module().epoch_context(doc) if doc.get('schema_version') == 2 else None):
@@ -808,7 +838,8 @@ def run_client(args):
         # callers may supply exact preapproved bytes directly, without regeneration.
         manifest = (read_init_proposal(state, proposal_file, proposal_sha256) if proposal_file
                     else sys.stdin.buffer.read(MAX_METADATA + 1))
-        validate_init_manifest(manifest)
+        if validate_init_manifest(manifest).get('format_version') != 3:
+            fail('CURRENT_ACCEPTED_V125_BASELINE_REQUIRED')
     else:
         manifest = read_protected(state/'run.json')
     doc = strict(manifest)
@@ -816,6 +847,8 @@ def run_client(args):
     authority = module('v126_policy_b_authority', 'v126-policy-b-authority.py')
     transport = module('v126_policy_b_transport', 'v126-policy-b-transport.py')
     enrollment = authority.load_enrolled_authority(args.policy_b_anchor)
+    if args.command in ('init', 'operation'):
+        validate_baseline_recovery_runtime(manifest, enrollment)
     ssh_options = load_transport_config(args.policy_b_transport, manifest, enrollment)
     verifier = authority.VVerifier(enrollment, lambda context, history: verify_native_stage7(state, context, history))
     if 'epoch' in doc:
@@ -874,6 +907,9 @@ def run_client(args):
     if 'epoch' in doc:
         environment.update(V126_INTERNAL_REMOTE_AUTHORITY_EPOCH_ID=doc['epoch']['epoch_id'],
                            V126_INTERNAL_REMOTE_DOMAIN_IDENTITY_SHA256=doc['epoch']['domain_identity_sha256'])
+    expected_baseline = base64.b64encode(canonical(doc['v125_baseline'])).decode() if 'v125_baseline' in doc else None
+    if environment.get('V126_INTERNAL_REMOTE_V125_BASELINE_B64') != expected_baseline:
+        fail('LOCAL_OPERATION_BASELINE_BINDING')
     request = dict(args=arguments, environment=environment)
     payload = None
     payload_metadata = None
