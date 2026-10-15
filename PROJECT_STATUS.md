@@ -1,5 +1,32 @@
 # Project Status
 
+## HT-V126-PR-CHECKPOINT-FIX-18 — published feature branch, Draft PR preparation (2026-10-15)
+
+This checkpoint supersedes the local, unpublished-status reports below without rewriting
+their historical evidence. The `Hookah_Tootah` feature branch
+`codex/ht-v126-one-vps-safe-implement-01` is published at
+`064b2dcb1e3f6120a56f83c58cd82d3db1f3cb9a`. Its base and merge-base with
+`origin/main` are both `8e69044d843e23a843592aa5ceb444e0904c1462`;
+the feature is five commits ahead and zero behind. The published commits are
+`08b404d`, `f5209be`, `31fbc9a`, `3bcfbb0` and `064b2dc`. The reviewed full
+base-to-HEAD diff is 28 files, +2403/-85.
+
+The supplied exact-HEAD [GitHub Actions run #38781777338](https://github.com/koteev-m/hookah_bot/actions/runs/38781777338)
+completed successfully on attempt 1: 15/15 jobs SUCCESS, including `compose-cutover`;
+GenesisSSH passed 11/11 and ProspectiveSSH passed 6/6. Independent full-branch review
+`HT-V126-FULL-BRANCH-PR-READINESS-17` inspected all five commits and the full diff.
+Its result was `FINDINGS`: no confirmed production-code defects and one P2 finding,
+the stale top-level checkpoint. This new entry addresses that documentation finding;
+the final diff after this edit still needs independent confirmation. A Draft PR has
+not been created. Merge and operational deployment are not authorized.
+
+`run724=UNKNOWN`, `CUTOVER_READY=NOT_PROVEN`, `LEGACY_EVIDENCE_INSUFFICIENT` and
+`ONE_VPS_SAFE_PATH_NOT_PROVEN` remain unchanged. Independent legacy cessation and
+writer-exclusion evidence, staging/cutover/recovery, installation of the updated
+executors, and new-image ordinary authority transfer remain closed. Server operations
+require their own independent evidence and separate authorization; CI and this
+documentation correction do not establish operational readiness.
+
 ## HT-V126-LINUX-CI-CANDIDATE-04 — local publication candidate (2026-10-15)
 
 The existing feature worktree remains at `8e69044d843e23a843592aa5ceb444e0904c1462`
