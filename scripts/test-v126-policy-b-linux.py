@@ -606,8 +606,8 @@ with fixture.git_observations():raise SystemExit(client.main())
         self.outer_env=dict(os.environ,PATH=str(bin_dir)+':/usr/sbin:/usr/bin:/sbin:/bin',PYTHONDONTWRITEBYTECODE='1')
         return self.source_root/'scripts/v126-cutover.sh'
 
-    def current_baseline_fixture(self):
-        runtime=self.fx.anchor['data_runtime']
+    def current_baseline_fixture(self, runtime=None):
+        if runtime is None: runtime=self.fx.anchor['data_runtime']
         database=dict(container_id='d'*64,system_id='12345',database='synthetic',user='synthetic',network='synthetic_default')
         scope=dict(project_id='Hookah_Tootah',directory=str(self.fx.target),
             compose_file=str(self.fx.target/'docker-compose.yml'),migration_fingerprint='e'*64,

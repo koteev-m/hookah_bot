@@ -98,6 +98,65 @@ class CurrentBaseline(unittest.TestCase):
                 c.prepare_init_proposal(fixture.state, self.root/'legacy-proposal', c.canonical(legacy))
         self.assertFalse(fixture.state.exists())
 
+    def test_prospective_current_proposal_keeps_bootstrap_authority_separate(self):
+        f = module('prospective_baseline_fixture', 'fixtures/v126-authority-epoch-fixture.py')
+        info = self.target.stat()
+        fx = f.Fixture(target=dict(path=str(self.target), device=info.st_dev, inode=info.st_ino,
+                                  uid=info.st_uid, host_fingerprint='SHA256:'+'N'*43))
+        before = copy.deepcopy(fx.anchor)
+        namespace = dict(json=json, hashlib=hashlib, T=SimpleNamespace(canonical=c.canonical))
+        builder = fixture_method('test-v126-policy-b-linux.py', 'LinuxCaller', 'current_baseline_fixture', namespace)
+        prepare = fixture_method('test-v126-prospective-linux.py', 'ProspectiveSSH', 'prepare_current_init', namespace)
+        tree = ast.parse((ROOT/'test-v126-prospective-linux.py').read_text())
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ProspectiveSSH')
+        setup = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == 'setUp')
+        self.assertTrue(any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                            and n.func.attr == 'prepare_current_init' for n in ast.walk(setup)))
+        epoch = f.E.epoch_context(fx.anchor)
+        legacy = dict(self.manifest, format_version=2, epoch=epoch,
+                      v125_image_tag='synthetic:f577934691a1a7a79ba327c54e2055425142b7be')
+        legacy.pop('v125_baseline')
+        fixture = SimpleNamespace(root=self.root, fx=SimpleNamespace(target=self.target, anchor=fx.anchor),
+                                  bindings=b, manifest=c.canonical(legacy))
+        fixture.current_baseline_fixture = lambda **kw: builder(fixture, **kw)
+        prepare(fixture)
+        doc = c.validate_init_manifest(fixture.manifest)
+        self.assertEqual(doc['format_version'], 3)
+        self.assertEqual(doc['epoch'], epoch)
+        baseline = b.binding_v125_baseline_documents((self.root/'accepted-registration.json').read_bytes(),
+            (self.root/'accepted-state.json').read_bytes(), self.target)
+        self.assertEqual(doc['v125_baseline'], baseline)
+        self.assertEqual(doc['v125_image_tag'], baseline['image_id'])
+        state = self.root/'prospective-state'; proposal = self.root/'prospective-init.json'
+        with patch.object(c, 'verify_source'):
+            summary = c.prepare_init_proposal(state, proposal, fixture.manifest)
+            with self.assertRaisesRegex(ValueError, 'CURRENT_ACCEPTED_V125_BASELINE_REQUIRED'):
+                c.prepare_init_proposal(state, self.root/'obsolete-init.json', c.canonical(legacy))
+            target_proposal = self.root/'prospective-target.json'
+            observed = c.datetime.fromisoformat(fx.request['created_at'].replace('Z', '+00:00'))
+            with patch.object(c.sys, 'version_info', (3, 12, 3)), patch.object(c, 'datetime', wraps=c.datetime) as clock:
+                clock.now.return_value = observed
+                c.prepare_target_binding(SimpleNamespace(command='prepare-isolated-target-binding', state_dir=state,
+                    init_proposal_file=proposal, init_proposal_sha256=summary['proposal_sha256'],
+                    proposal_file=target_proposal, target_device=info.st_dev, target_inode=info.st_ino,
+                    target_uid=info.st_uid, host_fingerprint=fx.anchor['host_fingerprint'],
+                    isolation_proof_sha256=fx.proof_ref, expires_at=fx.request['expires_at']))
+        request = json.loads(target_proposal.read_bytes()); f.E.validate_request(request)
+        self.assertEqual(request['next_init_manifest_sha256'], c.digest(fixture.manifest))
+        self.assertEqual(f.E.epoch_context(request), epoch)
+        initial = c.init_request(state, fixture.manifest)
+        self.assertEqual(initial['v125_baseline'], baseline)
+        self.assertEqual(initial['identity']['epoch_id'], epoch['epoch_id'])
+        self.assertEqual(initial['identity']['intent_sha256'], request['next_init_manifest_sha256'])
+        with self.assertRaisesRegex(ValueError, 'ACCEPTED_V125_RECOVERY_RUNTIME_MISMATCH'):
+            c.make_open(SimpleNamespace(document=fx.anchor), fixture.manifest, initial['identity'], initial)
+        self.assertEqual(fx.anchor, before)
+        f.E.validate_anchor(fx.anchor)
+        self.assertNotIn('data_runtime', fx.anchor)
+        self.assertNotIn('restore_runtime', fx.anchor)
+        self.assertFalse(state.exists())
+        self.assertFalse((self.target/'.v126-target-operations').exists())
+
     def test_linux_baseline_carries_locked_init_baseline(self):
         captured = []
         def opened(*args, **kwargs):
