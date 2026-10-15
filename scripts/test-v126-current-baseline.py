@@ -121,8 +121,29 @@ class CurrentBaseline(unittest.TestCase):
             baseline(fixture)
             env = captured[-1]
             self.assertEqual(env.get('V126_INTERNAL_REMOTE_V125_BASELINE_B64'),self.encoded if current else None)
-            self.assertEqual(env['V126_INTERNAL_REMOTE_ENVELOPE_VALIDATED'],
-                             'V126_INTERNAL_REMOTE_ENVELOPE_V3' if current else 'V126_INTERNAL_REMOTE_ENVELOPE_V1')
+            # Direct STAGE receives the normalized internal environment, not wire magic.
+            args = [str(self.target), fixture.owner['run_id'], fixture.owner['release_sha']]
+            source = c.SOURCE.read_bytes()
+            lines = ['V126_INTERNAL_REMOTE_ENVELOPE_V3' if current else 'V126_INTERNAL_REMOTE_ENVELOPE_V1',
+                     *[env['V126_INTERNAL_REMOTE_'+key] for key in c.ENVELOPE_NAMES]]
+            if current: lines.append(self.encoded)
+            stream = self.root/'baseline-stream'
+            stream.write_bytes(b'ignored loader\n'+('\n'.join(lines+['3', *args])+'\n').encode()+source)
+            _, decoded_args, normalized, _ = c.read_local_stream(stream, source)
+            self.assertEqual(decoded_args, args)
+            self.assertEqual(env, normalized)
+            command = ['bash', '-c', 'source "$1"; shift; remote_validate_envelope "$@"',
+                       'baseline-envelope-test', str(c.SOURCE), 'baseline', *args]
+            def validate(environment):
+                return subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=10,
+                    env=dict(PATH=os.environ['PATH'], LC_ALL='C', PYTHONDONTWRITEBYTECODE='1', **environment))
+            result = validate(env)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            # The real source must continue rejecting wire V3 as an internal marker.
+            wrong = dict(env, V126_INTERNAL_REMOTE_ENVELOPE_VALIDATED='V126_INTERNAL_REMOTE_ENVELOPE_V3')
+            result = validate(wrong)
+            self.assertEqual(result.returncode, 4)
+            self.assertIn(b'invalid internal remote envelope', result.stderr)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='v126-baseline-synthetic-')

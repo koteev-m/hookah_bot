@@ -259,7 +259,7 @@ tempfile.TemporaryFile=_observed_tempfile
         baseline=json.loads(self.manifest).get('v125_baseline')
         if baseline is not None:
             environment['V126_INTERNAL_REMOTE_V125_BASELINE_B64']=base64.b64encode(T.canonical(baseline)).decode()
-            environment['V126_INTERNAL_REMOTE_ENVELOPE_VALIDATED']='V126_INTERNAL_REMOTE_ENVELOPE_V3'
+        # Direct Policy B STAGE keeps the normalized V1 marker set above.
         args=[str(self.fx.target),identity['run_id'],identity['release_sha']]
         request=dict(args=args,environment=environment)
         opened=self.client.make_open(self.fx.enrollment,self.manifest,identity,request,arguments=args,
