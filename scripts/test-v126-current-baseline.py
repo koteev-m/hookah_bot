@@ -31,6 +31,16 @@ def module(name, filename):
     return loaded
 
 
+def fixture_method(filename, classname, method, namespace):
+    # Execute only fixture preparation/serialization, never import or relax the
+    # Linux/root/owned-SSH entrypoint guards for a portable test.
+    tree = ast.parse((ROOT/filename).read_text())
+    cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == classname)
+    node = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == method)
+    exec(compile(ast.Module(body=[node], type_ignores=[]), filename, 'exec'), namespace)
+    return namespace[method]
+
+
 b = module('baseline_bindings', 'v126-operation-bindings.py')
 c = module('baseline_client', 'v126-policy-b-client.py')
 d = module('baseline_database_evidence', 'v126-database-evidence.py')
@@ -47,6 +57,73 @@ def accepted_documents(target):
 
 
 class CurrentBaseline(unittest.TestCase):
+    def test_genesis_prepares_current_init_before_snapshotting_authority(self):
+        namespace = dict(json=json, hashlib=hashlib, T=SimpleNamespace(canonical=c.canonical))
+        builder = fixture_method('test-v126-policy-b-linux.py', 'LinuxCaller', 'current_baseline_fixture', namespace)
+        prepare = fixture_method('test-v126-genesis-linux.py', 'GenesisSSH', 'prepare_current_init', namespace)
+        setup = ast.parse((ROOT/'test-v126-genesis-linux.py').read_text())
+        cls = next(n for n in setup.body if isinstance(n, ast.ClassDef) and n.name == 'GenesisSSH')
+        setup = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == 'setUp')
+        call = next(n for n in ast.walk(setup) if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute) and n.func.attr == 'prepare_current_init')
+        snapshot = next(n for n in setup.body if isinstance(n, ast.Assign)
+                        and any(isinstance(t, ast.Attribute) and t.attr == 'original' for t in n.targets))
+        self.assertLess(call.lineno, snapshot.lineno)
+        runtime = dict(source_sha='a'*40, image_sha256='a'*64)
+        anchor = dict(data_runtime=runtime, restore_runtime=copy.deepcopy(runtime))
+        saved = []
+        fx = SimpleNamespace(target=self.target, anchor=anchor,
+                             catalogue={'actions':[{'identity':{'obsolete':True}}]}, save=saved.append)
+        legacy = dict(self.manifest, format_version=1,
+                      v125_image_tag='synthetic:f577934691a1a7a79ba327c54e2055425142b7be')
+        legacy.pop('v125_baseline')
+        fixture = SimpleNamespace(root=self.root, fx=fx, bindings=b, client=c,
+                                  state=self.root/'genesis-state', manifest=c.canonical(legacy))
+        fixture.current_baseline_fixture = lambda: builder(fixture)
+        before = copy.deepcopy(anchor)
+        prepare(fixture)
+        document = c.validate_init_manifest(fixture.manifest)
+        self.assertEqual(document['format_version'], 3)
+        self.assertEqual(document['v125_image_tag'], document['v125_baseline']['image_id'])
+        self.assertEqual(fixture.request, c.init_request(fixture.state, fixture.manifest))
+        self.assertEqual(fixture.request['manifest_sha256'], c.digest(fixture.manifest))
+        self.assertEqual(fx.identity, fixture.request['identity'])
+        self.assertEqual(fx.catalogue['actions'][0]['identity'], fx.identity)
+        self.assertEqual(saved, ['catalogue'])
+        self.assertEqual(anchor, before)
+        c.validate_baseline_recovery_runtime(fixture.manifest, SimpleNamespace(document=anchor))
+        with patch.object(c, 'verify_source'):
+            c.prepare_init_proposal(fixture.state, self.root/'genesis-proposal', fixture.manifest)
+            with self.assertRaisesRegex(ValueError, 'CURRENT_ACCEPTED_V125_BASELINE_REQUIRED'):
+                c.prepare_init_proposal(fixture.state, self.root/'legacy-proposal', c.canonical(legacy))
+        self.assertFalse(fixture.state.exists())
+
+    def test_linux_baseline_carries_locked_init_baseline(self):
+        captured = []
+        def opened(*args, **kwargs):
+            captured.append(kwargs['environment'])
+            return {}
+        def invoke(*args, **kwargs):
+            kwargs['output_sink'](b'CAPTURED_ACTION\tbaseline\nREMOTE_OPERATION_ACK')
+            return {'status':0}
+        namespace = dict(json=json, base64=base64,
+                         T=SimpleNamespace(canonical=c.canonical, invoke_operation=invoke))
+        baseline = fixture_method('test-v126-policy-b-linux.py', 'LinuxCaller', 'baseline', namespace)
+        fixture = SimpleNamespace(owner=dict(run_id='fixture',release_sha='c'*40,script_sha256='d'*64),
+            fx=SimpleNamespace(target=self.target,catalogue={'actions':[{}]},save=lambda name:None,enrollment=None),
+            client=SimpleNamespace(ENVELOPE_NAMES=c.ENVELOPE_NAMES,make_open=opened),
+            ssh=SimpleNamespace(options=lambda:{},source=b''), state=self.root/'state',
+            acks=[{}],verifier=lambda:None,assertEqual=self.assertEqual,assertIn=self.assertIn)
+        for current in (True, False):
+            document = dict(self.manifest)
+            if not current: document.pop('v125_baseline')
+            fixture.manifest = c.canonical(document)
+            baseline(fixture)
+            env = captured[-1]
+            self.assertEqual(env.get('V126_INTERNAL_REMOTE_V125_BASELINE_B64'),self.encoded if current else None)
+            self.assertEqual(env['V126_INTERNAL_REMOTE_ENVELOPE_VALIDATED'],
+                             'V126_INTERNAL_REMOTE_ENVELOPE_V3' if current else 'V126_INTERNAL_REMOTE_ENVELOPE_V1')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='v126-baseline-synthetic-')
         self.addCleanup(self.tmp.cleanup)

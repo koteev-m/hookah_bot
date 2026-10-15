@@ -6,6 +6,7 @@ copied enrolled source only replaces remote_dispatch_action, the privileged leaf
 source/envelope validation, admission, flock, native history and INIT execute.
 No operational target, app, provider, DB, Docker socket or user HOME is available.
 """
+import base64
 import copy
 import fcntl
 import shlex
@@ -255,6 +256,10 @@ tempfile.TemporaryFile=_observed_tempfile
             OPERATION_KIND='STAGE',OPERATION_NAME='BASELINE_VERIFIED',V126_IMAGE_ID='sha256:'+'a'*64,
             MODE='true',ENVELOPE_VALIDATED='V126_INTERNAL_REMOTE_ENVELOPE_V1')
         environment.update({'V126_INTERNAL_REMOTE_'+key:value for key,value in values.items()})
+        baseline=json.loads(self.manifest).get('v125_baseline')
+        if baseline is not None:
+            environment['V126_INTERNAL_REMOTE_V125_BASELINE_B64']=base64.b64encode(T.canonical(baseline)).decode()
+            environment['V126_INTERNAL_REMOTE_ENVELOPE_VALIDATED']='V126_INTERNAL_REMOTE_ENVELOPE_V3'
         args=[str(self.fx.target),identity['run_id'],identity['release_sha']]
         request=dict(args=args,environment=environment)
         opened=self.client.make_open(self.fx.enrollment,self.manifest,identity,request,arguments=args,
