@@ -1,5 +1,29 @@
 # Project Status
 
+## HT-V126-MAIN-INTEGRATION-CHECKPOINT-25 — PR #214 integrated in main (2026-10-16)
+
+[PR #214](https://github.com/koteev-m/hookah_bot/pull/214) is CLOSED/MERGED. GitHub
+`main` points to merge commit `fd8115f36e9b0c34b3ab7e0a4a70ffbddbf3c907`, with
+first parent `8e69044d843e23a843592aa5ceb444e0904c1462` and second parent
+`5f89fe7de1f31eac2bc4162fa2c9bac2dfb17a28`. The reviewed V126 one-VPS-safe
+code and documentation are integrated in main. This record supersedes the earlier
+feature-branch preparation checkpoints below as a statement of GitHub integration;
+their evidence remains historical.
+
+The exact-merge-SHA [post-merge CI #38802856278](https://github.com/koteev-m/hookah_bot/actions/runs/38802856278)
+completed successfully on attempt 1: 15/15 jobs SUCCESS, including
+`compose-cutover` with its isolated Linux SSH harness, backend, PostgreSQL and Mini
+App checks. GitHub integration and isolated CI do not prove readiness of the real
+VPS. No deployment, staging, cutover, recovery or other operational action is
+authorized or recorded by this checkpoint.
+
+`run724=UNKNOWN`, `CUTOVER_READY=NOT_PROVEN`, `LEGACY_EVIDENCE_INSUFFICIENT` and
+`ONE_VPS_SAFE_PATH_NOT_PROVEN` remain. Independent legacy cessation and writer
+exclusion evidence, installation of updated executors, ordinary V126 new-image
+authority transfer, and all real VPS/database operations remain closed. Next:
+separately assess the missing independent legacy evidence and decide the ordinary
+authority contract before any separately authorized server work.
+
 ## HT-V126-PR-CHECKPOINT-FIX-18 — published feature branch, Draft PR preparation (2026-10-15)
 
 This checkpoint supersedes the local, unpublished-status reports below without rewriting
