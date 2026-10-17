@@ -424,8 +424,13 @@ class ScopedSignedTests(SignedBoundaryTests):
 @unittest.skipUnless(os.environ.get('HT_CR1_RUNTIME_TEST') == '1', 'explicit disposable Docker installer opt-in required')
 class RealInstallerTests(unittest.TestCase):
     def test_real_cli_install_accept_app_forward_and_denials(self):
+        Runtime = DockerRuntime
+        if os.environ.get('HT_CR1_COMPOSE_TEST') == '1':
+            from clean_install_compose import ComposeRuntime
+            Runtime = ComposeRuntime
         from test_clean_install_postgres import BACKEND, POSTGRES, REVISION, ARCHIVE, JAVA, PostgreSQLRuntime, command
-        from clean_install_runtime import PG_IMAGE, PROBE_IMAGE
+        from clean_install_runtime import PROBE_IMAGE
+        POSTGRES = PG_IMAGE = Runtime.pg_image
         name = 'ht-cr1-local-' + uuid.uuid4().hex[:12]
         parent = Path('/private/tmp') if Path('/private/tmp').exists() else Path('/tmp')
         target = parent / name; target.mkdir(mode=0o700)
@@ -454,7 +459,7 @@ class RealInstallerTests(unittest.TestCase):
                 (qualification/'fixture.env').chmod(0o600)
                 docker('network','create','--internal','--label','ht.cr1.test='+name,qname); resources.append(('network',qname))
                 docker('volume','create','--label','ht.cr1.test='+name,qname); resources.append(('volume',qname))
-                docker('run','-d','--pull','never','--name',qname,'--network',qname,'--network-alias','postgres',
+                docker('run','-d','--pull','never','--platform',Runtime.pg_platform,'--name',qname,'--network',qname,'--network-alias','postgres',
                        '--label','ht.cr1.test='+name,'--env-file',str(qualification/'fixture.env'),
                        '--mount','type=volume,src='+qname+',dst=/var/lib/postgresql/data',POSTGRES)
                 resources.append(('container',qname))
@@ -469,7 +474,7 @@ class RealInstallerTests(unittest.TestCase):
                 qualifier = PostgreSQLRuntime(scope,record,qualification,qname)
                 qualifier.migrate('fixture'); record['schema'] = qualifier.schema()
                 base_env = {'APP_ENV':'staging','APP_HTTP_PORT':'8080','DB_JDBC_URL':'jdbc:postgresql://postgres:5432/fixture',
-                    'DB_USER':'fixture','DB_PASSWORD':secrets.token_hex(24),'API_SESSION_JWT_SECRET':secrets.token_hex(32),
+                    'DB_USER':'fixture','DB_PASSWORD':secrets.token_hex(24)+'-$literal-${HOME}','API_SESSION_JWT_SECRET':secrets.token_hex(32),
                     'TELEGRAM_BOT_ENABLED':'false','TELEGRAM_BOT_TOKEN':'340000001:'+secrets.token_urlsafe(32),
                     'TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER':secrets.token_hex(32),'VENUE_STAFF_INVITE_SECRET_PEPPER':secrets.token_hex(32),
                     'MINIAPP_ENTRY_ENABLED':'true','MINIAPP_STATIC_DIR':'/app/miniapp','MINIAPP_DEV_SERVER_URL':'',
@@ -501,7 +506,10 @@ class RealInstallerTests(unittest.TestCase):
                            '--label','ht.cr1.test='+name,'--label','com.docker.compose.project='+project,
                            PROBE_IMAGE,'python','-c','pass')
                     resources.append(('container',neighbor))
-                e['shared_guard']['protected_daemon']=DockerRuntime(e).protected_daemon()
+                if Runtime is not DockerRuntime:
+                    e['runtime'] = 'SCOPED_COMPOSE'
+                    scope['tooling'] = Runtime(e).clean_tooling(timeout=10)
+                e['shared_guard']['protected_daemon']=Runtime(e).protected_daemon()
                 scope['shared_host']['runtime_guard']=release.fingerprint(e['shared_guard'])
                 initialize_custody(e)
                 registration = target/'registration.json'; write_json(registration,e)
@@ -524,11 +532,11 @@ class RealInstallerTests(unittest.TestCase):
                     result=cli(action,candidate,expected,configuration)
                     diagnostic = release.read_json(target/'.staging-release/state.json').get('diagnostic') if (target/'.staging-release/state.json').exists() else None
                     if diagnostic == 'NETWORK_CONFIGURATION_CHANGED':
-                        net=json.loads(docker('network','inspect',name))[0]
+                        net=json.loads(docker('network','inspect',Runtime(e).network_name))[0]
                         diagnostic=(diagnostic,net['Internal'],net['Driver'],net.get('Options'))
                     if diagnostic == 'EXECUTION_ENV_CHANGED':
                         diffs=[]
-                        runtime=DockerRuntime(e)
+                        runtime=Runtime(e)
                         for suffix in ('pg','backend','probe'):
                             container=json.loads(docker('inspect',name+'-'+suffix))[0]
                             image_config=json.loads(docker('image','inspect',container['Image']))[0]['Config']
@@ -546,10 +554,13 @@ class RealInstallerTests(unittest.TestCase):
                 pre=cli('install',record,prepare=True);self.assertEqual(pre['status'],'SUCCESS',pre)
                 bundle=issue(e,pre['request'],private);del bundle['provider'];write_json(Path(e['evidence']),bundle)
                 self.assertEqual(cli('install',record)['reason'],'INDEPENDENT_ROLES_REQUIRED')
-                self.assertNotIn(name,docker('volume','ls','--format','{{.Name}}').decode().splitlines())
+                self.assertNotIn(Runtime(e).volume_name,docker('volume','ls','--format','{{.Name}}').decode().splitlines())
                 self.assertEqual(approved('install',record)['state'],'CLOSED_V126')
-                runtime=DockerRuntime(e)
+                runtime=Runtime(e)
                 first=runtime.clean_observe(timeout=10)
+                pg_id=runtime.inspect(name+'-pg')['Id']
+                protected_before=runtime.protected_daemon()
+                self.assertEqual(sum(not row['success'] for row in first['history']),0)
                 self.assertEqual(len(first['history']),126)
                 with release.Store(target/'.staging-release',migration_target=target).locked():
                     self.assertEqual(cli('status')['reason'],'DEPLOYMENT_BUSY')
@@ -561,9 +572,9 @@ class RealInstallerTests(unittest.TestCase):
                 request=cli('public-admit',configuration=public_config,prepare=True)['request']
                 issue(e,request,private,lambda p:p['owner'].update(approved=False))
                 self.assertEqual(cli('public-admit',configuration=public_config)['reason'],'OWNER_APPROVAL_REQUIRED')
-                self.assertEqual(DockerRuntime(e).clean_observe(timeout=10)['traffic'],'SMOKE')
+                self.assertEqual(Runtime(e).clean_observe(timeout=10)['traffic'],'SMOKE')
                 self.assertEqual(approved('public-admit',configuration=release.fingerprint(runtime.configuration('PUBLIC')))['state'],'ACCEPTED')
-                runtime=DockerRuntime(e)
+                runtime=Runtime(e)
                 runtime.sql("insert into users(telegram_user_id,first_name) values(340000001,'HT34 retained user')")
                 retained=runtime.sql('select row_to_json(u) from users u where telegram_user_id=340000001')
                 # Fixture-derived immutable images, not publishable release artifacts:
@@ -601,12 +612,15 @@ class RealInstallerTests(unittest.TestCase):
                 app=build_image('app',record)
                 self.assertEqual(approved('deploy',app,record['id'])['state'],'READY_FOR_SMOKE')
                 approved('accept')
-                runtime=DockerRuntime(e);self.assertEqual(runtime.clean_observe(timeout=10)['history'],first['history'])
+                runtime=Runtime(e);self.assertEqual(runtime.clean_observe(timeout=10)['history'],first['history'])
                 forward=build_image('forward',app)
                 self.assertEqual(approved('deploy',forward,app['id'])['state'],'READY_FOR_SMOKE')
                 approved('accept')
-                runtime=DockerRuntime(e);self.assertEqual(len(runtime.clean_observe(timeout=10)['history']),127)
+                runtime=Runtime(e);self.assertEqual(len(runtime.clean_observe(timeout=10)['history']),127)
                 self.assertEqual(json.loads(retained),json.loads(runtime.sql("select row_to_json(u)::jsonb-'cr1_fixture_note' from users u where telegram_user_id=340000001")))
+                self.assertEqual(runtime.inspect(name+'-pg')['Id'],pg_id)
+                self.assertEqual(runtime.clean_observe(timeout=10)['database'],first['database'])
+                self.assertEqual(runtime.protected_daemon(),protected_before)
                 self.assertEqual(cli('rollback')['reason'],'SCHEMA_INCOMPATIBLE_USE_FORWARD_FIX')
                 self.assertEqual(cli('status')['state'],'ACCEPTED')
                 for suffix in ('pg','probe'):
@@ -615,7 +629,7 @@ class RealInstallerTests(unittest.TestCase):
                     docker('network','disconnect',qname,name+'-'+suffix)
                 # Unexpected network writer is detected by a fresh worker process.
                 rogue=name+'-rogue'
-                docker('run','-d','--pull','never','--platform','linux/amd64','--name',rogue,'--network',name,
+                docker('run','-d','--pull','never','--platform','linux/amd64','--name',rogue,'--network',Runtime(e).network_name,
                        '--label','ht.cr1.test='+name,PROBE_IMAGE,'python','-c','import time;time.sleep(600)')
                 resources.append(('container',rogue))
                 self.assertEqual(cli('status')['reason'],'UNEXCLUDED_WRITER')

@@ -27,7 +27,7 @@ from clean_install_policy import SCOPED_ORIGIN
 
 
 TOOL_FILES = ("staging_release.py", "clean_install_policy.py", "clean_install_trust.py",
-              "clean_install_runtime.py", "shared_host_scope.py", "docker-save-archive.py", "deploy-staging.sh")
+              "clean_install_runtime.py", "clean_install_compose.py", "shared_host_scope.py", "docker-save-archive.py", "deploy-staging.sh")
 PG_IMAGE = "sha256:1eada89ec2521ae0f61125f6bdaf83bbbf88a43fecda48d112a83bb92df75c36"
 PROBE_IMAGE = "sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4"
 JAR_PATH = "app/app/lib/app-0.1.0.jar"
@@ -93,6 +93,9 @@ def archive_jar(path):
 
 
 class DockerRuntime:
+    pg_image = PG_IMAGE
+    pg_platform = "linux/arm64"
+
     def __init__(self, enrollment):
         require(enrollment.get('profile') == 'DISPOSABLE_LOCAL', 'BLOCKED_EXTERNAL_ENROLLMENT')
         self.e = copy.deepcopy(enrollment)
@@ -134,6 +137,14 @@ class DockerRuntime:
             require(self.scope['shared_host'] == scoped_binding(enrollment['shared_inventory'], enrollment['shared_routes'],
                     self.scope['shared_host']['retained_admins'], fingerprint(guard)), 'RESOURCE_PLAN_CHANGED')
 
+    @property
+    def network_name(self):
+        return self.name
+
+    @property
+    def volume_name(self):
+        return self.name
+
     def protected_daemon(self):
         """Local shared-daemon guard. Return only an aggregate digest, never Env.
 
@@ -147,7 +158,7 @@ class DockerRuntime:
         from shared_host_scope import overlap, ROOT
         paths = [ROOT, str(self.root), '/var/lib/docker/volumes/hookah-bot_pgdata/_data']
         for vol in volumes:
-            if vol['Name'] in (self.name, 'hookah-bot_pgdata'):
+            if vol['Name'] in (self.volume_name, 'hookah-bot_pgdata'):
                 require(isinstance(vol.get('Mountpoint'), str) and vol['Mountpoint'].startswith('/'), 'VOLUME_PATH_UNPROVEN')
                 paths.append(vol['Mountpoint'])
         protected = []
@@ -169,7 +180,7 @@ class DockerRuntime:
             require(item['Id'] not in retired['containers']
                     and (item['Config'].get('Labels') or {}).get('com.docker.compose.project') != 'hookah-bot',
                     'OLD_EXECUTOR_PRESENT')
-            require(all(m.get('Name') not in retired['volumes'] and m.get('Name') != self.name
+            require(all(m.get('Name') not in retired['volumes'] and m.get('Name') != self.volume_name
                         and not (m.get('Source') and any(overlap(m['Source'], path) for path in paths))
                         for m in item['Mounts']), 'OLD_OR_FOREIGN_VOLUME_CONSUMER')
             protected.append({k: item[k] for k in ('Id', 'Name', 'Image', 'Config', 'HostConfig', 'Mounts')}
@@ -178,7 +189,7 @@ class DockerRuntime:
         networks = self.json('network', 'inspect', *nets) if nets else []
         remaining = []
         for net in networks:
-            if net['Name'] == self.name:
+            if net['Name'] == self.network_name:
                 self.owned(net)
                 require(set(net['Containers']) <= target_ids, 'UNEXCLUDED_WRITER')
             else:
@@ -186,7 +197,7 @@ class DockerRuntime:
                 remaining.append(net)
         foreign_volumes = []
         for vol in volumes:
-            if vol['Name'] == self.name:
+            if vol['Name'] == self.volume_name:
                 self.owned(vol)
             else:
                 foreign_volumes.append(vol)
@@ -208,8 +219,8 @@ class DockerRuntime:
             return
         labels = self.labels()
         templates = [
-            ('network','create','--internal',*labels,self.name),
-            ('volume','create',*labels,self.name),
+            ('network','create','--internal',*labels,self.network_name),
+            ('volume','create',*labels,self.volume_name),
             ('exec','-i',self.name+'-pg','psql','-XqAtw','-U','fixture','-d','fixture','--set=ON_ERROR_STOP=1'),
             ('exec',self.name+'-pg','pg_isready','-h','127.0.0.1','-U','fixture','-d','fixture'),
             ('exec',self.name+'-pg','pg_dump','-U','fixture','-d','fixture','--schema-only',
@@ -217,10 +228,10 @@ class DockerRuntime:
              '--exclude-table=public.flyway_schema_history'),
             ('run','--rm','--pull','never','--name',self.name+'-empty-check',*labels,
              '--network','none','--read-only','--cap-drop','ALL','--mount',
-             'type=volume,src='+self.name+',dst=/empty,readonly,volume-nocopy','--entrypoint','/bin/sh',
-             PG_IMAGE,'-c','test -z "$(ls -A /empty)"'),
+             'type=volume,src='+self.volume_name+',dst=/empty,readonly,volume-nocopy','--entrypoint','/bin/sh',
+             self.pg_image,'-c','test -z "$(ls -A /empty)"'),
             ('run','-d','--pull','never','--platform','linux/amd64','--name',self.name+'-probe',
-             '--network',self.name,'--restart','no',*labels,PROBE_IMAGE,
+             '--network',self.network_name,'--restart','no',*labels,PROBE_IMAGE,
              'python','-c','import time;time.sleep(86400)')]
         for path in ('/health','/db/health','/version','/miniapp/','/api/guest/catalog'):
             templates.append(('exec',self.name+'-probe','python','-c',HTTP_PROBE,
@@ -236,9 +247,9 @@ class DockerRuntime:
             require(Path(envfile).parent == self.root and Path(envfile).name.startswith('.env-'), 'RUNTIME_CONFIG_CHANGED')
             self.files.check(envfile, private=True)
             base = ('run','-d','--pull','never','--name')
-            tail = ('--network',self.name,'--restart','no',*labels,'--env-file',envfile)
-            templates.append((*base,self.name+'-pg',*tail,'--network-alias','postgres','--mount',
-                              'type=volume,src='+self.name+',dst=/var/lib/postgresql/data',PG_IMAGE))
+            tail = ('--network',self.network_name,'--restart','no',*labels,'--env-file',envfile)
+            templates.append((*base,self.name+'-pg',*tail,'--platform',self.pg_platform,'--network-alias','postgres','--mount',
+                              'type=volume,src='+self.volume_name+',dst=/var/lib/postgresql/data',self.pg_image))
             for identity in self.e['images']:
                 for traffic in ('CLOSED','SMOKE','PUBLIC'):
                     templates.append((*base,self.name+'-backend',*tail,'--platform','linux/amd64',
@@ -273,11 +284,11 @@ class DockerRuntime:
 
     def isolation(self, item, *, volume=False):
         host = item['HostConfig']
-        require(set(item['NetworkSettings']['Networks']) == {self.name}
+        require(set(item['NetworkSettings']['Networks']) == {self.network_name}
                 and all(not bindings for bindings in (item['NetworkSettings'].get('Ports') or {}).values())
                 and not host.get('PublishAllPorts')
                 and not host.get('Privileged') and not host.get('PortBindings')
-                and host.get('NetworkMode') == self.name and host['RestartPolicy']['Name'] == 'no'
+                and host.get('NetworkMode') == self.network_name and host['RestartPolicy']['Name'] == 'no'
                 and item['RestartCount'] == 0 and not item['State'].get('Paused')
                 and not item['State'].get('Restarting')
                 and all(not host.get(key) for key in ('CapAdd','Devices','DeviceRequests','Binds','VolumesFrom',
@@ -287,14 +298,14 @@ class DockerRuntime:
                 and host.get('UTSMode','') == ''
                 and all(host.get(key,'') in ('','private') for key in ('IpcMode','UsernsMode','CgroupnsMode')),
                 'CONTAINER_ISOLATION_CHANGED')
-        require((len(item['Mounts']) == 1 and item['Mounts'][0].get('Name') == self.name
+        require((len(item['Mounts']) == 1 and item['Mounts'][0].get('Name') == self.volume_name
                  and item['Mounts'][0]['Destination'] == '/var/lib/postgresql/data') if volume else not item['Mounts'],
                 'CONTAINER_MOUNTS_CHANGED')
 
     def execution(self, item, image, env, *, probe=False, backend=False):
         # A locally present multi-platform index may expose an empty default
         # Config; compare the config of the exact platform actually requested.
-        config = self.json('image', 'inspect', '--platform', 'linux/amd64' if probe or backend else 'linux/arm64', image)[0]['Config']
+        config = self.json('image', 'inspect', '--platform', 'linux/amd64' if probe or backend else self.pg_platform, image)[0]['Config']
         expected_env = dict(value.split('=', 1) for value in config.get('Env', [])) | env
         actual_env = item['Config']['Env']
         require(len(actual_env) == len(expected_env)
@@ -371,27 +382,27 @@ class DockerRuntime:
         volumes = self.command('volume', 'ls', '--format', '{{.Name}}').decode().splitlines()
         has_pg = self.name + '-pg' in containers
         base = {'installation': self.scope['installation'], 'incarnation': self.scope['incarnation'],
-                'database': {'system_id': 'UNCREATED', 'database': 'fixture', 'role': 'fixture', 'volume': self.name, 'network': self.name},
+                'database': {'system_id': 'UNCREATED', 'database': 'fixture', 'role': 'fixture', 'volume': self.volume_name, 'network': self.network_name},
                 'image': None, 'backend_count': 0, 'traffic': 'CLOSED',
                 'configuration': fingerprint(self.configuration('CLOSED')), 'history': [],
                 'user_objects': [], 'unidentified_writers': [], 'schema': fingerprint({'database': 'UNCREATED'})}
         if self.scope['origin'] == SCOPED_ORIGIN:
             base['resource_guard'] = fingerprint(self.e['shared_guard'])
         if not has_pg:
-            require(self.name not in networks and self.name not in volumes
+            require(self.network_name not in networks and self.volume_name not in volumes
                     and not any(n.startswith(self.name + '-') for n in containers), 'PARTIAL_INSTALLATION_PRESENT')
             return base
-        require(self.name in networks and self.name in volumes, 'PARTIAL_INSTALLATION_PRESENT')
+        require(self.network_name in networks and self.volume_name in volumes, 'PARTIAL_INSTALLATION_PRESENT')
         pg = self.inspect(self.name + '-pg'); self.owned(pg)
         self.isolation(pg, volume=True)
-        self.execution(pg, PG_IMAGE, {'POSTGRES_DB':'fixture','POSTGRES_USER':'fixture','POSTGRES_PASSWORD':self.base['DB_PASSWORD']})
-        net = self.json('network', 'inspect', self.name)[0]; self.owned(net)
-        volume = self.json('volume', 'inspect', self.name)[0]; self.owned(volume)
+        self.execution(pg, self.pg_image, {'POSTGRES_DB':'fixture','POSTGRES_USER':'fixture','POSTGRES_PASSWORD':self.base['DB_PASSWORD']})
+        net = self.json('network', 'inspect', self.network_name)[0]; self.owned(net)
+        volume = self.json('volume', 'inspect', self.volume_name)[0]; self.owned(volume)
         require(volume['Driver'] == 'local' and not volume.get('Options'), 'VOLUME_CONFIGURATION_CHANGED')
         require(net['Internal'] is True and net['Driver'] == 'bridge'
                 and (net.get('Options') or {}) in ({}, {'com.docker.network.enable_ipv4':'true',
                                                        'com.docker.network.enable_ipv6':'false'}), 'NETWORK_CONFIGURATION_CHANGED')
-        require(pg['Image'] == PG_IMAGE, 'DATABASE_IMAGE_CHANGED')
+        require(pg['Image'] == self.pg_image, 'DATABASE_IMAGE_CHANGED')
         require(pg['State']['Running'], 'DATABASE_NOT_RUNNING')
         base['database']['system_id'] = self.sql('select system_identifier from pg_control_system()')
         backend = self.inspect(self.name + '-backend'); self.owned(backend)
@@ -408,13 +419,13 @@ class DockerRuntime:
                 and backend['RestartCount'] == 0 and not backend['Mounts']
                 and not backend['HostConfig'].get('Privileged') and not backend['HostConfig'].get('PortBindings')
                 and backend['HostConfig']['RestartPolicy']['Name'] == 'no'
-                and set(backend['NetworkSettings']['Networks']) == {self.name}, 'BACKEND_ISOLATION_CHANGED')
+                and set(backend['NetworkSettings']['Networks']) == {self.network_name}, 'BACKEND_ISOLATION_CHANGED')
         probe = self.inspect(self.name + '-probe'); self.owned(probe)
         self.isolation(probe)
         self.execution(probe, PROBE_IMAGE, {}, probe=True)
         require(probe['Image'] == PROBE_IMAGE and probe['State']['Running'] and not probe['Mounts']
                 and set(net['Containers']) == {pg['Id'], backend['Id'], probe['Id']}, 'UNEXCLUDED_WRITER')
-        backend_ip = backend['NetworkSettings']['Networks'][self.name]['IPAddress']
+        backend_ip = backend['NetworkSettings']['Networks'][self.network_name]['IPAddress']
         clients = json.loads(self.sql("select coalesce(json_agg(host(client_addr)),'[]') from pg_stat_activity where "
                             "datname=current_database() and backend_type='client backend' and pid<>pg_backend_pid()"))
         require(all(addr == backend_ip for addr in clients), 'UNEXCLUDED_WRITER')
@@ -469,17 +480,17 @@ class DockerRuntime:
                 'CONFIGURATION_NOT_ENROLLED')
         if kind == 'BOOTSTRAP':
             require(before['database']['system_id'] == 'UNCREATED', 'CREATE_ONLY_INSTALL_REQUIRED')
-            self.command('network', 'create', '--internal', *self.labels(), self.name)
-            self.command('volume', 'create', *self.labels(), self.name)
-            volume = self.json('volume','inspect',self.name)[0]; self.owned(volume)
+            self.command('network', 'create', '--internal', *self.labels(), self.network_name)
+            self.command('volume', 'create', *self.labels(), self.volume_name)
+            volume = self.json('volume','inspect',self.volume_name)[0]; self.owned(volume)
             require(volume['Driver'] == 'local' and not volume.get('Options'), 'VOLUME_CONFIGURATION_CHANGED')
             self.command('run','--rm','--pull','never','--name',self.name+'-empty-check',*self.labels(),
                          '--network','none','--read-only','--cap-drop','ALL',
-                         '--mount','type=volume,src='+self.name+',dst=/empty,readonly,volume-nocopy',
-                         '--entrypoint','/bin/sh',PG_IMAGE,'-c','test -z "$(ls -A /empty)"')
+                         '--mount','type=volume,src='+self.volume_name+',dst=/empty,readonly,volume-nocopy',
+                         '--entrypoint','/bin/sh',self.pg_image,'-c','test -z "$(ls -A /empty)"')
             pg_env = ('POSTGRES_DB=fixture\nPOSTGRES_USER=fixture\nPOSTGRES_PASSWORD=' + self.base['DB_PASSWORD'] + '\n').encode()
-            self.run_env(self.name + '-pg', PG_IMAGE, pg_env,
-                         ['--network-alias', 'postgres', '--mount', 'type=volume,src=' + self.name + ',dst=/var/lib/postgresql/data'])
+            self.run_env(self.name + '-pg', self.pg_image, pg_env,
+                         ['--platform', self.pg_platform, '--network-alias', 'postgres', '--mount', 'type=volume,src=' + self.volume_name + ',dst=/var/lib/postgresql/data'])
             deadline = time.monotonic() + 30
             while True:
                 try:
@@ -491,7 +502,7 @@ class DockerRuntime:
                              "where nspname not in ('pg_catalog','information_schema') and nspname not like 'pg_toast%'") == '0',
                     'DATABASE_NOT_EMPTY')
             self.command('run', '-d', '--pull', 'never', '--platform', 'linux/amd64', '--name', self.name + '-probe',
-                         '--network', self.name, '--restart', 'no', *self.labels(), PROBE_IMAGE,
+                         '--network', self.network_name, '--restart', 'no', *self.labels(), PROBE_IMAGE,
                          'python', '-c', 'import time;time.sleep(86400)')
         else:
             backend = self.inspect(self.name + '-backend'); self.owned(backend)
@@ -511,7 +522,7 @@ class DockerRuntime:
     def run_env(self, name, image, raw, extra):
         with tempfile.NamedTemporaryFile(dir=self.root, prefix='.env-') as stream:
             stream.write(raw); stream.flush()
-            self.command('run', '-d', '--pull', 'never', '--name', name, '--network', self.name, '--restart', 'no',
+            self.command('run', '-d', '--pull', 'never', '--name', name, '--network', self.network_name, '--restart', 'no',
                          *self.labels(), '--env-file', stream.name, *extra, image)
 
 
@@ -522,10 +533,16 @@ def local_action(args):
         files.check(args.local_registration, private=True)
         enrollment = decode_json(files.read(args.local_registration))
         require(enrollment.get('profile') == 'DISPOSABLE_LOCAL', 'BLOCKED_EXTERNAL_ENROLLMENT')
-        runtime = DockerRuntime(enrollment)
+        runtime_type = DockerRuntime
+        if enrollment.get('runtime') == 'SCOPED_COMPOSE':
+            from clean_install_compose import ComposeRuntime
+            runtime_type = ComposeRuntime
+        else:
+            require(enrollment.get('runtime') in (None, 'DOCKER'), 'RUNTIME_NOT_ENROLLED')
+        runtime = runtime_type(enrollment)
         # A second observer instance represents the verifier process boundary in
         # this local harness only; it is not an independent administrative domain.
-        authority = LocalSignedAuthority(enrollment, observe=DockerRuntime(enrollment).clean_observe)
+        authority = LocalSignedAuthority(enrollment, observe=runtime_type(enrollment).clean_observe)
         store = Store(Path(enrollment['directory']) / '.staging-release', migration_target=enrollment['directory'])
         controller = Controller.clean_installation(enrollment['scope'], store, runtime, authority)
         if args.action == 'status':
