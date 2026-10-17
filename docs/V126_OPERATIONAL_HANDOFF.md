@@ -14,6 +14,14 @@ disposition remain `NOT_PROVEN`. The following PR #198 paragraph is historical.
 
 ## Current ordinary controller boundary
 
+The approved [CLEAN_REINSTALL CR-1](CLEAN_REINSTALL_CONTRACT.md) has a local typed
+initial-acceptance and ordinary-release implementation in `staging_release.Controller`.
+HT34 adds the disposable local installer/ordinary CLI and signed fixture custody.
+Its production authority/runtime adapters and enrollment are absent; live dispatch
+remains closed. It supplies no historical handoff or exception to the consumers
+below. Historical UNKNOWN stays unchanged. New compatible forward migrations belong
+only to an independently admitted CR-1 lifecycle, not this historical transfer path.
+
 `deploy-staging.sh` now invokes `staging_release.py`, the installed V125 image-selection
 controller described in [ordinary releases](STAGING_ORDINARY_RELEASE.md). It does not
 invoke the older `v126-ordinary-deploy.py` contract below. These are distinct consumers:

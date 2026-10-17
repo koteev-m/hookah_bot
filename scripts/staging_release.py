@@ -22,6 +22,7 @@ import time
 from urllib.parse import urlsplit
 
 
+
 SOURCE = "https://github.com/koteev-m/hookah_bot"
 LIVE_REFUSAL = "LEGACY_TRANSITION_REQUIRED"
 REGISTRATION = Path("/etc/hookah-bot/staging-release.json")
@@ -245,6 +246,144 @@ class Controller:
         require(0 < readiness_seconds <= 120, "READINESS_BOUND_INVALID")
         self.scope, self.store, self.runtime = copy.deepcopy(scope), store, runtime
         self.seconds = readiness_seconds
+        self.clean_authority = None
+
+    @classmethod
+    def clean_installation(cls, scope, store, runtime, authority):
+        """CR-1 local integration API, deliberately unreachable from live worker.
+
+        runtime must bound all calls, verify actual immutable artifact/SQL/tool
+        bytes, observe full DB identity/history, and apply only the exact plan.
+        Its execute must exclude writers before Flyway, never repair/restore/drop
+        or seed, and never mutate traffic except an explicit TEST/PUBLIC plan.
+        Production enrollment/acquisition is NOT provided by this API.
+        """
+        # Preserve the existing standalone V125 tooling closure. New CR-1 tools
+        # must be enrolled together; simply installing this file grants nothing.
+        import clean_install_policy as clean
+        clean.scope(scope, require, digest)
+        require(isinstance(authority, clean.Authority), "INDEPENDENT_AUTHORITY_ADAPTER_REQUIRED")
+        require(store.migration_target is not None, "TARGET_GUARD_REQUIRED")
+        self = cls.__new__(cls)
+        self.scope, self.store, self.runtime = copy.deepcopy(scope), store, runtime
+        self.clean_authority = authority
+        self.clean_policy = clean
+        return self
+
+    def clean_action(self, kind, *, candidate=None, configuration=None, expected_current=None, prepare_only=False):
+        """One lock + independent CAS intent for install, admission and releases.
+
+        A pending external intent wins even when local state was lost. Failed and
+        unknown terminal states have no retry/repair/reset action in this API.
+        """
+        require(self.clean_authority is not None, "CLEAN_ORIGIN_REQUIRED")
+        clean = self.clean_policy
+        require(kind in ("BOOTSTRAP", "TEST", "ACCEPT", "PUBLIC", "APP", "FORWARD", "ROLLBACK"),
+                "CLEAN_ACTION_INVALID")
+        with self.store.locked():
+            authority = self.clean_authority
+            head = authority.head(self.scope["installation"], timeout=5)
+            require(isinstance(head, dict) and set(head) == {"state", "pending"}
+                    and head["pending"] is None, "OPERATOR_RECONCILIATION_REQUIRED")
+            state = self.store.read() if os.path.lexists(self.store.path) else None
+            require(head["state"] == (fingerprint(state) if state is not None else None),
+                    "INDEPENDENT_HISTORY_MISMATCH")
+            if state is not None:
+                require(state.get("scope") == fingerprint(self.scope), "STATE_TARGET_MISMATCH")
+                require(state.get("status") not in ("APPLYING", "UNKNOWN", "FAILED"),
+                        "OPERATOR_RECONCILIATION_REQUIRED")
+            before = self.runtime.clean_observe(timeout=5)
+            clean.snapshot(before, self.scope, require, digest)
+            require(self.runtime.clean_tooling(timeout=5) == self.scope["tooling"], "TOOLING_IDENTITY_CHANGED")
+            plan = {"kind": kind}
+            if kind in ("BOOTSTRAP", "APP", "FORWARD", "ROLLBACK"):
+                candidate = clean.image(copy.deepcopy(candidate), require, digest, image_id)
+                require(self.runtime.clean_image(candidate, timeout=30) == candidate, "IMAGE_IDENTITY_CHANGED")
+                plan["image"] = candidate
+            else:
+                require(candidate is None and expected_current is None, "UNEXPECTED_IMAGE_REQUEST")
+            if kind in ("TEST", "PUBLIC"):
+                require(digest(configuration) and configuration != before["configuration"],
+                        "EXACT_CONFIGURATION_REQUIRED")
+                plan["configuration"] = configuration
+            else:
+                require(configuration is None, "UNEXPECTED_CONFIGURATION_REQUEST")
+            if kind in ("APP", "FORWARD", "ROLLBACK"):
+                require(state is not None and expected_current == state["image"]["id"], "ACCEPTED_IMAGE_CHANGED")
+            phase, traffic = clean.transition(state, before, plan, require)
+            installed = candidate or state["image"]
+            if state is not None:
+                require(before["history"] == clean.history(state["image"]["manifest"]), "FLYWAY_HISTORY_CHANGED")
+                require(self.runtime.clean_image(state["image"], timeout=30) == state["image"],
+                        "ACCEPTED_IMAGE_CHANGED")
+            request = {"scope": self.scope, "plan": plan, "before": before, "previous": head["state"]}
+            if prepare_only:
+                return copy.deepcopy(request)
+            proof = authority.authorize(copy.deepcopy(request), timeout=10)
+            clean.evidence(proof, request, self.scope, require, digest, fingerprint)
+            self.store.ordinary_target()
+            # Re-observe after evidence acquisition and immediately before consuming intent.
+            require(self.runtime.clean_observe(timeout=5) == before, "PRE_DISPATCH_DRIFT")
+            intent = {"scope": fingerprint(self.scope), "status": "APPLYING", "image": installed,
+                      "previous_image": (state["image"] if kind in ("APP", "FORWARD", "ROLLBACK")
+                                         else state.get("previous_image")) if state else None, "observed": before,
+                      "events": copy.deepcopy(state["events"]) if state else [], "plan": plan,
+                      "request": fingerprint(request), "evidence": fingerprint(proof)}
+            # begin may commit then lose its reply. No local effects or automatic
+            # retry follow an exception; the external pending head blocks replay.
+            try:
+                token = authority.begin(request, proof, head["state"], timeout=10)
+            except BaseException:
+                raise Refused("AUTHORITY_INTENT_OUTCOME_UNKNOWN") from None
+            try:
+                require(isinstance(token, str) and digest(token), "INTENT_ACK_INVALID")
+                intent["token"] = token
+                self.store.write(intent)
+                self.store.ordinary_target()
+                require(self.runtime.clean_execute(copy.deepcopy(plan), copy.deepcopy(before), timeout=300)
+                        == "COMPLETED", "EXECUTION_OUTCOME_UNDEFINED")
+                after = self.runtime.clean_observe(timeout=10)
+                clean.snapshot(after, self.scope, require, digest)
+                database_matches = after["database"] == before["database"]
+                if kind == "BOOTSTRAP" and before["database"]["system_id"] == "UNCREATED":
+                    database_matches = (all(after["database"][key] == value for key, value in before["database"].items()
+                                            if key != "system_id")
+                                        and re.fullmatch(r"[0-9]{10,30}", after["database"]["system_id"]) is not None)
+                require(database_matches and after["image"] == installed["id"]
+                        and after["backend_count"] == 1 and after["traffic"] == traffic
+                        and after["configuration"] == plan.get("configuration", before["configuration"])
+                        and after["history"] == clean.history(installed["manifest"])
+                        and after["schema"] == installed["schema"], "POSTSTATE_NOT_PROVEN")
+                ready = self.runtime.clean_ready(installed, timeout=120)
+                require(type(ready) is bool, "READINESS_OUTCOME_UNDEFINED")
+                require(self.runtime.clean_observe(timeout=5) == after, "POSTSTATE_CHANGED")
+                self.store.ordinary_target()
+                intent["observed"] = after
+                intent["status"] = phase if ready else "FAILED"
+                intent["events"].append({"token": token, "request": intent["request"],
+                                         "evidence": intent["evidence"], "outcome": intent["status"],
+                                         "observation": fingerprint(after), "previous": head["state"]})
+                self.store.write(intent)
+                require(authority.finish(token, copy.deepcopy(intent), timeout=10) == "COMPLETED",
+                        "COMPLETION_ACK_LOST")
+                require(authority.head(self.scope["installation"], timeout=5)
+                        == {"state": fingerprint(intent), "pending": None}, "COMPLETION_READBACK_LOST")
+            except BaseException as error:
+                # The local pointer cannot override the independent pending/head
+                # record, including a lost terminal ACK or local fsync failure.
+                intent["status"] = "UNKNOWN"
+                intent["diagnostic"] = (str(error) if isinstance(error, Refused)
+                                        and re.fullmatch(r"[A-Z][A-Z0-9_]{0,95}", str(error))
+                                        else "RUNTIME_OR_PERSISTENCE_FAILURE")
+                try:
+                    self.store.write(intent)
+                except BaseException:
+                    # Independent pending/head mismatch still forbids replay if
+                    # local persistence is unavailable (disk full, crash, fsync).
+                    pass
+                raise Refused("CLEAN_OUTCOME_UNDEFINED_OPERATOR_REQUIRED") from None
+            require(ready, "READINESS_FAILED_RECONCILIATION_REQUIRED")
+            return intent["status"]
 
     def state(self):
         state = self.store.read()
@@ -334,6 +473,12 @@ class Controller:
         raise Refused("READINESS_TIMEOUT_MANUAL_DECISION_REQUIRED")
 
     def deploy(self, candidate, *, expected_current, owner_approved=False):
+        if self.clean_authority is not None:
+            require(owner_approved is True, "OWNER_APPROVAL_REQUIRED")
+            # Selection is checked again under the shared lock in clean_action.
+            current = self.store.read()["image"]
+            kind = "APP" if candidate.get("manifest") == current["manifest"] else "FORWARD"
+            return self.clean_action(kind, candidate=candidate, expected_current=expected_current)
         with self.store.locked():
             state = self.state()
             require(state["status"] == "ACCEPTED", "PREVIOUS_RELEASE_UNFINISHED")
@@ -351,6 +496,12 @@ class Controller:
             return self.apply(state)
 
     def rollback(self, *, owner_approved=False):
+        if self.clean_authority is not None:
+            require(owner_approved is True, "OWNER_APPROVAL_REQUIRED")
+            state = self.store.read()
+            require(state.get("previous_image") is not None, "ROLLBACK_IMAGE_MISSING")
+            return self.clean_action("ROLLBACK", candidate=state["previous_image"],
+                                     expected_current=state["image"]["id"])
         with self.store.locked():
             state = self.state()
             operation = state.get("operation")
@@ -366,6 +517,9 @@ class Controller:
             return self.apply(state)
 
     def accept(self, *, smoke_passed=False):
+        if self.clean_authority is not None:
+            require(smoke_passed is True, "MANUAL_SMOKE_REQUIRED")
+            return self.clean_action("ACCEPT")
         with self.store.locked():
             state = self.state()
             require(state["status"] == "READY_FOR_SMOKE", "AUTOMATIC_CHECKS_NOT_PASSED")
@@ -969,7 +1123,11 @@ def ssh_action(target, request, *, runner=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "simulate", "initialize", "deploy", "rollback", "accept", "status", "worker"))
+    parser.add_argument("action", choices=("plan", "simulate", "initialize", "deploy", "rollback", "accept", "status", "worker",
+                                          "install", "preflight", "test-admit", "public-admit"))
+    parser.add_argument("--local-registration", help="Protected disposable-local CR-1 enrollment; never a VPS target")
+    parser.add_argument("--operation", choices=("install", "deploy", "rollback", "accept", "test-admit", "public-admit"))
+    parser.add_argument("--configuration", help="Exact admitted configuration fingerprint")
     parser.add_argument("--fixture", help="Offline observations and reviewed image records")
     parser.add_argument("--state-dir", help="Local simulation state directory")
     parser.add_argument("--target", help="Explicit SSH alias, matching the enrolled staging target")
@@ -979,6 +1137,14 @@ def main(argv=None):
     parser.add_argument("--smoke-passed", action="store_true", help="Manual smoke completed successfully")
     args = parser.parse_args(argv)
     try:
+        if args.local_registration:
+            require(not args.target and not args.fixture and not args.state_dir, "LOCAL_TARGET_ONLY")
+            from clean_install_runtime import local_action
+            result = local_action(args)
+            print(json.dumps(result, sort_keys=True))
+            return {"SUCCESS": 0, "FAILED": 2, "UNKNOWN": 3}[result["status"]]
+        require(args.action not in ("install", "preflight", "test-admit", "public-admit")
+                and not args.operation and not args.configuration, "BLOCKED_EXTERNAL_ENROLLMENT")
         if args.action not in ("plan", "simulate"):
             require(args.target is not None and not args.fixture and not args.state_dir, LIVE_REFUSAL)
             require(re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", args.target), "TARGET_INVALID")
