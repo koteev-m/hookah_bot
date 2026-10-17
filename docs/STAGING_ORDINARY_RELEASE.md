@@ -1,4 +1,4 @@
-# Обычный staging-релиз без миграций
+# Обычный staging-релиз: действующий V125 и новый lifecycle CR-1
 
 **Текущий статус (2026-10-14): ordinary V125 controller установлен и работает.**
 Первоначальные `initialize/status` дали `ACCEPTED`; QR-релиз source
@@ -29,6 +29,18 @@ staging schema — V125 (`V126=0`, `failed=0`). [Разовый переход](
 Обычный релиз не применяет 125→126 и не разрешает rollback V125 поверх V126.
 
 ## Подготовка образа и approval
+
+Для новой чистой установки V126 утверждён [CR-1](CLEAN_REINSTALL_CONTRACT.md).
+HT33 реализует typed initial acceptance и subsequent releases в локальном API
+существующего `Controller`: неизменный manifest либо reviewed compatible forward,
+exact CI/image/tool/DDL/history, recovery prerequisites, один lock и независимый
+CAS intent/result. FAILED/UNKNOWN блокируют replay, rollback после изменения schema
+по умолчанию запрещён. Полные правила, tests и remaining adapter/enrollment decision
+находятся в CR-1, а не в дополнительном runbook.
+HT34 подключает disposable Docker installer и подписанный local evidence adapter к
+тому же CLI (команды и trust matrix — в CR-1). Live worker остаётся V125-only;
+production enrollment/provider/custody adapters закрыты: BLOCKED_EXTERNAL_ENROLLMENT.
+Примеры V125 ниже не применимы к CR-1 target и не разрешают фиктивный handoff.
 
 Бот, backend и Mini App обновляются одним immutable image. Для V125 весь PostgreSQL
 migration manifest должен совпадать с принятым; schema head = 125, V126/failed = 0.

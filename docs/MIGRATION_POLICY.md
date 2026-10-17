@@ -1,10 +1,17 @@
 # Migration policy (Flyway)
 
 Canonical general release/deploy and rollback policy is `docs/DEPLOYMENT_RUNBOOK.md`. The single
-PostgreSQL V126 policy/state-machine order and recovery boundary are
+historical PostgreSQL V125→V126 policy/state-machine order and recovery boundary are
 `docs/V126_STAGING_CUTOVER_CONTRACT.md`; executable authority is only
 `scripts/v126-cutover.sh`. This file remains the Flyway migration detail policy and does not
 authorize migration execution.
+
+Отдельный утверждённый [CR-1](CLEAN_REINSTALL_CONTRACT.md) задаёт EMPTY→V126 и
+последующие совместимые forward migrations **новой независимо принятой установки**.
+HT33 реализует controller transitions; HT34 добавляет disposable Docker runtime
+с реальными bootstrap/app/forward tests. Production enrollment/runtime adapters
+ещё отсутствуют. Обновление major версии PostgreSQL Engine не входит в этот workflow. Это не альтернативный вход в старый cutover/INIT/R0.
+Нижеописанные исторические V126 guards остаются неизменными.
 
 Документ описывает безопасный процесс валидации и обычного применения миграций без даунтайма;
 контролируемое окно V126 на staging является явно описанным исключением ниже.
@@ -70,6 +77,14 @@ sequencer проверяет backup/session prerequisites и фиксирует 
 Частичный или автоматический restore запрещён.
 
 ## Правила безопасности миграций
+
+В новом CR-1 lifecycle ordinary release допускает неизменную схему либо append-only
+forward migration с независимым exact compatibility review, CI, owner approval и
+текущей backup/recovery readiness. Старые SQL SHA-256/checksums/history не меняются;
+ожидаемый DDL fingerprint квалифицируется до dispatch. Destructive/incompatible
+изменения требуют отдельного expand/backfill/contract решения. FAILED/UNKNOWN
+запрещают повтор до reconciliation; нет автоматического repair, restore, downgrade
+или V125 rollback. Реализация и ограничения — только в CR-1.
 
 - Не редактировать уже применённые versioned-миграции (`V*__*.sql`), добавлять только новую версию.
 - Для потенциально долгих DDL использовать совместимую, поэтапную стратегию (expand/contract).

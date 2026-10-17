@@ -6,6 +6,14 @@
 
 ## Core Rule
 
+The approved [CLEAN_REINSTALL V126 CR-1](CLEAN_REINSTALL_CONTRACT.md) describes a
+same-VPS successor after independently verified retirement/reset. HT33 implements
+local transitions in the ordinary controller, including compatible forward schema
+updates. HT34 adds an executable disposable Docker installer to the same CLI.
+Live use remains `BLOCKED_EXTERNAL_ENROLLMENT`: real independent acquisition,
+custody/enrollment and server runtime adapters are absent. Losing test orders/bookings does not retire
+UNKNOWN effects, authorize other data loss, or waive Policy B. Historical gates remain.
+
 Do not mix docs-only work with runtime releases. Runtime changes must pass local checks, GitHub Actions, staging deploy and area smoke according to blast radius. Docs-only changes need local docs sanity and CI after push, but no staging deploy.
 
 Current practice:
