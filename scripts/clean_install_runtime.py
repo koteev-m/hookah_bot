@@ -180,11 +180,17 @@ class DockerRuntime:
             require(item['Id'] not in retired['containers']
                     and (item['Config'].get('Labels') or {}).get('com.docker.compose.project') != 'hookah-bot',
                     'OLD_EXECUTOR_PRESENT')
+            mounts = item.get('Mounts')
+            require(isinstance(mounts, list) and all(isinstance(m, dict) for m in mounts),
+                    'PROTECTED_MOUNTS_INVALID')
             require(all(m.get('Name') not in retired['volumes'] and m.get('Name') != self.volume_name
                         and not (m.get('Source') and any(overlap(m['Source'], path) for path in paths))
-                        for m in item['Mounts']), 'OLD_OR_FOREIGN_VOLUME_CONSUMER')
-            protected.append({k: item[k] for k in ('Id', 'Name', 'Image', 'Config', 'HostConfig', 'Mounts')}
-                             | {'networks': item['NetworkSettings']['Networks'], 'running': item['State']['Running']})
+                        for m in mounts), 'OLD_OR_FOREIGN_VOLUME_CONSUMER')
+            # Docker inspect does not guarantee mount order. Preserve every field
+            # and duplicate; only the outer list order is semantically irrelevant.
+            protected.append({k: item[k] for k in ('Id', 'Name', 'Image', 'Config', 'HostConfig')}
+                             | {'Mounts': sorted(mounts, key=lambda m: json.dumps(m, sort_keys=True)),
+                                'networks': item['NetworkSettings']['Networks'], 'running': item['State']['Running']})
         nets = self.command('network', 'ls', '-q', '--no-trunc').decode().split()
         networks = self.json('network', 'inspect', *nets) if nets else []
         remaining = []

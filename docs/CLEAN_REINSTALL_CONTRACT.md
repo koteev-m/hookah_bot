@@ -513,6 +513,13 @@ Network/volume — external для Compose, создаются только пр
 labels проверяются вместе с ID, mounts, networks, environment и execution settings.
 Само наличие labels не предоставляет полномочий. Protected inventory включает все
 нецелевые объекты Docker daemon, в том числе неизвестные и остановленные.
+Порядок элементов `Mounts` из Docker inspect не влияет на protected digest: список
+сортируется по полному JSON каждого mount, без удаления полей или дубликатов.
+Изменение любого поля (включая неизвестные), добавление/удаление mount и изменение
+числа дубликатов остаются drift. Нормализация не меняет исходный inspect snapshot,
+порядок вложенных массивов и проверки старых/чужих consumers; malformed коллекция
+mounts закрывает операцию. Digest старого алгоритма не преобразуется автоматически:
+для нового tool closure нужен новый проверенный baseline в рамках отдельного enrollment.
 
 Внутренняя сеть, отсутствие published ports и отключённый bot сохраняются даже при
 локальном PUBLIC profile. Это **не** реальный public/Telegram admission. Смена

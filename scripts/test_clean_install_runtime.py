@@ -7,6 +7,7 @@ import argparse
 import base64
 import copy
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -325,6 +326,105 @@ class SharedDaemonGuardTests(unittest.TestCase):
         self.r.json=lambda *a:self.items if a[0]=='inspect' else self.nets if a[0]=='network' else self.vols
         self.r.e['shared_guard']['protected_daemon']=self.r.protected_daemon()
 
+    def mounted_baseline(self):
+        self.items[0]['Mounts'] = [
+            {'Type':'volume','Name':'neighbor_data','Source':'/srv/neighbor/data',
+             'Destination':'/data','Driver':'local','Mode':'z','RW':True,'Propagation':''},
+            {'Type':'bind','Source':'/srv/neighbor/config','Destination':'/config',
+             'Mode':'ro','RW':False,'Propagation':'rprivate',
+             'FutureField':{'options':['one','two'],'enabled':True}},
+        ]
+        self.r.e['shared_guard']['protected_daemon']=self.r.protected_daemon()
+
+    def test_mount_order_and_object_key_order_do_not_change_digest_or_input(self):
+        self.mounted_baseline()
+        mounts=self.items[0]['Mounts']
+        before=copy.deepcopy(mounts)
+        mounts.reverse()
+        mounts[:]=[dict(reversed(list(m.items()))) for m in mounts]
+        reordered=copy.deepcopy(mounts)
+        self.r.shared_guard()
+        self.assertEqual(mounts,reordered)
+        self.assertEqual(list(mounts[0]),list(reordered[0]))
+        self.assertEqual(mounts,list(reversed(before)))
+
+    def test_every_mount_field_and_unknown_nested_fields_remain_protected(self):
+        self.mounted_baseline()
+        original=copy.deepcopy(self.items[0]['Mounts'])
+        for index,mount in enumerate(original):
+            for key,value in mount.items():
+                with self.subTest(index=index,key=key):
+                    self.items[0]['Mounts']=copy.deepcopy(original)
+                    changed = not value if isinstance(value,bool) else value+'-changed' if isinstance(value,str) else {'options':['two','one'],'enabled':True}
+                    self.items[0]['Mounts'][index][key]=changed
+                    with self.assertRaisesRegex(release.Refused,'PROTECTED_RESOURCE_DRIFT'):self.r.shared_guard()
+                    self.items[0]['Mounts']=copy.deepcopy(original)
+                    del self.items[0]['Mounts'][index][key]
+                    with self.assertRaisesRegex(release.Refused,'PROTECTED_RESOURCE_DRIFT'):self.r.shared_guard()
+        self.items[0]['Mounts']=copy.deepcopy(original)
+        self.items[0]['Mounts'][0]['NewField']=None
+        with self.assertRaisesRegex(release.Refused,'PROTECTED_RESOURCE_DRIFT'):self.r.shared_guard()
+
+    def test_mount_add_remove_and_duplicate_multiplicity_are_protected(self):
+        self.mounted_baseline()
+        original=copy.deepcopy(self.items[0]['Mounts'])
+        for mounts in (original[:1],original+[copy.deepcopy(original[0])]):
+            self.items[0]['Mounts']=mounts
+            with self.assertRaisesRegex(release.Refused,'PROTECTED_RESOURCE_DRIFT'):self.r.shared_guard()
+        # Duplicates in the baseline also survive normalization.
+        self.r.e['shared_guard']['protected_daemon']=self.r.protected_daemon()
+        self.items[0]['Mounts'].reverse()
+        self.r.shared_guard()
+        self.items[0]['Mounts'].pop(0)
+        with self.assertRaisesRegex(release.Refused,'PROTECTED_RESOURCE_DRIFT'):self.r.shared_guard()
+
+    def test_container_and_mount_permutations_are_independent(self):
+        self.mounted_baseline()
+        other=copy.deepcopy(self.items[0]);other.update(Id='e'*64,Name='/second-neighbor')
+        self.items.append(other)
+        self.r.e['shared_guard']['protected_daemon']=self.r.protected_daemon()
+        original=copy.deepcopy(self.items)
+        for order in itertools.permutations(original):
+            for first,second in itertools.product((False,True),repeat=2):
+                self.items[:]=copy.deepcopy(order)
+                for item,reverse in zip(self.items,(first,second)):
+                    if reverse:item['Mounts'].reverse()
+                self.r.shared_guard()
+
+    def test_malformed_mount_collections_fail_closed_without_dispatch(self):
+        self.r.command=DockerRuntime.command.__get__(self.r)
+        self.r.docker='docker';self.r.environment={}
+        for mounts in (None,{},'',{'unexpected':{}},[None],[[]],['mount'],[1]):
+            with self.subTest(mounts=mounts):
+                self.items[0]['Mounts']=mounts
+                with patch('clean_install_runtime.subprocess.run') as run:
+                    run.return_value=argparse.Namespace(returncode=0,stdout=b'fixture')
+                    with self.assertRaisesRegex(release.Refused,'PROTECTED_MOUNTS_INVALID'):
+                        self.r.command('volume','create',*self.r.labels(),self.r.volume_name)
+                    self.assertTrue(run.call_args_list)
+                    self.assertTrue(all(call.args[0][1:3] in (['ps','-aq'],['volume','ls'])
+                                        for call in run.call_args_list))
+
+    def test_neighbor_container_volume_and_network_drift_block_dispatch(self):
+        self.mounted_baseline()
+        self.r.command=DockerRuntime.command.__get__(self.r)
+        self.r.docker='docker';self.r.environment={}
+        for collection,key,value in ((self.items,'Image','changed'),(self.vols,'Driver','changed'),
+                                      (self.nets,'Internal',True)):
+            original=copy.deepcopy(collection)
+            for remove in (False,True):
+                with self.subTest(collection=key,remove=remove):
+                    collection[:]=copy.deepcopy(original)
+                    if remove:collection.clear()
+                    else:collection[0][key]=value
+                    with patch('clean_install_runtime.subprocess.run') as run:
+                        run.return_value=argparse.Namespace(returncode=0,stdout=b'fixture')
+                        with self.assertRaisesRegex(release.Refused,'PROTECTED_RESOURCE_DRIFT'):
+                            self.r.command('volume','create',*self.r.labels(),self.r.volume_name)
+                        self.assertTrue(all(call.args[0][1:3] in (['ps','-aq'],['volume','ls'],['network','ls'])
+                                            for call in run.call_args_list))
+            collection[:]=original
+
     def test_all_neighbors_and_unlabelled_resources_are_protected(self):
         self.r.shared_guard()
         self.assertNotIn('SECRET',self.r.protected_daemon())
@@ -500,10 +600,16 @@ class RealInstallerTests(unittest.TestCase):
                 e['shared_guard']={'target':e['target_binding'],'protected_daemon':'0'*64,
                                    'retired':replacement_scope(inv,routes)['selection']}
                 scope['shared_host']['runtime_guard']=release.fingerprint(e['shared_guard'])
+                neighbor_volumes=[name+'-neighbor-data',name+'-neighbor-config']
+                for volume in neighbor_volumes:
+                    docker('volume','create','--label','ht.cr1.test='+name,volume)
+                    resources.append(('volume',volume))
                 for project in ('hookah-production','markettap-stg','clubs-bot-stage','ai-bot-stage'):
                     neighbor='ht-cr1-neighbor-'+name[-12:]+'-'+project
                     docker('create','--pull','never','--platform','linux/amd64','--name',neighbor,'--network','none',
                            '--label','ht.cr1.test='+name,'--label','com.docker.compose.project='+project,
+                           '--mount','type=volume,src='+neighbor_volumes[0]+',dst=/neighbor-data,volume-nocopy',
+                           '--mount','type=volume,src='+neighbor_volumes[1]+',dst=/neighbor-config,readonly,volume-nocopy',
                            PROBE_IMAGE,'python','-c','pass')
                     resources.append(('container',neighbor))
                 if Runtime is not DockerRuntime:
@@ -511,6 +617,29 @@ class RealInstallerTests(unittest.TestCase):
                     scope['tooling'] = Runtime(e).clean_tooling(timeout=10)
                 e['shared_guard']['protected_daemon']=Runtime(e).protected_daemon()
                 scope['shared_host']['runtime_guard']=release.fingerprint(e['shared_guard'])
+                # Real daemon observations, with only inspect array ordering varied
+                # deterministically (Docker itself need not happen to reorder them).
+                guard_runtime=Runtime(e)
+                inspect_json=guard_runtime.json
+                def reordered_inspect(*args, **kwargs):
+                    value=inspect_json(*args, **kwargs)
+                    if args[0]=='inspect':
+                        value.reverse()
+                        for container in value:container['Mounts'].reverse()
+                    return value
+                with patch.object(guard_runtime,'json',side_effect=reordered_inspect):
+                    guard_runtime.shared_guard()
+                def changed_mount(*args, **kwargs):
+                    value=reordered_inspect(*args, **kwargs)
+                    if args[0]=='inspect':
+                        neighbor_item=next(c for c in value if c['Name']=='/'+neighbor)
+                        self.assertEqual(len(neighbor_item['Mounts']),2)
+                        neighbor_item['Mounts'][0]['RW']=not neighbor_item['Mounts'][0]['RW']
+                    return value
+                with patch.object(guard_runtime,'json',side_effect=changed_mount):
+                    with self.assertRaisesRegex(release.Refused,'PROTECTED_RESOURCE_DRIFT'):
+                        guard_runtime.shared_guard()
+                print('CR1 mounted neighbors: inspect reorder PASS; real-field drift BLOCKED',flush=True)
                 initialize_custody(e)
                 registration = target/'registration.json'; write_json(registration,e)
                 script = str(Path(__file__).with_name('deploy-staging.sh'))
