@@ -1260,13 +1260,15 @@ jobs:
           bash -n scripts/deploy-staging.sh
           bash -n scripts/deploy-staging-controlmaster.sh
       - name: Check staging release Python whitespace
-        run: python3 -m tabnanny scripts/staging_release.py scripts/test_staging_release.py scripts/test_staging_release_docker.py scripts/clean_install_policy.py scripts/test_clean_install_release.py scripts/test_clean_install_postgres.py scripts/clean_install_runtime.py scripts/clean_install_trust.py scripts/test_clean_install_runtime.py scripts/shared_host_scope.py scripts/test_shared_host_scope.py
+        run: python3 -m tabnanny scripts/staging_release.py scripts/test_staging_release.py scripts/test_staging_release_docker.py scripts/clean_install_policy.py scripts/test_clean_install_release.py scripts/test_clean_install_postgres.py scripts/clean_install_runtime.py scripts/clean_install_trust.py scripts/test_clean_install_runtime.py scripts/shared_host_scope.py scripts/test_shared_host_scope.py scripts/clean_install_compose.py scripts/test_clean_install_compose.py
       - name: Test staging release controller and executor
         run: python3 -B -m unittest discover -s scripts -p test_staging_release.py -v
       - name: Test CR-1 local transitions and authority fault injection
         run: python3 -B -m unittest discover -s scripts -p test_clean_install_release.py -v
       - name: Test CR-1 signed runtime boundaries (Docker opt-in stays local)
         run: python3 -B -m unittest discover -s scripts -p test_clean_install_runtime.py -v
+      - name: Test scoped Compose compiler and closed production dispatch
+        run: python3 -B -m unittest discover -s scripts -p test_clean_install_compose.py -v
       - name: Test shared-host Hookah-only selection and CR-1 lifecycle (no server dispatch)
         run: python3 -B -m unittest discover -s scripts -p test_shared_host_scope.py -v
       - name: Test disposable Docker Compose release fixture

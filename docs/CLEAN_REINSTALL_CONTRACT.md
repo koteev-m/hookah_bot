@@ -1,6 +1,6 @@
 # CLEAN_REINSTALL V126 — CR-1, локальная реализация и граница допуска
 
-Статус HT36: **BLOCKED_EXTERNAL_AUTHORITY / DISPOSABLE_LOCAL RUNTIME / NO SERVER AUTHORITY**.
+Статус HT40: **BLOCKED_EXTERNAL_AUTHORITY / DISPOSABLE_LOCAL COMPOSE RUNTIME / NO SERVER AUTHORITY**.
 Проект HT-V126-CLEAN-REINSTALL-IMPLEMENT-32 сохранён; четыре принципа CR-1 и
 совместимые последующие forward migrations утверждены владельцем в
 HT-V126-CR1-ORDINARY-RELEASE-IMPLEMENT-33. Проверенный application source
@@ -11,13 +11,17 @@ HT-V126-CR1-ORDINARY-RELEASE-IMPLEMENT-33. Проверенный application so
 [prospective epoch](V126_PROSPECTIVE_AUTHORITY_EPOCH.md),
 [ordinary release](STAGING_ORDINARY_RELEASE.md) или Policy B.
 Локальные переходы реализованы в существующем `staging_release.Controller`.
-Серверный worker остаётся V125-only: production authority/runtime adapters и
-их enrollment не реализованы. Ни JSON, ни CLI flag не включают CR-1 на VPS.
+Серверный worker остаётся V125-only. Compose execution transport проверяется локально;
+production acquisition/authority adapters и их enrollment не реализованы.
+Ни JSON, ни CLI flag не включают CR-1 на VPS.
 
 ## Принятый продуктовый объём и точная граница остановки
 
 Владелец подтвердил отсутствие реальных клиентов, допустимость простоя и отказ
-от переноса старых тестовых заказов/броней. Используется существующий VPS;
+от переноса **всего тестового бизнес-контента Hookah staging** (HT40): users, venues,
+roles, menus, orders, bookings, QR, sessions и остальных тестовых записей.
+Historical receipts, audit evidence, operation records и backups сохраняются;
+`run724=UNKNOWN` не меняется. Используется существующий VPS;
 второй постоянный VPS не планируется. Код приложения не переписывается.
 Это не разрешение на серверные действия, изменение секретов, удаление всех
 backup/operation records или снижение recovery требований будущего продукта.
@@ -436,11 +440,12 @@ Health/HTML/API denial здесь не заменяют browser/product/tenant/r
    Ни один другой проект, image store или общий host/service не выбирается.
    До retirement approval нужны custody readback, полное описание old Hookah
    CI/deploy/SSH/session/DB/bot/job/restore capabilities и независимый план их fence.
-3. Владелец отдельно утверждает полный список потерь: кроме тестовых orders/bookings,
-   чистая БД удаляет users/venues/memberships, меню, часы, table tokens/QR/invites,
-   chats/support, audit/outbox/session data. Если эти данные нужны, разрешить отдельный
-   bounded экспорт/ручное повторное создание; не восстанавливать старую БД целиком.
-   Нельзя молча расширить уже принятое решение об orders/bookings на все эти данные.
+3. HT40 разрешает не переносить весь старый тестовый бизнес-контент staging,
+   включая users/venues/memberships, меню, часы, table tokens/QR/invites,
+   chats/support/outbox/sessions. Это решение о новом пустом продукте, не команда
+   удаления: старые PG volume, каталог, historical audit/operation evidence и backups
+   не удаляются установщиком. Для любого последующего удаления нужен отдельный
+   exact-scope approval; никакие данные соседей не входят в этот объём.
 4. Enroll owner, внешний verifier с ограниченным read-only acquisition, независимый
    custodian и защищённый off-target versioned/CAS store. Подтвердить AEZA resource/control
    источник: конкретный API/audit export/reader пока не установлен. Отдельно установить
@@ -451,8 +456,11 @@ Health/HTML/API denial здесь не заменяют browser/product/tenant/r
    После отдельных approvals на downtime/fence и конкретные действия доказать
    прекращение старых executors и delayed effects; отсутствие контейнера недостаточно.
    Только затем допустить новую project-resource incarnation. OS reset не выполняется.
-   Выбрать exact PostgreSQL version/platform/digest: HT31 PG17.8/ARM64 не заменяет
-   native Linux/amd64 qualification. Реальные adapters требуют отдельного review/CI.
+   Кандидат HT40 — PostgreSQL 17.8 linux/amd64, pinned OCI index
+   `sha256:69dddb030ab69d669d8d7c6abf67aeb448178e5270d5f123a21f4f7ac8b46a24`
+   и platform config `sha256:4112a46de39c48ee61ac5d686db835dd9152de32cb7cb271a978001532cd1bc3`.
+   Это не прежний staging PG image и не разрешение его заменить.
+   Нужны enrollment exact pair, проверка native server runtime и отдельный review/CI.
 5. После enrollment, реализации/review server adapter и отдельного install approval
    установить проверенный tool closure; загрузить approved
    exact image, создать новые network/volume/PG/DB и closed backend через утверждённый
@@ -485,6 +493,77 @@ Health/HTML/API denial здесь не заменяют browser/product/tenant/r
    opening, ни recovery не разрешены одним approval документа CR-1.
 
 ## Проверки и точная граница evidence
+
+### Compose executor HT40
+
+`clean_install_compose.ComposeRuntime` подключён к тому же
+`deploy-staging.sh → staging_release.py → Controller.clean_installation` через
+`--local-registration` с `profile=DISPOSABLE_LOCAL`, `runtime=SCOPED_COMPOSE`.
+Он переиспользует image/archive/Flyway проверки, operation lock, independent-intent
+интерфейс, terminal UNKNOWN и ordinary transitions. Отдельного release framework нет.
+Production profile отвергается **до I/O**. Fixture signatures не допускаются на AEZA.
+
+Executor компилирует конфигурацию одного сервиса в памяти, передаёт её Compose через
+stdin и использует pinned-by-hash `docker-compose` executable без пользовательских
+Compose файлов, `.env` или Docker credential config. Secret environment не выводится.
+Network/volume — external для Compose, создаются только прежними exact create-only
+шаблонами; контейнеры — именованные Compose one-off services. Это осознанно позволяет
+сохранить остановленный backend по exact ID при очередном обновлении, не вызывая
+`up/down`, recreate PostgreSQL или orphan cleanup. Compose project/service/working-dir
+labels проверяются вместе с ID, mounts, networks, environment и execution settings.
+Само наличие labels не предоставляет полномочий. Protected inventory включает все
+нецелевые объекты Docker daemon, в том числе неизвестные и остановленные.
+
+Внутренняя сеть, отсутствие published ports и отключённый bot сохраняются даже при
+локальном PUBLIC profile. Это **не** реальный public/Telegram admission. Смена
+runtime bytes, drift соседей, неизвестный writer, lost ACK или частичное создание
+останавливают операцию; автоматического удаления/повтора/rollback нет.
+
+```bash
+python3 -B -m unittest discover -s scripts -p test_clean_install_compose.py -v
+HT_CR1_RUNTIME_TEST=1 HT_CR1_COMPOSE_TEST=1 \
+  python3 -B -m unittest discover -s scripts -p test_clean_install_runtime.py -v
+```
+
+Вторая команда запускает существующий real integration scenario новым Compose
+transport, с отдельными `_default` network и `_pgdata` volume. Это disposable local
+PG17.8/linux-amd64 и amd64 app под эмуляцией Docker Desktop, не native AEZA qualification.
+OCI index и platform фиксированы в коде, runtime ничего не скачивает. Server credential
+provisioning, real authority acquisition и public ingress
+attachment остаются закрытыми внешними integration points; включать их копированием
+fixture registration или заменой profile запрещено.
+
+HT40: 255 релевантных проверок PASS (254 portable и один Compose/Docker scenario,
+288.474 s). Реальный amd64 PG прошёл CLOSED_V126, local TEST/ACCEPT/PUBLIC,
+app-only и synthetic V127; PG container/system ID, volume, users row и protected
+neighbor digest сохранились. Пароль с `$`/`${...}` не изменился при Compose
+interpolation. Повтор bootstrap, конкурентный lock/writer и unsafe rollback
+отвергнуты. Это не hosted CI, real Telegram, server backup/restore или independent
+authority evidence. HT41: независимый focused review полного HT40 diff не обнаружил
+открытых блокирующих findings; 254 portable tests повторно PASS. Docker evidence HT40
+переиспользовано после проверки exact file hashes и tool closure. Это не server qualification.
+
+После реального enrollment и отдельного approval будущая узкая операция создаёт
+только `hookah-staging-v126_default` (internal), `hookah-staging-v126_pgdata` (local),
+`hookah-staging-v126-pg`, `hookah-staging-v126-probe`, `hookah-staging-v126-backend`
+в новом project `hookah-staging-v126`, root `/opt/hookah-bot-v126`.
+Внутренние шаблоны: `network create --internal`, `volume create`, readonly empty-volume
+check, `docker-compose --env-file /dev/null --project-name <exact-new-project>
+--project-directory <exact-new-root> --file - run --no-deps --pull never --use-aliases
+-d --name <exact-container> <one-service>`. Это описание ограничений executor,
+**не альтернативная команда deploy** и не действующее разрешение.
+Единственным операторским entrypoint остаётся `deploy-staging.sh`; сейчас server
+`install --target hookah-staging` возвращает `BLOCKED_EXTERNAL_ENROLLMENT`.
+
+Для первого CLOSED_V126 сначала независимо подтвердить old-Hookah retirement и
+off-VPS custody readback, заново сверить IDs/весь protected inventory, затем утвердить
+exact app/tool/PG/config pair и создание новых ресурсов. Старые container/volume,
+Caddy, SSH, DNS, Telegram и соседи не изменяются install operation. Остановка старого
+Hookah/fence требует отдельного approval и не реализуется через installer.
+Ожидаемый результат: image/source совпадают; Flyway 126 successful / 0 failed;
+health, db/health, version, Mini App HTML и API denial PASS; public ingress/egress
+отсутствуют. Настоящие backup/restore, TEST, product acceptance и PUBLIC — отдельные
+последующие boundaries уже описанного lifecycle.
 
 Исполняемые локальные проверки:
 
