@@ -1,5 +1,31 @@
 # Project Status
 
+## HT-71-SIMPLE-STAGING-DRAFT-PR — HT70 isolated publication (2026-10-20)
+
+HT70 simple staging install/update is isolated from the unpublished HT46–HT69 work.
+Base: `dfa577a8e92958bf863b12eaaa6617b37820f1c1`; publication branch:
+`codex/ht-71-simple-staging-draft-pr`; worktree:
+`/private/tmp/ht71-simple-staging-publication`. Project/instruction gates passed.
+The original dirty worktree and its index remain unchanged.
+
+Scope: independent operator script, immutable image build helper, unit/Docker tests,
+one CI validation step and scoped deployment guidance. Existing historical contracts
+and implementations are retained. Simple staging does not require HDC/1 or HDC/2.
+Updates replace only backend; schema changes require review and a verified backup.
+Recovery blocks unknown replay and schema rollback; the shared flock is cooperative.
+
+Isolated-tree validation: 21/21 unit tests and 21/21 with Python -O PASS; Docker
+integration PASS (90.317 s), including EMPTY→V126, unchanged PostgreSQL identity/data,
+backup/isolated restore, failed backend/rollback, reviewed V127, neighbor preservation
+and owned cleanup. Bash/Python/YAML syntax and diff checks PASS. The Docker fixture
+uses a retained V126 image; GitHub CI and registry transport are fixtures. This does
+not prove a new image build, actual remote CI, AEZA installation or Telegram smoke.
+
+Authorization covers this branch, commit, push and one Draft PR to main only.
+No merge, image publication, deployment, AEZA changes or CI monitoring is authorized.
+Next: review the Draft PR and completed CI for its exact commit; image publication
+and any staging installation/smoke require a separate authorized task.
+
 ## HT-V126-MAIN-INTEGRATION-CHECKPOINT-25 — PR #214 integrated in main (2026-10-16)
 
 [PR #214](https://github.com/koteev-m/hookah_bot/pull/214) is CLOSED/MERGED. GitHub

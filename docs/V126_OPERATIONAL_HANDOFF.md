@@ -1,5 +1,13 @@
 # V125/V126 operational handoff — accepted target policy, application not authorized
 
+> **HT70, решение владельца 2026-10-20:** для нового тестового staging без реальных
+> клиентов действует [простой install/update](STAGING_ORDINARY_RELEASE.md#ht70--простой-staging-install-и-последующие-обновления).
+> HDC/1, HDC/2, Authority/CAS/custody, external anchor, verifier/custodian keys,
+> privileged HDC executor, CR-1 и историческая V125→V126 цепочка не являются его
+> обязательными условиями. Противоречащие требования ниже относятся к историческим
+> targets/строгому контракту. Evidence и исходники сохраняются; будущий production
+> требует отдельного допуска. HT70 не разрешает переустановку VPS или текущий deploy.
+
 HT-RELEASE-REPAIR-01 records the policy accepted in AUTHORIZE_REPAIR_FEATURE_CI_ONLY without applying it. Migration stages,
 recovery and final automated gates retain `restart=no` and RestartCount=0. A completed
 stage20 or restored HTTP availability does not transfer image/configuration authority

@@ -1,5 +1,13 @@
 # CLEAN_REINSTALL V126 — CR-1, локальная реализация и граница допуска
 
+> **HT70, решение владельца 2026-10-20:** для нового тестового staging без реальных
+> клиентов действует [простой install/update](STAGING_ORDINARY_RELEASE.md#ht70--простой-staging-install-и-последующие-обновления).
+> HDC/1, HDC/2, Authority/CAS/custody, external anchor, verifier/custodian keys,
+> privileged HDC executor, CR-1 и историческая V125→V126 цепочка не являются его
+> обязательными условиями. Противоречащие требования ниже относятся к историческим
+> targets/строгому контракту. Evidence и исходники сохраняются; будущий production
+> требует отдельного допуска. HT70 не разрешает переустановку VPS или текущий deploy.
+
 Статус HT40: **BLOCKED_EXTERNAL_AUTHORITY / DISPOSABLE_LOCAL COMPOSE RUNTIME / NO SERVER AUTHORITY**.
 Проект HT-V126-CLEAN-REINSTALL-IMPLEMENT-32 сохранён; четыре принципа CR-1 и
 совместимые последующие forward migrations утверждены владельцем в
