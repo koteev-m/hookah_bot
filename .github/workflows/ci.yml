@@ -1294,6 +1294,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Validate simple staging install and update
+        run: |
+          bash -n scripts/build-simple-staging-image.sh
+          python3 -B -m unittest discover -s scripts -p test_simple_staging.py -v
       - name: Validate staging admission guard syntax
         run: |
           bash -n scripts/validate-staging-admission.sh

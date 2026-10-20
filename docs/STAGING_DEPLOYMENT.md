@@ -1,5 +1,13 @@
 # Staging Deployment
 
+> **HT70, решение владельца 2026-10-20:** для нового тестового staging без реальных
+> клиентов действует [простой install/update](STAGING_ORDINARY_RELEASE.md#ht70--простой-staging-install-и-последующие-обновления).
+> HDC/1, HDC/2, Authority/CAS/custody, external anchor, verifier/custodian keys,
+> privileged HDC executor, CR-1 и историческая V125→V126 цепочка не являются его
+> обязательными условиями. Противоречащие требования ниже относятся к историческим
+> targets/строгому контракту. Evidence и исходники сохраняются; будущий production
+> требует отдельного допуска. HT70 не разрешает переустановку VPS или текущий deploy.
+
 HT-STAGING-SIMPLE-02: the [ordinary V125 release controller](STAGING_ORDINARY_RELEASE.md)
 has a local real command executor; its [one-time protocol transition](STAGING_PROTOCOL_TRANSITION.md)
 has not been authorized or performed. No worker or target registration is installed on the VPS.

@@ -1,4 +1,247 @@
-# Обычный staging-релиз: действующий V125 и новый lifecycle CR-1
+# Staging: простой install/update и исторические release-контракты
+
+## HT70 — простой STAGING: install и последующие обновления
+
+Решение владельца от 2026-10-20: для staging без реальных клиентов обязательными
+условиями больше не являются HDC/1, HDC/2, независимые Authority/CAS/custody,
+external GitHub anchor, отдельные verifier/custodian keys, privileged HDC executor,
+CR-1 и историческая V125→V126 cutover-цепочка. Это решение имеет приоритет над
+противоречащими staging-рекомендациями ниже и в связанных исторических документах.
+История HT46–HT69, исходники и evidence сохраняются. Строгие контракты production
+не выполнены этим решением; будущая production-установка требует отдельного допуска.
+Нельзя применять этот путь к старой БД V125, существующей CR-1 registration или
+переносить сюда незавершённые операции старого окружения.
+
+Текущий entrypoint для **нового простого staging** — `scripts/simple_staging.py`.
+Исторический `deploy-staging.sh` / Controller не меняет своего назначения.
+Новый entrypoint не устанавливает ОС, не вызывает SSH, не настраивает Caddy/DNS,
+не восстанавливает production/MarketTap/AI Bot и не выполняет cleanup/DB restore.
+
+Согласованная топология нового AEZA: только `hookah-bot` и `clubs-bot-stage`.
+Системный Caddy: `staging.hookahtootah.club → 127.0.0.1:8080`,
+`stage.nightconcierge.help → 127.0.0.1:8081`. Hookah создаёт только Compose services
+`postgres`/`backend`, volume `hookah-bot_pgdata`, network `hookah-bot_default`.
+PostgreSQL 17 не публикует host port; credentials/config/volumes/networks раздельные.
+Общий lock `/run/lock/shared-staging-docker.lock` удерживается от проверки до
+результата операции. Ожидание по умолчанию 30 секунд, `--lock-wait` допускает 0–60.
+Это кооперативный `flock`, не защита от другого root или прямого доступа к Docker.
+Clubs должен использовать **тот же inode/path и flock на всё время операции**;
+lock нельзя удалять/заменять после освобождения. Общий Coordinator не требуется.
+
+Все Docker-команды на VPS выполняет доверенный системный оператор (Linux root).
+Обычному пользователю деплоя не выдаются docker group, socket, произвольный sudo
+или доступ на запись к скрипту/конфигурации. Root на общем daemon уже имеет полные
+полномочия: раздельные Compose projects не являются границей привилегий root.
+Код фиксирует `hookah-bot`, порт 8080 и локальный `/var/run/docker.sock`, отвергает
+ambient DOCKER_/COMPOSE_ overrides; чужих Compose resources он не изменяет.
+
+### Подготовка образа после зелёного CI
+
+На доверенной build-машине нужен чистый checkout точного опубликованного release
+SHA, Docker Buildx, Python 3.9+ и `gh` с доступом чтения Actions. Образ собирается
+вне VPS из `backend/Dockerfile`, включает Mini App с URL staging. Для первого
+install packaged PostgreSQL manifest обязан содержать ровно V1–V126.
+Оператор отдельно аутентифицируется в GHCR с правом публикации. Запуск следующего
+скрипта **публикует image** и требует отдельного разрешения; в HT70 не запускался:
+
+```bash
+# RELEASE_SHA и CI_RUN_ID — фактический SHA и уже завершённый успешный push-run CI.
+# ARTIFACT_DIR — новый каталог вне checkout; скрипт откажет, если он существует.
+bash scripts/build-simple-staging-image.sh "$RELEASE_SHA" "$CI_RUN_ID" "$ARTIFACT_DIR"
+```
+
+Скрипт проверяет точный HEAD/чистоту checkout, читает один законченный CI run и его
+jobs без ожидания/polling, требует все обязательные backend/Compose/Mini App/Docker
+jobs. Затем публикует `ghcr.io/koteev-m/hookah_bot/backend:<SHA>` и создаёт
+`candidate.json` с **registry manifest digest**, SHA и CI run ID. Deploy использует
+только `ghcr.io/koteev-m/hookah_bot/backend@sha256:…`; tag не является selector.
+Повторная сборка того же SHA может дать другой digest — это другой кандидат.
+CI подтверждает source SHA, а trusted builder связывает с ним image; независимая
+криптографическая provenance здесь не заявляется. Не подменять digest image ID.
+
+На VPS перед каждым install/deploy ещё раз читается завершённый CI run, выполняется
+pull точного digest и inspect platform/source/revision. Из never-started контейнера
+читается packaged JAR; проверяются V1–V126, SQL SHA-256 и Flyway checksums.
+Нельзя обойти проверки флагом `ci_success=true` или ручным manifest в candidate.
+`inspect` позволяет получить проверенный manifest до изменения приложения:
+
+```bash
+umask 077
+python3 -B /opt/hookah-bot/simple_staging.py inspect --directory /opt/hookah-bot \
+  --candidate /opt/hookah-bot/candidate.json > /opt/hookah-bot/candidate-inspected.json
+```
+
+### Первый запуск на чистом AEZA
+
+Все пути `/opt/hookah-bot` ниже — **новый предлагаемый каталог**, который оператор
+создаёт этими командами; его существование на AEZA не утверждается. Сначала оператор
+проверяет выбранный сервер/SSH host key, архитектуру (build helper: linux/amd64),
+устанавливает Docker Engine 28+, Compose v2+, Python 3.9+ и GitHub CLI по официальной
+инструкции ОС. Системный Caddy устанавливается/настраивается отдельно.
+Нужно заранее обеспечить доступ `gh` к Actions и Docker к приватному GHCR.
+Не переносить прежние credentials или чужие volumes. Не запускать команды на старом
+сервере как способ «починить» незавершённый CR-1/HDC.
+
+```bash
+# На выбранном новом VPS, доверенный root-оператор:
+install -d -m 0700 /opt/hookah-bot
+hostname
+uname -m
+docker version
+docker compose version
+python3 --version
+gh auth status
+```
+
+После отдельного разрешения оператор доставляет проверенный `scripts/simple_staging.py`
+и `candidate.json` по SSH/SCP в этот каталог (имя SSH target берётся из его реальной
+конфигурации). Оба файла должны принадлежать root, mode 0600; каталог mode 0700.
+Пример доставки с build-машины: `$SSH_TARGET` — явно выбранный root/admin target
+с заранее проверенным host key; если вход не root, установку файлов выполняет
+доверенный оператор отдельно, без выдачи deploy-пользователю произвольного sudo:
+
+```bash
+scp -o StrictHostKeyChecking=yes scripts/simple_staging.py \
+  "$ARTIFACT_DIR/candidate.json" "$SSH_TARGET:/opt/hookah-bot/"
+ssh -o StrictHostKeyChecking=yes "$SSH_TARGET"
+```
+
+`POSTGRES_DIGEST_REF` — независимо выбранный immutable `postgres@sha256:…`
+**PostgreSQL 17** для архитектуры сервера; скрипт проверяет PG_MAJOR и platform.
+`EXPECTED_HOST` — ожидаемый hostname именно нового сервера, сверенный оператором.
+
+```bash
+chmod 0600 /opt/hookah-bot/simple_staging.py /opt/hookah-bot/candidate.json
+python3 -B /opt/hookah-bot/simple_staging.py init-config \
+  --directory /opt/hookah-bot --host "$EXPECTED_HOST" \
+  --architecture amd64 --postgres-image "$POSTGRES_DIGEST_REF"
+python3 -B /opt/hookah-bot/simple_staging.py install --directory /opt/hookah-bot \
+  --candidate /opt/hookah-bot/candidate.json
+```
+
+`init-config` создаёт случайные DB/JWT/pepper secrets в private `config.json`,
+не печатает их, не перезаписывает существующий config. Telegram token пустой,
+polling выключен. `install` отказывает при уже существующих неуправляемых ресурсах
+`hookah-bot`; создаёт отдельную пустую БД, backend применяет реальный Flyway V1–V126.
+Проверяются `/health`, `/db/health` (DB readiness; отдельного `/ready` в backend нет),
+`/version`, защищённый `/api/guest/catalog` (401 без токена), HTML и assets `/miniapp/`.
+Это технический smoke, не полный authenticated product/Telegram smoke.
+`SUCCESS` сохраняется в `result.json` и `operation-<id>.json`; исходный кандидат,
+manifest и DB binding входят в результат. `compose.json` генерируется скриптом,
+содержит secrets, mode 0600; вручную его не редактируют.
+Повторный `install` того же image проверяет runtime и возвращает `unchanged: true`.
+
+### Одно штатное обновление
+
+Подготовить новый image/candidate тем же build helper после зелёного CI точного SHA,
+доставить новый candidate на VPS по согласованному SSH-каналу, mode 0600. Затем:
+
+```bash
+python3 -B /opt/hookah-bot/simple_staging.py deploy --directory /opt/hookah-bot \
+  --candidate /opt/hookah-bot/candidate.json
+```
+
+Для неизменного SQL manifest выполняется только
+`compose up -d --no-build --pull never --no-deps --force-recreate backend`.
+PostgreSQL не перезапускается/не пересоздаётся. Проверяется прежний container ID,
+volume, network ID, PostgreSQL system identifier и конфигурация. Никаких `down -v`,
+`prune`, общего cleanup или операций с 8081/Caddy нет.
+
+Forward migration допускается только append-only с неизменными старыми SQL bytes и
+checksums. Оператор/reviewer обязан проверить совместимость SQL и приложения;
+скрипт не выдаёт наличие `ADD` за доказательство безопасности произвольного SQL.
+Для `--compatibility-review /opt/hookah-bot/compatibility.json` (mode 0600) нужны:
+`from_manifest` = digest manifest текущего result, `to_manifest` = digest manifest
+из `inspect`, `backward_compatible: true`, `reason` = содержательное объяснение.
+Digest вычисляется функцией `digest()` из доставленного `simple_staging.py`:
+SHA-256 JSON с `sort_keys=True, separators=(',', ':')`. Проверить пару можно так:
+
+```bash
+cd /opt/hookah-bot
+python3 -B - <<'PY'
+import json
+from simple_staging import digest
+for filename, key in [('result.json', 'target'), ('candidate-inspected.json', None)]:
+    value = json.load(open(filename))
+    print(filename, digest((value[key] if key else value)['manifest']))
+PY
+python3 -B /opt/hookah-bot/simple_staging.py deploy --directory /opt/hookah-bot \
+  --candidate /opt/hookah-bot/candidate.json \
+  --compatibility-review /opt/hookah-bot/compatibility.json
+```
+
+Перед новой схемой останавливается **только Hookah backend**, создаётся `pg_dump -Fc`,
+проверяется `pg_restore --list`, сохраняются SHA-256 и metadata, затем запускается
+candidate. Ошибка backup блокирует миграцию. Автоматического DB rollback нет.
+Backup и result следует скопировать в защищённое хранилище вне VPS по принятой
+политике; локальный dump не защищает от потери сервера. PostgreSQL major upgrades
+и изменение DB credentials/binding не входят в обычный app update.
+
+### Статус, логи, backup и восстановление
+
+```bash
+python3 -B /opt/hookah-bot/simple_staging.py status --directory /opt/hookah-bot
+python3 -B /opt/hookah-bot/simple_staging.py backup --directory /opt/hookah-bot
+# Только чтение логов своих сервисов; вывод может содержать операционные данные.
+docker compose -p hookah-bot --project-directory /opt/hookah-bot \
+  --env-file /dev/null -f /opt/hookah-bot/compose.json logs --tail 100 backend postgres
+```
+
+`APPLYING` после прерывания или `UNKNOWN` после ошибки не разрешают следующий deploy.
+Не удалять `result.json`, lock, volume и историю, не повторять install для обхода.
+`status` показывает записанный intent и наблюдаемые контейнеры; не объявляет intent
+фактическим успешным deployment. Сначала проверить status/логи/свободное место.
+Если candidate сам завершил запуск после потери ответа, следующая команда только
+проверяет точные image/config/DB/history/HTTP и подтверждает текущий результат:
+
+```bash
+python3 -B /opt/hookah-bot/simple_staging.py reconcile --directory /opt/hookah-bot
+```
+
+При неработающем новом приложении и **том же полном SQL manifest и runtime config**:
+
+```bash
+python3 -B /opt/hookah-bot/simple_staging.py rollback --directory /opt/hookah-bot
+```
+
+Rollback заново проверяет CI/digest предыдущего image и точную DB history, меняет
+только backend и повторяет smoke. При любом schema/config drift он отказывает;
+после forward migration нужен совместимый forward fix с отдельным решением, а не
+schema downgrade. Неизвестная/частично созданная DB без сохранённого binding,
+ошибка Flyway, отсутствующая БД или невозможность доказать history требуют ручной
+диагностики оператора; автоматического reinstall/reset нет. Recovery не закрывается
+одним успешным освобождением lock. Восстановление данных из dump — отдельная
+опасная операция с согласованной потерей записей, проверкой restore в изолированной
+БД и разрешением владельца; entrypoint не содержит destructive restore-команды.
+
+### HTTPS и Telegram после smoke
+
+После локального технического и нужного product smoke оператор отдельно подключает
+Caddy/DNS только для `staging.hookahtootah.club → 127.0.0.1:8080`; проверяет HTTPS
+health/DB health/Mini App в браузере. Hookah script не редактирует общий Caddy и не
+затрагивает маршрут Clubs на 8081. При согласованном включении Telegram оператор
+редактирует **только** `runtime` в private `config.json`: реальные bot token/username,
+owner Telegram ID, `TELEGRAM_BOT_ENABLED="true"`. Затем тем же проверенным candidate:
+
+```bash
+python3 -B /opt/hookah-bot/simple_staging.py deploy --directory /opt/hookah-bot \
+  --candidate /opt/hookah-bot/candidate.json --apply-config
+```
+
+Флаг явно разрешает замену runtime config; DB/host binding изменить им нельзя.
+PRODUCT/RBAC остаются серверными проверками, maintenance OFF, static lists пустые.
+До включения polling оператор исключает другой активный poller того же бота.
+После включения нужен реальный Telegram/Mini App и соответствующий изменению smoke
+по QA strategy. `SUCCESS` технической установки не объявляет production readiness.
+
+---
+
+## Исторические V125 / CR-1 / HDC процедуры
+
+Следующие разделы сохранены как история и контракты прежних targets. Их требования
+не блокируют новый простой staging HT70 и не предоставляют ему автоматический
+production-допуск.
+
 
 **Текущий статус (2026-10-14): ordinary V125 controller установлен и работает.**
 Первоначальные `initialize/status` дали `ACCEPTED`; QR-релиз source

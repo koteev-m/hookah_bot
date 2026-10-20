@@ -1,5 +1,13 @@
 # Deployment / Runbook / Operations
 
+> **HT70, решение владельца 2026-10-20:** для нового тестового staging без реальных
+> клиентов действует [простой install/update](STAGING_ORDINARY_RELEASE.md#ht70--простой-staging-install-и-последующие-обновления).
+> HDC/1, HDC/2, Authority/CAS/custody, external anchor, verifier/custodian keys,
+> privileged HDC executor, CR-1 и историческая V125→V126 цепочка не являются его
+> обязательными условиями. Противоречащие требования ниже относятся к историческим
+> targets/строгому контракту. Evidence и исходники сохраняются; будущий production
+> требует отдельного допуска. HT70 не разрешает переустановку VPS или текущий deploy.
+
 Дата актуализации: 2026-09-17.
 
 Статус: **current operations reference / UPDATED**. This document is the canonical deploy, release and operations runbook for the Telegram bot + Mini App platform. Use it together with `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation scope, `docs/STAGING_DEPLOYMENT.md` for one-VPS staging details, `docs/OPERATIONS.md` for metrics/queue incident basics and `docs/MIGRATION_POLICY.md` for Flyway policy.
