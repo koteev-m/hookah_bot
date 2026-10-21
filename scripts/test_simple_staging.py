@@ -4,9 +4,11 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -229,14 +231,6 @@ class ContractTests(unittest.TestCase):
             for p in root.glob('*.sql'): out.writestr('db/migration/postgresql/' + p.name, p.read_bytes())
         rows = s.manifest(raw.getvalue()); self.assertEqual(len(rows), 126)
         self.assertEqual(rows[-1]['version'], 126)
-    def test_lock_conflict_bounded_and_unlock(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp).resolve() / 'shared.lock'
-            with s.shared_lock(path, 0):
-                code = 'import simple_staging as s; from pathlib import Path\nwith s.shared_lock(Path(__import__("sys").argv[1]),0): pass'
-                p = subprocess.run([sys.executable, '-B', '-c', code, str(path)], cwd=Path(__file__).parent, capture_output=True)
-                self.assertNotEqual(p.returncode, 0); self.assertIn(b'SHARED_DOCKER_LOCK_BUSY', p.stderr)
-            with s.shared_lock(path, 0): pass
     def test_ci_exact_sha_completed_success_and_all_jobs(self):
         info = {'head_sha': 'a' * 40, 'event': 'push', 'path': '.github/workflows/ci.yml',
                 'repository': {'full_name': s.REPO}, 'head_repository': {'full_name': s.REPO},
@@ -257,6 +251,221 @@ class ContractTests(unittest.TestCase):
             runtime = s.Staging(root, runner=lambda *a, **k: calls.append(a))
             with self.assertRaisesRegex(s.Refused, 'IMMUTABLE'): runtime.candidate(dict(image='clubs:latest', revision='a' * 40, ci_run=1))
             self.assertEqual(calls, [])
+
+
+class SharedLockTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name).resolve() / 'shared.lock'
+        self.path.touch()
+        self.path.chmod(0o660)
+        self.fstat = os.fstat
+        if not hasattr(os, 'listxattr'):
+            # This macOS Python lacks xattr APIs; Linux runs use real FD metadata.
+            self.xattrs = patch.object(s.os, 'listxattr', return_value=[], create=True)
+            self.xattrs.start()
+            self.addCleanup(self.xattrs.stop)
+        if os.geteuid() != 0:
+            # Portable tests simulate only root ownership; Linux/root runs use real metadata.
+            self.root_owner = patch.object(s.os, 'fstat', side_effect=lambda fd: self.with_uid(self.fstat(fd), 0))
+            self.root_owner.start()
+            self.addCleanup(self.root_owner.stop)
+
+    @staticmethod
+    def with_uid(info, uid):
+        values = list(info); values[4] = uid
+        return os.stat_result(values)
+
+    def probe(self):
+        code = '''import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOFOLLOW)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(75)
+finally:
+    os.close(fd)
+'''
+        return subprocess.run([sys.executable, '-B', '-c', code, str(self.path)],
+                              capture_output=True, timeout=5).returncode
+
+    def replace(self):
+        self.path.rename(self.path.with_suffix('.old'))
+        self.path.touch()
+        self.path.chmod(0o660)
+
+    def test_existing_0660_lock_conflict_entire_body_and_unlock(self):
+        before = self.path.stat()
+        with s.shared_lock(self.path, 0):
+            self.assertEqual(self.probe(), 75)
+            self.assertEqual(self.probe(), 75)
+        self.assertEqual(self.probe(), 0)
+        after = self.path.stat()
+        self.assertEqual((before.st_dev, before.st_ino), (after.st_dev, after.st_ino))
+        self.assertEqual(stat.S_IMODE(after.st_mode), 0o660)
+
+    def test_exception_releases_lock(self):
+        with self.assertRaisesRegex(RuntimeError, 'operation failed'):
+            with s.shared_lock(self.path, 0):
+                raise RuntimeError('operation failed')
+        self.assertEqual(self.probe(), 0)
+
+    def test_inode_swap_inside_body_refused_and_descriptor_closed(self):
+        real_open = os.open
+        descriptors = []
+        def opened(*args):
+            fd = real_open(*args); descriptors.append(fd); return fd
+        with patch.object(s.os, 'open', side_effect=opened):
+            with self.assertRaisesRegex(s.Refused, 'LOCK_INODE_CHANGED'):
+                with s.shared_lock(self.path, 0):
+                    self.replace()
+        with self.assertRaises(OSError): self.fstat(descriptors[0])
+        self.assertEqual(self.probe(), 0)
+        self.path.unlink()
+        self.path.with_suffix('.old').rename(self.path)
+        self.assertEqual(self.probe(), 0)
+
+    def test_hard_links_refused_without_repair(self):
+        alias = self.path.with_suffix('.alias')
+        os.link(self.path, alias)
+        with self.assertRaisesRegex(s.Refused, 'LOCK_LINK_COUNT_INVALID'):
+            with s.shared_lock(self.path, 0): self.fail('operation admitted')
+        self.assertEqual(self.path.stat().st_nlink, 2)
+        self.assertEqual(alias.stat().st_ino, self.path.stat().st_ino)
+        self.assertEqual(self.probe(), 0)
+
+    def test_extended_attributes_refused_without_removal(self):
+        if hasattr(os, 'setxattr'):
+            os.setxattr(self.path, 'user.ht_flock_test', b'fixture')
+            with self.assertRaisesRegex(s.Refused, 'LOCK_XATTR_PRESENT'):
+                with s.shared_lock(self.path, 0): self.fail('operation admitted')
+            self.assertEqual(os.getxattr(self.path, 'user.ht_flock_test'), b'fixture')
+        else:
+            with patch.object(s.os, 'listxattr', return_value=['user.ht_flock_test']) as attrs:
+                with self.assertRaisesRegex(s.Refused, 'LOCK_XATTR_PRESENT'):
+                    with s.shared_lock(self.path, 0): self.fail('operation admitted')
+                self.assertIsInstance(attrs.call_args.args[0], int)
+        self.assertEqual(self.probe(), 0)
+
+    def test_unavailable_or_failed_xattr_check_refused_and_descriptor_closed(self):
+        with patch.object(s.os, 'listxattr', None):
+            with self.assertRaisesRegex(s.Refused, 'LOCK_XATTR_CHECK_UNAVAILABLE'):
+                with s.shared_lock(self.path, 0): self.fail('operation admitted')
+        with patch.object(s.os, 'listxattr', side_effect=OSError('xattr check failed')) as attrs:
+            with self.assertRaisesRegex(OSError, 'xattr check failed'):
+                with s.shared_lock(self.path, 0): self.fail('operation admitted')
+            with self.assertRaises(OSError): self.fstat(attrs.call_args.args[0])
+        self.assertEqual(self.probe(), 0)
+
+    def test_hard_links_or_xattrs_added_inside_body_refused(self):
+        alias = self.path.with_suffix('.alias')
+        with self.assertRaisesRegex(s.Refused, 'LOCK_LINK_COUNT_INVALID'):
+            with s.shared_lock(self.path, 0): os.link(self.path, alias)
+        alias.unlink()
+        with patch.object(s.os, 'listxattr', return_value=[]) as attrs:
+            with self.assertRaisesRegex(s.Refused, 'LOCK_XATTR_PRESENT'):
+                with s.shared_lock(self.path, 0): attrs.return_value = ['user.ht_flock_test']
+        self.assertEqual(self.probe(), 0)
+
+    def test_missing_lock_is_not_created(self):
+        self.path.unlink()
+        with self.assertRaises(FileNotFoundError):
+            with s.shared_lock(self.path, 0): self.fail('operation admitted')
+        self.assertFalse(self.path.exists())
+
+    def test_exact_mode_required_without_repair(self):
+        modes = (0o600, 0o640, 0o664, 0o666, 0o770, 0o1660)
+        if os.geteuid() == 0:
+            modes += (0o2660, 0o4660)
+        for mode in modes:
+            self.path.chmod(mode)
+            with self.subTest(mode=oct(mode)), self.assertRaisesRegex(s.Refused, 'LOCK_OWNER_OR_MODE_INVALID'):
+                with s.shared_lock(self.path, 0): self.fail('operation admitted')
+            self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), mode)
+
+    def test_special_mode_bits_refused(self):
+        # Non-root macOS can silently strip setgid/setuid on chmod.
+        for mode in (0o2660, 0o4660):
+            info = list(self.path.stat()); info[0] = stat.S_IFREG | mode; info[4] = 0
+            with self.subTest(mode=oct(mode)), patch.object(s.os, 'fstat', return_value=os.stat_result(info)):
+                with self.assertRaisesRegex(s.Refused, 'LOCK_OWNER_OR_MODE_INVALID'):
+                    with s.shared_lock(self.path, 0): self.fail('operation admitted')
+
+    def test_owner_must_be_root_even_if_caller_matches(self):
+        with patch.object(s.os, 'fstat', side_effect=lambda fd: self.with_uid(self.fstat(fd), 1234)), \
+                patch.object(s.os, 'geteuid', return_value=1234):
+            with self.assertRaisesRegex(s.Refused, 'LOCK_OWNER_OR_MODE_INVALID'):
+                with s.shared_lock(self.path, 0): self.fail('operation admitted')
+
+    def test_symlink_refused(self):
+        target = self.path.with_suffix('.target')
+        self.path.rename(target)
+        self.path.symlink_to(target)
+        with self.assertRaises(OSError):
+            with s.shared_lock(self.path, 0): self.fail('operation admitted')
+
+    def test_fifo_refused_without_blocking(self):
+        self.path.unlink(); os.mkfifo(self.path, 0o660); self.path.chmod(0o660)
+        with self.assertRaisesRegex(s.Refused, 'LOCK_OWNER_OR_MODE_INVALID'):
+            with s.shared_lock(self.path, 0): self.fail('operation admitted')
+
+    def test_inode_swap_between_lstat_and_open_refused(self):
+        real_open = os.open
+        def swapped_open(*args):
+            if not args[1] & os.O_CREAT:
+                self.replace()
+            return real_open(*args)
+        with patch.object(s.os, 'open', side_effect=swapped_open):
+            with self.assertRaisesRegex(s.Refused, 'LOCK_INODE_CHANGED'):
+                with s.shared_lock(self.path, 0): self.fail('operation admitted')
+
+    def test_inode_swap_after_flock_refused_and_descriptor_closed(self):
+        real_flock = s.fcntl.flock
+        descriptors = []
+        def swapped_flock(fd, flags):
+            real_flock(fd, flags); descriptors.append(fd); self.replace()
+        with patch.object(s.fcntl, 'flock', side_effect=swapped_flock):
+            with self.assertRaisesRegex(s.Refused, 'LOCK_INODE_CHANGED'):
+                with s.shared_lock(self.path, 0): self.fail('operation admitted')
+        with self.assertRaises(OSError): self.fstat(descriptors[0])
+        self.assertEqual(self.probe(), 0)
+
+    def test_busy_timeout_and_wait_for_release(self):
+        fd = os.open(self.path, os.O_RDWR)
+        try:
+            s.fcntl.flock(fd, s.fcntl.LOCK_EX | s.fcntl.LOCK_NB)
+            start = time.monotonic()
+            with self.assertRaisesRegex(s.Refused, 'SHARED_DOCKER_LOCK_BUSY'):
+                with s.shared_lock(self.path, 0.15): self.fail('operation admitted')
+            self.assertGreaterEqual(time.monotonic() - start, 0.15)
+            with patch.object(s.time, 'sleep', side_effect=lambda _: s.fcntl.flock(fd, s.fcntl.LOCK_UN)):
+                with s.shared_lock(self.path, 1): self.assertEqual(self.probe(), 75)
+        finally:
+            os.close(fd)
+        self.assertEqual(self.probe(), 0)
+
+    def test_inode_or_permissions_changed_while_waiting_refused(self):
+        for change, reason in ((self.replace, 'LOCK_INODE_CHANGED'),
+                               (lambda: self.path.chmod(0o666), 'LOCK_OWNER_OR_MODE_INVALID')):
+            fd = os.open(self.path, os.O_RDWR)
+            try:
+                s.fcntl.flock(fd, s.fcntl.LOCK_EX | s.fcntl.LOCK_NB)
+                with self.subTest(reason=reason), patch.object(s.time, 'sleep', side_effect=lambda _: change()):
+                    with self.assertRaisesRegex(s.Refused, reason):
+                        with s.shared_lock(self.path, 1): self.fail('operation admitted')
+            finally:
+                os.close(fd)
+
+    def test_default_wait_30_and_invalid_wait(self):
+        for wait in (-1, 61):
+            with self.subTest(wait=wait), self.assertRaisesRegex(s.Refused, 'LOCK_WAIT_INVALID'):
+                with s.shared_lock(self.path, wait): self.fail('operation admitted')
+        with patch.object(s.fcntl, 'flock', side_effect=BlockingIOError), \
+                patch.object(s.time, 'monotonic', side_effect=[0, 29, 30]), patch.object(s.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(s.Refused, 'SHARED_DOCKER_LOCK_BUSY'):
+                with s.shared_lock(self.path): self.fail('operation admitted')
+            sleep.assert_called_once_with(0.1)
 
 
 if __name__ == '__main__': unittest.main()

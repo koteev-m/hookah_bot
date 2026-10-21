@@ -141,20 +141,33 @@ def compatibility(old, new, review=None):
 @contextlib.contextmanager
 def shared_lock(path=LOCK, wait=30):
     require(0 <= wait <= 60, 'LOCK_WAIT_INVALID')
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    initial = os.lstat(path)
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
-        st = os.fstat(fd)
-        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and not st.st_mode & 0o022,
-                'LOCK_OWNER_OR_MODE_INVALID')
+        def check():
+            st, named = os.fstat(fd), os.lstat(path)
+            require(stat.S_ISREG(st.st_mode) and st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o660,
+                    'LOCK_OWNER_OR_MODE_INVALID')
+            require(stat.S_ISREG(named.st_mode)
+                    and (initial.st_dev, initial.st_ino) == (st.st_dev, st.st_ino) == (named.st_dev, named.st_ino),
+                    'LOCK_INODE_CHANGED')
+            require(st.st_nlink == 1, 'LOCK_LINK_COUNT_INVALID')
+            listxattr = getattr(os, 'listxattr', None)
+            require(listxattr is not None, 'LOCK_XATTR_CHECK_UNAVAILABLE')
+            require(not listxattr(fd), 'LOCK_XATTR_PRESENT')
+
         deadline = time.monotonic() + wait
         while True:
+            check()
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 require(time.monotonic() < deadline, 'SHARED_DOCKER_LOCK_BUSY')
                 time.sleep(0.1)
+        check()
         yield
+        check()
     finally:
         os.close(fd)
 
