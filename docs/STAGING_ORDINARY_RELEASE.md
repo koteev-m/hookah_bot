@@ -37,27 +37,69 @@ ambient DOCKER_/COMPOSE_ overrides; чужих Compose resources он не из�
 
 ### Подготовка образа после зелёного CI
 
-На доверенной build-машине нужен чистый checkout точного опубликованного release
-SHA, Docker Buildx, Python 3.9+ и `gh` с доступом чтения Actions. Образ собирается
-вне VPS из `backend/Dockerfile`, включает Mini App с URL staging. Для первого
-install packaged PostgreSQL manifest обязан содержать ровно V1–V126.
-Оператор отдельно аутентифицируется в GHCR с правом публикации. Запуск следующего
-скрипта **публикует image** и требует отдельного разрешения; в HT70 не запускался:
+Основной путь: **GitHub main → CI → GHCR → candidate.json → отдельно разрешённый
+install/deploy**. Job `publish-ghcr` в `.github/workflows/ci.yml` запускается только
+на `push` в `refs/heads/main` репозитория `koteev-m/hookah_bot`, после success всех
+15 обязательных backend, Compose, Docker, Mini App и browser-smoke jobs. На PR,
+других branches, failed/skipped/cancelled обязательных jobs публикации нет.
+Существующие required checks сохраняются.
+
+GitHub-hosted runner использует автоматически предоставленный `secrets.GITHUB_TOKEN`
+через официальный `docker/login-action`; `packages: write` есть только у publishing
+job, `contents: read` сохраняется. Личный PAT и дополнительные repository secrets
+для публикации не нужны. Actions закреплены полными commit SHA.
+Образ собирается из checkout точного `github.sha`, `backend/Dockerfile`,
+для `linux/amd64`, с `VITE_BACKEND_PUBLIC_URL=https://staging.hookahtootah.club`
+и OCI source/revision labels. Имя: `ghcr.io/koteev-m/hookah_bot/backend:<полный-SHA>`.
+
+После push job читает manifest из registry, сверяет его digest с output сборки,
+затем читает config по immutable digest и проверяет platform/source/revision.
+Только после этих проверок сохраняет artifact
+`ghcr-candidate-<полный-SHA>-<run_attempt>` на 30 дней:
+
+- `candidate.json`: ровно `{"image":"ghcr.io/koteev-m/hookah_bot/backend@sha256:…",
+  "revision":"<полный-SHA>","ci_run":123}`; `ci_run` — числовой ID текущего run.
+- `build-metadata.json`: те же поля, platform, source, registry manifest digest,
+  media type и run attempt. Полные build records, environment и credentials
+  в artifact не выгружаются.
+
+Artifact скачивается из **Actions → нужный CI run → Artifacts** или существующим
+`gh` с доступом чтения Actions. Выбирать только завершённый успешный main push-run
+нужного SHA; номер попытки берётся из этого run:
 
 ```bash
-# RELEASE_SHA и CI_RUN_ID — фактический SHA и уже завершённый успешный push-run CI.
-# ARTIFACT_DIR — новый каталог вне checkout; скрипт откажет, если он существует.
-bash scripts/build-simple-staging-image.sh "$RELEASE_SHA" "$CI_RUN_ID" "$ARTIFACT_DIR"
+gh run download "$CI_RUN_ID" --repo koteev-m/hookah_bot \
+  --name "ghcr-candidate-${RELEASE_SHA}-${RUN_ATTEMPT}" --dir "$ARTIFACT_DIR"
+chmod 0600 "$ARTIFACT_DIR/candidate.json" "$ARTIFACT_DIR/build-metadata.json"
+python3 -B scripts/simple_staging.py verify-ci --revision "$RELEASE_SHA" --ci-run "$CI_RUN_ID"
 ```
 
-Скрипт проверяет точный HEAD/чистоту checkout, читает один законченный CI run и его
-jobs без ожидания/polling, требует все обязательные backend/Compose/Mini App/Docker
-jobs. Затем публикует `ghcr.io/koteev-m/hookah_bot/backend:<SHA>` и создаёт
-`candidate.json` с **registry manifest digest**, SHA и CI run ID. Deploy использует
+`ARTIFACT_DIR` — отдельный новый каталог вне checkout. Download не сохраняет mode
+0600, поэтому `chmod` обязателен перед чтением installer. Наличие artifact ещё не
+означает успешное завершение всего run. Publishing job не вызывает `verify-ci` для
+самого себя: run ещё выполняется. После завершения run installer по-прежнему требует
+полный успешный CI, включая publishing job; ошибка upload/verification блокирует допуск.
+GitHub Actions не содержит SSH/deployment credentials и ничего не развёртывает на AEZA.
+
+`candidate.json` содержит **registry manifest digest**, а не Docker image ID. Deploy использует
 только `ghcr.io/koteev-m/hookah_bot/backend@sha256:…`; tag не является selector.
 Повторная сборка того же SHA может дать другой digest — это другой кандидат.
-CI подтверждает source SHA, а trusted builder связывает с ним image; независимая
-криптографическая provenance здесь не заявляется. Не подменять digest image ID.
+`latest` не создаётся. Независимая криптографическая provenance здесь не заявляется.
+
+Если GHCR отказывает в доступе к уже существующему package, публикация завершается
+ошибкой без candidate. Владелец отдельно проверяет связь package с репозиторием и
+Actions access; PAT не используется как обход. Первый push из Actions должен
+подтвердить фактические права. Новый package по
+умолчанию private; доступ будущего VPS для pull — отдельное условие install, его
+не обеспечивает краткоживущий publishing `GITHUB_TOKEN`.
+См. [официальный контракт GHCR/GITHUB_TOKEN](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+Ручной `scripts/build-simple-staging-image.sh` сохранён как резервный, отдельно
+разрешаемый путь для доверенной build-машины с уже настроенным GHCR auth, Docker
+Buildx, Python 3.9+ и `gh`. Он не является обязательным этапом:
+`bash scripts/build-simple-staging-image.sh "$RELEASE_SHA" "$CI_RUN_ID" "$ARTIFACT_DIR"`.
+Он требует чистый checkout точного SHA и завершённый успешный CI. Для первого
+install packaged PostgreSQL manifest по-прежнему обязан содержать ровно V1–V126.
 
 На VPS перед каждым install/deploy ещё раз читается завершённый CI run, выполняется
 pull точного digest и inspect platform/source/revision. Из never-started контейнера
@@ -75,7 +117,7 @@ python3 -B /opt/hookah-bot/simple_staging.py inspect --directory /opt/hookah-bot
 
 Все пути `/opt/hookah-bot` ниже — **новый предлагаемый каталог**, который оператор
 создаёт этими командами; его существование на AEZA не утверждается. Сначала оператор
-проверяет выбранный сервер/SSH host key, архитектуру (build helper: linux/amd64),
+проверяет выбранный сервер/SSH host key, архитектуру (published image: linux/amd64),
 устанавливает Docker Engine 28+, Compose v2+, Python 3.9+ и GitHub CLI по официальной
 инструкции ОС. Системный Caddy устанавливается/настраивается отдельно.
 Нужно заранее обеспечить доступ `gh` к Actions и Docker к приватному GHCR.
@@ -96,7 +138,7 @@ gh auth status
 После отдельного разрешения оператор доставляет проверенный `scripts/simple_staging.py`
 и `candidate.json` по SSH/SCP в этот каталог (имя SSH target берётся из его реальной
 конфигурации). Оба файла должны принадлежать root, mode 0600; каталог mode 0700.
-Пример доставки с build-машины: `$SSH_TARGET` — явно выбранный root/admin target
+Пример доставки с машины оператора: `$SSH_TARGET` — явно выбранный root/admin target
 с заранее проверенным host key; если вход не root, установку файлов выполняет
 доверенный оператор отдельно, без выдачи deploy-пользователю произвольного sudo:
 
@@ -133,7 +175,7 @@ manifest и DB binding входят в результат. `compose.json` ген
 
 ### Одно штатное обновление
 
-Подготовить новый image/candidate тем же build helper после зелёного CI точного SHA,
+Скачать новый candidate из artifact завершённого успешного main CI точного SHA,
 доставить новый candidate на VPS по согласованному SSH-каналу, mode 0600. Затем:
 
 ```bash

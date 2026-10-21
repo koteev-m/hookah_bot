@@ -162,16 +162,15 @@ class ReleaseCiTest(unittest.TestCase):
         doc['jobs'].reverse()
         self.assertEqual(self.validate(doc).returncode, 0)
 
-    def test_workflow_and_tracked_contract_agree(self):
+    def assert_workflow_and_tracked_contract_agree(self, workflow):
         code = shell('source "$1"; release_ci_python', SCRIPT)
         self.assertEqual(code.returncode, 0, code.stderr)
         namespace = {}
         exec(compile(code.stdout, str(SCRIPT), 'exec'), namespace)
-        workflow = (ROOT.parent / '.github/workflows/ci.yml').read_text()
         self.assertTrue(workflow.startswith('name: CI\n'))
         # Deliberately bounded to this workflow's literal, single-axis matrices.
         # A new syntax/name/matrix needs explicit contract review, never silent expansion.
-        sections = re.split(r'^  ([a-z][a-z0-9-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        sections = re.split(r'^  ([A-Za-z_][A-Za-z0-9_-]*):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
         names = []
         for job, body in zip(sections[1::2], sections[2::2]):
             header = body.split('    steps:\n', 1)[0]
@@ -185,9 +184,38 @@ class ReleaseCiTest(unittest.TestCase):
                 self.assertNotIn('matrix:', header)
             names.append(job)
         self.assertEqual(len(names), len(set(names)))
-        self.assertEqual(sorted(names), list(namespace['CI_REQUIRED_JOBS']))
-        self.assertEqual(sorted(names), sorted(job['name'] for job in GOOD['jobs']))
-        self.assertEqual(len(names), 15)
+        # Publication is an optional workflow addition, not a historical receipt gate.
+        # Its main-push/success conditions are covered by test_ghcr_publish.py.
+        required_names = [name for name in names if name != 'publish-ghcr']
+        self.assertEqual(sorted(required_names), list(namespace['CI_REQUIRED_JOBS']))
+        self.assertEqual(sorted(required_names), sorted(job['name'] for job in GOOD['jobs']))
+        self.assertEqual(len(required_names), 15)
+
+    def test_workflow_and_tracked_contract_agree(self):
+        self.assert_workflow_and_tracked_contract_agree(
+            (ROOT.parent / '.github/workflows/ci.yml').read_text())
+
+    def test_workflow_allows_only_optional_publish_ghcr_addition(self):
+        workflow = (ROOT.parent / '.github/workflows/ci.yml').read_text()
+        baseline = workflow.replace('  publish-ghcr:\n' + workflow_jobs()['publish-ghcr'], '')
+        self.assert_workflow_and_tracked_contract_agree(baseline)
+        self.assert_workflow_and_tracked_contract_agree(workflow)
+        for unexpected in ('unexpected', 'publish-ghcr-other', 'x', 'unexpected_job', 'UnexpectedJob'):
+            with self.subTest(job=unexpected), self.assertRaises(AssertionError):
+                self.assert_workflow_and_tracked_contract_agree(
+                    workflow + f'\n  {unexpected}:\n    runs-on: ubuntu-latest\n    steps: []\n')
+
+    def test_workflow_still_requires_every_original_job_and_unique_names(self):
+        workflow = (ROOT.parent / '.github/workflows/ci.yml').read_text()
+        for job, body in workflow_jobs().items():
+            if job == 'publish-ghcr':
+                continue
+            with self.subTest(missing=job), self.assertRaises(AssertionError):
+                self.assert_workflow_and_tracked_contract_agree(
+                    workflow.replace(f'  {job}:\n' + body, ''))
+        with self.assertRaises(AssertionError):
+            self.assert_workflow_and_tracked_contract_agree(
+                workflow + '\n  publish-ghcr:\n    runs-on: ubuntu-latest\n    steps: []\n')
 
     def test_incomplete_duplicate_substituted_and_unexpected_sets(self):
         variants = []
@@ -196,6 +224,7 @@ class ReleaseCiTest(unittest.TestCase):
         doc = copy.deepcopy(GOOD); doc['jobs'][-1] = doc['jobs'][0]; variants.append(doc)
         doc = copy.deepcopy(GOOD); doc['jobs'][-1]['name'] = 'substituted'; variants.append(doc)
         doc = copy.deepcopy(GOOD); doc['jobs'].append({'name':'unexpected','status':'completed','conclusion':'success'}); variants.append(doc)
+        doc = copy.deepcopy(GOOD); doc['jobs'].append({'name':'publish-ghcr','status':'completed','conclusion':'success'}); variants.append(doc)
         doc = copy.deepcopy(GOOD)
         for index, job in enumerate(doc['jobs']): job['name'] = f'arbitrary-{index}'
         variants.append(doc)
