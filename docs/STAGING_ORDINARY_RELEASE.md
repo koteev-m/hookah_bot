@@ -113,6 +113,17 @@ install packaged PostgreSQL manifest по-прежнему обязан соде
 pull точного digest и inspect platform/source/revision. Из never-started контейнера
 читается packaged JAR; проверяются V1–V126, SQL SHA-256 и Flyway checksums.
 Нельзя обойти проверки флагом `ci_success=true` или ручным manifest в candidate.
+
+Чтение CI публичного `koteev-m/hookah_bot` в `verify-ci` и install/deploy идёт напрямую
+по HTTPS через GitHub REST API, без `gh`-аутентификации и без GitHub-токена на AEZA.
+GitHub разрешает анонимные [Get a workflow run](https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run)
+и [List jobs for a workflow run](https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run).
+Точный SHA/run ID, репозиторий, workflow, событие `push` и полный успешный CI остаются
+обязательными. Недоступность API, rate limit (HTTP 403/429), timeout или неполный ответ
+останавливают проверку; после восстановления доступа/лимита нужно повторить проверку CI.
+Обхода или автоматического перехода на токен нет. Это относится к чтению CI;
+скачивание artifact и доступ к GHCR остаются отдельными условиями, описанными выше.
+
 `inspect` позволяет получить проверенный manifest до изменения приложения:
 
 ```bash
@@ -126,9 +137,11 @@ python3 -B /opt/hookah-bot/simple_staging.py inspect --directory /opt/hookah-bot
 Все пути `/opt/hookah-bot` ниже — **новый предлагаемый каталог**, который оператор
 создаёт этими командами; его существование на AEZA не утверждается. Сначала оператор
 проверяет выбранный сервер/SSH host key, архитектуру (published image: linux/amd64),
-устанавливает Docker Engine 28+, Compose v2+, Python 3.9+ и GitHub CLI по официальной
+устанавливает Docker Engine 28+, Compose v2+ и Python 3.9+ по официальной
 инструкции ОС. Системный Caddy устанавливается/настраивается отдельно.
-Нужно заранее обеспечить доступ `gh` к Actions и Docker к приватному GHCR.
+Нужно заранее обеспечить доступ Docker к приватному GHCR.
+Для чтения Actions функция `verify_ci()` использует публичный GitHub HTTPS API
+без GitHub-токена; установка и авторизация `gh` на сервере не требуются.
 Не переносить прежние credentials или чужие volumes. Не запускать команды на старом
 сервере как способ «починить» незавершённый CR-1/HDC.
 
@@ -140,7 +153,6 @@ uname -m
 docker version
 docker compose version
 python3 --version
-gh auth status
 ```
 
 После отдельного разрешения оператор доставляет проверенный `scripts/simple_staging.py`
