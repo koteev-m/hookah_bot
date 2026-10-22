@@ -1,5 +1,6 @@
 """Portable publication contract tests; no Docker, registry, GitHub or deployment calls."""
 import copy
+from email.message import Message
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+import urllib.response
 import zipfile
 
 import yaml
@@ -200,10 +202,28 @@ class PublicationTests(unittest.TestCase):
     def test_existing_installer_accepts_candidate_only_after_full_success(self):
         self.execute('candidate', self.registry)
         candidate = staging.private_json(self.output / 'candidate.json')
-        run = {'head_sha': SHA, 'event': 'push', 'path': '.github/workflows/ci.yml',
+        run = {'id': 123, 'run_attempt': 1, 'head_sha': SHA, 'event': 'push',
+               'path': '.github/workflows/ci.yml',
                'repository': {'full_name': staging.REPO}, 'head_repository': {'full_name': staging.REPO},
                'status': 'completed', 'conclusion': 'success', 'html_url': SOURCE + '/actions/runs/123'}
-        jobs = [{'name': n, 'conclusion': 'success'} for n in JOB['needs'] + ['publish-ghcr']]
+        jobs = [{'id': number, 'run_id': 123, 'head_sha': SHA, 'name': name,
+                 'status': 'completed', 'conclusion': 'success'}
+                for number, name in enumerate(sorted(staging.REQUIRED_JOBS | {'publish-ghcr'}), 1)]
+        base = f'https://api.github.com/repos/{staging.REPO}/actions/runs/123'
+        jobs_url = base + '/jobs?filter=latest&per_page=100&page=1'
+        requests = []
+
+        def http(request):
+            requests.append(request.full_url)
+            self.assertIn(request.full_url, (base, jobs_url))
+            value = run if request.full_url == base else {'total_count': len(jobs), 'jobs': jobs}
+            body = json.dumps(value).encode()
+            headers = Message()
+            headers['Content-Length'] = str(len(body))
+            response = urllib.response.addinfourl(io.BytesIO(body), headers, request.full_url, 200)
+            response.msg = 'fixture'
+            return response
+
         jar = io.BytesIO()
         with zipfile.ZipFile(jar, 'w') as archive:
             for n in range(1, 127):
@@ -215,8 +235,6 @@ class PublicationTests(unittest.TestCase):
             archive.addfile(info, io.BytesIO(jar.getvalue()))
 
         def runner(argv, **kwargs):
-            if argv[:2] == ['gh', 'api']:
-                return json.dumps([{'jobs': jobs}] if '--paginate' in argv else run).encode()
             if argv[:2] == ['docker', 'create']:
                 return b'fixture-container'
             if argv[:2] == ['docker', 'cp']:
@@ -227,19 +245,25 @@ class PublicationTests(unittest.TestCase):
         runtime = staging.Staging.__new__(staging.Staging)
         runtime.run, runtime.project = runner, 'fixture'
         inspected = {'Id': IMAGE_ID, 'Config': self.config['config']}
-        with patch.object(runtime, 'inspect_image', return_value=inspected):
+        with patch.object(staging.urllib.request.HTTPSHandler, 'https_open', side_effect=http), \
+                patch.object(runtime, 'inspect_image', return_value=inspected):
             result = runtime.candidate(candidate)
             self.assertEqual(result['image'], IMAGE + '@' + DIGEST)
             self.assertEqual(result['id'], IMAGE_ID)
             self.assertEqual(len(result['manifest']), 126)
+            self.assertEqual(requests, [base, jobs_url, base])
             for status, conclusion in [('in_progress', None), ('completed', 'failure')]:
                 run.update(status=status, conclusion=conclusion)
+                requests.clear()
                 with self.assertRaisesRegex(staging.Refused, 'EXACT_CI_NOT_GREEN'):
                     runtime.candidate(candidate)
+                self.assertEqual(requests, [base])
             run.update(status='completed', conclusion='success')
             jobs[-1]['conclusion'] = 'failure'
+            requests.clear()
             with self.assertRaisesRegex(staging.Refused, 'REQUIRED_CI_JOB_NOT_GREEN'):
                 runtime.candidate(candidate)
+            self.assertEqual(requests, [base, jobs_url])
 
 
 if __name__ == '__main__':
