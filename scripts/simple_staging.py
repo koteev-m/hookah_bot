@@ -8,6 +8,7 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -89,21 +90,96 @@ def run(argv, *, timeout=60, payload=None):
     return p.stdout
 
 
-def verify_ci(revision, run_id, runner=run):
-    require(re.fullmatch(r'[0-9a-f]{40}', revision) and str(run_id).isdigit(), 'CI_INPUT_INVALID')
-    base = f'repos/{REPO}/actions/runs/{run_id}'
-    record = json.loads(runner(['gh', 'api', base], timeout=30))
-    require(record.get('head_sha') == revision and record.get('event') == 'push'
-            and record.get('path') == '.github/workflows/ci.yml'
-            and record.get('repository', {}).get('full_name') == REPO
-            and record.get('head_repository', {}).get('full_name') == REPO
-            and record.get('status') == 'completed' and record.get('conclusion') == 'success',
-            'EXACT_CI_NOT_GREEN')
-    pages = json.loads(runner(['gh', 'api', '--paginate', '--slurp', base + '/jobs?filter=latest&per_page=100'], timeout=30))
-    jobs = [job for page in pages for job in page['jobs']]
-    names = {j['name'].split(' (')[0] for j in jobs if j.get('conclusion') == 'success'}
-    require(REQUIRED_JOBS <= names and all(j.get('conclusion') == 'success' for j in jobs), 'REQUIRED_CI_JOB_NOT_GREEN')
-    return {'id': int(run_id), 'sha': revision, 'url': record['html_url']}
+class NoCiRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        raise Refused('CI_API_REDIRECT_REFUSED')
+
+
+def public_ci_json(opener, url, deadline):
+    request = urllib.request.Request(url, headers={
+        'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10',
+        'User-Agent': 'Hookah-Tootah-staging-ci'})
+    remaining = deadline - time.monotonic()
+    require(remaining > 0, 'CI_API_TIMEOUT')
+    limit = 4 * 1024 * 1024
+    try:
+        with opener.open(request, timeout=min(10, remaining)) as response:
+            require(response.status == 200, 'CI_API_RESPONSE_INVALID')
+            length = response.headers.get('Content-Length')
+            if length is not None:
+                require(length.isascii() and length.isdigit() and int(length) <= limit,
+                        'CI_API_RESPONSE_INVALID')
+            body = bytearray()
+            while True:
+                require(time.monotonic() < deadline, 'CI_API_TIMEOUT')
+                chunk = response.read1(min(65536, limit + 1 - len(body)))
+                if not chunk:
+                    break
+                body.extend(chunk)
+                require(len(body) <= limit, 'CI_API_RESPONSE_TOO_LARGE')
+            require(time.monotonic() < deadline, 'CI_API_TIMEOUT')
+            require(length is None or len(body) == int(length), 'CI_API_RESPONSE_INCOMPLETE')
+        value = json.loads(body)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise Refused(f'CI_API_HTTP_{exc.code}') from exc
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+        raise Refused('CI_API_UNAVAILABLE') from exc
+    except (ValueError, RecursionError) as exc:
+        raise Refused('CI_API_RESPONSE_INVALID') from exc
+    require(isinstance(value, dict), 'CI_API_RESPONSE_INVALID')
+    return value
+
+
+def verify_ci(revision, run_id):
+    require(isinstance(revision, str) and re.fullmatch(r'[0-9a-f]{40}', revision)
+            and re.fullmatch(r'[1-9][0-9]{0,19}', str(run_id)), 'CI_INPUT_INVALID')
+    run_id = int(run_id)
+    base = f'https://api.github.com/repos/{REPO}/actions/runs/{run_id}'
+    html_url = f'{SOURCE}/actions/runs/{run_id}'
+    # Fresh anonymous transport: no ambient proxy credentials, gh auth or redirects.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoCiRedirect())
+    deadline = time.monotonic() + 60
+
+    def read_run():
+        record = public_ci_json(opener, base, deadline)
+        require(type(record.get('id')) is int and record['id'] == run_id
+                and record.get('head_sha') == revision and record.get('event') == 'push'
+                and record.get('path') == '.github/workflows/ci.yml'
+                and all(isinstance(record.get(k), dict) and record[k].get('full_name') == REPO
+                        for k in ('repository', 'head_repository'))
+                and record.get('status') == 'completed' and record.get('conclusion') == 'success'
+                and record.get('html_url') == html_url
+                and type(record.get('run_attempt')) is int and record['run_attempt'] > 0,
+                'EXACT_CI_NOT_GREEN')
+        return record
+
+    record = read_run()
+    total = None
+    ids, names = set(), set()
+    # Request numbered pages from the fixed endpoint, never URLs supplied in Link.
+    for page in range(1, 11):
+        data = public_ci_json(opener, base + f'/jobs?filter=latest&per_page=100&page={page}', deadline)
+        count, jobs = data.get('total_count'), data.get('jobs')
+        require(type(count) is int and 0 < count <= 1000 and isinstance(jobs, list), 'CI_JOBS_RESPONSE_INVALID')
+        if total is None:
+            total = count
+        require(count == total and len(jobs) == min(100, total - len(ids)), 'CI_JOBS_RESPONSE_INCOMPLETE')
+        for job in jobs:
+            require(isinstance(job, dict) and type(job.get('id')) is int and job['id'] > 0
+                    and job['id'] not in ids and type(job.get('run_id')) is int and job['run_id'] == run_id
+                    and job.get('head_sha') == revision and isinstance(job.get('name'), str) and job['name'],
+                    'CI_JOB_IDENTITY_INVALID')
+            require(job.get('status') == 'completed' and job.get('conclusion') == 'success', 'REQUIRED_CI_JOB_NOT_GREEN')
+            ids.add(job['id'])
+            names.add(job['name'].split(' (')[0])
+        if len(ids) == total:
+            break
+    require(len(ids) == total and REQUIRED_JOBS <= names, 'REQUIRED_CI_JOB_NOT_GREEN')
+    # A rerun during pagination must not combine evidence from different executions.
+    require(read_run()['run_attempt'] == record['run_attempt'], 'CI_RUN_CHANGED')
+    return {'id': run_id, 'sha': revision, 'url': html_url}
 
 
 def manifest(jar_bytes):
@@ -251,7 +327,7 @@ class Staging:
     def candidate(self, record):
         require(set(record) == {'image', 'revision', 'ci_run'}, 'CANDIDATE_FIELDS_INVALID')
         require(re.fullmatch(IMAGE_RE, record['image']), 'HOOKAH_IMMUTABLE_IMAGE_REQUIRED')
-        ci = verify_ci(record['revision'], record['ci_run'], self.run)
+        ci = verify_ci(record['revision'], record['ci_run'])
         data = self.inspect_image(record['image'])
         labels = data.get('Config', {}).get('Labels') or {}
         require(labels.get('org.opencontainers.image.source') == SOURCE

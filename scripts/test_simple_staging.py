@@ -1,9 +1,13 @@
 """Focused portable tests: exact CI, migrations, boundaries, intent/recovery and locks."""
 import copy
+import contextlib
+from email.message import Message
+import http.client
 import io
 import json
 import os
 from pathlib import Path
+import ssl
 import stat
 import subprocess
 import sys
@@ -11,6 +15,8 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+import urllib.error
+import urllib.response
 import zipfile
 
 import simple_staging as s
@@ -185,13 +191,6 @@ class ContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(s.Refused, 'SOURCE_REVISION'): runtime.candidate(record(image()))
             self.assertFalse(any('create' in call for call in calls))
 
-    def test_ci_wrong_repository_and_incomplete_jobs_refused(self):
-        def runner(argv, **kwargs):
-            return json.dumps({'head_sha': 'a' * 40, 'event': 'push', 'path': '.github/workflows/ci.yml',
-                               'repository': {'full_name': 'other/repository'}, 'status': 'completed',
-                               'conclusion': 'success'}).encode()
-        with self.assertRaisesRegex(s.Refused, 'EXACT_CI'): s.verify_ci('a' * 40, 1, runner)
-
     def test_wrong_host_refused_before_docker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve(); s.atomic(root / 'config.json', config())
@@ -231,19 +230,6 @@ class ContractTests(unittest.TestCase):
             for p in root.glob('*.sql'): out.writestr('db/migration/postgresql/' + p.name, p.read_bytes())
         rows = s.manifest(raw.getvalue()); self.assertEqual(len(rows), 126)
         self.assertEqual(rows[-1]['version'], 126)
-    def test_ci_exact_sha_completed_success_and_all_jobs(self):
-        info = {'head_sha': 'a' * 40, 'event': 'push', 'path': '.github/workflows/ci.yml',
-                'repository': {'full_name': s.REPO}, 'head_repository': {'full_name': s.REPO},
-                'status': 'completed', 'conclusion': 'success', 'html_url': 'https://github.com/' + s.REPO + '/actions/runs/1'}
-        jobs = [{'name': k + ' (21)', 'conclusion': 'success'} for k in s.REQUIRED_JOBS]
-        def runner(argv, **kw): return json.dumps([{'jobs': jobs}] if '--paginate' in argv else info).encode()
-        self.assertEqual(s.verify_ci('a' * 40, 1, runner)['sha'], 'a' * 40)
-        for key, value in [('head_sha', 'b' * 40), ('event', 'pull_request'), ('status', 'queued'), ('conclusion', 'failure')]:
-            old = info[key]; info[key] = value
-            with self.subTest(key=key), self.assertRaises(s.Refused): s.verify_ci('a' * 40, 1, runner)
-            info[key] = old
-        jobs.pop()
-        with self.assertRaisesRegex(s.Refused, 'JOB'): s.verify_ci('a' * 40, 1, runner)
     def test_bad_image_rejected_before_docker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve(); s.atomic(root / 'config.json', config())
@@ -251,6 +237,228 @@ class ContractTests(unittest.TestCase):
             runtime = s.Staging(root, runner=lambda *a, **k: calls.append(a))
             with self.assertRaisesRegex(s.Refused, 'IMMUTABLE'): runtime.candidate(dict(image='clubs:latest', revision='a' * 40, ci_run=1))
             self.assertEqual(calls, [])
+
+
+class PublicCiTests(unittest.TestCase):
+    def setUp(self):
+        self.info = {'id': 1, 'run_attempt': 1, 'head_sha': 'a' * 40, 'event': 'push',
+                     'path': '.github/workflows/ci.yml', 'repository': {'full_name': s.REPO},
+                     'head_repository': {'full_name': s.REPO}, 'status': 'completed',
+                     'conclusion': 'success', 'html_url': s.SOURCE + '/actions/runs/1'}
+        self.jobs = [self.job(n, name + ' (21)') for n, name in enumerate(sorted(s.REQUIRED_JOBS), 1)]
+        self.base = 'https://api.github.com/repos/' + s.REPO + '/actions/runs/1'
+        self.requests = []
+        self.transport = patch.object(s.urllib.request.HTTPSHandler, 'https_open', side_effect=self.respond)
+        self.http = self.transport.start()
+        self.addCleanup(self.transport.stop)
+        self.subprocess = patch.object(s.subprocess, 'run', side_effect=AssertionError('CI must not invoke gh'))
+        self.subprocess.start()
+        self.addCleanup(self.subprocess.stop)
+
+    def job(self, number, name='extra'):
+        return {'id': number, 'run_id': 1, 'head_sha': 'a' * 40, 'name': name,
+                'status': 'completed', 'conclusion': 'success'}
+
+    def response(self, request, value, *, raw=None, code=200, headers=None):
+        raw = json.dumps(value).encode() if raw is None else raw
+        metadata = Message()
+        for key, value in (headers if headers is not None else {'Content-Length': str(len(raw))}).items():
+            metadata[key] = value
+        response = urllib.response.addinfourl(io.BytesIO(raw), metadata, request.full_url, code)
+        response.msg = 'fixture'
+        return response
+
+    def respond(self, request):
+        self.requests.append(request)
+        self.assertEqual(request.get_method(), 'GET')
+        self.assertEqual(request.host, 'api.github.com')
+        self.assertFalse(request.has_proxy())
+        self.assertGreater(request.timeout, 0)
+        self.assertLessEqual(request.timeout, 10)
+        headers = {k.lower(): v for k, v in request.header_items()}
+        self.assertNotIn('authorization', headers)
+        self.assertNotIn('proxy-authorization', headers)
+        self.assertEqual(headers['accept'], 'application/vnd.github+json')
+        self.assertEqual(headers['x-github-api-version'], '2026-03-10')
+        self.assertTrue(headers['user-agent'])
+        if request.full_url == self.base:
+            return self.response(request, self.info)
+        page = int(request.full_url.rsplit('=', 1)[1])
+        self.assertEqual(request.full_url, self.base + f'/jobs?filter=latest&per_page=100&page={page}')
+        return self.response(request, {'total_count': len(self.jobs), 'jobs': self.jobs[(page - 1) * 100:page * 100]})
+
+    def verify(self):
+        return s.verify_ci('a' * 40, '1')
+
+    def test_anonymous_exact_ci_ignores_tokens_proxy_and_gh(self):
+        with patch.dict(os.environ, {'GH_TOKEN': 'unused', 'GITHUB_TOKEN': 'unused',
+                                   'HTTPS_PROXY': 'http://user:password@invalid:9999'}):
+            self.assertEqual(self.verify(), {'id': 1, 'sha': 'a' * 40, 'url': self.info['html_url']})
+        self.assertEqual([r.full_url for r in self.requests],
+                         [self.base, self.base + '/jobs?filter=latest&per_page=100&page=1', self.base])
+
+    def test_invalid_input_never_requests_network(self):
+        for revision, run_id in [('bad', 1), (None, 1)] + [
+                ('a' * 40, v) for v in ('', 0, -1, True, '1?x=1', '١', '9' * 100)]:
+            with self.subTest(revision=revision, run_id=run_id), self.assertRaisesRegex(s.Refused, 'CI_INPUT'):
+                s.verify_ci(revision, run_id)
+        self.http.assert_not_called()
+
+    def test_wrong_or_missing_run_identity_and_non_green_run_refused(self):
+        bad = [('id', 2), ('id', True), ('id', '1'), ('head_sha', 'b' * 40), ('event', 'pull_request'),
+               ('path', '.github/workflows/other.yml'), ('repository', {'full_name': 'other/repo'}),
+               ('head_repository', {'full_name': 'other/repo'}), ('repository', None),
+               ('html_url', 'https://example.com/run/1'), ('run_attempt', 0), ('run_attempt', True)]
+        bad += [('status', v) for v in ('queued', 'in_progress', None)]
+        bad += [('conclusion', v) for v in ('failure', 'skipped', 'cancelled', 'timed_out', None)]
+        for key, value in bad:
+            with self.subTest(key=key, value=value), patch.dict(self.info, {key: value}):
+                with self.assertRaisesRegex(s.Refused, 'EXACT_CI'): self.verify()
+        for key in list(self.info):
+            value = self.info.pop(key)
+            with self.subTest(missing=key), self.assertRaisesRegex(s.Refused, 'EXACT_CI'): self.verify()
+            self.info[key] = value
+
+    def test_every_required_job_must_be_present(self):
+        for job in self.jobs:
+            with self.subTest(missing=job['name']), patch.dict(job, {'name': 'unrelated'}):
+                with self.assertRaisesRegex(s.Refused, 'JOB_NOT_GREEN'): self.verify()
+
+    def test_non_green_or_incomplete_jobs_including_extra_jobs_refused(self):
+        self.jobs.append(self.job(999, 'publish-ghcr'))
+        for job in (self.jobs[0], self.jobs[-1]):
+            for key, values in [('conclusion', ('failure', 'skipped', 'cancelled', 'timed_out', 'neutral', None)),
+                                ('status', ('queued', 'in_progress', None))]:
+                for value in values:
+                    with self.subTest(job=job['name'], key=key, value=value), patch.dict(job, {key: value}):
+                        with self.assertRaisesRegex(s.Refused, 'JOB_NOT_GREEN'): self.verify()
+                old = job.pop(key)
+                with self.assertRaisesRegex(s.Refused, 'JOB_NOT_GREEN'): self.verify()
+                job[key] = old
+
+    def test_job_identity_malformed_or_duplicate_refused(self):
+        for key, value in [('id', self.jobs[1]['id']), ('id', True), ('run_id', 2), ('run_id', True),
+                           ('head_sha', 'b' * 40), ('name', None), ('name', '')]:
+            with self.subTest(key=key, value=value), patch.dict(self.jobs[0], {key: value}):
+                with self.assertRaisesRegex(s.Refused, 'JOB_IDENTITY'): self.verify()
+        for key in ('id', 'run_id', 'head_sha', 'name'):
+            value = self.jobs[0].pop(key)
+            with self.subTest(missing=key), self.assertRaisesRegex(s.Refused, 'JOB_IDENTITY'): self.verify()
+            self.jobs[0][key] = value
+        self.jobs[0] = None
+        with self.assertRaisesRegex(s.Refused, 'JOB_IDENTITY'): self.verify()
+
+    def test_pagination_collects_required_jobs_on_last_page(self):
+        required = self.jobs[:]
+        for count in (100, 101, 200):
+            self.jobs = [self.job(1000 + n) for n in range(count - len(required))] + required
+            self.requests.clear()
+            self.assertEqual(self.verify()['id'], 1)
+            self.assertEqual(len(self.requests), 2 + (count + 99) // 100)
+
+    def test_missing_later_page_changed_count_and_duplicate_page_refused(self):
+        self.jobs += [self.job(1000 + n) for n in range(86)]  # All required names are on page 1.
+        for page in ({'total_count': 101, 'jobs': []}, {'total_count': 102, 'jobs': [self.jobs[-1]]},
+                     {'total_count': 101, 'jobs': [self.jobs[0]]}):
+            def respond(request):
+                return self.response(request, page) if request.full_url.endswith('page=2') else self.respond(request)
+            self.http.side_effect = respond
+            with self.subTest(page=page), self.assertRaises(s.Refused): self.verify()
+
+    def test_malformed_jobs_response_and_bounded_page_count(self):
+        values = [{}, {'jobs': self.jobs}, {'total_count': 15}, {'total_count': 15, 'jobs': {}},
+                  {'total_count': 16, 'jobs': self.jobs}]
+        values += [{'total_count': v, 'jobs': self.jobs} for v in (0, -1, True, '15', 1001)]
+        for value in values:
+            self.http.side_effect = lambda req: self.response(req, value) if '/jobs?' in req.full_url else self.respond(req)
+            with self.subTest(value=value), self.assertRaisesRegex(s.Refused, 'JOBS_RESPONSE'): self.verify()
+
+    def test_failed_later_page_is_not_ignored(self):
+        self.jobs += [self.job(1000 + n) for n in range(86)]
+        self.jobs[-1]['conclusion'] = 'failure'
+        with self.assertRaisesRegex(s.Refused, 'JOB_NOT_GREEN'): self.verify()
+
+    def test_rerun_or_non_green_run_after_jobs_refused(self):
+        for change in ({'run_attempt': 2}, {'status': 'in_progress'}, {'conclusion': 'failure'}, {'id': 2}):
+            self.requests.clear()
+            def respond(request):
+                if request.full_url == self.base and self.requests:
+                    return self.response(request, dict(self.info, **change))
+                return self.respond(request)
+            self.http.side_effect = respond
+            with self.subTest(change=change), self.assertRaises(s.Refused): self.verify()
+
+    def test_http_errors_including_rate_limits_fail_without_retry(self):
+        required = self.jobs[:]
+        for target in ('run', 'jobs', 'last-page', 'final-run'):
+            self.jobs = [self.job(1000 + n) for n in range(86)] + required
+            for code in (401, 403, 404, 429, 500, 503):
+                self.requests.clear()
+                self.http.reset_mock()
+                def respond(request):
+                    fail = (target == 'run' or target == 'jobs' and '/jobs?' in request.full_url
+                            or target == 'last-page' and request.full_url.endswith('page=2')
+                            or target == 'final-run' and request.full_url == self.base and self.requests)
+                    if fail: return self.response(request, {'message': 'private fixture'}, code=code)
+                    return self.respond(request)
+                self.http.side_effect = respond
+                with self.subTest(target=target, code=code), self.assertRaisesRegex(s.Refused, f'CI_API_HTTP_{code}'):
+                    self.verify()
+                self.assertEqual(self.http.call_count, {'run': 1, 'jobs': 2, 'last-page': 3, 'final-run': 4}[target])
+
+    def test_redirects_and_partial_http_status_refused(self):
+        for code in (301, 302, 307, 308, 206):
+            self.http.reset_mock()
+            self.http.side_effect = lambda req: self.response(req, self.info, code=code,
+                                                              headers={'Location': 'https://example.com/ci'})
+            with self.subTest(code=code), self.assertRaisesRegex(s.Refused, 'CI_API_'): self.verify()
+            self.assertEqual(self.http.call_count, 1)
+
+    def test_network_timeout_tls_and_incomplete_read_refused(self):
+        for error in (urllib.error.URLError('private fixture'), TimeoutError(),
+                      urllib.error.URLError(ssl.SSLCertVerificationError()),
+                      ConnectionResetError(), http.client.IncompleteRead(b'{', 20)):
+            self.http.side_effect = error
+            with self.subTest(error=type(error).__name__), self.assertRaisesRegex(s.Refused, 'CI_API_UNAVAILABLE'):
+                self.verify()
+        response = self.response(type('Request', (), {'full_url': self.base})(), self.info)
+        response.read1 = lambda size: (_ for _ in ()).throw(http.client.IncompleteRead(b'{', 20))
+        self.http.side_effect = lambda req: response
+        with self.assertRaisesRegex(s.Refused, 'CI_API_UNAVAILABLE'): self.verify()
+
+    def test_invalid_json_truncation_and_oversized_response_refused(self):
+        for raw in (b'{', b'[]', b'null', b'\xff', b'[' * 2000 + b']' * 2000, b' ' * (4 * 1024 * 1024 + 1)):
+            self.http.side_effect = lambda req: self.response(req, None, raw=raw, headers={})
+            with self.subTest(size=len(raw)), self.assertRaisesRegex(s.Refused, 'CI_API_RESPONSE'): self.verify()
+        for length in ('99999', '-1', 'invalid', str(4 * 1024 * 1024 + 1)):
+            self.http.side_effect = lambda req: self.response(req, self.info, headers={'Content-Length': length})
+            with self.subTest(length=length), self.assertRaisesRegex(s.Refused, 'CI_API_RESPONSE'): self.verify()
+
+    def test_elapsed_deadline_refused(self):
+        now = [0]
+        def respond(request):
+            now[0] = 61
+            return self.respond(request)
+        self.http.side_effect = respond
+        with patch.object(s.time, 'monotonic', side_effect=lambda: now[0]):
+            with self.assertRaisesRegex(s.Refused, 'CI_API_TIMEOUT'): self.verify()
+
+    def test_ci_failure_blocks_candidate_before_docker(self):
+        self.http.side_effect = TimeoutError()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve(); s.atomic(root / 'config.json', config())
+            runtime = s.Staging(root)
+            with self.assertRaisesRegex(s.Refused, 'CI_API_UNAVAILABLE'): runtime.candidate(record(image()))
+
+    def test_cli_reports_stop_without_response_or_credentials(self):
+        self.http.side_effect = urllib.error.URLError('private fixture')
+        output = io.StringIO()
+        with patch.object(sys, 'argv', ['simple_staging.py', 'verify-ci', '--revision', 'a' * 40, '--ci-run', '1']), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(s.main(), 1)
+        result = json.loads(output.getvalue())
+        self.assertEqual((result['status'], result['reason']), ('STOP', 'CI_API_UNAVAILABLE'))
+        self.assertNotIn('private fixture', output.getvalue())
 
 
 class SharedLockTests(unittest.TestCase):
