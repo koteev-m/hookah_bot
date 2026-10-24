@@ -116,12 +116,12 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
 }
 
 function buildPlatformShell(root: HTMLDivElement): PlatformShellRefs {
-  const app = el('div', { className: 'venue-shell' })
+  const app = el('div', { className: 'venue-shell platform-shell' })
+  app.lang = 'ru'
   const header = el('header', { className: 'venue-header' })
   const brand = el('div', { className: 'app-brand' })
-  const title = el('h1', { text: 'Hookah Mini App' })
-  const subtitle = el('p', { className: 'app-subtitle', text: 'Режим платформы' })
-  append(brand, title, subtitle)
+  const title = el('h1', { text: 'Платформа' })
+  append(brand, title)
 
   const controls = el('div', { className: 'venue-controls' })
   const accessState = el('p', { className: 'venue-access-state', text: 'Проверяем доступ...' })
@@ -230,7 +230,7 @@ export function mountPlatformApp(options: PlatformAppOptions) {
     }
     access = result.data
     hasAccess = true
-    setAccessState(`Platform owner #${access.ownerUserId}`)
+    setAccessState('Управление кальянными')
   }
 
   const navigate = (hash: string) => {
