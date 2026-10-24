@@ -29,6 +29,9 @@ type ScreenRefs = {
   error: HTMLDivElement
   venues: HTMLDivElement
   applications: HTMLDivElement
+  history: HTMLDetailsElement
+  historySummary: HTMLElement
+  historyList: HTMLDivElement
   form: HTMLFormElement
   formTitle: HTMLHeadingElement
   venueName: HTMLInputElement
@@ -137,9 +140,13 @@ function buildDom(root: HTMLDivElement): ScreenRefs {
   append(form, formTitle, formGrid, formActions)
 
   const applicationCard = el('section', { className: 'card' })
-  append(applicationCard, el('h3', { text: 'Заявки' }))
+  append(applicationCard, el('h3', { text: 'Активные заявки' }))
   const applications = el('div', { className: 'venue-orders-list' }) as HTMLDivElement
-  applicationCard.appendChild(applications)
+  const history = el('details', { className: 'application-extra' }) as HTMLDetailsElement
+  const historySummary = el('summary', { text: 'История заявок' })
+  const historyList = el('div', { className: 'venue-orders-list' }) as HTMLDivElement
+  append(history, historySummary, historyList)
+  append(applicationCard, applications, history)
 
   append(wrapper, header, status, error, venueCard, form, applicationCard)
   root.replaceChildren(wrapper)
@@ -148,6 +155,9 @@ function buildDom(root: HTMLDivElement): ScreenRefs {
     error,
     venues,
     applications,
+    history,
+    historySummary,
+    historyList,
     form,
     formTitle,
     venueName,
@@ -174,6 +184,11 @@ function applicationStatusCopy(application: VenueConnectionApplicationDto): stri
     case 'CANCELLED':
       return 'Отменено'
   }
+}
+
+function isActiveApplication(application: VenueConnectionApplicationDto): boolean {
+  return application.linkedVenueId == null &&
+    (application.status === 'PENDING' || application.status === 'APPROVED')
 }
 
 function venueStatusCopy(status?: string | null) {
@@ -291,10 +306,14 @@ export function renderVenueOwnershipScreen(options: VenueOwnershipScreenOptions)
     }
 
     refs.applications.replaceChildren()
-    if (!data.applications.length) {
-      refs.applications.appendChild(el('p', { className: 'venue-empty', text: 'Заявок пока нет.' }))
-      return
+    refs.historyList.replaceChildren()
+    const activeApplications = data.applications.filter(isActiveApplication)
+    const completedApplications = data.applications.filter((application) => !isActiveApplication(application))
+    if (!activeApplications.length) {
+      refs.applications.appendChild(el('p', { className: 'venue-empty', text: 'Активных заявок пока нет.' }))
     }
+    refs.history.hidden = completedApplications.length === 0
+    refs.historySummary.textContent = `История заявок (${completedApplications.length})`
     data.applications.forEach((application) => {
       const row = el('div', { className: 'venue-order-row' })
       row.dataset.applicationId = String(application.id)
@@ -325,7 +344,8 @@ export function renderVenueOwnershipScreen(options: VenueOwnershipScreenOptions)
         actions.appendChild(reload)
       }
       append(row, meta, actions)
-      refs.applications.appendChild(row)
+      const destination = isActiveApplication(application) ? refs.applications : refs.historyList
+      destination.appendChild(row)
     })
   }
 
@@ -350,7 +370,10 @@ export function renderVenueOwnershipScreen(options: VenueOwnershipScreenOptions)
     if (options.focusApplicationId != null) {
       const row = refs.applications.querySelector<HTMLElement>(
         `[data-application-id="${options.focusApplicationId}"]`
+      ) ?? refs.historyList.querySelector<HTMLElement>(
+        `[data-application-id="${options.focusApplicationId}"]`
       )
+      if (row && refs.historyList.contains(row)) refs.history.open = true
       row?.focus({ preventScroll: true })
     }
   }
