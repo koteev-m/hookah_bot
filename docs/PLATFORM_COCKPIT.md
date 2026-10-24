@@ -245,6 +245,9 @@ recorded as user-confirmed rather than independently queried in this docs-only c
 Venue Owner Mini App receives `Мои заведения`: current venue cards, entry to the existing selector,
 `Добавить заведение`, own request list/detail and submission/edit/cancel through the same domain
 contract as Telegram. Expose only the actual four states and explain approved-but-unlinked state.
+Keep `PENDING` and `APPROVED` without a linked venue in the active list; keep linked, rejected and
+cancelled requests in an expandable history. Open owned unpublished venues from authenticated Venue
+access data; public Guest venue visibility remains unchanged.
 Exact canonical repeat returns the matching authoritative request; a different venue name, city,
 contact or comment creates another application. Implementation serializes simultaneous exact and
 distinct submissions without relying on the client. After linking, the next authoritative access
@@ -253,8 +256,8 @@ applicants and also supports additional venues.
 
 Platform Mini App receives one top-level onboarding/ownership workspace with:
 
-1. `Заявки`: pending/actionable list, detail, approve/reject, commercial terms and current
-   create-new-DRAFT-and-link action; no existing-venue chooser is implied;
+1. `Заявки`: `PENDING` by default, with filters for other statuses, detail, approve/reject,
+   commercial terms and current create-new-DRAFT-and-link action; no existing-venue chooser is implied;
 2. `Кальянные`: name, city, lifecycle status, existing subscription/onboarding summary when present,
    all-owner count/names and transition to the existing venue detail;
 3. `Владельцы`: safe platform-visible identity, venue count, counts by venue status, linked venues,

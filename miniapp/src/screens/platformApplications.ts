@@ -142,6 +142,7 @@ export function renderPlatformApplicationsListScreen(options: PlatformApplicatio
     ['REJECTED', 'Отклонено'],
     ['CANCELLED', 'Отменено']
   ].forEach(([value, label]) => statusFilter.appendChild(new Option(label, value)))
+  statusFilter.value = 'PENDING'
   const search = document.createElement('input')
   search.type = 'search'
   search.className = 'venue-input'

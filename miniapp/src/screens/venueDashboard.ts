@@ -1,7 +1,6 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestGetVenue } from '../shared/api/guestApi'
 import { venueGetStaffCalls, venueGetStaffChatStatus } from '../shared/api/venueApi'
 import type { VenueAccessDto } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
@@ -139,6 +138,8 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
 
   const showStaffChatStatus = access.role !== 'STAFF'
   const refs = buildDashboardDom(root, { showStaffChatStatus })
+  refs.title.textContent = access.venueName?.trim() || `Заведение #${venueId}`
+  refs.subtitle.textContent = `Роль: ${venueRoleLabel(access.role)}`
   const deps = buildApiDeps(isDebug)
 
   let disposed = false
@@ -187,25 +188,20 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
     const controller = new AbortController()
     loadAbort = controller
     const seq = ++loadSeq
-    const baseVenuePromise = guestGetVenue(backendUrl, venueId, deps, controller.signal)
     const staffCallsPromise = venueGetStaffCalls(backendUrl, { venueId, limit: 100 }, deps, controller.signal)
     const chatPromise = canViewStaffChat
       ? venueGetStaffChatStatus(backendUrl, venueId, deps, controller.signal)
       : Promise.resolve(null)
 
-    const responses = await Promise.all([baseVenuePromise, staffCallsPromise, chatPromise])
+    const responses = await Promise.all([staffCallsPromise, chatPromise])
 
     if (disposed || loadSeq !== seq) return
     inFlight = false
     loadAbort = null
 
-    const venueResult = responses[0] as Awaited<typeof baseVenuePromise>
-    const staffCallsResult = responses[1] as Awaited<typeof staffCallsPromise>
-    const chatResult = responses[2] as Awaited<typeof chatPromise>
+    const staffCallsResult = responses[0] as Awaited<typeof staffCallsPromise>
+    const chatResult = responses[1] as Awaited<typeof chatPromise>
 
-    if (!venueResult.ok && venueResult.error.code === REQUEST_ABORTED_CODE) {
-      return
-    }
     if (!staffCallsResult.ok && staffCallsResult.error.code === REQUEST_ABORTED_CODE) {
       return
     }
@@ -213,11 +209,6 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
       return
     }
 
-    if (!venueResult.ok) {
-      showError(venueResult.error)
-      setStatus('')
-      return
-    }
     if (!staffCallsResult.ok) {
       refs.summaryNew.textContent = 'ошибка'
       refs.summaryActive.textContent = 'ошибка'
@@ -225,10 +216,6 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
       setStatus('')
       return
     }
-
-    const venue = venueResult.data.venue
-    refs.title.textContent = venue.name
-    refs.subtitle.textContent = `Роль: ${venueRoleLabel(access.role)}`
 
     const activeCalls = staffCallsResult.data.items
     refs.summaryNew.textContent = String(activeCalls.filter((item) => isNewStaffCallStatus(item.status)).length)
