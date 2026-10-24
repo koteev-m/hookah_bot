@@ -1,5 +1,6 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
+import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
   platformCreateAndLinkOnboardingRequest,
   platformDecideOnboardingRequest,
@@ -11,10 +12,12 @@ import type {
   PlatformOnboardingRequestDto,
   PlatformOnboardingTermsRequest
 } from '../shared/api/platformDtos'
-import type { ApiErrorInfo } from '../shared/api/types'
+import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError } from '../shared/ui/apiErrorPresenter'
 import { showToast } from '../shared/ui/toast'
+import { getTelegramContext } from '../shared/telegram'
+import { telegramUsernameUrl } from '../shared/validation/telegramUsername'
 
 type CommonOptions = {
   root: HTMLDivElement | null
@@ -49,14 +52,14 @@ function applicantName(request: PlatformOnboardingRequestDto) {
   const fullName = [request.applicant.firstName?.trim(), request.applicant.lastName?.trim()].filter(Boolean).join(' ')
   if (fullName) return fullName
   if (request.applicant.username?.trim()) return `@${request.applicant.username.replace(/^@/, '')}`
-  return `User #${request.applicant.userId}`
+  return 'Заявитель без имени'
 }
 
 function statusCopy(request: PlatformOnboardingRequestDto) {
   if (request.status === 'PENDING') return 'На рассмотрении'
   if (request.status === 'REJECTED') return 'Отклонена'
   if (request.status === 'CANCELLED') return 'Отменена'
-  return request.linkedVenueId ? `Одобрена · venue #${request.linkedVenueId}` : 'Одобрена · ожидает создания'
+  return request.linkedVenueId ? 'Кабинет создан' : 'Одобрена · ожидает создания'
 }
 
 function commercialTermsReady(request: PlatformOnboardingRequestDto) {
@@ -97,7 +100,15 @@ function showError(
   isDebug: boolean,
   retry?: () => void
 ) {
-  const presentation = presentApiError(error, { isDebug, scope: 'venue' })
+  const presentation = presentApiError(error, { isDebug, scope: 'generic' })
+  if (normalizeErrorCode(error) === ApiErrorCodes.INVALID_INPUT) {
+    const message = error.message ?? ''
+    presentation.message = message.startsWith('Лимит заведений исчерпан:')
+      ? 'Лимит кальянных владельца исчерпан. Сначала увеличьте лимит, затем повторите создание кабинета.'
+      : message.includes('активной роли Owner')
+        ? 'У заявителя больше нет роли владельца. Сначала восстановите его доступ, затем повторите действие.'
+        : 'Проверьте статус заявки и условия: стоимость подписки, пробный период, сумму и дату будущей цены. Исправьте данные или обновите заявку и повторите действие.'
+  }
   const actions = el('div', { className: 'error-actions' })
   presentation.actions.forEach((action) => {
     const button = el('button', {
@@ -134,7 +145,7 @@ export function renderPlatformApplicationsListScreen(options: PlatformApplicatio
   const search = document.createElement('input')
   search.type = 'search'
   search.className = 'venue-input'
-  search.placeholder = 'Название, город, username или request id'
+  search.placeholder = 'Название, город, имя в Telegram или номер заявки'
   const filters = el('div', { className: 'venue-form-grid' })
   append(
     filters,
@@ -143,8 +154,8 @@ export function renderPlatformApplicationsListScreen(options: PlatformApplicatio
   )
   append(
     header,
-    el('h2', { text: 'Подключение и ownership' }),
-    el('p', { text: 'Решения выполняются явно. Создание DRAFT и назначение OWNER происходят только после одобрения и коммерческих условий.' }),
+    el('h2', { text: 'Заявки на подключение' }),
+    el('p', { text: 'Рассмотрите заявку, сохраните условия подписки и создайте кабинет кальянной.' }),
     workspaceNav(onNavigate),
     filters
   )
@@ -231,16 +242,16 @@ export function renderPlatformApplicationsListScreen(options: PlatformApplicatio
 export function renderPlatformApplicationDetailScreen(options: PlatformApplicationDetailOptions) {
   const { root, backendUrl, isDebug, onNavigate, requestId } = options
   if (!root) return () => undefined
-  const wrapper = el('div', { className: 'venue-orders ownership-workspace' })
-  const header = el('section', { className: 'card' })
+  const wrapper = el('div', { className: 'venue-orders ownership-workspace application-detail' })
+  const header = el('div', { className: 'application-nav' })
   const back = el('button', { className: 'button-small button-secondary', text: '← К заявкам' }) as HTMLButtonElement
   back.addEventListener('click', () => onNavigate('#/applications'))
-  append(header, back, el('h2', { text: `Заявка #${requestId}` }), workspaceNav(onNavigate))
+  append(header, back, el('h2', { text: `Заявка #${requestId}` }))
   const status = el('p', { className: 'status' })
   const error = el('div', { className: 'error-card' }) as HTMLDivElement
   error.hidden = true
   configureLiveRegions(status, error)
-  const content = el('div') as HTMLDivElement
+  const content = el('div', { className: 'application-content' }) as HTMLDivElement
   append(wrapper, header, status, error, content)
   root.replaceChildren(wrapper)
 
@@ -249,6 +260,9 @@ export function renderPlatformApplicationDetailScreen(options: PlatformApplicati
   let controller: AbortController | null = null
   let seq = 0
   let mutationPending = false
+  let detailFresh = false
+  let refreshAvailability: () => void = () => undefined
+  let canCreateFromCurrent = () => false
   let mutationControls: Array<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement> = []
 
   const setMutationPending = (pending: boolean) => {
@@ -256,6 +270,7 @@ export function renderPlatformApplicationDetailScreen(options: PlatformApplicati
     mutationControls.forEach((control) => {
       control.disabled = pending
     })
+    refreshAvailability()
   }
 
   const beginMutation = () => {
@@ -299,10 +314,10 @@ export function renderPlatformApplicationDetailScreen(options: PlatformApplicati
     const futurePriceRaw = String(data.get('futurePriceRub') ?? '').trim()
     const body: PlatformOnboardingTermsRequest = {
       trialConfigured: true,
-      trialEndsOn: String(data.get('trialEndsOn') ?? '').trim() || null,
+      trialEndsOn: data.has('useTrial') ? String(data.get('trialEndsOn') ?? '').trim() || null : null,
       currentPriceRub: Number(data.get('currentPriceRub')),
-      futurePriceRub: futurePriceRaw ? Number(futurePriceRaw) : null,
-      futurePriceEffectiveOn: String(data.get('futurePriceEffectiveOn') ?? '').trim() || null,
+      futurePriceRub: data.has('useFuturePrice') && futurePriceRaw ? Number(futurePriceRaw) : null,
+      futurePriceEffectiveOn: data.has('useFuturePrice') ? String(data.get('futurePriceEffectiveOn') ?? '').trim() || null : null,
       commercialNote: String(data.get('commercialNote') ?? '').trim() || null
     }
     if (!beginMutation()) return
@@ -322,13 +337,13 @@ export function renderPlatformApplicationDetailScreen(options: PlatformApplicati
   }
 
   const createAndLink = async (request: PlatformOnboardingRequestDto) => {
-    if (mutationPending) return
+    if (mutationPending || !canCreateFromCurrent()) return
     const confirmed = window.confirm(
-      `Создать DRAFT «${request.venueName}», назначить действующего OWNER и связать заявку? Новое заведение не будет выбрано автоматически.`
+      `Создать кабинет кальянной «${request.venueName}»? Заявитель получит роль владельца. Кальянная останется неопубликованной и не будет выбрана автоматически.`
     )
     if (!confirmed) return
     if (!beginMutation()) return
-    status.textContent = 'Создаём и связываем...'
+    status.textContent = 'Создаём кабинет кальянной...'
     const result = await platformCreateAndLinkOnboardingRequest(backendUrl, requestId, requestDeps)
     if (disposed) return
     if (!result.ok) {
@@ -337,41 +352,68 @@ export function renderPlatformApplicationDetailScreen(options: PlatformApplicati
       showError(error, result.error, isDebug, () => void createAndLink(request))
       return
     }
-    showToast(result.data.created ? 'Черновик создан и связан.' : 'Заявка уже связана с существующим результатом.')
+    showToast(result.data.created ? 'Кабинет кальянной создан.' : 'Заявка уже связана с существующим результатом.')
     onNavigate(`#/venue/${result.data.venueId}`)
   }
 
   const render = (request: PlatformOnboardingRequestDto) => {
     content.replaceChildren()
+    refreshAvailability = () => undefined
+    canCreateFromCurrent = () => false
     const nextMutationControls: Array<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement> = []
-    const details = el('section', { className: 'card' })
+    const details = el('section', { className: 'card application-summary' })
+    details.dataset.applicationStatus = request.status
     append(
       details,
       el('h3', { text: request.venueName }),
+      el('p', { className: 'application-city', text: request.city }),
       el('p', { className: 'ownership-status', text: statusCopy(request) }),
-      el('p', { text: `Applicant: ${applicantName(request)} (#${request.applicant.userId})` }),
-      el('p', { text: `Город: ${request.city}` }),
+      el('p', { text: `Заявитель: ${applicantName(request)}` }),
       el('p', { text: `Контакт: ${request.contact}` }),
-      el('p', { text: `Комментарий: ${request.comment?.trim() || 'нет'}` })
+      el('p', { className: 'application-comment', text: `Комментарий: ${request.comment?.trim() || 'нет'}` })
     )
+    const contactActions = el('div', { className: 'venue-inline-actions' })
+    const telegramUrl = telegramUsernameUrl(request.applicant.username) ?? telegramUsernameUrl(request.contact)
+    if (telegramUrl) {
+      const telegram = el('a', { className: 'application-telegram', text: 'Написать в Telegram' })
+      telegram.href = telegramUrl
+      telegram.target = '_blank'
+      telegram.rel = 'noopener noreferrer'
+      telegram.addEventListener('click', (event) => {
+        const webApp = getTelegramContext().webApp
+        if (!webApp?.openTelegramLink) return
+        event.preventDefault()
+        try {
+          webApp.openTelegramLink(telegramUrl)
+        } catch {
+          showToast('Не удалось открыть Telegram. Скопируйте контакт и найдите заявителя вручную.')
+        }
+      })
+      contactActions.appendChild(telegram)
+    }
+    if (request.contact.trim()) {
+      const copy = el('button', { className: 'button-small button-secondary', text: 'Копировать контакт' })
+      copy.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(request.contact)
+          if (!disposed) showToast('Контакт скопирован.')
+        } catch {
+          if (!disposed) showToast('Не удалось скопировать контакт. Выделите и скопируйте его вручную.')
+        }
+      })
+      contactActions.appendChild(copy)
+    }
+    details.appendChild(contactActions)
     const actions = el('div', { className: 'venue-inline-actions' })
     if (request.status === 'PENDING') {
       const approve = el('button', { text: 'Одобрить' }) as HTMLButtonElement
       const reject = el('button', { className: 'button-danger', text: 'Отклонить' }) as HTMLButtonElement
       approve.addEventListener('click', () => void mutate('approve'))
       reject.addEventListener('click', () =>
-        void mutate('reject', 'Отклонить заявку? После этого applicant сможет отправить новую заявку.')
+        void mutate('reject', 'Отклонить заявку? После этого заявитель сможет отправить новую заявку.')
       )
       nextMutationControls.push(approve, reject)
       append(actions, approve, reject)
-    }
-    if (request.status === 'APPROVED' && !request.linkedVenueId) {
-      const close = el('button', { className: 'button-danger', text: 'Закрыть без создания' }) as HTMLButtonElement
-      close.addEventListener('click', () =>
-        void mutate('close', 'Закрыть одобренную заявку без создания заведения? Это действие отменит заявку.')
-      )
-      nextMutationControls.push(close)
-      actions.appendChild(close)
     }
     details.appendChild(actions)
     content.appendChild(details)
@@ -379,79 +421,196 @@ export function renderPlatformApplicationDetailScreen(options: PlatformApplicati
     if (request.status === 'APPROVED' && !request.linkedVenueId) {
       const form = document.createElement('form')
       form.className = 'card ownership-terms-form'
-      const grid = el('div', { className: 'venue-form-grid' })
+      const termsReady = commercialTermsReady(request)
+      const termsState = el('p', { className: 'application-hint' })
+      termsState.setAttribute('role', 'status')
+      termsState.setAttribute('aria-live', 'polite')
+      const priceChoice = el('fieldset', { className: 'application-price-choice' })
+      priceChoice.appendChild(el('legend', { text: 'Стоимость подписки' }))
+      const free = document.createElement('input')
+      free.type = 'radio'
+      free.name = 'priceMode'
+      free.value = 'free'
+      free.required = true
+      free.checked = request.currentPriceRub === 0
+      const paid = document.createElement('input')
+      paid.type = 'radio'
+      paid.name = 'priceMode'
+      paid.value = 'paid'
+      paid.required = true
+      paid.checked = request.currentPriceRub != null && request.currentPriceRub > 0
+      const choice = (control: HTMLInputElement, text: string) => {
+        const label = el('label', { className: 'application-choice' })
+        append(label, control, el('span', { text }))
+        return label
+      }
+      append(priceChoice, choice(free, 'Бесплатно · 0 ₽ в месяц'), choice(paid, 'Платная подписка'))
+      const currentPrice = document.createElement('input')
+      currentPrice.type = 'number'
+      currentPrice.inputMode = 'numeric'
+      currentPrice.name = 'currentPriceRub'
+      currentPrice.className = 'venue-input'
+      currentPrice.min = '1'
+      currentPrice.max = '21474836'
+      currentPrice.step = '1'
+      currentPrice.value = request.currentPriceRub == null ? '' : String(request.currentPriceRub)
+      const priceField = labeledControl('platform-onboarding-current-price', 'Стоимость в месяц, ₽', currentPrice)
+
+      const trialToggle = document.createElement('input')
+      trialToggle.type = 'checkbox'
+      trialToggle.name = 'useTrial'
+      trialToggle.checked = Boolean(request.trialEndsOn)
       const trialEnd = document.createElement('input')
       trialEnd.type = 'date'
       trialEnd.name = 'trialEndsOn'
       trialEnd.className = 'venue-input'
       trialEnd.value = request.trialEndsOn ?? ''
-      const currentPrice = document.createElement('input')
-      currentPrice.type = 'number'
-      currentPrice.name = 'currentPriceRub'
-      currentPrice.className = 'venue-input'
-      currentPrice.min = '0'
-      currentPrice.required = true
-      currentPrice.placeholder = 'Текущая цена, ₽'
-      currentPrice.value = request.currentPriceRub == null ? '' : String(request.currentPriceRub)
+      const trialField = labeledControl('platform-onboarding-trial-end', 'Пробный период до', trialEnd)
+
+      const futureToggle = document.createElement('input')
+      futureToggle.type = 'checkbox'
+      futureToggle.name = 'useFuturePrice'
+      futureToggle.checked = request.futurePriceRub != null || Boolean(request.futurePriceEffectiveOn)
       const futurePrice = document.createElement('input')
       futurePrice.type = 'number'
+      futurePrice.inputMode = 'numeric'
       futurePrice.name = 'futurePriceRub'
       futurePrice.className = 'venue-input'
       futurePrice.min = '1'
-      futurePrice.placeholder = 'Будущая цена, ₽ (необязательно)'
+      futurePrice.max = currentPrice.max
+      futurePrice.step = '1'
       futurePrice.value = request.futurePriceRub == null ? '' : String(request.futurePriceRub)
       const futureDate = document.createElement('input')
       futureDate.type = 'date'
       futureDate.name = 'futurePriceEffectiveOn'
       futureDate.className = 'venue-input'
       futureDate.value = request.futurePriceEffectiveOn ?? ''
+      const futureFields = el('div', { className: 'venue-form-grid' })
+      append(
+        futureFields,
+        el('p', { className: 'application-hint', text: 'Укажите сумму больше 0 ₽ и дату вместе. Это новая ежемесячная стоимость подписки.' }),
+        labeledControl('platform-onboarding-future-price', 'Будущая стоимость в месяц, ₽', futurePrice),
+        labeledControl('platform-onboarding-future-price-date', 'Новая стоимость с', futureDate)
+      )
+      const noteDetails = el('details', { className: 'application-extra' })
+      noteDetails.open = Boolean(request.commercialNote)
       const note = document.createElement('textarea')
       note.name = 'commercialNote'
       note.className = 'venue-input'
       note.maxLength = 1000
-      note.placeholder = 'Коммерческая заметка (необязательно)'
       note.value = request.commercialNote ?? ''
+      append(noteDetails, el('summary', { text: 'Заметка об условиях' }), labeledControl('platform-onboarding-commercial-note', 'Коммерческая заметка (необязательно)', note))
       const save = el('button', { text: 'Сохранить условия' }) as HTMLButtonElement
       save.type = 'submit'
       append(
-        grid,
-        labeledControl('platform-onboarding-trial-end', 'Пробный период до (необязательно)', trialEnd),
-        labeledControl('platform-onboarding-current-price', 'Текущая цена, ₽', currentPrice),
-        labeledControl('platform-onboarding-future-price', 'Будущая цена, ₽ (необязательно)', futurePrice),
-        labeledControl(
-          'platform-onboarding-future-price-date',
-          'Дата начала будущей цены (необязательно)',
-          futureDate
-        ),
-        labeledControl('platform-onboarding-commercial-note', 'Коммерческая заметка (необязательно)', note)
+        form,
+        el('h3', { text: '1. Условия подключения' }),
+        termsState,
+        el('p', { className: 'application-hint', text: 'Это ежемесячная стоимость подписки кальянной на платформу в рублях.' }),
+        priceChoice,
+        priceField,
+        choice(trialToggle, 'Добавить пробный период'),
+        trialField,
+        choice(futureToggle, 'Запланировать изменение цены'),
+        futureFields,
+        noteDetails,
+        save
       )
-      append(form, el('h3', { text: 'Коммерческие условия' }), grid, save)
       form.addEventListener('submit', (event) => {
         event.preventDefault()
         void saveTerms(form)
       })
-      nextMutationControls.push(trialEnd, currentPrice, futurePrice, futureDate, note, save)
+      nextMutationControls.push(free, paid, trialToggle, futureToggle, trialEnd, currentPrice, futurePrice, futureDate, note, save)
       content.appendChild(form)
 
       const createCard = el('section', { className: 'card' })
-      const create = el('button', { text: 'Создать DRAFT и связать' }) as HTMLButtonElement
-      const termsReady = commercialTermsReady(request)
-      create.disabled = !termsReady
-      if (termsReady) {
-        create.addEventListener('click', () => void createAndLink(request))
-        nextMutationControls.push(create)
+      const create = el('button', { text: 'Создать кабинет кальянной' }) as HTMLButtonElement
+      const createHint = el('p', { className: 'application-hint', id: 'application-create-hint' })
+      create.setAttribute('aria-describedby', createHint.id)
+      let lastPaidPrice = paid.checked ? currentPrice.value : ''
+      const updateFields = () => {
+        priceField.hidden = !paid.checked
+        currentPrice.type = paid.checked ? 'number' : 'hidden'
+        currentPrice.required = paid.checked
+        currentPrice.value = free.checked ? '0' : paid.checked ? lastPaidPrice : ''
+        trialField.hidden = !trialToggle.checked
+        trialEnd.required = trialToggle.checked
+        futureFields.hidden = !futureToggle.checked
+        futurePrice.required = futureToggle.checked
+        futureDate.required = futureToggle.checked
+        // Hidden optional fields must not take part in native form validation.
+        trialEnd.disabled = mutationPending || !trialToggle.checked
+        futurePrice.disabled = mutationPending || !futureToggle.checked
+        futureDate.disabled = mutationPending || !futureToggle.checked
       }
+      const values = () => JSON.stringify({
+        mode: free.checked ? 'free' : paid.checked ? 'paid' : '',
+        price: currentPrice.value,
+        trialEnabled: trialToggle.checked,
+        trial: trialToggle.checked ? trialEnd.value : '',
+        futureEnabled: futureToggle.checked,
+        futurePrice: futureToggle.checked ? futurePrice.value : '',
+        futureDate: futureToggle.checked ? futureDate.value : '',
+        note: note.value.trim()
+      })
+      updateFields()
+      const savedValues = values()
+      refreshAvailability = () => {
+        updateFields()
+        const dirty = values() !== savedValues
+        create.disabled = mutationPending || !detailFresh || !termsReady || dirty
+        save.disabled = mutationPending || !detailFresh
+        termsState.textContent = mutationPending
+          ? 'Сохраняем изменения…'
+          : dirty
+            ? 'Есть несохранённые изменения.'
+            : termsReady ? 'Условия сохранены.' : 'Условия ещё не сохранены.'
+        createHint.textContent = !detailFresh
+          ? 'Дождитесь загрузки актуальной заявки. При ошибке повторите загрузку.'
+          : dirty
+            ? 'Сначала сохраните изменения условий.'
+            : !termsReady
+              ? 'Выберите бесплатное подключение или платную подписку и сохраните условия.'
+              : 'Условия сохранены. Можно создать кабинет кальянной.'
+      }
+      form.addEventListener('input', () => {
+        if (paid.checked && currentPrice.type === 'number') lastPaidPrice = currentPrice.value
+        refreshAvailability()
+      })
+      canCreateFromCurrent = () => !create.disabled
+      create.addEventListener('click', () => {
+        if (!create.disabled) void createAndLink(request)
+      })
+      nextMutationControls.push(create)
       append(
         createCard,
-        el('h3', { text: 'Создание заведения' }),
-        el('p', {
-          text:
-            (termsReady ? '' : 'Сначала сохраните корректные коммерческие условия. ') +
-            'На этой границе применяется текущий commercial quota. При недостаточном лимите DRAFT, membership и link не создаются.'
-        }),
-        create
+        el('h3', { text: '2. Кабинет кальянной' }),
+        el('p', { className: 'application-hint', text: 'Заявитель получит роль владельца. Кальянная останется неопубликованной: её нужно будет настроить и опубликовать отдельно.' }),
+        createHint,
+        create,
+        el('p', { className: 'application-hint', text: 'При создании проверяется лимит кальянных владельца. Если лимит исчерпан, кабинет не создастся — сначала потребуется увеличить лимит.' })
       )
       content.appendChild(createCard)
+      const extra = el('details', { className: 'application-extra' })
+      const close = el('button', { className: 'button-secondary', text: 'Закрыть без создания' }) as HTMLButtonElement
+      close.addEventListener('click', () =>
+        void mutate('close', 'Закрыть одобренную заявку без создания заведения? Это действие отменит заявку.')
+      )
+      nextMutationControls.push(close)
+      append(extra, el('summary', { text: 'Дополнительные действия' }), el('p', { className: 'application-hint', text: 'Закрытие отменит заявку. Кабинет кальянной не будет создан.' }), close)
+      content.appendChild(extra)
+    } else {
+      const guidance = request.linkedVenueId
+        ? 'Кабинет уже создан. Откройте его для настройки кальянной.'
+        : request.status === 'PENDING'
+          ? 'Сначала рассмотрите заявку. Условия подключения и создание кабинета доступны после одобрения.'
+          : 'Заявка завершена. Создание кабинета по ней недоступно; заявитель может подать новую заявку.'
+      details.appendChild(el('p', { className: 'application-hint', text: guidance }))
+      if (request.linkedVenueId) {
+        const open = el('button', { text: 'Открыть кабинет кальянной' })
+        open.addEventListener('click', () => onNavigate(`#/venue/${request.linkedVenueId}`))
+        details.appendChild(open)
+      }
     }
     mutationControls = nextMutationControls
     setMutationPending(mutationPending)
@@ -463,6 +622,8 @@ export function renderPlatformApplicationDetailScreen(options: PlatformApplicati
     controller = active
     const current = ++seq
     error.hidden = true
+    detailFresh = false
+    refreshAvailability()
     status.textContent = 'Загрузка...'
     const result = await platformGetOnboardingRequest(backendUrl, requestId, requestDeps, active.signal)
     if (disposed || current !== seq) return
@@ -473,6 +634,7 @@ export function renderPlatformApplicationDetailScreen(options: PlatformApplicati
       showError(error, result.error, isDebug, () => void load())
       return
     }
+    detailFresh = true
     status.textContent = announcement ?? ''
     render(result.data.request)
     if (announcement) status.focus({ preventScroll: true })

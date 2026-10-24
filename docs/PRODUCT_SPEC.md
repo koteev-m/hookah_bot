@@ -539,6 +539,14 @@ MUST:
   `venue_members(role=OWNER)`, applies commercial terms and links the request. Failure leaves no
   partial venue/member/link/settings/audit state; retry returns the authoritative link. Neither
   submit nor approval/linking seeds menu categories or auto-selects a venue.
+- Platform application review keeps terms saving and cabinet creation as separate explicit actions.
+  The mobile detail groups applicant/contact/comment with venue and request status; a Telegram action
+  accepts only a validated username, while arbitrary contact text is copyable without becoming a link.
+  Subscription terms require an explicit free (0 RUB/month) or paid choice; optional trial and future
+  price fields appear on demand, with the future amount/date required together. Unsaved edits block
+  creation until saved. Closing an approved unlinked request remains a confirmed additional action.
+  Creating a cabinet explains applicant OWNER access and the unpublished venue state; server quota,
+  RBAC and atomic create/link remain authoritative.
 - For an applicant without a previous OWNER membership or commercial account, Platform create/link
   preserves the former connection-request account semantics and existing default limit of one; it
   does not introduce a new quota/account policy.

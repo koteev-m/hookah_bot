@@ -3182,3 +3182,180 @@ input[type="number"] {
     grid-column: 1 / -1;
   }
 }
+
+/* Compact Platform shell; venue and guest layouts keep their own spacing. */
+.platform-shell .venue-header {
+  padding: 0.75rem 1rem;
+  margin: 0;
+  gap: 0.15rem;
+}
+
+.platform-shell .app-brand h1 {
+  font-size: 1.1rem;
+}
+
+.platform-shell .venue-access-state {
+  font-size: 0.85rem;
+}
+
+.platform-shell .venue-content {
+  padding-top: 0.75rem;
+}
+
+.application-detail,
+.application-content {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.application-detail .card {
+  margin: 0;
+  padding: 0.9rem;
+  min-width: 0;
+}
+
+.application-detail h2,
+.application-detail h3,
+.application-detail p {
+  margin: 0;
+}
+
+.application-detail p {
+  line-height: 1.45;
+}
+
+.application-detail :is(h2, h3, p) {
+  overflow-wrap: anywhere;
+}
+
+.application-detail > .status {
+  font: inherit;
+}
+
+.application-detail > .status:empty {
+  display: none;
+}
+
+.application-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.application-nav h2 {
+  font-size: 1rem;
+}
+
+.application-detail .application-summary {
+  gap: 0.4rem;
+}
+
+.application-city,
+.application-hint {
+  color: #475569;
+  font-size: 0.9rem;
+}
+
+.application-comment {
+  white-space: pre-wrap;
+}
+
+.application-detail .ownership-status {
+  justify-self: start;
+  padding: 0.2rem 0.5rem;
+  background: #ecfdf3;
+  border-radius: 6px;
+}
+
+.application-summary[data-application-status='REJECTED'] .ownership-status,
+.application-summary[data-application-status='CANCELLED'] .ownership-status {
+  color: #9f1239;
+  background: #fff1f2;
+}
+
+.application-price-choice {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.application-price-choice legend {
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+
+.application-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.application-choice input {
+  flex: 0 0 auto;
+  width: 1.15rem;
+  height: 1.15rem;
+  accent-color: #4f46e5;
+}
+
+.application-detail .venue-input {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.application-detail textarea.venue-input {
+  min-height: 4.5rem;
+}
+
+.application-extra summary {
+  display: list-item;
+  padding: 0.65rem 0;
+  min-height: 24px;
+  cursor: pointer;
+  color: #475569;
+}
+
+.application-extra[open] > :not(summary) {
+  margin-top: 0.5rem;
+}
+
+.application-detail button,
+.application-telegram {
+  min-height: 44px;
+}
+
+.application-detail button:disabled {
+  background-color: #e2e8f0;
+  color: #475569;
+  opacity: 1;
+}
+
+.application-telegram {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0.4rem 0.6rem;
+  color: #3730a3;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.application-detail :is(button, a, summary, input):focus-visible {
+  outline: 2px solid #3730a3;
+  outline-offset: 3px;
+}
+
+@media (max-width: 480px) {
+  .platform-shell .venue-content {
+    padding: 0.75rem;
+  }
+
+  .application-detail .venue-inline-actions > * {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}

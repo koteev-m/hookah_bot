@@ -9146,7 +9146,7 @@ test('ownership onboarding: platform shows requests owners and venue co-owners',
   await expect(venueRow).toContainText('Владельцы: Анна Иванова, @co_owner, User #503')
 
   await page.getByRole('button', { name: 'Заявки' }).click()
-  await expect(page.getByRole('heading', { name: 'Подключение и ownership' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Заявки на подключение' })).toBeVisible()
   await expect(page.getByLabel('Статус заявки')).toBeVisible()
   await expect(page.getByLabel('Поиск заявок')).toBeVisible()
   const applicationsStatus = page.locator('.ownership-workspace > .status')
@@ -9170,18 +9170,21 @@ test('ownership onboarding: platform shows requests owners and venue co-owners',
   await expect(page.getByText('Одобрена · ожидает создания')).toBeVisible()
   await expect(applicationsStatus).toHaveText('Заявка #701 одобрена.')
   await expect(applicationsStatus).toBeFocused()
-  const createBeforeTerms = page.getByRole('button', { name: 'Создать DRAFT и связать' })
+  const createBeforeTerms = page.getByRole('button', { name: 'Создать кабинет кальянной' })
   await expect(createBeforeTerms).toBeDisabled()
-  await expect(page.getByText(/Сначала сохраните корректные коммерческие условия/)).toBeVisible()
+  await expect(page.getByText(/Выберите бесплатное подключение или платную подписку и сохраните условия/)).toBeVisible()
 
-  await page.getByLabel('Текущая цена, ₽').fill('2200')
-  await page.getByLabel('Пробный период до (необязательно)').fill('2030-02-01')
+  await page.getByRole('radio', { name: 'Платная подписка', exact: true }).check()
+  await page.getByLabel('Стоимость в месяц, ₽', { exact: true }).fill('2200')
+  await page.getByLabel('Добавить пробный период').check()
+  await page.getByLabel('Пробный период до', { exact: true }).fill('2030-02-01')
+  await page.getByText('Заметка об условиях', { exact: true }).click()
   await page.getByLabel('Коммерческая заметка (необязательно)').fill('Пилотный тариф')
   await page.getByRole('button', { name: 'Сохранить условия' }).click()
   await expect.poll(() => api.getRequest().currentPriceRub).toBe(2200)
   await expect(applicationsStatus).toHaveText('Коммерческие условия заявки #701 сохранены.')
   await expect(applicationsStatus).toBeFocused()
-  await expect(page.getByRole('button', { name: 'Создать DRAFT и связать' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: 'Создать кабинет кальянной' })).toBeEnabled()
   expect(api.getMutations()).toEqual([
     { method: 'POST', path: '/api/platform/onboarding/requests/701/approve' },
     {
@@ -9199,7 +9202,7 @@ test('ownership onboarding: platform shows requests owners and venue co-owners',
   ])
 
   await page.getByRole('button', { name: '← К заявкам' }).click()
-  await expect(page.getByRole('heading', { name: 'Подключение и ownership' })).toBeFocused()
+  await expect(page.getByRole('heading', { name: 'Заявки на подключение' })).toBeFocused()
   await page.getByRole('button', { name: 'Кальянные' }).click()
   await expect(page.getByRole('heading', { name: 'Заведения' })).toBeVisible()
   await page.getByRole('button', { name: 'Владельцы' }).click()
@@ -9260,7 +9263,7 @@ test('ownership onboarding: first create-link focuses the rendered venue detail 
   page.once('dialog', async (dialog) => {
     await dialog.accept()
   })
-  await page.getByRole('button', { name: 'Создать DRAFT и связать' }).click()
+  await page.getByRole('button', { name: 'Создать кабинет кальянной' }).click()
 
   await expect(page).toHaveURL(/#\/venue\/2$/)
   const heading = page.locator('[data-platform-venue-detail-heading="true"]')
@@ -9293,17 +9296,24 @@ test('ownership onboarding: platform retries a lost create-link result as an ide
     confirmation = dialog.message()
     await dialog.accept()
   })
-  const create = page.getByRole('button', { name: 'Создать DRAFT и связать' })
+  const create = page.getByRole('button', { name: 'Создать кабинет кальянной' })
   await create.click()
 
   await expect.poll(() => confirmation).toBe(
-    'Создать DRAFT «Дымный берег», назначить действующего OWNER и связать заявку? Новое заведение не будет выбрано автоматически.'
+    'Создать кабинет кальянной «Дымный берег»? Заявитель получит роль владельца. Кальянная останется неопубликованной и не будет выбрана автоматически.'
   )
   await expect(page.getByRole('heading', { name: 'Нет соединения' })).toBeVisible()
   await expect(create).toBeEnabled()
   expect(api.getCreateLinkCalls()).toBe(1)
   expect(api.getCreateLinkCreatedResults()).toEqual([true])
   expect(api.getRequest().linkedVenueId).toBe(2)
+
+  await page.getByLabel('Стоимость в месяц, ₽', { exact: true }).fill('2300')
+  await page.getByRole('button', { name: 'Повторить' }).click()
+  expect(api.getCreateLinkCalls()).toBe(1)
+  await expect(create).toBeDisabled()
+  await page.getByLabel('Стоимость в месяц, ₽', { exact: true }).fill('2200')
+  await expect(create).toBeEnabled()
 
   page.once('dialog', async (dialog) => {
     await dialog.accept()
@@ -9375,6 +9385,7 @@ test('ownership onboarding: platform closes approved-unlinked request through th
   page.once('dialog', async (dialog) => {
     await dialog.accept()
   })
+  await page.getByText('Дополнительные действия', { exact: true }).click()
   await page.getByRole('button', { name: 'Закрыть без создания' }).click()
 
   const status = page.locator('.ownership-workspace > .status')
@@ -9385,6 +9396,247 @@ test('ownership onboarding: platform closes approved-unlinked request through th
   expect(api.getMutations()).toEqual([
     { method: 'POST', path: '/api/platform/onboarding/requests/701/close' }
   ])
+})
+
+async function openPlatformApplication(page: Page) {
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Заявки', exact: true }).click()
+  await page.locator('.venue-order-row').filter({ hasText: 'Дымный берег' }).getByRole('button', { name: 'Открыть' }).click()
+  await expect(page.getByRole('heading', { name: 'Заявка #701' })).toBeVisible()
+}
+
+test('platform application UX: compact mobile summary, safe Telegram action and contact copying', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 360, height: 780 })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  api.setRequest({ status: 'APPROVED' })
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async (value: string) => { (window as any).__copiedContact = value }
+    } })
+  })
+  await openPlatformApplication(page)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Платформа')
+  await expect(page.locator('.venue-header')).not.toContainText('123456789')
+  expect((await page.locator('.venue-header').boundingBox())!.height).toBeLessThan(90)
+  await expect(page.locator('.application-detail .ownership-tabs')).toHaveCount(0)
+  await expect(page.locator('.application-summary')).toContainText('Казань')
+  await expect(page.locator('.application-summary')).toContainText('Заявитель: Анна Иванова')
+  await expect(page.locator('.application-detail')).not.toContainText(/Applicant|DRAFT|OWNER|membership|commercial quota|link/)
+  const telegram = page.getByRole('link', { name: 'Написать в Telegram' })
+  await expect(telegram).toHaveAttribute('href', 'https://t.me/anna_owner')
+  await telegram.click()
+  expect(await page.evaluate(() => (window as any).__e2eTelegramOpenedLinks)).toEqual(['https://t.me/anna_owner'])
+  await page.getByRole('button', { name: 'Копировать контакт' }).click()
+  await expect(page.getByText('Контакт скопирован.', { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => (window as any).__copiedContact)).toBe('@anna_owner')
+  await expect(page.getByLabel('Пробный период до', { exact: true })).toBeHidden()
+  await expect(page.getByLabel('Будущая стоимость в месяц, ₽')).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Закрыть без создания' })).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Создать кабинет кальянной' })).toBeDisabled()
+  await expect(page.getByText('Условия ещё не сохранены.', { exact: true })).toBeVisible()
+  for (const width of [320, 360, 390]) {
+    await page.setViewportSize({ width, height: 780 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  }
+  await expect(page.locator('.toast')).toHaveAttribute('data-visible', 'false')
+  await page.screenshot({ path: testInfo.outputPath('application-mobile.png'), fullPage: true, animations: 'disabled' })
+  expect(api.getMutations()).toEqual([])
+})
+
+test('platform application UX: arbitrary contact remains text and clipboard denial has a fallback', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  api.setRequest({ applicant: { userId: 501, username: 'evil/name', firstName: null, lastName: null }, contact: 'javascript:alert(1)' })
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async () => { throw new Error('denied') }
+    } })
+  })
+  await openPlatformApplication(page)
+  await expect(page.getByRole('link', { name: 'Написать в Telegram' })).toHaveCount(0)
+  await expect(page.getByText('Контакт: javascript:alert(1)', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Копировать контакт' }).click()
+  await expect(page.getByText('Не удалось скопировать контакт. Выделите и скопируйте его вручную.')).toBeVisible()
+})
+
+test('platform application UX: valid contact username is used when applicant has no username', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  api.setRequest({ applicant: { userId: 501, username: null, firstName: null, lastName: null }, contact: '@contact_owner' })
+  await openPlatformApplication(page)
+  await expect(page.getByRole('link', { name: 'Написать в Telegram' })).toHaveAttribute('href', 'https://t.me/contact_owner')
+  await expect(page.getByText('Заявитель: Заявитель без имени', { exact: true })).toBeVisible()
+})
+
+test('platform application UX: explicit free terms, dirty state, failed save and no automatic creation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  api.setRequest({ status: 'APPROVED' })
+  await openPlatformApplication(page)
+  const save = page.getByRole('button', { name: 'Сохранить условия' })
+  const create = page.getByRole('button', { name: 'Создать кабинет кальянной' })
+  await save.click()
+  expect(api.getMutations()).toEqual([])
+  await expect(page.getByRole('radio', { name: 'Бесплатно · 0 ₽ в месяц' })).toBeFocused()
+  await page.getByRole('radio', { name: 'Бесплатно · 0 ₽ в месяц' }).check()
+  await save.click()
+  await expect(create).toBeEnabled()
+  expect(api.getRequest().currentPriceRub).toBe(0)
+  expect(api.getRequest().trialConfigured).toBe(true)
+  expect(api.getCreateLinkCalls()).toBe(0)
+  await page.getByRole('radio', { name: 'Платная подписка', exact: true }).check()
+  await page.getByLabel('Стоимость в месяц, ₽', { exact: true }).fill('1500')
+  await expect(page.getByText('Есть несохранённые изменения.', { exact: true })).toBeVisible()
+  await expect(create).toBeDisabled()
+  await create.dispatchEvent('click')
+  expect(api.getCreateLinkCalls()).toBe(0)
+  await page.route('**/commercial-terms', (route) => route.fulfill(jsonResponse({ error: { code: 'INVALID_INPUT', message: 'currentPriceRub is out of range' } }, 400)))
+  await save.click()
+  await expect(page.getByRole('alert')).toContainText('Проверьте статус заявки и условия')
+  await expect(page.getByRole('alert')).not.toContainText('currentPriceRub')
+  await expect(page.getByRole('alert')).toBeFocused()
+  await expect(create).toBeDisabled()
+  await expect(page.getByLabel('Стоимость в месяц, ₽', { exact: true })).toHaveValue('1500')
+  await page.unroute('**/commercial-terms')
+  await save.click()
+  await expect(create).toBeEnabled()
+  expect(api.getRequest().currentPriceRub).toBe(1500)
+  expect(api.getCreateLinkCalls()).toBe(0)
+})
+
+test('platform application UX: saving blocks duplicate mutations and failed reload keeps creation locked', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  api.setRequest({ status: 'APPROVED' })
+  await openPlatformApplication(page)
+  let release = () => undefined
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let saves = 0
+  await page.route('**/commercial-terms', async (route) => {
+    saves += 1
+    await gate
+    await route.fallback()
+  })
+  await page.route('**/onboarding/requests/701', async (route) => {
+    await page.unroute('**/onboarding/requests/701')
+    await route.abort('failed')
+  })
+  await page.getByRole('radio', { name: 'Бесплатно · 0 ₽ в месяц' }).check()
+  const save = page.getByRole('button', { name: 'Сохранить условия' })
+  const create = page.getByRole('button', { name: 'Создать кабинет кальянной' })
+  await save.click()
+  await expect(page.locator('.ownership-workspace > .status')).toHaveText('Сохраняем условия...')
+  await expect(save).toBeDisabled()
+  await expect(create).toBeDisabled()
+  await page.locator('.ownership-terms-form').dispatchEvent('submit')
+  expect(saves).toBe(1)
+  release()
+  await expect(page.getByRole('heading', { name: 'Нет соединения' })).toBeVisible()
+  await expect(create).toBeDisabled()
+  await expect(save).toBeDisabled()
+  await expect(page.getByText('Дождитесь загрузки актуальной заявки. При ошибке повторите загрузку.')).toBeVisible()
+  expect(api.getRequest().currentPriceRub).toBe(0)
+  await page.getByRole('button', { name: 'Повторить' }).click()
+  await expect(create).toBeEnabled()
+  await expect(page.getByText('Условия сохранены.', { exact: true })).toBeVisible()
+  expect(api.getCreateLinkCalls()).toBe(0)
+})
+
+test('platform application UX: optional trial and future price require dates and survive save', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 360, height: 780 })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  api.setRequest({ status: 'APPROVED', trialConfigured: true, currentPriceRub: 0 })
+  await openPlatformApplication(page)
+  const save = page.getByRole('button', { name: 'Сохранить условия' })
+  const create = page.getByRole('button', { name: 'Создать кабинет кальянной' })
+  await page.getByLabel('Добавить пробный период').check()
+  await expect(create).toBeDisabled()
+  await save.click()
+  await expect(page.getByLabel('Пробный период до', { exact: true })).toBeFocused()
+  await page.getByLabel('Пробный период до', { exact: true }).fill('2030-02-01')
+  await page.getByLabel('Запланировать изменение цены').check()
+  await save.click()
+  await expect(page.getByLabel('Будущая стоимость в месяц, ₽')).toBeFocused()
+  await page.getByLabel('Будущая стоимость в месяц, ₽').fill('0')
+  await save.click()
+  expect(api.getMutations()).toEqual([])
+  await page.getByLabel('Будущая стоимость в месяц, ₽').fill('2500')
+  await save.click()
+  await expect(page.getByLabel('Новая стоимость с')).toBeFocused()
+  expect(api.getMutations()).toEqual([])
+  await page.getByLabel('Новая стоимость с').fill('2030-02-02')
+  await save.click()
+  await expect(create).toBeEnabled()
+  expect(api.getRequest()).toMatchObject({ currentPriceRub: 0, trialEndsOn: '2030-02-01', futurePriceRub: 2500, futurePriceEffectiveOn: '2030-02-02' })
+  await expect(page.locator('.toast')).toHaveAttribute('data-visible', 'false')
+  await page.screenshot({ path: testInfo.outputPath('application-terms-mobile.png'), fullPage: true, animations: 'disabled' })
+  await page.getByLabel('Запланировать изменение цены').uncheck()
+  await page.getByLabel('Добавить пробный период').uncheck()
+  await expect(create).toBeDisabled()
+  await save.click()
+  await expect(create).toBeEnabled()
+  expect(api.getRequest()).toMatchObject({ trialEndsOn: null, futurePriceRub: null, futurePriceEffectiveOn: null })
+  expect(api.getCreateLinkCalls()).toBe(0)
+})
+
+for (const state of [
+  { status: 'PENDING', text: 'На рассмотрении' },
+  { status: 'REJECTED', text: 'Отклонена' },
+  { status: 'CANCELLED', text: 'Отменена' },
+  { status: 'APPROVED', linkedVenueId: 2, text: 'Кабинет создан' }
+] as const) {
+  test(`platform application UX: ${state.status}${'linkedVenueId' in state ? ' linked' : ''} only exposes permitted actions`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const api = await mockPlatformOwnershipApi(page)
+    api.setRequest({ status: state.status, linkedVenueId: 'linkedVenueId' in state ? state.linkedVenueId : null, trialConfigured: true, currentPriceRub: 0 })
+    await openPlatformApplication(page)
+    await expect(page.getByText(state.text, { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Создать кабинет кальянной' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Сохранить условия' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Закрыть без создания' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Одобрить', exact: true })).toHaveCount(state.status === 'PENDING' ? 1 : 0)
+    if ('linkedVenueId' in state) {
+      await page.getByRole('button', { name: 'Открыть кабинет кальянной' }).click()
+      await expect(page).toHaveURL(/#\/venue\/2$/)
+    }
+    expect(api.getMutations()).toEqual([])
+  })
+}
+
+for (const terms of [
+  { trialConfigured: false, currentPriceRub: 0 },
+  { trialConfigured: true, currentPriceRub: null },
+  { trialConfigured: true, currentPriceRub: -1 },
+  { trialConfigured: true, currentPriceRub: 100, futurePriceRub: 200, futurePriceEffectiveOn: null },
+  { trialConfigured: true, currentPriceRub: 100, futurePriceRub: null, futurePriceEffectiveOn: '2030-02-01' },
+  { trialConfigured: true, currentPriceRub: 100, futurePriceRub: 0, futurePriceEffectiveOn: '2030-02-01' }
+]) {
+  test(`platform application UX: incomplete saved terms block creation ${JSON.stringify(terms)}`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const api = await mockPlatformOwnershipApi(page)
+    api.setRequest({ status: 'APPROVED', ...terms })
+    await openPlatformApplication(page)
+    const create = page.getByRole('button', { name: 'Создать кабинет кальянной' })
+    await expect(create).toBeDisabled()
+    await create.dispatchEvent('click')
+    expect(api.getCreateLinkCalls()).toBe(0)
+  })
+}
+
+test('platform application UX: quota denial explains next action without navigation or technical English', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformOwnershipApi(page)
+  api.setRequest({ status: 'APPROVED', trialConfigured: true, currentPriceRub: 0 })
+  await page.route('**/create-and-link', (route) => route.fulfill(jsonResponse({ error: { code: 'INVALID_INPUT', message: 'Лимит заведений исчерпан: 1 из 1. Сначала увеличьте лимит владельца.' } }, 400)))
+  await openPlatformApplication(page)
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByRole('button', { name: 'Создать кабинет кальянной' }).click()
+  await expect(page.getByRole('alert')).toContainText('Лимит кальянных владельца исчерпан. Сначала увеличьте лимит')
+  await expect(page).toHaveURL(/#\/application\/701$/)
+  await expect(page.getByRole('button', { name: 'Создать кабинет кальянной' })).toBeEnabled()
+  expect(api.getMutations()).toEqual([])
 })
 
 test('guest catalog sends debounced backend search and city filters then resets', async ({ page }) => {
