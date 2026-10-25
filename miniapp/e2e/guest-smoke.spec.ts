@@ -1810,6 +1810,26 @@ async function installTelegramWebApp(page: Page, userId: number) {
   })
 }
 
+async function showVenueSections(page: Page) {
+  await expect(page.locator('.venue-access-state')).toContainText('Роль:')
+  if (await page.locator('.venue-owner-shell').count()) {
+    await page.locator('[data-nav-route="more"]').click()
+  }
+}
+
+async function openVenueSection(page: Page, name: string) {
+  await expect(page.locator('.venue-access-state')).toContainText('Роль:')
+  const owner = await page.locator('.venue-owner-shell').count() > 0
+  const label = owner && name === 'Обзор' ? 'Главная' : name
+  if (owner && !['Главная', 'Заказы', 'Настройки'].includes(label)) {
+    await page.locator('[data-nav-route="more"]').click()
+  }
+  const button = label === 'Переписки'
+    ? page.locator('[data-nav-route="messages"]')
+    : page.locator('nav').getByRole('button', { name: label, exact: true })
+  await button.click()
+}
+
 async function clickTelegramBackButton(page: Page) {
   await page.evaluate(() => {
     window.dispatchEvent(new Event('hookah:e2e-telegram-back'))
@@ -8652,6 +8672,247 @@ async function mockPlatformOwnershipApi(
   }
 }
 
+const ownerUxPermissions = [
+  'ORDER_QUEUE_VIEW', 'BOOKING_VIEW', 'SUPPORT_MANAGE', 'SHIFT_EXTENSION_VIEW',
+  'MENU_VIEW', 'TABLE_VIEW', 'STAFF_SCHEDULE_VIEW', 'FEEDBACK_VIEW', 'STAFF_CHAT_LINK'
+]
+
+async function mockOwnerUx(page: Page, status = 'DRAFT', permissions = ownerUxPermissions) {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueOwnershipApi(page, {
+    accesses: [
+      { venueId: 1, venueName: 'Микс', venueCity: 'Москва', venueStatus: status, role: 'OWNER', permissions },
+      { venueId: 2, venueName: 'Дымный берег', venueCity: 'Казань', venueStatus: 'PUBLISHED', role: 'OWNER', permissions }
+    ],
+    applications: [
+      { id: 1, venueName: 'Новая кальянная', city: 'Тула', contact: '@owner', status: 'PENDING', createdAt: '2030-01-01T00:00:00Z' },
+      { id: 2, venueName: 'Прошлая заявка', city: 'Пермь', contact: '@owner', status: 'CANCELLED', createdAt: '2030-01-01T00:00:00Z' }
+    ]
+  })
+  await page.route('**/api/venue/*/staff-calls**', (route) => route.fulfill(jsonResponse({ items: [
+    { id: 1, status: 'NEW' }, { id: 2, status: 'ACK' }
+  ] })))
+  await page.route('**/api/venue/*/staff-chat', (route) => route.fulfill(jsonResponse({ isLinked: true })))
+  await page.route('**/api/venue/*/support/unread-count', (route) => route.fulfill(jsonResponse({
+    unreadCount: new URL(route.request().url()).pathname.includes('/1/') ? 3 : 0
+  })))
+}
+
+async function expectNoHorizontalOverflow(page: Page) {
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+}
+
+for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
+  test(`owner UX DRAFT first screen and safe layout ${viewport.width}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport)
+    await mockOwnerUx(page)
+    await page.goto('?mode=venue&venueId=1#/dashboard')
+    await expect(page.getByRole('heading', { name: 'Микс', exact: true })).toBeVisible()
+    await expect(page.locator('.venue-header')).toContainText('Москва · Черновик')
+    await expect(page.getByRole('heading', { name: 'Подготовьте заведение' })).toBeInViewport()
+    await expect(page.locator('.venue-owner-home')).toContainText('не видна гостям')
+    await expect(page.locator('.venue-owner-nav button:visible')).toHaveCount(4)
+    await expect(page.locator('.venue-nav')).toBeHidden()
+    await expect(page.locator('[data-nav-route="dashboard"]')).toHaveAttribute('aria-current', 'page')
+    const actions = page.locator('.venue-owner-action')
+    await expect(actions).toHaveCount(6)
+    for (const action of await actions.all()) await expect(action).toBeInViewport()
+    await expect(page.getByRole('link', { name: 'Карточка заведения Адрес и описание' })).toHaveAttribute('href', '#/settings')
+    await expect(page.getByRole('link', { name: 'Часы работы В настройках заведения' })).toHaveAttribute('href', '#/settings')
+    await expect(page.locator('.ownership-workspace')).toHaveCount(0)
+    await expectNoHorizontalOverflow(page)
+    const navBox = await page.locator('.venue-owner-nav').boundingBox()
+    const contentBox = await page.locator('.venue-owner-home').boundingBox()
+    expect(contentBox!.y).toBeGreaterThanOrEqual(navBox!.y + navBox!.height)
+    await page.screenshot({ path: testInfo.outputPath(`owner-draft-${viewport.width}.png`), fullPage: true })
+  })
+}
+
+test('owner UX published metrics, unread badge, switching and portfolio history', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockOwnerUx(page, 'PUBLISHED')
+  await page.goto('?mode=venue&venueId=1#/dashboard')
+  await expect(page.locator('.venue-header')).toContainText('Москва · Опубликовано')
+  await expect(page.locator('.venue-summary-row').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:1')
+  await expect(page.locator('.venue-summary-row').filter({ hasText: 'В работе:' })).toHaveText('В работе:1')
+  await expect(page.locator('.venue-summary')).toContainText('Чат персонала:привязан')
+  await expect(page.locator('.venue-owner-actions a')).toHaveText(['Заказы', 'Брони', 'Вызовы', 'Переписки'])
+  await expect(page.getByRole('button', { name: 'Ещё, непрочитанных сообщений: 3', exact: true })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('owner-published-390.png'), fullPage: true })
+  await page.getByRole('combobox', { name: 'Выбрать заведение' }).selectOption('2')
+  await expect(page.locator('.venue-header')).toContainText('Дымный берег')
+  await expect(page.locator('.venue-header')).toContainText('Казань · Опубликовано')
+  await expect(page.locator('[data-nav-route="more"]')).toHaveAttribute('aria-label', 'Ещё')
+  await expect(page).toHaveURL(/venueId=2/)
+  await page.reload()
+  await expect(page.getByRole('combobox', { name: 'Выбрать заведение' })).toHaveValue('2')
+  await openVenueSection(page, 'Мои заведения')
+  await expect(page.getByRole('heading', { name: 'Мои заведения', exact: true })).toBeVisible()
+  await expect(page.getByText('Новая кальянная', { exact: true })).toBeVisible()
+  await page.getByText('История заявок (1)', { exact: true }).click()
+  await expect(page.getByText('Прошлая заявка', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Добавить заведение', exact: true })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+})
+
+test('owner UX all allowed routes, active navigation, browser and Telegram back', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  // Route traversal checks the shell even when a section API is temporarily unavailable.
+  // Existing operational smoke tests exercise the successful forms and queues.
+  await page.route(/\/api\/venue\/\d+\//, (route) => route.fulfill(jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'Временно недоступно' } }, 500)))
+  await mockOwnerUx(page)
+  await page.goto('?mode=venue&venueId=1#/dashboard')
+  await showVenueSections(page)
+  const routes = ['ownership', 'bookings', 'messages', 'calls', 'extensions', 'shifts', 'guest-preview', 'menu', 'promotions', 'tables', 'staff', 'chat', 'subscription', 'stats', 'feedback', 'support']
+  await expect(page.locator('.venue-owner-more [data-nav-route]:visible')).toHaveCount(routes.length)
+  await page.screenshot({ path: testInfo.outputPath('owner-more-390.png'), fullPage: true })
+  for (const route of routes) {
+    await page.locator(`.venue-owner-more [data-nav-route="${route}"]`).click()
+    await expect(page).toHaveURL(new RegExp(`#/${route}$`))
+    await expect(page.locator('.screen-root')).not.toBeEmpty()
+    await expect(page.getByText('У вас нет доступа к этому разделу.', { exact: true })).toHaveCount(0)
+    await expect(page.locator('[data-nav-route="more"]')).toHaveAttribute('aria-current', 'page')
+    await page.goBack()
+    await expect(page.getByRole('heading', { name: 'Ещё', exact: true })).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+  }
+  await page.locator('[data-nav-route="menu"]').click()
+  await expect(page.locator('[data-nav-route="menu"]')).toHaveAttribute('aria-current', 'page')
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/more$/)
+  await page.getByRole('button', { name: '← Назад', exact: true }).click()
+  await expect(page).toHaveURL(/#\/dashboard$/)
+  for (const route of ['orders', 'settings']) {
+    await page.locator(`[data-nav-route="${route}"]`).click()
+    await expect(page.locator(`[data-nav-route="${route}"]`)).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('[data-nav-route="more"]')).not.toHaveAttribute('aria-current', 'page')
+    await clickTelegramBackButton(page)
+    await expect(page).toHaveURL(/#\/dashboard$/)
+  }
+  await page.getByRole('link', { name: 'Заказное меню', exact: true }).click()
+  await expect(page.locator('[data-nav-route="menu"]')).toHaveAttribute('aria-current', 'page')
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/dashboard$/)
+  expect(errors).toEqual([])
+})
+
+test('owner UX restricted permissions hide actions and deny direct routes', async ({ page }) => {
+  await mockOwnerUx(page, 'DRAFT', [])
+  await page.goto('?mode=venue#/dashboard')
+  await expect(page.getByRole('link', { name: 'Заказное меню', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Столы и QR', exact: true })).toHaveCount(0)
+  await expect(page.locator('[data-nav-route="orders"]')).toBeHidden()
+  await showVenueSections(page)
+  for (const route of ['orders', 'bookings', 'calls', 'messages', 'menu', 'tables', 'shifts', 'feedback', 'support', 'chat']) {
+    await expect(page.locator(`[data-nav-route="${route}"]`)).toBeHidden()
+    await page.evaluate((value) => { window.location.hash = `#/${value}` }, route)
+    await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+  }
+})
+
+test('owner UX mobile long settings form remains editable with a reduced viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ['BOOKING_MANAGE', 'SHIFT_EXTENSION_SETTINGS'] })
+  await page.goto('?mode=venue#/settings')
+  const card = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) })
+  const input = card.getByPlaceholder(/авторские чаши/)
+  await input.fill('Новое описание из мобильного кабинета.')
+  await expectNoHorizontalOverflow(page)
+  // Reduced viewport checks scrolling while an on-screen keyboard occupies space.
+  // Native iOS keyboard behavior still requires a real Telegram smoke.
+  await page.setViewportSize({ width: 390, height: 420 })
+  await input.focus()
+  await input.scrollIntoViewIfNeeded()
+  await expect(input).toBeInViewport()
+  const save = card.getByRole('button', { name: 'Сохранить', exact: true })
+  await save.scrollIntoViewIfNeeded()
+  await expect(save).toBeInViewport()
+  expect(await save.evaluate((button) => {
+    const box = button.getBoundingClientRect()
+    return button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))
+  })).toBe(true)
+  await expectNoHorizontalOverflow(page)
+  await save.click()
+  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  expect(api.getPublicCardSettings().cardDescription).toBe('Новое описание из мобильного кабинета.')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openVenueSection(page, 'Обзор')
+  await expect(page.locator('.venue-owner-nav')).toBeInViewport()
+})
+
+test('owner UX switching to a venue with another role restores its original navigation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueOwnershipApi(page, { accesses: [
+    { venueId: 1, venueName: 'Своя', venueStatus: 'DRAFT', role: 'OWNER', permissions: ownerUxPermissions },
+    { venueId: 2, venueName: 'Управляемая', venueStatus: 'PUBLISHED', role: 'MANAGER', permissions: ['ORDER_QUEUE_VIEW'] },
+    { venueId: 3, venueName: 'Рабочая', venueStatus: 'PUBLISHED', role: 'STAFF', permissions: ['ORDER_QUEUE_VIEW'] }
+  ] })
+  await page.goto('?mode=venue&venueId=1#/more')
+  await expect(page.getByRole('heading', { name: 'Ещё', exact: true })).toBeVisible()
+  const selector = page.getByRole('combobox', { name: 'Выбрать заведение' })
+  for (const id of ['2', '3']) {
+    await selector.selectOption(id)
+    await expect(page.locator('.venue-owner-nav')).toBeHidden()
+    await expect(page.locator('.venue-nav')).toBeVisible()
+    await expect(page.locator('[data-nav-route="subscription"]')).toBeHidden()
+    await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+  }
+  await expect(page.locator('[data-nav-route="settings"]')).toBeHidden()
+  await expect(page.locator('[data-nav-route="staff"]')).toBeHidden()
+  await selector.selectOption('1')
+  await expect(page.locator('.venue-owner-nav')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Ещё', exact: true })).toBeVisible()
+  await expect(page.locator('.venue-owner-more [data-nav-route="subscription"]')).toBeVisible()
+})
+
+for (const role of ['MANAGER', 'STAFF'] as const) {
+  test(`owner UX preserves ${role} layout and denied routes`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    await mockVenueOwnershipApi(page, { accesses: [{
+      venueId: 1, venueName: 'Микс', venueStatus: 'DRAFT', role, permissions: ['ORDER_QUEUE_VIEW']
+    }] })
+    await page.route('**/api/venue/*/staff-calls**', (route) => route.fulfill(jsonResponse({ items: [] })))
+    await page.goto('?mode=venue#/dashboard')
+    await expect(page.getByRole('heading', { name: 'Панель заведения' })).toBeVisible()
+    await expect(page.locator('.venue-owner-nav')).toBeHidden()
+    await expect(page.locator('.venue-nav')).toBeVisible()
+    await expect(page.locator('.venue-owner-home')).toHaveCount(0)
+    await expect(page.locator('[data-nav-route="subscription"]')).toBeHidden()
+    await expect(page.locator('[data-nav-route="ownership"]')).toBeHidden()
+    const denied = role === 'STAFF'
+      ? ['more', 'ownership', 'subscription', 'settings', 'staff', 'guest-preview', 'promotions', 'stats', 'messages']
+      : ['more', 'ownership', 'subscription', 'messages']
+    for (const route of denied) {
+      await page.evaluate((value) => { window.location.hash = `#/${value}` }, route)
+      await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
+    }
+    await openVenueSection(page, 'Обзор')
+    await expect(page.locator('[data-nav-route="dashboard"]')).toHaveAttribute('aria-current', 'page')
+  })
+}
+
+for (const [status, label, context] of [
+  ['HIDDEN', 'Скрыто', 'Заведение скрыто от гостей.'],
+  ['PAUSED', 'На паузе', 'Заведение на паузе.'],
+  ['SUSPENDED', 'Заблокировано', 'Работа заведения приостановлена.'],
+  ['ARCHIVED', 'Архив', 'Заведение в архиве.'],
+  ['DELETED', 'Удалено', 'Заведение удалено.'],
+  ['', 'Статус не указан', 'Статус публикации не подтверждён.']
+]) {
+  test(`owner UX truthful status ${status || 'missing'}`, async ({ page }) => {
+    await mockOwnerUx(page, status)
+    await page.goto('?mode=venue#/dashboard')
+    await expect(page.locator('.venue-header')).toContainText(label)
+    await expect(page.locator('.venue-owner-home')).toContainText(context)
+    await expect(page.locator('.venue-owner-home')).not.toContainText('Подготовьте заведение')
+    await expect(page.locator('.venue-owner-home button')).toHaveCount(0)
+  })
+}
+
 test('ownership onboarding: owner explicitly selects and opens one or multiple venue cards', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const firstAccess: VenueOwnershipAccessFixture = {
@@ -8687,12 +8948,12 @@ test('ownership onboarding: owner explicitly selects and opens one or multiple v
   })
 
   await page.goto(`?mode=venue&venueId=1#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
 
   await expect(page.getByRole('heading', { name: 'Мои заведения' })).toBeVisible()
   await clickTelegramBackButton(page)
   await expect(page.getByRole('heading', { name: 'Микс', exact: true })).toBeFocused()
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
   await expect(page.getByRole('heading', { name: 'Мои заведения' })).toBeVisible()
   const venueCard = page.locator('section.card').filter({
     has: page.getByRole('heading', { name: 'Заведения', exact: true })
@@ -8740,12 +9001,12 @@ test('ownership dashboard opens non-public venues without reading the guest venu
   })
 
   await page.goto(`?mode=venue&venueId=1#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
   await page.locator('.venue-order-row').filter({ hasText: 'Микс' }).getByRole('button', { name: 'Открыть' }).click()
   await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
-  await expect(page.locator('.venue-dashboard-subtitle')).toHaveText('Роль: владелец')
-  await expect(page.locator('.venue-dashboard .status')).toContainText('Обновлено:')
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await expect(page.locator('.venue-access-state')).toHaveText('Роль: владелец')
+  await expect(page.getByText('Карточка ещё не опубликована и не видна гостям.', { exact: false })).toBeVisible()
+  await openVenueSection(page, 'Мои заведения')
   await page.locator('.venue-order-row').filter({ hasText: 'Скрытая' }).getByRole('button', { name: 'Открыть' }).click()
   await expect(page.getByRole('heading', { name: 'Скрытая' })).toBeVisible()
   await expect(page.locator('.venue-dashboard .status')).toContainText('Обновлено:')
@@ -8771,7 +9032,7 @@ test('ownership keeps pending and approved unlinked requests active and complete
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
   const active = page.locator('.ownership-workspace .card').filter({ has: page.getByRole('heading', { name: 'Активные заявки' }) }).locator(':scope > .venue-orders-list')
   await expect(active.locator('.venue-order-row')).toHaveCount(2)
   await expect(active.getByText('Ожидает', { exact: true })).toBeVisible()
@@ -8816,7 +9077,7 @@ test('ownership onboarding: owner submits edits and cancels an application with 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
 
   await expect(
     page.getByText('Заявка одобрена. Заведение ещё подготавливается и скоро появится в списке.')
@@ -8896,7 +9157,7 @@ test('ownership onboarding: exact double-submit keeps one authoritative applicat
   const releaseFirstResponse = api.deferNextSubmitResponse()
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
   const liveStatus = page.locator('.ownership-workspace > .status')
   await expect(liveStatus).toHaveAttribute('role', 'status')
   await expect(liveStatus).toHaveAttribute('aria-live', 'polite')
@@ -8955,7 +9216,7 @@ test('ownership onboarding: a distinct second venue creates and shows a second a
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
   await page.getByRole('button', { name: 'Добавить заведение' }).click()
   await fillVenueOwnershipApplication(page, {
     venueName: 'Северный дым',
@@ -9015,7 +9276,7 @@ test('ownership onboarding: approved-unlinked canonical retry returns the existi
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
   await page.getByRole('button', { name: 'Добавить заведение' }).click()
   await fillVenueOwnershipApplication(page, {
     venueName: '  ДЫМНЫЙ   БЕРЕГ  ',
@@ -9069,7 +9330,7 @@ test('ownership onboarding: account replacement ignores a late prior-account sub
   const releaseOldResponse = api.deferNextSubmitResponse()
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
   await page.getByRole('button', { name: 'Добавить заведение' }).click()
   await fillVenueOwnershipApplication(page, {
     venueName: 'Поздняя заявка старого аккаунта',
@@ -9084,7 +9345,7 @@ test('ownership onboarding: account replacement ignores a late prior-account sub
     window.localStorage.setItem('__e2e_telegram_init_data', initData)
   }, { userId: 987654321, initData: otherMockInitData })
   await page.goto(`?mode=venue&smokeUser=other#tgWebAppData=${encodeURIComponent(otherMockInitData)}`)
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
 
   await expect(page.getByText('Заявка другого владельца', { exact: true })).toBeVisible()
   await expect(page.getByText('Поздняя заявка старого аккаунта', { exact: true })).toHaveCount(0)
@@ -9117,7 +9378,7 @@ test('ownership onboarding: lost response keeps the form and exact retry reuses 
   api.loseNextSubmitResult()
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мои заведения', exact: true }).click()
+  await openVenueSection(page, 'Мои заведения')
   await page.getByRole('button', { name: 'Добавить заведение' }).click()
   await page.getByLabel('Название заведения').fill('Северный дым')
   await page.getByLabel('Город', { exact: true }).fill('Пермь')
@@ -13457,7 +13718,7 @@ test('venue staff sees pending shift extension requests and can approve or rejec
   await extensionRequestsButton.click()
   await expect(page.getByRole('heading', { name: 'Продления' })).toBeVisible()
   await expect(page.getByText('Запрос на продление')).toBeVisible()
-  await page.getByRole('button', { name: 'Заказы' }).click()
+  await openVenueSection(page, 'Заказы')
   await expect(page.getByText('Запрос на продление')).toBeVisible()
   await expect(page.getByText('Заказ №42')).toBeVisible()
   await page.getByRole('button', { name: 'Открыть' }).click()
@@ -13500,7 +13761,7 @@ test('venue bill renders persisted happy hours amounts without recalculating the
   await mockVenueShiftExtensionApi(page, { promotionFacts: true })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказы' }).click()
+  await openVenueSection(page, 'Заказы')
   await page.getByRole('button', { name: 'Открыть' }).click()
 
   const bill = page.locator('.venue-order-bill')
@@ -13523,7 +13784,7 @@ test('venue bill hides manual discount action for a trigger with an active linke
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказы' }).click()
+  await openVenueSection(page, 'Заказы')
   await page.getByRole('button', { name: 'Открыть' }).click()
 
   const triggerRow = page.locator('.order-item').filter({ hasText: 'Double Apple' })
@@ -13540,7 +13801,7 @@ test('venue staff accepts and closes staff calls queue', async ({ page }) => {
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Вызовы', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Вызовы', exact: true }).click()
+  await openVenueSection(page, 'Вызовы')
   await expect(page.getByRole('heading', { name: 'Вызовы персонала' })).toBeVisible()
 
   const callCard = page.locator('.venue-call-card').filter({ hasText: 'Стол №4' })
@@ -13564,7 +13825,7 @@ test('venue staff sees bill request context in calls queue', async ({ page }) =>
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Вызовы', exact: true }).click()
+  await openVenueSection(page, 'Вызовы')
   const billCard = page.locator('.venue-call-card').filter({ hasText: 'Причина: Запрос счёта' })
   await expect(billCard).toBeVisible()
   await expect(billCard).toContainText('Гость: Мария')
@@ -13596,8 +13857,9 @@ test('venue owner links tests and unlinks staff chat from mini app', async ({ pa
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
+  await showVenueSections(page)
   await expect(page.getByRole('button', { name: 'Чат персонала', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Чат персонала', exact: true }).click()
+  await openVenueSection(page, 'Чат персонала')
   await expect(page.getByRole('heading', { name: 'Чат персонала' })).toBeVisible()
   await expect(page.getByText('Чат персонала не подключён')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Скопировать команду' })).toHaveCount(0)
@@ -13660,7 +13922,7 @@ test('venue manager can test staff chat but cannot unlink', async ({ page }) => 
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Чат персонала', exact: true }).click()
+  await openVenueSection(page, 'Чат персонала')
   await expect(page.getByText('Чат персонала подключён')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Отправить тестовое сообщение' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Отвязать чат' })).toHaveCount(0)
@@ -13687,7 +13949,7 @@ test('venue owner creates manager staff invite with copyable deep link', async (
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
   await expect(page.getByRole('heading', { name: 'Персонал' })).toBeVisible()
   await page.locator('.venue-staff select.venue-select').first().selectOption('MANAGER')
   await page.getByRole('button', { name: 'Добавить сотрудника' }).click()
@@ -13780,7 +14042,7 @@ test('venue manager creates and revokes only staff invites', async ({ page }) =>
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
 
   const accessCard = page.locator('.venue-staff > .card').first()
   const roleSelect = accessCard.getByLabel('Роль приглашения')
@@ -13817,7 +14079,7 @@ test('venue manager manages staff and display cards while protected cards stay r
   const api = await mockVenueStaffChatApi(page, { role: 'MANAGER', linked: true })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
 
   const accessCard = page.locator('.venue-staff > .card').first()
   const svetlanaMember = accessCard.locator('.venue-staff-row').filter({ hasText: 'Светлана Орлова' })
@@ -13930,7 +14192,7 @@ test('staff profile controls fail closed while the current directory loads or er
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
 
   const staff = page.locator('.venue-staff')
   const cards = staff.locator('.venue-public-staff')
@@ -14095,19 +14357,19 @@ test('manager duplicate staff links stay read-only across reload refresh and ven
 
   const initialResponsesPromise = waitForVenueStaffGetResponses(page, 1)
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
   assertRawDuplicateContract(await initialResponsesPromise)
   await assertDuplicateUiIsReadOnly()
 
-  await page.getByRole('button', { name: 'Обзор', exact: true }).click()
+  await openVenueSection(page, 'Обзор')
   const refreshedResponsesPromise = waitForVenueStaffGetResponses(page, 1)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
   assertRawDuplicateContract(await refreshedResponsesPromise)
   await assertDuplicateUiIsReadOnly()
 
   const reloadedResponsesPromise = waitForVenueStaffGetResponses(page, 1)
   await page.reload()
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
   assertRawDuplicateContract(await reloadedResponsesPromise)
   await assertDuplicateUiIsReadOnly()
 
@@ -14204,7 +14466,7 @@ test('owner repairs one concrete duplicate staff card with safe unlink only', as
 
   const initialResponsesPromise = waitForVenueStaffGetResponses(page, 1)
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
   const initialResponses = await initialResponsesPromise
   expect(initialResponses.directory.members.find((member) => member.userId === 222222222)).toMatchObject({
     profileLinkState: 'DUPLICATE_LINK_DETECTED',
@@ -14302,7 +14564,7 @@ test('owner repairs one concrete duplicate staff card with safe unlink only', as
 
   const reloadedResponsesPromise = waitForVenueStaffGetResponses(page, 1)
   await page.reload()
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
   const reloadedResponses = await reloadedResponsesPromise
   expect(reloadedResponses.directory.members.find((member) => member.userId === 222222222)).toMatchObject({
     profileLinkState: 'LINKED',
@@ -14349,7 +14611,7 @@ test('concurrent profile link conflict opens the winning safe profile without a 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
 
   const accessCard = page.locator('.venue-staff > .card').first()
   let maximMember = accessCard.locator('.venue-staff-row').filter({ hasText: 'Максим Катаев' })
@@ -14432,7 +14694,7 @@ test('venue switch clears staff invite and profile drafts', async ({ page }) => 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
   let staff = page.locator('.venue-staff')
   await staff.getByRole('button', { name: 'Добавить сотрудника' }).click()
   await expect(staff.locator('.venue-invite-result')).toBeVisible()
@@ -14457,7 +14719,7 @@ test('account switch does not reuse prior venue member identities', async ({ pag
   const api = await mockVenueStaffChatApi(page, { role: 'MANAGER', linked: true })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
   let accessCard = page.locator('.venue-staff > .card').first()
   await expect(accessCard).toContainText('Максим Катаев')
 
@@ -14481,7 +14743,7 @@ test('account switch does not reuse prior venue member identities', async ({ pag
     window.localStorage.setItem('__e2e_telegram_init_data', initData)
   }, { userId: 987654321, initData: otherMockInitData })
   await page.goto(`?mode=venue&smokeUser=other#tgWebAppData=${encodeURIComponent(otherMockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
 
   accessCard = page.locator('.venue-staff > .card').first()
   await expect(accessCard).toContainText('Екатерина Новая')
@@ -14521,7 +14783,7 @@ test('staff module off keeps access and invites available and explains profile a
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
 
   const accessCard = page.locator('.venue-staff > .card').first()
   await expect(accessCard.getByRole('heading', { name: 'Доступ сотрудников' })).toBeVisible()
@@ -14536,7 +14798,7 @@ test('staff module off keeps access and invites available and explains profile a
   await expect(profileCard.getByRole('button', { name: 'Включить в настройках' })).toBeVisible()
   await expect.poll(() => api.getProfileGetCalls()).toBe(0)
 
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
   const schedule = page.locator('.screen-root .venue-module-disabled')
   await expect(schedule).toContainText('Карточки команды и график смен отключены.')
   await expect(schedule).toContainText('Сохранённые смены не удалены')
@@ -14583,7 +14845,7 @@ test('manual Today publication is persisted and schedule source removes the manu
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
   let profileRow = page.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
   await expect(profileRow).toContainText('По графику: не запланирован сегодня')
   await expect(profileRow).toContainText('Для гостей: выключено вручную')
@@ -14640,7 +14902,7 @@ test('manual Today success copy does not claim public visibility when guest team
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
   const profileRow = page.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
   await profileRow.getByRole('switch', { name: 'Выключено' }).click()
 
@@ -14661,7 +14923,7 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
   const api = await mockVenueStaffChatApi(page, { role: 'OWNER', linked: true })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Персонал', exact: true }).click()
+  await openVenueSection(page, 'Персонал')
 
   const staffCards = page.locator('.venue-public-staff')
   const createForm = staffCards.locator('.venue-profile-form')
@@ -14773,7 +15035,7 @@ test('staff shift form uses effective venue hours without overwriting manual or 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
 
   const schedule = page.locator('.venue-staff-schedule')
   await expect(schedule).toContainText('Asia/Yekaterinburg')
@@ -14859,7 +15121,7 @@ test('staff shift AUTO clears stale hours on load error and retries an aborted d
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
   await schedule.getByRole('button', { name: 'Добавить смену' }).click()
   const form = schedule.locator('.venue-schedule-form')
@@ -14899,7 +15161,7 @@ test('staff bulk draft refreshes AUTO hours and does not leak canceled saved tim
   const api = await mockVenueStaffScheduleApi(page)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
   await schedule.getByRole('button', { name: 'Добавить смену' }).click()
   const form = schedule.locator('.venue-schedule-form')
@@ -14941,7 +15203,7 @@ test('venue owner assigns multiple staff with common and individual hours and ex
   const api = await mockVenueStaffScheduleApi(page)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
   const canceledRow = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Анна' })
   await expect(canceledRow).toContainText('Отменена')
@@ -15037,7 +15299,7 @@ test('future canceled schedule row restores through explicit row action with new
   const api = await mockVenueStaffScheduleApi(page)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
   const canceledRow = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Анна' })
   await canceledRow.getByRole('button', { name: 'Восстановить' }).click()
@@ -15083,7 +15345,7 @@ test('scheduled staff conflict blocks the whole bulk confirmation', async ({ pag
   const before = api.getAdminShifts(1)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
   await schedule.getByRole('button', { name: 'Добавить смену' }).click()
   const form = schedule.locator('.venue-schedule-form')
@@ -15111,7 +15373,7 @@ test('atomic staff batch error keeps every schedule row unchanged and draft retr
   const api = await mockVenueStaffScheduleApi(page)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
   await schedule.getByRole('button', { name: 'Добавить смену' }).click()
   const form = schedule.locator('.venue-schedule-form')
@@ -15141,7 +15403,7 @@ test('venue owner manages a weekly staff schedule with local overnight copy', as
   const api = await mockVenueStaffScheduleApi(page)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
 
   const schedule = page.locator('.venue-staff-schedule')
   await expect(schedule.getByRole('heading', { name: 'График смен', exact: true })).toBeVisible()
@@ -15239,7 +15501,7 @@ test('venue manager has the same staff schedule editor controls', async ({ page 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
   await expect(schedule.getByRole('button', { name: 'Добавить смену' })).toBeVisible()
   const row = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Алексей' })
@@ -15317,7 +15579,7 @@ test('staff schedule stale edit requires refresh and never overwrites current ro
   const api = await mockVenueStaffScheduleApi(page)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
   const row = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Алексей' })
   await row.getByRole('button', { name: 'Редактировать' }).click()
@@ -15363,7 +15625,7 @@ test('staff schedule venue switch clears draft ignores late response and restore
   const api = await mockVenueStaffScheduleApi(page, { accesses })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'График смен', exact: true }).click()
+  await openVenueSection(page, 'График смен')
   let schedule = page.locator('.venue-staff-schedule')
   await expect(schedule).toContainText('Алексей')
   await schedule.getByRole('button', { name: 'Добавить смену' }).click()
@@ -15405,7 +15667,7 @@ test('expired staff chat link code is not presented as usable', async ({ page })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Чат персонала', exact: true }).click()
+  await openVenueSection(page, 'Чат персонала')
   await page.getByRole('button', { name: 'Сгенерировать код привязки' }).click()
 
   await expect(page.getByRole('heading', { name: 'Срок действия кода истёк' })).toBeVisible()
@@ -15433,6 +15695,7 @@ test('venue owner opens the published guest preview with public read-only conten
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
+  await showVenueSections(page)
   const previewNav = page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true })
   await expect(previewNav).toBeVisible()
   await previewNav.click()
@@ -15518,7 +15781,7 @@ test('venue manager can open the published guest preview', async ({ page }) => {
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await openVenueSection(page, 'Предпросмотр для гостя')
   const preview = page.locator('.screen-root')
   await expect(preview.getByRole('heading', { name: 'Предпросмотр для гостя', exact: true })).toBeVisible()
   await expect(preview.getByRole('heading', { name: 'Опубликованный лаунж менеджера', exact: true })).toBeVisible()
@@ -15550,7 +15813,7 @@ test('guest preview uses the server mode when a published venue is temporarily u
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await openVenueSection(page, 'Предпросмотр для гостя')
 
   const preview = page.locator('.screen-root')
   await expect(preview.getByText('Черновик', { exact: true })).toBeVisible()
@@ -15629,7 +15892,7 @@ test('venue owner and manager open saved draft previews through the shared read-
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await openVenueSection(page, 'Предпросмотр для гостя')
 
   const preview = page.locator('.screen-root')
   await expect(preview.getByText('Черновик', { exact: true })).toBeVisible()
@@ -15696,7 +15959,7 @@ test('settings preview blocks unsaved public card and schedule changes, then sho
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
   const publicCard = page.locator('.card').filter({
     has: page.getByRole('heading', { name: 'Публичная карточка', exact: true })
   })
@@ -15799,7 +16062,7 @@ test('temporarily unavailable venues use safe private-preview reasons while dele
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await openVenueSection(page, 'Предпросмотр для гостя')
   const preview = page.locator('.screen-root')
 
   const safeReasons = [
@@ -15891,7 +16154,7 @@ test('venue guest preview clears stale data while switching venues', async ({ pa
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await openVenueSection(page, 'Предпросмотр для гостя')
 
   const preview = page.locator('.screen-root')
   await expect(preview.getByText('Загрузка предпросмотра...', { exact: true })).toBeVisible()
@@ -15951,7 +16214,7 @@ test('published guest preview clears a slow published venue before loading the n
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await openVenueSection(page, 'Предпросмотр для гостя')
 
   const preview = page.locator('.screen-root')
   await expect(preview.getByText('Загрузка предпросмотра...', { exact: true })).toBeVisible()
@@ -15999,6 +16262,7 @@ test('venue guest preview ignores table cart and order context and uses GET-only
     `?mode=venue&table_token=${encodeURIComponent(tableToken)}#tgWebAppData=${encodeURIComponent(mockInitData)}`
   )
 
+  await showVenueSections(page)
   const previewNav = page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true })
   await expect(previewNav).toBeVisible()
   api.clearTraffic()
@@ -16088,7 +16352,7 @@ test('venue guest preview has safe loading empty error and unavailable states', 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await openVenueSection(page, 'Предпросмотр для гостя')
 
   const preview = page.locator('.screen-root')
   await expect(preview.getByText('Загрузка предпросмотра...', { exact: true })).toBeVisible()
@@ -16140,7 +16404,7 @@ test('venue owner disables and re-enables staff module without resetting nested 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
 
   const card = page.getByTestId('staff-module-settings')
   const master = card.getByTestId('staff-module-master')
@@ -16191,7 +16455,7 @@ test('venue manager sees staff module settings through the narrow permission', a
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
   await expect(page.getByTestId('staff-module-settings')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Команда и график смен' })).toBeVisible()
 })
@@ -16256,7 +16520,7 @@ test('staff module settings venue switch ignores a late response from the previo
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
   await expect.poll(() => venueOneRequestStarted).toBe(true)
 
   const venueSelect = page.locator('.venue-controls select.venue-select')
@@ -16290,7 +16554,7 @@ test('venue manager configures public profile card settings', async ({ page }) =
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
   const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
   await expect(publicCard).toContainText('Эти данные видят гости в каталоге')
   await expect(publicCard).toContainText('Микс')
@@ -16362,7 +16626,7 @@ test('venue owner configures public review link settings', async ({ page }) => {
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
   const reviewCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Ссылка для отзывов' }) })
   await expect(reviewCard).toContainText('Эту кнопку покажем гостю только после оценки 5/5')
   await expect(reviewCard).toContainText('Где взять ссылку: откройте карточку заведения в Яндекс.Картах')
@@ -16414,7 +16678,7 @@ test('venue public card failed save preserves manual location draft', async ({ p
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
 
   const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
   await publicCard.getByPlaceholder('Начните вводить город').fill('Иннополис')
@@ -16440,7 +16704,7 @@ test('venue manager configures working hours and date exceptions', async ({ page
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
   let scheduleCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Часы работы' }) })
   await expect(scheduleCard).toContainText('7 дней · исключений: 0')
 
@@ -16455,7 +16719,7 @@ test('venue manager configures working hours and date exceptions', async ({ page
   })
 
   await page.getByRole('button', { name: 'Вернуться в обзор' }).click()
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
   scheduleCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Часы работы' }) })
   await expect(scheduleCard).toContainText('Пн · Закрыто')
 
@@ -16568,7 +16832,7 @@ test('venue manager configures paid shift extension settings', async ({ page }) 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
   await expect(page.getByRole('heading', { name: 'Настройки брони' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Продление времени' })).toBeVisible()
   await expect(page.getByText('Настройте цену и длительность, чтобы гости могли запросить продление.')).toBeVisible()
@@ -16603,7 +16867,7 @@ test('venue manager configures booking hold settings', async ({ page }) => {
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await openVenueSection(page, 'Настройки')
   const bookingCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Настройки брони' }) })
   await expect(bookingCard).toContainText('Держим бронь: 30 минут')
   await expect(bookingCard).toContainText('если бронь на 19:00')
@@ -16662,7 +16926,7 @@ test('venue booking queue shows guest attendance confirmation only when present'
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Брони', exact: true }).click()
+  await openVenueSection(page, 'Брони')
 
   const confirmedCard = page.locator('.venue-booking-card').filter({ hasText: 'Бронь №12' })
   await expect(confirmedCard).toContainText('подтверждена')
@@ -16692,7 +16956,7 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Брони', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Брони', exact: true }).click()
+  await openVenueSection(page, 'Брони')
   await expect(page.getByRole('heading', { name: 'Брони' })).toBeVisible()
   const bookingCard = page.locator('.venue-booking-card[data-booking-id="701"]')
   await expect(bookingCard.getByRole('heading', { name: 'Бронь №12 · 10.01.2030, 21:30' })).toBeVisible()
@@ -16743,7 +17007,7 @@ test('venue manager manages bookings queue lifecycle', async ({ page }) => {
   await page.getByRole('button', { name: 'Возобновить переписку' }).click()
   await expect(page.getByRole('button', { name: 'Завершить переписку' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Активные' })).toHaveAttribute('data-active', 'true')
-  await page.getByRole('button', { name: 'Брони', exact: true }).click()
+  await openVenueSection(page, 'Брони')
 
   await page.getByRole('button', { name: 'Подтвердить' }).click()
   await expect(page.locator('.venue-booking-card .venue-order-meta').filter({ hasText: 'подтверждена' })).toBeVisible()
@@ -16909,7 +17173,7 @@ test('venue booking conversation discoverability keeps labels unread and exact t
   await expect(firstBookingCard).toHaveAttribute('data-unread-count', '2')
   await expect(messagesNav).toHaveAttribute('data-unread-count', '3')
 
-  await messagesNav.click()
+  await openVenueSection(page, 'Переписки')
   await expect(page.getByRole('heading', { name: 'Переписки' })).toBeVisible()
   await expect(page.locator('.venue-message-thread-card')).toHaveCount(3)
   await expect.poll(async () =>
@@ -16929,26 +17193,26 @@ test('venue booking conversation discoverability keeps labels unread and exact t
   await expect(page.locator('.venue-message-thread-card[data-thread-id="7420"]')).toContainText(secondLabel)
   await expect(page.locator('.venue-message-thread-card[data-thread-id="7430"]')).toContainText('Чат')
 
-  await page.locator('[data-nav-route="support"]').click()
+  await openVenueSection(page, 'Поддержка')
   await expect(page.getByRole('heading', { name: 'Поддержка' })).toBeVisible()
   await expect(page.getByText('Обращений в поддержку нет.')).toBeVisible()
   await expect(page.locator('.venue-message-thread-card')).toHaveCount(0)
 
-  await page.locator('[data-nav-route="bookings"]').click()
+  await openVenueSection(page, 'Брони')
   await secondBookingCard.getByRole('button', { name: 'Открыть переписку' }).click()
   await expect(page).toHaveURL(/#\/messages\?threadId=7420$/)
   await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: secondLabel })).toBeVisible()
   await expect(page.locator('.venue-messages-detail')).toContainText('Вторая бронь остаётся без новых сообщений.')
   await expect(messagesNav).toHaveAttribute('data-unread-count', '3')
 
-  await page.locator('[data-nav-route="bookings"]').click()
+  await openVenueSection(page, 'Брони')
   await firstBookingCard.getByRole('button', { name: 'Открыть переписку' }).click()
   await expect(page).toHaveURL(/#\/messages\?threadId=7410$/)
   await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: firstLabel })).toBeVisible()
   await expect(page.locator('.venue-messages-detail')).toContainText('Подтвердите, пожалуйста, стол у окна.')
   await expect(messagesNav).toHaveAttribute('data-unread-count', '1')
 
-  await page.locator('[data-nav-route="bookings"]').click()
+  await openVenueSection(page, 'Брони')
   await expect(firstBookingCard).toHaveAttribute('data-unread-count', '0')
   await expect(firstBookingCard.locator('.booking-unread-badge')).toHaveCount(0)
   await expect(secondBookingCard).toHaveAttribute('data-unread-count', '0')
@@ -16984,7 +17248,7 @@ test('venue booking conversation discoverability keeps labels unread and exact t
     '0'
   )
 
-  await page.locator('[data-nav-route="bookings"]').click()
+  await openVenueSection(page, 'Брони')
   await expect(firstBookingCard).toHaveAttribute('data-unread-count', '1')
   await expect(firstBookingCard.locator('.booking-unread-badge')).toHaveText('Новых сообщений: 1')
   await expect(secondBookingCard).toHaveAttribute('data-unread-count', '0')
@@ -17037,7 +17301,7 @@ test('venue conversation deep link rejects a support ticket before its read mark
   ])
   expect(api.getThreadById(7490)?.unreadCount).toBe(4)
 
-  await page.locator('[data-nav-route="support"]').click()
+  await openVenueSection(page, 'Поддержка')
   await expect(page.getByRole('heading', { name: 'Поддержка' })).toBeVisible()
   const supportCard = page.locator('.venue-message-thread-card[data-thread-id="7490"]')
   await expect(supportCard).toContainText('Проблема с оплатой')
@@ -17054,7 +17318,7 @@ test('venue booking message double click keeps one client message id and one per
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Брони', exact: true }).click()
+  await openVenueSection(page, 'Брони')
   await page.getByRole('button', { name: 'Написать гостю' }).click()
   await page
     .getByPlaceholder('Например: На 19:00 все столы заняты. Можем предложить 20:30?')
@@ -17517,7 +17781,7 @@ test('booking message account venue and thread switches invalidate the pending c
   await expect.poll(() => api.getMessageRequests()).toHaveLength(2)
   await page.getByRole('dialog').getByRole('button', { name: 'Отмена' }).click()
 
-  await page.getByRole('button', { name: 'Переписки', exact: true }).click()
+  await openVenueSection(page, 'Переписки')
   const firstVenueTwoThread = page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №22' })
   await firstVenueTwoThread.getByRole('button', { name: 'Открыть' }).click()
   await page.getByPlaceholder('Напишите ответ гостю.').fill(message)
@@ -17617,7 +17881,7 @@ test('venue staff sees booking arrival controls only', async ({ page }) => {
     window.location.hash = '#/support'
   })
   await expect(page.getByRole('heading', { name: 'Недостаточно прав' })).toBeVisible()
-  await page.getByRole('button', { name: 'Брони', exact: true }).click()
+  await openVenueSection(page, 'Брони')
   await expect(page.getByRole('heading', { name: 'Брони' })).toBeVisible()
   await expect(page.getByText('Бронь №12')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Подтвердить' })).toHaveCount(0)
@@ -18211,7 +18475,7 @@ test('venue manager support queue is list-first and transfers ticket with clear 
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Поддержка', exact: true }).click()
+  await openVenueSection(page, 'Поддержка')
   await expect(page.getByRole('heading', { name: 'Поддержка' })).toBeVisible()
   await expect(page.locator('.venue-message-thread-card').filter({ hasText: 'Нужна помощь по заказу' })).toBeVisible()
   await expect(page.locator('.venue-messages-detail')).toHaveText('')
@@ -18347,8 +18611,9 @@ test('venue manager sees read-only statistics and switches period', async ({ pag
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
+  await showVenueSections(page)
   await expect(page.getByRole('button', { name: 'Статистика', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Статистика', exact: true }).click()
+  await openVenueSection(page, 'Статистика')
   await expect(page.getByRole('heading', { name: 'Статистика' })).toBeVisible()
   await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Заказы' }).getByText('4')).toBeVisible()
   await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Выручка' })).toContainText(/5\s*000/)
@@ -18524,8 +18789,9 @@ test('venue owner subscription screen separates refresh from checkout ensure', a
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
+  await showVenueSections(page)
   await expect(page.getByRole('button', { name: 'Подписка', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Подписка', exact: true }).click()
+  await openVenueSection(page, 'Подписка')
   await expect(page.getByRole('heading', { name: 'Подписка' })).toBeVisible()
   await expect(page.getByText('Статус: Активна')).toBeVisible()
   await expect(page.getByText(/Цена:.*₽/)).toBeVisible()
@@ -18561,7 +18827,7 @@ test('venue owner subscription screen uses human manual payment copy and hides f
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Подписка', exact: true }).click()
+  await openVenueSection(page, 'Подписка')
   await expect(page.getByText('Онлайн-оплата не подключена. Оплату ведёт платформа вручную.')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Оплатить картой' })).toBeDisabled()
   await expect(page.getByText('fake://')).toHaveCount(0)
@@ -18586,8 +18852,9 @@ test('venue owner sees statistics section', async ({ page }) => {
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
+  await showVenueSections(page)
   await expect(page.getByRole('button', { name: 'Статистика', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Статистика', exact: true }).click()
+  await openVenueSection(page, 'Статистика')
   await expect(page.getByRole('heading', { name: 'Статистика' })).toBeVisible()
   await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Средний чек' })).toContainText(/1\s*250/)
 })
@@ -18609,7 +18876,7 @@ test('venue owner creates edits activates and pauses informational promotion', a
   const api = await mockVenuePromotionsApi(page, { role: 'OWNER', nowEpochMs: referenceEpochMs })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
   await expect(page.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
   await expect(
     page.getByText('Акция носит информационный характер. Скидки и промокоды автоматически к заказу не применяются.')
@@ -18645,7 +18912,7 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await expect(page.locator('.guest-venue-promotions')).toHaveCount(0)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
   const draftCard = page.locator('.venue-promotion-card').filter({ hasText: 'Вечер для друзей' })
   await draftCard.getByRole('button', { name: 'Опубликовать' }).click()
   await expect(page.getByText('Акция опубликована.')).toBeVisible()
@@ -18686,7 +18953,7 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await expect(page.locator('.guest-venue-promotions')).toContainText('Обновлённый вечер')
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
   await page
     .locator('.venue-promotion-card')
     .filter({ hasText: 'Обновлённый вечер' })
@@ -18700,7 +18967,7 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await expect(page.locator('.guest-venue-promotions')).toHaveCount(0)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
   const pausedCard = page.locator('.venue-promotion-card').filter({ hasText: 'Обновлённый вечер' })
   await pausedCard.getByRole('button', { name: 'Редактировать' }).click()
   await form.getByLabel('Описание', { exact: true }).fill('Обновлённое предложение для компаний.')
@@ -18773,7 +19040,7 @@ test('venue promotions present derived effective states without lifecycle mutati
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
 
   const currentPanel = page.locator('#venue-promotions-current-panel')
   const archivedPanel = page.locator('#venue-promotions-archived-panel')
@@ -18878,7 +19145,7 @@ test('venue promotion tabs separate current and archived cards with accessible k
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
 
   const tablist = page.getByRole('tablist', { name: 'Списки акций', exact: true })
   const currentTab = tablist.getByRole('tab', { name: 'Текущие', exact: true })
@@ -18949,7 +19216,7 @@ test('venue promotion pause and archive use separate confirmed lifecycle request
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
   await expect.poll(() => api.getPromotionListRequests()).toBe(1)
 
   const currentTab = page.getByRole('tab', { name: 'Текущие', exact: true })
@@ -19060,7 +19327,7 @@ test('venue promotion stale status and archive refresh authoritative state witho
 
   await page.goto(`?mode=venue&venueId=2#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await expect(page.locator('.venue-select')).toHaveValue('2')
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
   await expect.poll(() => api.getPromotionListRequests()).toBe(1)
 
   const statusConflictCard = page.locator('[data-promotion-id="912"]')
@@ -19201,7 +19468,7 @@ test('archived gift promotion is read only while active and paused readiness sta
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
 
   const currentTab = page.getByRole('tab', { name: 'Текущие', exact: true })
   const archivedTab = page.getByRole('tab', { name: 'Архив', exact: true })
@@ -19287,7 +19554,7 @@ test('venue promotion tabs reset and ignore a disposed late response on venue sw
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
   const venueSelect = page.locator('.venue-controls select.venue-select')
   const currentTab = page.getByRole('tab', { name: 'Текущие', exact: true })
   const archivedTab = page.getByRole('tab', { name: 'Архив', exact: true })
@@ -19369,7 +19636,7 @@ test('venue owner configures happy hours windows and targets while invalid activ
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
 
   const incompleteCard = page.locator('.venue-promotion-card').filter({ hasText: 'Ненастроенные часы' })
   await expect(incompleteCard).toContainText('Нужно исправить перед публикацией')
@@ -19463,7 +19730,7 @@ test('venue owner configures happy hours windows and targets while invalid activ
   await expect(page.locator('.guest-venue-promotions')).toContainText('Счастливые часы')
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
   await page
     .locator('.venue-promotion-card', {
       has: page.getByRole('heading', { name: 'Счастливые часы', exact: true })
@@ -19497,7 +19764,7 @@ test('venue owner creates a fixed gift promotion and edits it to an allowlisted 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
   await page.getByRole('button', { name: 'Создать акцию' }).click()
   const form = page.locator('.venue-promotion-form')
   await form.getByLabel('Тип акции').selectOption('GIFT_WITH_ITEM')
@@ -19571,8 +19838,9 @@ test('venue owner sees feedback section and staff does not', async ({ page }) =>
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
+  await showVenueSections(page)
   await expect(page.getByRole('button', { name: 'Отзывы', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Отзывы', exact: true }).click()
+  await openVenueSection(page, 'Отзывы')
   await expect(page.getByRole('heading', { name: 'Отзывы', exact: true })).toBeVisible()
   await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Отзывы' })).toContainText('2')
   await expect(page.getByText('Гость 9010')).toBeVisible()
@@ -19627,7 +19895,7 @@ test('venue manager can create promotions from the management section', async ({
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Акции', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await openVenueSection(page, 'Акции')
   await expect(page.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
   const currentTab = page.getByRole('tab', { name: 'Текущие', exact: true })
   const archivedTab = page.getByRole('tab', { name: 'Архив', exact: true })
@@ -19676,7 +19944,7 @@ test('venue menu bootstraps an empty venue before the first authoritative displa
     observer.observe(document.body, { childList: true, subtree: true })
   })
 
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   await expect.poll(() => api.getBootstrapCalls()).toBe(1)
   expect(api.getMenuCalls()).toBe(0)
   await expect(page.locator('.venue-menu-category-title')).toHaveCount(0)
@@ -19710,15 +19978,15 @@ test('venue menu repeats bootstrap on a new screen mount without duplicate categ
   const api = await mockVenueMenuApi(page, { categories: [], bootstrapSeedsDefaults: true })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   await expect(page.locator('.venue-menu-category-title')).toHaveText([
     'Кальянное меню',
     'Напитки',
     'Кухня'
   ])
 
-  await page.getByRole('button', { name: 'Обзор', exact: true }).click()
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Обзор')
+  await openVenueSection(page, 'Заказное меню')
 
   await expect.poll(() => api.getBootstrapCalls()).toBe(2)
   await expect.poll(() => api.getMenuCalls()).toBe(2)
@@ -19757,7 +20025,7 @@ test('venue menu bootstrap preserves a partial custom menu and appends only miss
   const api = await mockVenueMenuApi(page, { categories, bootstrapSeedsDefaults: true })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   await expect(page.locator('.venue-menu-category-title')).toHaveText([
     'Авторское меню',
@@ -19793,7 +20061,7 @@ test('venue menu keeps bootstrap failure retryable without a false empty-menu su
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   const errorCard = page.locator('.venue-menu-builder > .error-card')
   await expect(errorCard.getByRole('heading', { name: 'Сервис временно недоступен' })).toBeVisible()
@@ -19856,7 +20124,7 @@ test('venue menu ignores a delayed bootstrap response after a venue switch', asy
   const releaseOldBootstrap = api.deferNextMenuBootstrap(1)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   await expect.poll(() => api.getBootstrapRequests()).toEqual([1])
   const venueSelect = page.locator('.venue-controls select.venue-select')
 
@@ -19901,7 +20169,7 @@ test('venue menu ignores a delayed bootstrap response after an account replaceme
   const releaseOldBootstrap = api.deferNextMenuBootstrap()
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   await expect.poll(() => api.getBootstrapCalls()).toBe(1)
 
   await page.evaluate(
@@ -19912,7 +20180,7 @@ test('venue menu ignores a delayed bootstrap response after an account replaceme
     { userId: 987654321, initData: otherMockInitData }
   )
   await page.goto(`?mode=venue&smokeUser=other#tgWebAppData=${encodeURIComponent(otherMockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   await expect.poll(() => api.getBootstrapCalls()).toBe(2)
   await expect(page.locator('.venue-menu-category-title')).toHaveText([
@@ -19947,7 +20215,7 @@ test('venue staff reads the menu without sending the bootstrap mutation', async 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   await expect(page.locator('.venue-menu-category-title')).toHaveText(['Кальянное меню'])
   expect(api.getBootstrapCalls()).toBe(0)
@@ -19973,7 +20241,7 @@ test('venue manager drafts cancels and atomically confirms one menu shift check 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   const editing = page.locator('details.venue-menu-editing')
   const shiftCheck = page.locator('details.venue-menu-shift-check')
@@ -20205,7 +20473,7 @@ test('venue owner can complete a no-op menu shift check with one empty batch', a
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const shiftCheck = page.locator('details.venue-menu-shift-check')
   await shiftCheck.locator(':scope > summary').click()
   await shiftCheck.getByRole('button', { name: 'Подтвердить проверку' }).click()
@@ -20242,7 +20510,7 @@ test('menu shift check rebases a stale draft and keeps a failed confirmation ret
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const shiftCheck = page.locator('details.venue-menu-shift-check')
   const errorCard = page.locator('.venue-menu-builder > .error-card')
   const berrySwitch = () =>
@@ -20336,7 +20604,7 @@ test('menu shift check clears venue drafts and ignores a disposed late menu resp
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   let editing = page.locator('details.venue-menu-editing')
   let shiftCheck = page.locator('details.venue-menu-shift-check')
   const venueSelect = page.locator('.venue-controls select.venue-select')
@@ -20421,7 +20689,7 @@ test('venue menu isolates form scroll focus and success across a venue switch', 
 
   await page.setViewportSize({ width: 390, height: 600 })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const venueSelect = page.locator('.venue-controls select.venue-select')
   const editing = page.locator('details.venue-menu-editing')
   await editing.locator(':scope > summary').click()
@@ -20511,7 +20779,7 @@ test('venue menu isolates form scroll focus and success across an account replac
   })
   await page.setViewportSize({ width: 390, height: 600 })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const editing = page.locator('details.venue-menu-editing')
   await editing.locator(':scope > summary').click()
   const category = editing.locator('details.venue-menu-category[data-category-id="30"]')
@@ -20544,7 +20812,7 @@ test('venue menu isolates form scroll focus and success across an account replac
     window.localStorage.setItem('__e2e_telegram_init_data', initData)
   }, { userId: 987654321, initData: otherMockInitData })
   await page.goto(`?mode=venue&smokeUser=other#tgWebAppData=${encodeURIComponent(otherMockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const otherBuilder = page.locator('.venue-menu-builder')
   await expect(otherBuilder).toBeVisible()
   await expect.poll(() => api.getVenueMeUserIds().at(-1)).toBe(987654321)
@@ -20608,7 +20876,7 @@ test('venue staff has no menu shift check but keeps individual stop-list access'
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   await expect(page.locator('.venue-menu-shift-check')).toHaveCount(0)
   await expect(page.getByText('Проверка меню перед сменой', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('searchbox', { name: 'Поиск по позициям и опциям' })).toHaveCount(0)
@@ -20762,7 +21030,7 @@ test('venue manager manages menu item flavors from mini app', async ({ page }) =
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   await expect(page.getByRole('heading', { level: 2, name: 'Меню', exact: true })).toBeVisible()
   const editing = page.locator('details.venue-menu-editing')
   await editing.locator(':scope > summary').click()
@@ -20897,7 +21165,7 @@ test('venue menu focuses a renamed non-empty category summary after authoritativ
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueMenuApi(page, { categories: buildMenuShiftCheckFixture() })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   const editing = page.locator('details.venue-menu-editing')
   const category = editing.locator('details.venue-menu-category[data-category-id="30"]')
@@ -20939,7 +21207,7 @@ test('venue menu focuses a renamed empty category summary after authoritative re
   })
   const api = await mockVenueMenuApi(page, { categories })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   const editing = page.locator('details.venue-menu-editing')
   const category = editing.locator('details.venue-menu-category[data-category-id="32"]')
@@ -20977,7 +21245,7 @@ test('venue menu creates and focuses the server-id category summary after author
   })
   const api = await mockVenueMenuApi(page, { categories })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   const editing = page.locator('details.venue-menu-editing')
   await editing.locator(':scope > summary').click()
@@ -21027,7 +21295,7 @@ test('venue menu restores the moved category summary and authoritative order', a
   const api = await mockVenueMenuApi(page, { categories })
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   const editing = page.locator('details.venue-menu-editing')
   const firstCategory = editing.locator('details.venue-menu-category[data-category-id="30"]')
@@ -21105,7 +21373,7 @@ test('venue menu skips category focus restoration after manual scroll and focus'
   const api = await mockVenueMenuApi(page, { categories })
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   const editing = page.locator('details.venue-menu-editing')
   const renamedCategory = editing.locator('details.venue-menu-category[data-category-id="30"]')
@@ -21155,7 +21423,7 @@ test('venue menu cancel restores focus to stable inline-form triggers without ne
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueMenuApi(page, { categories: buildMenuShiftCheckFixture() })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   const editing = page.locator('details.venue-menu-editing')
   const category = editing.locator('details.venue-menu-category[data-category-id="30"]')
@@ -21214,7 +21482,7 @@ test('venue menu management keeps cards and actions inside narrow viewports', as
   item.options[0].name = 'Очень длинное название вкуса или дополнительной опции без обрезания справа'
   await mockVenueMenuApi(page, { categories })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const editing = page.locator('details.venue-menu-editing')
   const category = editing.locator('details.venue-menu-category[data-category-id="30"]')
   const itemCard = category.locator('.venue-menu-item[data-item-id="310"]')
@@ -21379,7 +21647,7 @@ test('venue menu price fields use empty new values and replace an existing zero'
   categories[0].items[1].priceMinor = 0
   const api = await mockVenueMenuApi(page, { categories })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const editing = page.locator('details.venue-menu-editing')
   const category = editing.locator('details.venue-menu-category[data-category-id="30"]')
   const hookahItem = category.locator('.venue-menu-item[data-item-id="310"]')
@@ -21518,7 +21786,7 @@ test('venue menu restores an edited item and option context after authoritative 
   const api = await mockVenueMenuApi(page, { categories })
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const editing = page.locator('details.venue-menu-editing')
   const category = editing.locator('details.venue-menu-category[data-category-id="30"]')
   const item = category.locator('.venue-menu-item[data-item-id="9000"]')
@@ -21605,7 +21873,7 @@ test('venue menu does not steal user scroll or focus after a delayed authoritati
   const api = await mockVenueMenuApi(page, { categories })
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
 
   const editing = page.locator('details.venue-menu-editing')
   const category = editing.locator('details.venue-menu-category[data-category-id="30"]')
@@ -21677,7 +21945,7 @@ test('venue menu keeps failed inline edit values at the current card', async ({ 
     }
   })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const editing = page.locator('details.venue-menu-editing')
   const category = editing.locator('details.venue-menu-category[data-category-id="30"]')
   const item = category.locator('.venue-menu-item[data-item-id="310"]')
@@ -21747,7 +22015,7 @@ test('venue menu item delete explains dependencies and handles fixed and choice 
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const editing = page.locator('details.venue-menu-editing')
   await editing.locator(':scope > summary').click()
   await editing
@@ -21810,7 +22078,7 @@ test('venue menu item delete cancellation sends no request', async ({ page }) =>
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const editing = page.locator('details.venue-menu-editing')
   await editing.locator(':scope > summary').click()
   await editing
@@ -21869,7 +22137,7 @@ test('venue staff sees menu flavors without edit controls', async ({ page }) => 
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await page.getByRole('button', { name: 'Заказное меню', exact: true }).click()
+  await openVenueSection(page, 'Заказное меню')
   const editing = page.locator('details.venue-menu-editing')
   await editing.locator(':scope > summary').click()
   await editing

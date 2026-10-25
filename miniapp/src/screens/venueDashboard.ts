@@ -16,6 +16,7 @@ export type VenueDashboardOptions = {
   isDebug: boolean
   venueId: number
   access: VenueAccessDto
+  canAccessRoute: (route: 'settings' | 'menu' | 'tables' | 'staff' | 'guest-preview' | 'orders' | 'bookings' | 'calls' | 'messages') => boolean
 }
 
 type DashboardRefs = {
@@ -132,14 +133,68 @@ function isInWorkStaffCallStatus(status: string) {
   return normalized === 'ACK' || normalized === 'ACKNOWLEDGED' || normalized === 'ACCEPTED'
 }
 
+function buildOwnerHome(options: VenueDashboardOptions): HTMLElement {
+  const { access, canAccessRoute } = options
+  const status = access.venueStatus?.trim().toUpperCase()
+  const draft = status === 'DRAFT'
+  const card = el('section', { className: 'card venue-owner-home' })
+  const messages: Record<string, string> = {
+    DRAFT: 'Карточка ещё не опубликована и не видна гостям. Подготовьте заведение: заполните данные, добавьте меню, столы и команду.',
+    PUBLISHED: 'Заведение опубликовано. Здесь — текущие вызовы и быстрый доступ к работе заведения.',
+    HIDDEN: 'Заведение скрыто от гостей. Сохранённую карточку можно проверить в предпросмотре.',
+    PAUSED: 'Заведение на паузе. Доступность операций определяется текущими ограничениями заведения.',
+    SUSPENDED: 'Работа заведения приостановлена. Уточните причину и дальнейшие действия в поддержке.',
+    ARCHIVED: 'Заведение в архиве. Доступность восстановления определяется действующими правилами.',
+    DELETED: 'Заведение удалено. Доступные действия определяются текущими ограничениями.'
+  }
+  append(card,
+    el('h2', { text: draft ? 'Подготовьте заведение' : 'Работа заведения' }),
+    el('p', { className: 'venue-owner-context', text: messages[status ?? ''] ?? 'Статус публикации не подтверждён. Доступные разделы показаны ниже.' })
+  )
+  const actions = el('div', { className: 'venue-owner-actions' })
+  const items: Array<{ route: Parameters<typeof canAccessRoute>[0]; title: string; detail?: string }> = draft
+    ? [
+        { route: 'settings', title: 'Карточка заведения', detail: 'Адрес и описание' },
+        { route: 'settings', title: 'Часы работы', detail: 'В настройках заведения' },
+        { route: 'menu', title: 'Заказное меню' },
+        { route: 'tables', title: 'Столы и QR' },
+        { route: 'staff', title: 'Персонал' },
+        { route: 'guest-preview', title: 'Предпросмотр для гостя' }
+      ]
+    : [
+        { route: 'orders', title: 'Заказы' },
+        { route: 'bookings', title: 'Брони' },
+        { route: 'calls', title: 'Вызовы' },
+        { route: 'messages', title: 'Переписки' }
+      ]
+  items.filter((item) => canAccessRoute(item.route)).forEach((item) => {
+    const link = el('a', { className: 'venue-owner-action' })
+    link.href = `#/${item.route}`
+    append(link, el('strong', { text: item.title }))
+    if (item.detail) append(link, el('span', { text: item.detail }))
+    actions.appendChild(link)
+  })
+  card.appendChild(actions)
+  return card
+}
+
 export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
   const { root, backendUrl, isDebug, venueId, access } = options
   if (!root) return () => undefined
 
+  const owner = access.role === 'OWNER'
+  const draft = owner && access.venueStatus?.trim().toUpperCase() === 'DRAFT'
+  if (draft) {
+    root.replaceChildren(buildOwnerHome(options))
+    return () => undefined
+  }
   const showStaffChatStatus = access.role !== 'STAFF'
   const refs = buildDashboardDom(root, { showStaffChatStatus })
   refs.title.textContent = access.venueName?.trim() || `Заведение #${venueId}`
   refs.subtitle.textContent = `Роль: ${venueRoleLabel(access.role)}`
+  if (owner) {
+    refs.title.parentElement?.replaceWith(buildOwnerHome(options))
+  }
   const deps = buildApiDeps(isDebug)
 
   let disposed = false
@@ -188,7 +243,9 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
     const controller = new AbortController()
     loadAbort = controller
     const seq = ++loadSeq
-    const staffCallsPromise = venueGetStaffCalls(backendUrl, { venueId, limit: 100 }, deps, controller.signal)
+    const staffCallsPromise = !owner || access.permissions.includes('ORDER_QUEUE_VIEW')
+      ? venueGetStaffCalls(backendUrl, { venueId, limit: 100 }, deps, controller.signal)
+      : Promise.resolve(null)
     const chatPromise = canViewStaffChat
       ? venueGetStaffChatStatus(backendUrl, venueId, deps, controller.signal)
       : Promise.resolve(null)
@@ -202,14 +259,14 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
     const staffCallsResult = responses[0] as Awaited<typeof staffCallsPromise>
     const chatResult = responses[1] as Awaited<typeof chatPromise>
 
-    if (!staffCallsResult.ok && staffCallsResult.error.code === REQUEST_ABORTED_CODE) {
+    if (staffCallsResult && !staffCallsResult.ok && staffCallsResult.error.code === REQUEST_ABORTED_CODE) {
       return
     }
     if (chatResult && !chatResult.ok && chatResult.error.code === REQUEST_ABORTED_CODE) {
       return
     }
 
-    if (!staffCallsResult.ok) {
+    if (staffCallsResult && !staffCallsResult.ok) {
       refs.summaryNew.textContent = 'ошибка'
       refs.summaryActive.textContent = 'ошибка'
       showError(staffCallsResult.error)
@@ -217,9 +274,9 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
       return
     }
 
-    const activeCalls = staffCallsResult.data.items
-    refs.summaryNew.textContent = String(activeCalls.filter((item) => isNewStaffCallStatus(item.status)).length)
-    refs.summaryActive.textContent = String(activeCalls.filter((item) => isInWorkStaffCallStatus(item.status)).length)
+    const activeCalls = staffCallsResult?.data.items ?? []
+    refs.summaryNew.textContent = staffCallsResult ? String(activeCalls.filter((item) => isNewStaffCallStatus(item.status)).length) : 'недоступно'
+    refs.summaryActive.textContent = staffCallsResult ? String(activeCalls.filter((item) => isInWorkStaffCallStatus(item.status)).length) : 'недоступно'
     if (showStaffChatStatus && refs.summaryChat) {
       refs.summaryChat.textContent =
         chatResult === null
