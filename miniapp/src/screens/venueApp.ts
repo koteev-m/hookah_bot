@@ -38,6 +38,7 @@ export type VenueAppOptions = {
 
 type RouteName =
   | 'dashboard'
+  | 'more'
   | 'ownership'
   | 'orders'
   | 'order'
@@ -65,10 +66,19 @@ type Route = {
   previewOrigin?: 'settings' | 'venue'
 }
 
-type NavRouteName = Exclude<RouteName, 'order'>
+type NavRouteName = Exclude<RouteName, 'order' | 'more'>
 
 type VenueShellRefs = {
   app: HTMLDivElement
+  header: HTMLElement
+  title: HTMLHeadingElement
+  subtitle: HTMLParagraphElement
+  nav: HTMLElement
+  ownerNav: HTMLElement
+  ownerPortfolio: HTMLElement
+  moreButton: HTMLButtonElement
+  moreUnreadBadge: HTMLSpanElement
+  backButton: HTMLButtonElement
   accessState: HTMLParagraphElement
   venueSelect: HTMLSelectElement
   navButtons: Record<NavRouteName, HTMLButtonElement>
@@ -106,6 +116,7 @@ function resolveRoute(): Route {
     !route ||
     ![
       'dashboard',
+      'more',
       'ownership',
       'orders',
       'order',
@@ -173,9 +184,11 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
   const venueSelect = document.createElement('select')
   venueSelect.className = 'venue-select'
   venueSelect.disabled = true
+  venueSelect.setAttribute('aria-label', 'Выбрать заведение')
   append(controls, accessState, venueSelect)
 
   const nav = el('nav', { className: 'venue-nav' })
+  nav.setAttribute('aria-label', 'Разделы заведения')
   const navButtons = {
     dashboard: el('button', { className: 'nav-button', text: 'Обзор' }) as HTMLButtonElement,
     ownership: el('button', { className: 'nav-button', text: 'Мои заведения' }) as HTMLButtonElement,
@@ -210,6 +223,11 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
   messagesUnreadBadge.hidden = true
   messagesUnreadBadge.setAttribute('aria-hidden', 'true')
   navButtons.messages.append(' ', messagesUnreadBadge)
+
+  const ownerPortfolio = el('div', { className: 'venue-nav-section' })
+  ownerPortfolio.hidden = true
+  append(ownerPortfolio, el('span', { className: 'venue-nav-section-title', text: 'Портфель' }))
+  nav.appendChild(ownerPortfolio)
 
   const navSections = [
     {
@@ -256,6 +274,18 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     return { element: group, buttons: section.buttons }
   })
 
+  const ownerNav = el('nav', { className: 'venue-owner-nav' })
+  ownerNav.setAttribute('aria-label', 'Основная навигация')
+  ownerNav.hidden = true
+  const moreButton = el('button', { className: 'nav-button', text: 'Ещё' })
+  moreButton.dataset.navRoute = 'more'
+  const moreUnreadBadge = el('span', { className: 'nav-unread-badge' })
+  moreUnreadBadge.hidden = true
+  moreUnreadBadge.setAttribute('aria-hidden', 'true')
+  moreButton.append(' ', moreUnreadBadge)
+  const backButton = el('button', { className: 'venue-owner-back button-secondary', text: '← Назад' })
+  backButton.hidden = true
+
   const errorCard = el('div', { className: 'error-card venue-error' }) as HTMLDivElement
   errorCard.hidden = true
   const errorTitle = el('h3')
@@ -265,12 +295,21 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
   append(errorCard, errorTitle, errorMessage, errorActions, errorDetails)
 
   const content = el('div', { className: 'container venue-content' })
-  append(header, brand, controls, nav)
-  append(app, header, errorCard, content)
+  append(header, brand, controls, ownerNav, nav)
+  append(app, header, errorCard, backButton, content)
   root.replaceChildren(app)
 
   return {
     app,
+    header,
+    title,
+    subtitle,
+    nav,
+    ownerNav,
+    ownerPortfolio,
+    moreButton,
+    moreUnreadBadge,
+    backButton,
     accessState,
     venueSelect,
     navButtons,
@@ -288,6 +327,8 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
 function updateNav(navButtons: Record<NavRouteName, HTMLButtonElement>, active: RouteName) {
   Object.entries(navButtons).forEach(([key, button]) => {
     button.dataset.active = String(key === active)
+    if (key === active) button.setAttribute('aria-current', 'page')
+    else button.removeAttribute('aria-current')
   })
 }
 
@@ -363,6 +404,9 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   const setConversationUnreadCount = (value: number) => {
     const count = Number.isSafeInteger(value) && value > 0 ? value : 0
+    refs.moreUnreadBadge.hidden = count === 0
+    refs.moreUnreadBadge.textContent = count > 99 ? '99+' : String(count)
+    refs.moreButton.setAttribute('aria-label', count > 0 ? `Ещё, непрочитанных сообщений: ${count}` : 'Ещё')
     refs.messagesUnreadBadge.hidden = count === 0
     refs.messagesUnreadBadge.textContent = count > 99 ? '99+' : String(count)
     refs.navButtons.messages.dataset.unreadCount = String(count)
@@ -373,6 +417,27 @@ export function mountVenueApp(options: VenueAppOptions) {
   }
 
   const updateAccessState = () => {
+    const access = accessList.find((item) => item.venueId === selectedVenueId)
+    const owner = currentRole === 'OWNER'
+    refs.app.classList.toggle('venue-owner-shell', owner)
+    refs.title.textContent = owner ? access?.venueName?.trim() || `Заведение #${selectedVenueId}` : 'Панель заведения'
+    refs.subtitle.textContent = owner
+      ? [access?.venueCity?.trim(), venueStatusLabel(access?.venueStatus) || 'Статус не указан'].filter(Boolean).join(' · ')
+      : 'Операционный режим'
+    refs.ownerNav.hidden = !owner
+    refs.ownerPortfolio.hidden = !owner
+    refs.navButtons.dashboard.textContent = owner ? 'Главная' : 'Обзор'
+    if (owner) {
+      refs.ownerPortfolio.appendChild(refs.navButtons.ownership)
+      append(refs.ownerNav, refs.navButtons.dashboard, refs.navButtons.orders, refs.navButtons.settings, refs.moreButton)
+    } else {
+      refs.navSections.forEach((section) => {
+        const actions = section.element.querySelector<HTMLElement>('.venue-nav-section-actions')!
+        append(actions, ...section.buttons)
+      })
+      refs.header.appendChild(refs.nav)
+      refs.nav.hidden = false
+    }
     if (selectedVenueId && currentRole) {
       refs.accessState.textContent = `Роль: ${venueRoleLabel(currentRole)}`
     } else {
@@ -537,12 +602,14 @@ export function mountVenueApp(options: VenueAppOptions) {
       !hasPermission('BOOKING_MANAGE') &&
       !hasPermission('STAFF_MODULE_SETTINGS_MANAGE')
     refs.navSections.forEach((section) => {
-      section.element.hidden = section.buttons.every((button) => button.hidden)
+      section.element.hidden = section.buttons.every((button) => button.hidden || !section.element.contains(button))
     })
   }
 
   const canAccessRoute = (route: RouteName) => {
     switch (route) {
+      case 'more':
+        return currentRole === 'OWNER'
       case 'ownership':
         return accessList.some((access) => access.role === 'OWNER')
       case 'orders':
@@ -655,8 +722,14 @@ export function mountVenueApp(options: VenueAppOptions) {
       return () => undefined
     }
     switch (route.name) {
+      case 'more': {
+        screenRoot.classList.add('venue-owner-more')
+        append(screenRoot, el('h2', { text: 'Ещё' }), refs.nav)
+        refs.nav.hidden = false
+        return () => undefined
+      }
       case 'dashboard':
-        return renderVenueDashboardScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+        return renderVenueDashboardScreen({ root: screenRoot, backendUrl, isDebug, venueId, access, canAccessRoute })
       case 'orders':
         return renderVenueOrdersScreen({
           root: screenRoot,
@@ -791,6 +864,8 @@ export function mountVenueApp(options: VenueAppOptions) {
   }
 
   const disposables: Array<() => void> = []
+  disposables.push(on(refs.moreButton, 'click', () => navigate('#/more')))
+  disposables.push(on(refs.backButton, 'click', () => router.back()))
   disposables.push(on(refs.navButtons.dashboard, 'click', () => navigate('#/dashboard')))
   disposables.push(on(refs.navButtons.ownership, 'click', () => navigate('#/ownership')))
   disposables.push(on(refs.navButtons.orders, 'click', () => navigate('#/orders')))
@@ -820,6 +895,7 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   let currentDispose: (() => void) | null = null
   let currentRoute = resolveRoute()
+  let ownerSectionOrigin: 'dashboard' | 'more' = 'more'
 
   const routeListeners = new Set<() => void>()
   const notifyRouteChange = () => {
@@ -838,6 +914,10 @@ export function mountVenueApp(options: VenueAppOptions) {
         navigate('#/settings')
         return
       }
+      if (currentRole === 'OWNER' && !['dashboard', 'more', 'orders', 'settings', 'ownership'].includes(currentRoute.name)) {
+        navigate(`#/${ownerSectionOrigin}`)
+        return
+      }
       navigate('#/dashboard')
     },
     canGoBack: () => currentRoute.name !== 'dashboard',
@@ -854,11 +934,24 @@ export function mountVenueApp(options: VenueAppOptions) {
     const previousRoute = currentRoute
     currentRoute = route
     updateNav(refs.navButtons, route.name === 'order' ? 'orders' : route.name)
+    const owner = currentRole === 'OWNER'
+    if (owner && previousRoute.name !== route.name && (previousRoute.name === 'dashboard' || previousRoute.name === 'more')) {
+      ownerSectionOrigin = previousRoute.name
+    }
+    const moreActive = !['dashboard', 'orders', 'order', 'settings'].includes(route.name)
+    refs.moreButton.dataset.active = String(moreActive)
+    if (moreActive) refs.moreButton.setAttribute('aria-current', 'page')
+    else refs.moreButton.removeAttribute('aria-current')
+    refs.backButton.hidden = !owner || route.name === 'dashboard'
+    // Keep the same permission-filtered buttons when moving between role layouts and More.
+    refs.header.appendChild(refs.nav)
+    refs.nav.hidden = owner
     currentDispose?.()
     currentDispose = renderRouteContent(route)
     void refreshConversationUnreadCount()
-    if (previousRoute.name === 'ownership' && route.name === 'dashboard') {
-      const heading = refs.content.querySelector<HTMLElement>('h2')
+    if ((owner && previousRoute.name !== route.name) || (previousRoute.name === 'ownership' && route.name === 'dashboard')) {
+      if (owner) window.scrollTo(0, 0)
+      const heading = owner && route.name === 'dashboard' ? refs.title : refs.content.querySelector<HTMLElement>('h2')
       if (heading) {
         heading.tabIndex = -1
         heading.focus({ preventScroll: true })

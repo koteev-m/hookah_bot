@@ -64,6 +64,31 @@ Role behavior:
 Current vs target:
 - Current dashboard is `PARTIAL`: operational counters and stats exist in slices, but one complete dashboard model with all cards above needs verification.
 
+### Owner Mini App home and navigation (HT-VENUE-OWNER-UX01)
+
+Local UI scope: OWNER sees the selected venue name, optional city, the status returned by
+Venue access and a compact role label. The existing selector remains available for multiple
+venues. Missing status is shown as unknown; no readiness percentage or inferred completion
+state is displayed.
+
+- Primary navigation: `Главная`, permission-gated `Заказы`, `Настройки`, `Ещё`.
+  `Ещё` retains the existing permission-filtered operations, setup, statistics and help routes,
+  including `Мои заведения`, application creation, active applications and history.
+- Navigation remains in document flow with safe-area padding. It does not cover form controls
+  when scrolling or reducing the viewport for a keyboard. Active routes use `aria-current`;
+  `Ещё` carries the existing aggregate unread count, with the detailed badge on `Переписки`.
+- DRAFT home explains that the card is not published or visible to guests. Card/address/description
+  and working hours both open the existing settings screen; menu, tables/QR, staff and guest
+  preview use existing routes and access checks. Operational polling is not started on DRAFT home.
+- Other statuses retain live staff-call counts and staff-chat state where access allows, with
+  shortcuts to orders, bookings, calls and messages. Status context does not grant publication,
+  availability or restoration. Publication/archive/restore and subscription rules are unchanged.
+- The selected venue home does not duplicate the ownership portfolio. MANAGER/STAFF retain
+  their existing navigation and route checks; server RBAC remains authoritative.
+
+Validation is local and fixture-backed. Real iPhone Telegram safe-area/keyboard behavior and
+staging smoke remain release checks after separate publication/deployment authorization.
+
 ## Orders Queue
 
 Target:

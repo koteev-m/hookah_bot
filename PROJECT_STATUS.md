@@ -1,5 +1,36 @@
 # Project Status
 
+## HT-VENUE-OWNER-UX01 — local Owner home/navigation ready (2026-10-25)
+
+Worktree: `/Users/maksimmartynov/.codex/worktrees/ht-onboarding-ux01-isolate/hookah_bot_ANT`.
+Branch: `codex/ht-venue-owner-ux01`; base/current HEAD:
+`ab1c37f9498750e4bf79c3df30a39a94f89420b0`. Identity gates passed before and after
+branch creation; `codex/ht-owner-draft-access-fix` remains at `bbd166a615b1fe938f6b99c76a7d6283f06a038a`.
+
+State: `HT_VENUE_OWNER_UX01_LOCAL_READY`, uncommitted local Mini App changes only plus tests/docs.
+OWNER has a compact venue header, four primary navigation entries, grouped More page and DRAFT
+preparation actions on existing routes. Other statuses retain operational counts/chat context.
+Ownership applications/history, permissions and MANAGER/STAFF layouts are preserved.
+No backend/API, lifecycle, archive recovery, billing or real venue data changes.
+
+Validation: TypeScript `--noEmit`, Mini App production build and `git diff --check` PASS;
+final full Chromium Playwright smoke **288/288 PASS** (2.5m), including 390×844/1280×900,
+reduced-height form/save, route/back/unread, venue/role switching and existing operational tests.
+Initial test-navigation/mocking failures were corrected before the final full green run.
+Vite reports a JS chunk over 500 kB. Local evidence with source hashes and four screenshots:
+[validation](.tmp-checks/ht-venue-owner-ux01/validation.json),
+[DRAFT mobile](.tmp-checks/ht-venue-owner-ux01/screenshots/owner-draft-390.png),
+[PUBLISHED mobile](.tmp-checks/ht-venue-owner-ux01/screenshots/owner-published-390.png),
+[DRAFT desktop](.tmp-checks/ht-venue-owner-ux01/screenshots/owner-draft-1280.png),
+[More mobile](.tmp-checks/ht-venue-owner-ux01/screenshots/owner-more-390.png).
+These ignored local artifacts are not committed or deployed evidence.
+
+No unfinished process or external operation. No commit, push, PR, merge, deploy or SSH;
+main/deployment checkouts, staging and `scripts/dev/` untouched.
+Next: review the local diff; publication is a separately authorized task. Before release,
+run separately authorized staging/real iPhone Telegram smoke for safe-area and native keyboard;
+WebKit is not installed locally. Fixture-backed Chromium tests do not establish deployed behavior.
+
 ## HT-71-SIMPLE-STAGING-DRAFT-PR — HT70 isolated publication (2026-10-20)
 
 HT70 simple staging install/update is isolated from the unpublished HT46–HT69 work.

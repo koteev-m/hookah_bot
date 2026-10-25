@@ -3359,3 +3359,149 @@ input[type="number"] {
     justify-content: center;
   }
 }
+
+/* Owner navigation stays in document flow, including when the WebView keyboard opens. */
+.venue-owner-shell {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.venue-owner-shell *,
+.venue-owner-shell *::before,
+.venue-owner-shell *::after {
+  box-sizing: border-box;
+}
+
+.venue-owner-shell .venue-header {
+  margin: 0;
+  padding: max(1rem, env(safe-area-inset-top, 0px)) max(1rem, env(safe-area-inset-right, 0px)) 0.75rem max(1rem, env(safe-area-inset-left, 0px));
+  gap: 0.5rem;
+}
+
+.venue-owner-shell .app-brand h1 {
+  font-size: 1.3rem;
+  overflow-wrap: anywhere;
+}
+
+.venue-owner-shell .app-subtitle,
+.venue-owner-shell .venue-access-state {
+  font-size: 0.85rem;
+}
+
+.venue-owner-shell .venue-access-state {
+  color: #64748b;
+}
+
+.venue-owner-shell .venue-select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.venue-owner-nav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.venue-owner-nav .nav-button {
+  min-height: 44px;
+  padding: 0.65rem 0.2rem;
+  font-size: 0.85rem;
+  border-radius: 9px;
+  position: relative;
+}
+
+.venue-owner-nav .nav-unread-badge {
+  position: absolute;
+  top: -0.3rem;
+  right: 0;
+}
+
+.venue-owner-shell .venue-content {
+  padding: 1rem max(1rem, env(safe-area-inset-right, 0px)) 1.5rem max(1rem, env(safe-area-inset-left, 0px));
+  overflow-wrap: anywhere;
+}
+
+.venue-owner-back {
+  margin: 0.75rem 1rem 0;
+  min-height: 44px;
+}
+
+.venue-owner-home h2,
+.venue-owner-more h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.venue-owner-context {
+  color: #52617d;
+  line-height: 1.45;
+  margin: 0 0 1rem;
+}
+
+.venue-owner-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.venue-owner-action {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.25rem;
+  min-height: 64px;
+  padding: 0.75rem;
+  border: 1px solid #dfe3eb;
+  border-radius: 10px;
+  background: #f7f9fc;
+  color: #1f2a44;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.venue-owner-action span {
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+.venue-owner-action:hover {
+  background: #e0e7ff;
+}
+
+.venue-owner-shell :is(button, a):focus-visible {
+  outline: 3px solid #0f766e;
+  outline-offset: 3px;
+}
+
+.venue-owner-shell .venue-dashboard {
+  display: grid;
+  gap: 1rem;
+}
+
+.venue-owner-more .venue-nav {
+  gap: 1.25rem;
+  margin-top: 1rem;
+}
+
+.venue-owner-more .venue-nav-section-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.venue-owner-more .nav-button {
+  min-height: 48px;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+@media (min-width: 768px) {
+  .venue-owner-shell .venue-header {
+    padding-left: max(1.5rem, calc((100% - 688px) / 2));
+    padding-right: max(1.5rem, calc((100% - 688px) / 2));
+  }
+
+  .venue-owner-back {
+    margin-left: max(1.5rem, calc((100% - 688px) / 2));
+  }
+}
