@@ -23,7 +23,8 @@ import { renderVenueOrderDetailScreen } from './venueOrderDetail'
 import { renderVenueOrdersScreen } from './venueOrders'
 import { renderVenueOwnershipScreen } from './venueOwnership'
 import { renderVenuePromotionsScreen } from './venuePromotions'
-import { renderVenueSettingsScreen } from './venueSettings'
+import { renderVenueSettingsCatalog, SETTINGS_SECTIONS, type VenueSettingsSection } from './venueSettingsCatalog'
+import { renderVenueSettingsScreen, type VenueSettingsDraftState } from './venueSettings'
 import { renderVenueShiftExtensionsScreen } from './venueShiftExtensions'
 import { renderVenueStaffScreen } from './venueStaff'
 import { renderVenueStaffScheduleScreen } from './venueStaffSchedule'
@@ -64,6 +65,8 @@ type Route = {
   orderId: number | null
   threadId: number | null
   previewOrigin?: 'settings' | 'venue'
+  settingsSection?: VenueSettingsSection
+  previewSection?: VenueSettingsSection
 }
 
 type NavRouteName = Exclude<RouteName, 'order' | 'more'>
@@ -147,6 +150,8 @@ function resolveRoute(): Route {
   }
   return {
     name: route,
+    settingsSection: route === 'settings' ? segments[1] as VenueSettingsSection : undefined,
+    previewSection: SETTINGS_SECTIONS.includes(query.get('section') as VenueSettingsSection) ? query.get('section') as VenueSettingsSection : undefined,
     orderId: null,
     threadId: parsePositiveInt(query.get('threadId')) ?? null,
     previewOrigin:
@@ -401,12 +406,66 @@ export function mountVenueApp(options: VenueAppOptions) {
   let currentRole: VenueAccessDto['role'] | null = null
   let currentPermissions: string[] = []
   let currentUserId: number | null = null
+  let canLeaveScreen: (() => boolean) | null = null
+  let renderedUrl = window.location.href
+  type SettingsDraft = {
+    key: string
+    venueId: number
+    role: VenueAccessDto['role']
+    userId: number | null
+    section?: VenueSettingsSection
+    root: HTMLDivElement
+    state: VenueSettingsDraftState
+    guard: () => boolean
+    dispose: () => void
+  }
+  // Keep the actual editor (including raw/invalid input and pending explicit saves) in this
+  // app session only. Identity includes permission scope; never reuse it across access changes.
+  const drafts = new Map<string, SettingsDraft>()
+  let currentSettings: SettingsDraft | null = null
+  const draftNotice = el('section', { className: 'card venue-draft-notice' })
+  draftNotice.setAttribute('aria-label', 'Несохранённые черновики')
+  draftNotice.hidden = true
+  refs.content.before(draftNotice)
+  const needsRetention = (draft: SettingsDraft) => draft.state.hasUnsavedChanges() || draft.state.isSaving()
+  const updateDraftNotice = () => {
+    if (disposed) return
+    for (const [key, draft] of drafts) {
+      if (!needsRetention(draft)) { drafts.delete(key); draft.dispose() }
+    }
+    const relevant = [...drafts.values(), ...(currentSettings ? [currentSettings] : [])]
+      .filter((draft) => draft.venueId === selectedVenueId && draft.role === currentRole && draft.userId === currentUserId && needsRetention(draft))
+    draftNotice.hidden = relevant.length === 0
+    draftNotice.replaceChildren()
+    if (!relevant.length) return
+    append(draftNotice, el('p', { text: 'Есть несохранённый черновик. Он хранится только в памяти этого окна. При закрытии или перезагрузке данные могут потеряться. На сервер они попадут только после нажатия «Сохранить».' }))
+    for (const draft of relevant) {
+      if (draft === currentSettings) continue
+      const link = el('a', { text: `Вернуться к черновику: ${draft.root.querySelector('h2')?.textContent ?? 'Настройки'}` })
+      link.href = `#/settings${draft.section ? `/${draft.section}` : ''}`
+      draftNotice.appendChild(link)
+    }
+  }
+  // TS's bundled DOM lib predates Navigation API. Only cancellation and committed-entry
+  // notifications are used; canIntercept is deliberately not treated as cancelable.
+  type NavigationEvent = Event & { destination: { sameDocument: boolean; url: string } }
+  const navigation = (window as Window & { navigation?: EventTarget }).navigation
+  let conversationUnreadCount = 0
 
   const setConversationUnreadCount = (value: number) => {
     const count = Number.isSafeInteger(value) && value > 0 ? value : 0
-    refs.moreUnreadBadge.hidden = count === 0
+    conversationUnreadCount = count
+    const messageLink = refs.content.querySelector<HTMLElement>('[data-owner-messages]')
+    if (messageLink) messageLink.setAttribute('aria-label', count > 0 ? `Переписки, непрочитанных: ${count}` : 'Переписки')
+    let badge = messageLink?.querySelector<HTMLElement>('.nav-unread-badge')
+    if (messageLink && !badge) {
+      badge = el('span', { className: 'nav-unread-badge' })
+      messageLink.appendChild(badge)
+    }
+    if (badge) { badge.hidden = count === 0; badge.textContent = count > 99 ? '99+' : String(count) }
+    refs.moreUnreadBadge.hidden = true
     refs.moreUnreadBadge.textContent = count > 99 ? '99+' : String(count)
-    refs.moreButton.setAttribute('aria-label', count > 0 ? `Ещё, непрочитанных сообщений: ${count}` : 'Ещё')
+    refs.moreButton.setAttribute('aria-label', 'Ещё')
     refs.messagesUnreadBadge.hidden = count === 0
     refs.messagesUnreadBadge.textContent = count > 99 ? '99+' : String(count)
     refs.navButtons.messages.dataset.unreadCount = String(count)
@@ -465,6 +524,9 @@ export function mountVenueApp(options: VenueAppOptions) {
     renderErrorDetails(refs.errorDetails, error, { isDebug })
   }
 
+  const settingsDraftKey = (access: VenueAccessDto, section?: VenueSettingsSection) =>
+    JSON.stringify([currentUserId, access.venueId, access.role, [...access.permissions].sort(), section ?? 'all'])
+
   const loadAccess = async () => {
     if (accessAbort) {
       accessAbort.abort()
@@ -487,6 +549,10 @@ export function mountVenueApp(options: VenueAppOptions) {
     clearAccessError()
     accessList = result.data.venues
     currentUserId = result.data.userId
+    for (const [key, draft] of drafts) {
+      const access = accessList.find((item) => item.venueId === draft.venueId)
+      if (!access || key !== settingsDraftKey(access, draft.section)) { drafts.delete(key); draft.dispose() }
+    }
     const telegramContext = getTelegramContext()
     const params = new URLSearchParams(window.location.search)
     const requestedVenueId = parsePositiveInt(params.get('venueId')) ?? parsePositiveInt(telegramContext.startParam)
@@ -524,7 +590,8 @@ export function mountVenueApp(options: VenueAppOptions) {
     } else {
       nextUrl.searchParams.delete('venueId')
     }
-    window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+    window.history.replaceState(window.history.state, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+    renderedUrl = window.location.href
   }
 
   const updateAccessFromSelection = () => {
@@ -571,7 +638,16 @@ export function mountVenueApp(options: VenueAppOptions) {
       return
     }
     conversationUnreadAbort = null
-    if (!result.ok) return
+    if (!result.ok) {
+      const link = refs.content.querySelector<HTMLElement>('[data-owner-messages]')
+      if (link) {
+        const badge = link.querySelector('.nav-unread-badge')
+        if (badge) badge.textContent = '?'
+        if (badge instanceof HTMLElement) badge.hidden = false
+        link.setAttribute('aria-label', 'Переписки, число непрочитанных не удалось обновить')
+      }
+      return
+    }
     setConversationUnreadCount(result.data.unreadCount)
   }
 
@@ -724,8 +800,15 @@ export function mountVenueApp(options: VenueAppOptions) {
     switch (route.name) {
       case 'more': {
         screenRoot.classList.add('venue-owner-more')
-        append(screenRoot, el('h2', { text: 'Ещё' }), refs.nav)
-        refs.nav.hidden = false
+        append(screenRoot, el('h2', { text: 'Ещё' }))
+        const links = el('div', { className: 'venue-settings-links' })
+        for (const name of ['ownership', 'stats', 'feedback', 'subscription', 'support'] as const) {
+          if (!canAccessRoute(name)) continue
+          const link = el('a', { className: 'venue-owner-action', text: refs.navButtons[name].textContent ?? '' })
+          link.href = `#/${name}`
+          links.appendChild(link)
+        }
+        screenRoot.appendChild(links)
         return () => undefined
       }
       case 'dashboard':
@@ -789,7 +872,7 @@ export function mountVenueApp(options: VenueAppOptions) {
           access,
           origin: route.previewOrigin ?? 'venue',
           onBack: () =>
-            navigate(route.previewOrigin === 'settings' ? '#/settings' : '#/dashboard')
+            navigate(route.previewOrigin === 'settings' ? `#/settings${route.previewSection ? `/${route.previewSection}` : ''}` : '#/dashboard')
         })
       case 'menu':
         return renderVenueMenuScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
@@ -805,7 +888,7 @@ export function mountVenueApp(options: VenueAppOptions) {
           venueId,
           access,
           currentUserId: currentUserId ?? 0,
-          onOpenStaffModuleSettings: () => navigate('#/settings')
+          onOpenStaffModuleSettings: () => navigate(currentRole === 'OWNER' ? '#/settings/team' : '#/settings')
         })
       case 'shifts':
         return renderVenueStaffScheduleScreen({
@@ -814,31 +897,54 @@ export function mountVenueApp(options: VenueAppOptions) {
           isDebug,
           venueId,
           access,
-          onOpenStaffModuleSettings: () => navigate('#/settings')
+          onOpenStaffModuleSettings: () => navigate(currentRole === 'OWNER' ? '#/settings/team' : '#/settings')
         })
       case 'stats':
         return renderVenueStatsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'feedback':
         return renderVenueFeedbackScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'settings':
-        return renderVenueSettingsScreen({
+        if (currentRole === 'OWNER' && !route.settingsSection) return renderVenueSettingsCatalog(screenRoot, access)
+        if (route.settingsSection && !SETTINGS_SECTIONS.includes(route.settingsSection)) {
+          append(screenRoot, el('h2', { text: 'Раздел не найден' }))
+          return () => undefined
+        }
+        const key = settingsDraftKey(access, route.settingsSection)
+        const retained = drafts.get(key)
+        if (retained) {
+          drafts.delete(key)
+          currentSettings = retained
+          canLeaveScreen = retained.guard
+          refs.content.replaceChildren(retained.root)
+          return retained.dispose
+        }
+        let state: VenueSettingsDraftState | null = null
+        let guard = () => true
+        const dispose = renderVenueSettingsScreen({
           root: screenRoot,
           backendUrl,
           isDebug,
           venueId,
           access,
-          onOpenPreview: () => navigate('#/guest-preview?from=settings'),
+          section: route.settingsSection,
+          setLeaveGuard: (value) => { guard = value; canLeaveScreen = value },
+          setDraftState: (value) => { state = value },
+          onDraftChange: updateDraftNotice,
+          onBack: () => navigate('#/dashboard'),
+          onOpenPreview: () => navigate(`#/guest-preview?from=settings${route.settingsSection ? `&section=${route.settingsSection}` : ''}`),
           onStaffModuleSettingsSaved: (settings) => {
-            if (disposed || selectedVenueId !== venueId) return
+            if (disposed) return
             const index = accessList.findIndex((item) => item.venueId === venueId)
             if (index < 0) return
             accessList[index] = {
               ...accessList[index],
               teamScheduleModuleEnabled: settings.teamScheduleModuleEnabled
             }
-            updateNavVisibility()
+            if (selectedVenueId === venueId) updateNavVisibility()
           }
         })
+        if (state) currentSettings = { key, venueId, userId: currentUserId, role: access.role, section: route.settingsSection, root: screenRoot, state, guard, dispose }
+        return dispose
       case 'subscription':
         return renderVenueSubscriptionScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'chat':
@@ -858,7 +964,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   }
 
   const navigate = (hash: string) => {
-    if (window.location.hash !== hash) {
+    if (window.location.hash !== hash && (!canLeaveScreen || canLeaveScreen())) {
       window.location.hash = hash
     }
   }
@@ -887,6 +993,10 @@ export function mountVenueApp(options: VenueAppOptions) {
   disposables.push(on(refs.navButtons.support, 'click', () => navigate('#/support')))
   disposables.push(
     on(refs.venueSelect, 'change', () => {
+      if (canLeaveScreen && !canLeaveScreen()) {
+        refs.venueSelect.value = String(selectedVenueId)
+        return
+      }
       updateAccessFromSelection()
       persistSelectedVenue()
       render()
@@ -895,7 +1005,9 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   let currentDispose: (() => void) | null = null
   let currentRoute = resolveRoute()
-  let ownerSectionOrigin: 'dashboard' | 'more' = 'more'
+  let ownerSectionOrigin = ['ownership', 'stats', 'feedback', 'subscription', 'support'].includes(currentRoute.name) ? 'more'
+    : ['staff', 'chat'].includes(currentRoute.name) ? 'settings/team'
+      : ['menu', 'tables', 'promotions'].includes(currentRoute.name) ? 'settings' : 'dashboard'
 
   const routeListeners = new Set<() => void>()
   const notifyRouteChange = () => {
@@ -911,6 +1023,10 @@ export function mountVenueApp(options: VenueAppOptions) {
         return
       }
       if (currentRoute.name === 'guest-preview' && currentRoute.previewOrigin === 'settings') {
+        navigate(`#/settings${currentRoute.previewSection ? `/${currentRoute.previewSection}` : ''}`)
+        return
+      }
+      if (currentRole === 'OWNER' && currentRoute.name === 'settings' && currentRoute.settingsSection) {
         navigate('#/settings')
         return
       }
@@ -933,23 +1049,45 @@ export function mountVenueApp(options: VenueAppOptions) {
     const route = resolveRoute()
     const previousRoute = currentRoute
     currentRoute = route
+    renderedUrl = window.location.href
     updateNav(refs.navButtons, route.name === 'order' ? 'orders' : route.name)
     const owner = currentRole === 'OWNER'
-    if (owner && previousRoute.name !== route.name && (previousRoute.name === 'dashboard' || previousRoute.name === 'more')) {
-      ownerSectionOrigin = previousRoute.name
+    const routeChanged = previousRoute.name !== route.name || previousRoute.settingsSection !== route.settingsSection
+    if (owner && previousRoute.name !== route.name && (['dashboard', 'more', 'settings'].includes(previousRoute.name))) {
+      ownerSectionOrigin = previousRoute.name === 'settings' && previousRoute.settingsSection ? `settings/${previousRoute.settingsSection}` : previousRoute.name
     }
-    const moreActive = !['dashboard', 'orders', 'order', 'settings'].includes(route.name)
+    const settingsActive = ['settings', 'menu', 'tables', 'staff', 'chat', 'promotions', 'guest-preview'].includes(route.name) && !(route.name === 'menu' && ownerSectionOrigin === 'dashboard')
+    if (owner && settingsActive) refs.navButtons.settings.setAttribute('aria-current', 'page')
+    if (owner && settingsActive) refs.navButtons.settings.dataset.active = 'true'
+    const homeActive = ['dashboard', 'bookings', 'calls', 'messages', 'extensions', 'shifts'].includes(route.name) || (route.name === 'menu' && !settingsActive)
+    if (owner && homeActive) {
+      refs.navButtons.dashboard.setAttribute('aria-current', 'page')
+      refs.navButtons.dashboard.dataset.active = 'true'
+    }
+    const moreActive = ['more', 'ownership', 'stats', 'feedback', 'subscription', 'support'].includes(route.name)
     refs.moreButton.dataset.active = String(moreActive)
     if (moreActive) refs.moreButton.setAttribute('aria-current', 'page')
     else refs.moreButton.removeAttribute('aria-current')
-    refs.backButton.hidden = !owner || route.name === 'dashboard'
-    // Keep the same permission-filtered buttons when moving between role layouts and More.
+    refs.backButton.hidden = true
+    // Preserve the original permission-filtered navigation for Manager/Staff.
     refs.header.appendChild(refs.nav)
     refs.nav.hidden = owner
-    currentDispose?.()
+    const retainedAccess = currentSettings && accessList.find((item) => item.venueId === currentSettings?.venueId)
+    if (currentSettings && retainedAccess && currentSettings.key === settingsDraftKey(retainedAccess, currentSettings.section) && needsRetention(currentSettings)) {
+      drafts.set(currentSettings.key, currentSettings)
+    } else currentDispose?.()
+    currentSettings = null
+    canLeaveScreen = null
     currentDispose = renderRouteContent(route)
+    updateDraftNotice()
+    setConversationUnreadCount(conversationUnreadCount)
+    if (owner && !['dashboard', 'orders', 'order', 'more', 'ownership', 'guest-preview'].includes(route.name) && (route.name !== 'settings' || route.settingsSection)) {
+      const back = el('button', { className: 'button-secondary', text: route.name === 'settings' && route.settingsSection ? '← Настройки' : '← Назад' })
+      back.addEventListener('click', () => router.back())
+      refs.content.prepend(back)
+    }
     void refreshConversationUnreadCount()
-    if ((owner && previousRoute.name !== route.name) || (previousRoute.name === 'ownership' && route.name === 'dashboard')) {
+    if ((owner && routeChanged) || (previousRoute.name === 'ownership' && route.name === 'dashboard')) {
       if (owner) window.scrollTo(0, 0)
       const heading = owner && route.name === 'dashboard' ? refs.title : refs.content.querySelector<HTMLElement>('h2')
       if (heading) {
@@ -960,10 +1098,43 @@ export function mountVenueApp(options: VenueAppOptions) {
   }
 
   const onHashChange = () => {
+    if (window.location.href === renderedUrl) return
+    // popstate/hashchange are notifications, not cancellation points. Follow the actual URL
+    // even for unknown entries or overlapping traversals; retain dirty editors before unmount.
+    const venueId = parsePositiveInt(new URLSearchParams(window.location.search).get('venueId'))
+    if (venueId !== selectedVenueId) {
+      refs.venueSelect.value = venueId && accessList.some((item) => item.venueId === venueId) ? String(venueId) : ''
+      updateAccessFromSelection()
+    }
     render()
     notifyRouteChange()
   }
+  const onNavigate = (event: Event) => {
+    const next = event as NavigationEvent
+    if (next.destination.sameDocument && next.destination.url !== window.location.href && event.cancelable && canLeaveScreen && !canLeaveScreen()) {
+      event.preventDefault()
+    }
+  }
+  const onEntryChange = () => {
+    // replaceState during venue selection is synchronous; let the caller finish first.
+    queueMicrotask(() => { if (!disposed) onHashChange() })
+  }
+  const beforeUnload = (event: BeforeUnloadEvent) => {
+    if ((currentSettings && needsRetention(currentSettings)) || [...drafts.values()].some(needsRetention)) {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+  }
 
+  const onLinkClick = (event: MouseEvent) => {
+    const link = (event.target as Element).closest<HTMLAnchorElement>('a[href^="#"]')
+    if (link && link.hash !== window.location.hash && canLeaveScreen && !canLeaveScreen()) event.preventDefault()
+  }
+  root.addEventListener('click', onLinkClick)
+  navigation?.addEventListener('navigate', onNavigate)
+  navigation?.addEventListener('currententrychange', onEntryChange)
+  window.addEventListener('beforeunload', beforeUnload)
+  window.addEventListener('popstate', onHashChange)
   window.addEventListener('hashchange', onHashChange)
   void loadAccess()
   render()
@@ -975,8 +1146,15 @@ export function mountVenueApp(options: VenueAppOptions) {
     accessAbort = null
     conversationUnreadAbort?.abort()
     conversationUnreadAbort = null
+    root.removeEventListener('click', onLinkClick)
+    navigation?.removeEventListener('navigate', onNavigate)
+    navigation?.removeEventListener('currententrychange', onEntryChange)
+    window.removeEventListener('beforeunload', beforeUnload)
+    window.removeEventListener('popstate', onHashChange)
     window.removeEventListener('hashchange', onHashChange)
     currentDispose?.()
+    drafts.forEach((draft) => draft.dispose())
+    drafts.clear()
     unbindBackButton()
     disposables.forEach((dispose) => dispose())
   }

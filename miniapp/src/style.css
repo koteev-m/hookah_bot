@@ -3505,3 +3505,81 @@ input[type="number"] {
     margin-left: max(1.5rem, calc((100% - 688px) / 2));
   }
 }
+
+.venue-owner-setup {
+  display: inline-block;
+  margin-bottom: 1rem;
+  color: #3158a6;
+}
+
+.venue-settings-links {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.venue-settings-links .venue-owner-action {
+  min-height: 48px;
+}
+
+.venue-schedule-day {
+  border-bottom: 1px solid #dfe3eb;
+  padding: 0.25rem 0;
+}
+
+.venue-day-toggle {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: left;
+}
+
+.venue-day-toggle span:last-child,
+.venue-day-dirty {
+  font-size: 0.8rem;
+  color: #52617d;
+}
+
+.venue-day-editor {
+  padding: 0.75rem 0;
+}
+
+.venue-owner-shell :is(input, select, textarea) {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 16px;
+}
+
+.venue-owner-shell .venue-content > button {
+  margin-bottom: 0.75rem;
+  min-height: 44px;
+}
+
+.venue-settings .status:empty {
+  display: none;
+}
+
+.venue-owner-shell .venue-settings-heading h2,
+.venue-settings-catalog h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.15rem;
+}
+
+.venue-owner-shell .venue-settings button {
+  min-height: 44px;
+}
+
+.venue-owner-shell .venue-settings .button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.venue-owner-action .nav-unread-badge {
+  align-self: flex-start;
+  margin-left: 0;
+  color: #ffffff;
+  font-size: 0.75rem;
+}

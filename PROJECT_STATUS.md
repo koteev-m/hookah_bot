@@ -1,5 +1,114 @@
 # Project Status
 
+## HT-VENUE-OWNER-UX02-HISTORY-COMPAT — local compatibility ready (2026-10-26)
+
+Identity gate PASS: `Hookah_Tootah` / `hookah_bot_ANT`, physical worktree
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_worktrees/ht-venue-owner-ux02`, branch
+`codex/ht-venue-owner-ux02`, expected/actual HEAD `6f07c450ba22d7782a592fc71612eb47840d1c60`.
+Expected common dir/checkout index/origin/instruction authority verified; base/parent NOT_SUPPLIED.
+Starting 8 modified + 2 untracked UX02 files preserved; same final Git status, nothing staged.
+
+State: **HT_VENUE_OWNER_UX02_HISTORY_COMPAT_READY**. Supersedes the HISTORY-HARDEN blocker below.
+Both P2s eliminated: no unknown-index compensation and no restoration state that can hang after
+rapid Back. Cancel only cancellable Navigation API events; otherwise follow actual URL/venue/screen
+and retain dirty editors in memory by user/venue/role/permission scope/form. Stay or explicitly
+confirm discard on cancellable exits; no autosave/storage persistence. Saved/confirmed-discarded
+state is cleared; pending explicit writes may finish while detached. Host close/reload can lose drafts.
+
+Fresh evidence: TypeScript `--noEmit`, production build and diff-check PASS; **32/32 targeted** and
+**320/320 full Playwright smoke (2.5m)** in Chromium 148. Five formerly failing cases remain and pass
+under the agreed fallback contract. Real browser-UI repeated Back proves `cancelable=false` despite
+`canIntercept=true`; screen/draft recovery passes. Two-venue/OWNER-MANAGER, all five forms, exact raw
+text, API counts, errors and pending writes covered. Existing Vite >500 kB warning remains.
+See [validation report](docs/HT_VENUE_OWNER_UX02_LOCAL_VALIDATION.md) and local
+`.tmp-checks/ht-venue-owner-ux02/compat-*` logs, screenshot and scope/hash manifest.
+
+Only router, settings draft lifetime, related tests/docs/checkpoint changed during this task.
+Dashboard/catalog/CSS match task-start hashes. No backend/API/DB/RBAC/Bot/lifecycle/billing/archive,
+other checkout, `scripts/dev/`, stage/commit/push/PR/merge/fetch/SSH/deploy changes. No unfinished
+external operation or local test server. Staging and real Telegram/iPhone/Android, WebKit/Firefox
+NOT_VERIFIED; Chromium fallback emulation is not real old-WebView evidence.
+Next: local diff review; publication and required staging/real Telegram smoke need separate authorization.
+
+## HT-VENUE-OWNER-UX02-HISTORY-HARDEN — blocked before runtime fix (2026-10-26)
+
+Identity PASS in `/Users/maksimmartynov/IdeaProjects/hookah_bot_worktrees/ht-venue-owner-ux02`,
+branch `codex/ht-venue-owner-ux02`, expected/actual HEAD `6f07c450ba22d7782a592fc71612eb47840d1c60`;
+common dir/index/origin/instruction authority verified; base/parent NOT_SUPPLIED. Starting 8 modified
++ 2 untracked preserved. Goal: harden unknown and overlapping browser history without losing drafts.
+
+State: **BLOCKED; neither P2 fixed.** Both reproduced in real Chromium, including native rapid Back.
+Legacy History API cannot identify arbitrary unindexed entry positions/deltas. Stopped runtime
+implementation under the task's explicit limitation clause; source files remain unchanged from start.
+Six new tests: targeted UX02 13 PASS / 5 FAIL (all 12 old cases pass). TypeScript/build PASS.
+Fresh full smoke: **301 PASS / 5 FAIL of 306 (2.9m)**; all original 300 tests pass. Diff-check PASS;
+all five runtime/style files match starting hashes. Final status 8 modified + 2 untracked; no staged
+changes or running test server. See [current validation](docs/HT_VENUE_OWNER_UX02_LOCAL_VALIDATION.md).
+Evidence: `.tmp-checks/ht-venue-owner-ux02/harden-*` logs, preserved browser traces and source hashes.
+Earlier 300/300 does not cover these failures. New regressions intentionally remain red.
+
+Only local tests/docs authorized and changed at this stop; no stage/commit/push/PR/merge/SSH/deploy,
+other checkout or scripts/dev changes. Staging/real Telegram NOT_VERIFIED. No publication authorized.
+Next: agree browser-owned Navigation API entry identity and compatibility/fallback behavior, then
+resume the runtime fix and full acceptance checks. No partial fix is claimed.
+
+## HT-VENUE-OWNER-UX02-FIX-P2-HISTORY — local P2 fixed (2026-10-26)
+
+Worktree `/Users/maksimmartynov/IdeaProjects/hookah_bot_worktrees/ht-venue-owner-ux02`, branch
+`codex/ht-venue-owner-ux02`, expected/observed HEAD `6f07c450ba22d7782a592fc71612eb47840d1c60`.
+Fresh identity gate PASS; same common dir/index/origin/instruction authority. Starting state:
+eight modified and two untracked UX02 files. No new base/parent constraint supplied.
+
+State: `HT_VENUE_OWNER_UX02_P2_FIXED`. Cancelled hash Back/Forward restores the indexed history
+position without overwriting earlier URLs or remounting the dirty form. Venue URL updates retain
+history state. Existing save-first hash guard and native document discard confirmation remain.
+Only router, tests and relevant docs changed from the reviewed UX02 state; no business logic changes.
+
+Evidence: [P2 validation](docs/HT_VENUE_OWNER_UX02_LOCAL_VALIDATION.md),
+[pre-fix browser failure](.tmp-checks/ht-venue-owner-ux02/p2-before.log),
+[final full smoke](.tmp-checks/ht-venue-owner-ux02/p2-full.log),
+[current source hashes](.tmp-checks/ht-venue-owner-ux02/p2-validation.json).
+Three new Chromium regressions plus extended two-venue history coverage. Targeted UX02 **12/12**,
+fresh full frontend **300/300 (2.4m)**, TypeScript/build/diff-check PASS; existing Vite chunk warning.
+Real iPhone Telegram/WebKit/staging remain NOT_VERIFIED. No stage/commit/push/PR/merge/SSH/deploy,
+other checkout or `scripts/dev/` changes; no unfinished test server/external operation.
+
+Next: separate review/publication decision. Required staging/real Telegram release smoke needs
+separate authorization. Stop this bounded local correction here.
+
+## HT-VENUE-OWNER-UX02 — local Owner workspace ready (2026-10-26)
+
+Worktree: `/Users/maksimmartynov/IdeaProjects/hookah_bot_worktrees/ht-venue-owner-ux02`.
+Branch: `codex/ht-venue-owner-ux02`; expected/observed HEAD and exact starting base:
+`6f07c450ba22d7782a592fc71612eb47840d1c60`. Read-only identity gate PASS; common dir,
+checkout/index ownership, origin and instruction provenance verified. Initial status clean.
+
+State: `HT_VENUE_OWNER_UX02_LOCAL_READY`, uncommitted local Mini App/test/docs changes.
+DRAFT/PUBLISHED share an operational home; Settings opens an eight-entry permission-filtered
+catalog; More has portfolio, statistics, feedback, subscription and support. Existing forms/API
+contracts are reused. Owner hours show seven compact days, preserving dirty inputs across
+collapse and other-day/exception saves. Settings navigation, browser/Telegram Back and venue
+switching protect dirty drafts and in-flight writes. Saved preview returns to its subsection.
+MANAGER/STAFF navigation and server RBAC boundaries remain. Media upload is still an existing gap.
+
+Validation: TypeScript `--noEmit`, production build, `git diff --check` PASS. Final full configured
+Chromium Playwright smoke **297/297 PASS** (2.4m); nine new UX02 cases plus existing regressions.
+390×844, reduced 390×420 and desktop checks; requested PNGs created and visually inspected.
+Vite still warns about the >500 kB JS chunk. Initial local port sandbox failure was resolved by
+approved localhost test execution; no filesystem restriction was bypassed.
+
+Evidence: [validation report](docs/HT_VENUE_OWNER_UX02_LOCAL_VALIDATION.md),
+[source hashes/results](.tmp-checks/ht-venue-owner-ux02/validation.json),
+[full smoke log](.tmp-checks/ht-venue-owner-ux02/playwright-full.log),
+[screenshots](.tmp-checks/ht-venue-owner-ux02/screenshots/owner-catalog-390.png).
+The ignored evidence is local only. Staging/real iPhone Telegram/native keyboard/WebKit are
+NOT_VERIFIED; this is not production readiness. Backend/API/DB/Bot/Guest/Platform/billing/lifecycle
+are unchanged. Main/other worktrees and `scripts/dev/` untouched. No stage/commit/push/PR/merge,
+SSH or deploy; no unfinished external operations or local test server.
+
+Next: review this worktree's local diff. Publication and required staging/real Telegram smoke
+need separate authorization; stop this local task here.
+
 ## HT-VENUE-OWNER-UX01 — local Owner home/navigation ready (2026-10-25)
 
 Worktree: `/Users/maksimmartynov/.codex/worktrees/ht-onboarding-ux01-isolate/hookah_bot_ANT`.

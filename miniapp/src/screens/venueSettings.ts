@@ -1,3 +1,4 @@
+import type { VenueSettingsSection } from './venueSettingsCatalog'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
@@ -37,12 +38,22 @@ import { append, el, on } from '../shared/ui/dom'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
 
+export type VenueSettingsDraftState = {
+  hasUnsavedChanges: () => boolean
+  isSaving: () => boolean
+}
+
 export type VenueSettingsOptions = {
   root: HTMLDivElement | null
   backendUrl: string
   isDebug: boolean
   venueId: number
   access: VenueAccessDto
+  section?: VenueSettingsSection
+  setLeaveGuard?: (guard: () => boolean) => void
+  setDraftState?: (state: VenueSettingsDraftState) => void
+  onDraftChange?: () => void
+  onBack?: () => void
   onOpenPreview?: () => void
   onStaffModuleSettingsSaved?: (settings: VenueStaffModuleSettingsDto) => void
 }
@@ -154,11 +165,13 @@ function buildApiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
 }
 
-function buildDom(root: HTMLDivElement): VenueSettingsRefs {
+function buildDom(root: HTMLDivElement, compact = false): VenueSettingsRefs {
   const wrapper = el('div', { className: 'venue-settings' })
   const header = el('section', { className: 'card' })
   const title = el('h2', { text: 'Настройки' })
   const status = el('p', { className: 'status', text: '' })
+  status.setAttribute('role', 'status')
+  status.setAttribute('aria-live', 'polite')
   append(header, title, status)
 
   const staffModuleCard = el('section', { className: 'card venue-staff-module-settings' })
@@ -381,6 +394,7 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
     publicCardPreviewHint
   )
   append(publicCard, publicTitle, publicDescription, publicNameLabel, publicName, publicCardForm)
+  if (compact) publicDescription.remove()
 
   const reviewLinkCard = el('section', { className: 'card' })
   const reviewLinkTitle = el('h3', { text: 'Ссылка для отзывов' })
@@ -579,6 +593,10 @@ function buildDom(root: HTMLDivElement): VenueSettingsRefs {
     extensionCard,
     backButton
   )
+  if (compact) {
+    header.className = 'venue-settings-heading'
+    scheduleDescription.remove()
+  }
   root.replaceChildren(wrapper)
 
   return {
@@ -786,6 +804,7 @@ function renderBookingSettings(refs: VenueSettingsRefs, settings: VenueBookingSe
 }
 
 type ScheduleCallbacks = {
+  compact?: boolean
   onSaveDay: (weekday: number, isClosed: boolean, opensAt: string, closesAt: string) => void
   onDayDirtyChange: (weekday: number, isDirty: boolean) => void
   onEditOverride: (group: ScheduleOverrideGroup) => void
@@ -876,10 +895,11 @@ function renderScheduleDay(
   day: VenueScheduleDayDto,
   callbacks: ScheduleCallbacks
 ): HTMLElement {
-  const row = el('div', { className: 'venue-form-grid' })
+  const row = el('div', { className: callbacks.compact ? 'venue-schedule-day' : 'venue-form-grid' })
+  row.dataset.weekday = String(day.weekday)
   const title = el('p', {
     className: 'field-label',
-    text: `${WEEKDAY_LABELS[day.weekday - 1] ?? day.weekday} · ${formatScheduleLine(day.opensAt, day.closesAt, day.isClosed)}`
+    text: `${WEEKDAY_LABELS[day.weekday - 1] ?? day.weekday} · ${day.configured ? formatScheduleLine(day.opensAt, day.closesAt, day.isClosed) : 'Не настроено'}`
   })
   const closedLabel = document.createElement('label')
   closedLabel.className = 'venue-settings-toggle'
@@ -893,25 +913,28 @@ function renderScheduleDay(
   opensInput.className = 'venue-input'
   opensInput.type = 'time'
   opensInput.value = day.opensAt
+  opensInput.setAttribute('aria-label', 'Открываемся')
   const closesInput = document.createElement('input')
   closesInput.className = 'venue-input'
   closesInput.type = 'time'
   closesInput.value = day.closesAt
+  closesInput.setAttribute('aria-label', 'Закрываемся')
   const saveButton = el('button', {
     className: 'button-small',
-    text: day.configured ? 'Сохранить день' : 'Добавить день'
+    text: 'Сохранить день'
   }) as HTMLButtonElement
 
   const syncClosedState = () => {
     opensInput.disabled = closedInput.checked
     closesInput.disabled = closedInput.checked
   }
+  const dirtyLabel = el('span', { className: 'venue-day-dirty', text: 'Не сохранено' })
+  dirtyLabel.hidden = true
   const notifyDirtyState = () => {
-    callbacks.onDayDirtyChange(
-      day.weekday,
-      closedInput.checked !== day.isClosed ||
-        (!closedInput.checked && (opensInput.value !== day.opensAt || closesInput.value !== day.closesAt))
-    )
+    const dirty = closedInput.checked !== day.isClosed || opensInput.value !== day.opensAt || closesInput.value !== day.closesAt
+    row.dataset.dirty = String(dirty)
+    dirtyLabel.hidden = !dirty
+    callbacks.onDayDirtyChange(day.weekday, dirty)
   }
   closedInput.addEventListener('change', () => {
     syncClosedState()
@@ -923,7 +946,33 @@ function renderScheduleDay(
     callbacks.onSaveDay(day.weekday, closedInput.checked, opensInput.value, closesInput.value)
   })
   syncClosedState()
-  append(row, title, closedLabel, opensInput, closesInput, saveButton)
+  if (callbacks.compact) {
+    const toggle = el('button', { className: 'venue-day-toggle button-secondary' })
+    toggle.setAttribute('aria-expanded', 'false')
+    const summary = el('span', { text: title.textContent ?? '' })
+    const editLabel = el('span', { text: 'Изменить' })
+    append(toggle, summary, editLabel)
+    const editor = el('div', { className: 'venue-form-grid venue-day-editor' })
+    editor.id = `venue-day-editor-${day.weekday}`
+    toggle.setAttribute('aria-controls', editor.id)
+    editor.hidden = true
+    append(editor, closedLabel, el('span', { text: 'Открываемся' }), opensInput, el('span', { text: 'Закрываемся' }), closesInput,
+      el('p', { className: 'venue-order-sub', text: 'Одинаковое время — круглосуточно. Закрытие раньше открытия — на следующий день.' }), saveButton)
+    toggle.addEventListener('click', () => {
+      const open = editor.hidden
+      row.parentElement?.querySelectorAll<HTMLElement>('.venue-day-editor').forEach((other) => { other.hidden = true })
+      row.parentElement?.querySelectorAll<HTMLElement>('.venue-day-toggle').forEach((other) => {
+        other.setAttribute('aria-expanded', 'false')
+        other.lastElementChild!.textContent = 'Изменить'
+      })
+      editor.hidden = !open
+      toggle.setAttribute('aria-expanded', String(open))
+      editLabel.textContent = open ? 'Свернуть' : 'Изменить'
+    })
+    append(row, toggle, dirtyLabel, editor)
+  } else {
+    append(row, title, dirtyLabel, closedLabel, opensInput, closesInput, saveButton)
+  }
   return row
 }
 
@@ -971,7 +1020,7 @@ function renderScheduleSettings(
     ...settings.weeklyHours
       .slice()
       .sort((a, b) => a.weekday - b.weekday)
-      .map((day) => renderScheduleDay(day, callbacks))
+      .map((day) => refs.weeklyScheduleList.querySelector<HTMLElement>(`[data-weekday="${day.weekday}"][data-dirty="true"]`) ?? renderScheduleDay(day, callbacks))
   )
   refs.overrideList.replaceChildren(
     ...(settings.dateOverrides.length
@@ -1024,19 +1073,46 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const { root, backendUrl, isDebug, venueId, access } = options
   if (!root) return () => undefined
 
-  const refs = buildDom(root)
+  const refs = buildDom(root, access.role === 'OWNER')
   refs.publicCardPreviewButton.hidden = !options.onOpenPreview
   refs.publicCardPreviewButton.disabled = true
   const deps = buildApiDeps(isDebug)
-  const canManagePublicCard = access.role === 'OWNER' || access.role === 'MANAGER'
-  const canManageReviewLink = access.permissions.includes('VENUE_SETTINGS')
-  const canManageSchedule = access.role === 'OWNER' || access.role === 'MANAGER'
-  const canManageBookingSettings = access.permissions.includes('BOOKING_MANAGE')
-  const canManageShiftExtension = access.permissions.includes('SHIFT_EXTENSION_SETTINGS')
-  const canManageStaffModuleSettings = access.permissions.includes('STAFF_MODULE_SETTINGS_MANAGE')
+  const section = options.section
+  const inSection = (name: VenueSettingsSection) => !section || section === name
+  const canManagePublicCard = inSection('card') && (access.role === 'OWNER' || access.role === 'MANAGER')
+  const canManageReviewLink = inSection('card') && access.permissions.includes('VENUE_SETTINGS')
+  const canManageSchedule = inSection('hours') && (access.role === 'OWNER' || access.role === 'MANAGER')
+  const canManageBookingSettings = inSection('booking') && access.permissions.includes('BOOKING_MANAGE')
+  const canManageShiftExtension = inSection('extension') && access.permissions.includes('SHIFT_EXTENSION_SETTINGS')
+  const canManageStaffModuleSettings = inSection('team') && access.permissions.includes('STAFF_MODULE_SETTINGS_MANAGE')
+  if (access.role === 'OWNER') refs.backButton.remove()
+  if (section) {
+    const titles = { card: 'Карточка заведения', hours: 'Часы работы', team: 'Команда и доступ', booking: 'Бронирование', extension: 'Продление времени' }
+    root.querySelector('h2')!.textContent = titles[section]
+    // The section title replaces a duplicate card heading, while existing forms stay intact.
+    const cards = { card: refs.publicCard, hours: refs.scheduleCard, team: refs.staffModuleCard, booking: refs.bookingCard, extension: refs.extensionCard }
+    if (section !== 'card' && section !== 'team') cards[section].querySelector('h3')?.remove()
+    if (section === 'hours') refs.scheduleCard.appendChild(refs.publicCardPreviewButton)
+    if (section === 'team') {
+      const links = el('div', { className: 'venue-settings-links' })
+      if (access.role === 'OWNER' || access.role === 'MANAGER') {
+        const staff = el('a', { className: 'venue-owner-action', text: 'Персонал и приглашения' })
+        staff.href = '#/staff'
+        links.appendChild(staff)
+      }
+      if (access.permissions.includes('STAFF_CHAT_LINK')) {
+        const chat = el('a', { className: 'venue-owner-action', text: 'Чат персонала' })
+        chat.href = '#/chat'
+        links.appendChild(chat)
+      }
+      refs.status.parentElement!.appendChild(links)
+    }
+  }
   const disposables: Array<() => void> = []
 
   let disposed = false
+  let discarded = false
+  const notifyDraftChange = () => queueMicrotask(() => { if (!disposed) options.onDraftChange?.() })
   let loadAbort: AbortController | null = null
   let publicCardSaveAbort: AbortController | null = null
   let reviewLinkSaveAbort: AbortController | null = null
@@ -1114,6 +1190,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const openOverrideForm = (mode: OverrideFormMode, group: ScheduleOverrideGroup | null = null) => {
+    if (overrideFormDirty) { announceUnsaved(); return }
     overrideFormMode = mode
     editingOverrideRange = group ? { fromDate: group.fromDate, toDate: group.toDate } : null
     overrideFormDirty = false
@@ -1133,7 +1210,8 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     syncOverrideFormMode()
   }
 
-  const closeOverrideForm = () => {
+  const closeOverrideForm = (saved = false) => {
+    if (!saved && overrideFormDirty && !window.confirm('Отменить несохранённые изменения исключения? Сохранённое расписание не изменится.')) { announceUnsaved(); return }
     overrideFormMode = null
     editingOverrideRange = null
     overrideFormDirty = false
@@ -1309,6 +1387,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (disposed || staffModuleSaveAbort !== controller) return
     staffModuleSaveAbort = null
     staffModuleSaving = false
+    notifyDraftChange()
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       if (normalizeErrorCode(result.error) === ApiErrorCodes.STAFF_MODULE_SETTINGS_STALE) {
@@ -1429,23 +1508,46 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.reviewLinkClearButton.disabled = !normalizeNullableText(currentReviewLinkSettings?.publicReviewUrl)
   }
 
+  const publicCardInputState = new Map<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement, boolean>()
   const setPublicCardBusy = (busy: boolean) => {
     publicCardSaving = busy
+    if (busy) {
+      refs.publicCardForm.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>('input, textarea, button').forEach((input) => {
+        publicCardInputState.set(input, input.disabled)
+        input.disabled = true
+      })
+    } else {
+      publicCardInputState.forEach((disabled, input) => { input.disabled = disabled })
+      publicCardInputState.clear()
+    }
     updatePublicCardSaveButton()
     updatePreviewButton()
   }
 
   const setReviewLinkBusy = (busy: boolean) => {
     reviewLinkSaving = busy
+    refs.reviewLinkInput.disabled = busy
     updateReviewLinkButtons()
   }
 
   const setBookingBusy = (busy: boolean) => {
+    refs.holdInput.disabled = busy
+    refs.bookingPresetActions.querySelectorAll('button').forEach((button) => { button.disabled = busy })
     refs.bookingSaveButton.disabled = busy
     refs.bookingSaveButton.textContent = busy ? 'Сохраняем…' : 'Сохранить'
   }
 
+  const scheduleInputState = new Map<HTMLInputElement | HTMLTextAreaElement, boolean>()
   const setScheduleBusy = (busy: boolean) => {
+    if (busy) {
+      refs.scheduleCard.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((input) => {
+        scheduleInputState.set(input, input.disabled)
+        input.disabled = true
+      })
+    } else {
+      scheduleInputState.forEach((disabled, input) => { input.disabled = disabled })
+      scheduleInputState.clear()
+    }
     scheduleSaving = busy
     updatePreviewButton()
     updateOverrideSaveButton()
@@ -1453,6 +1555,9 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const setExtensionBusy = (busy: boolean) => {
+    refs.enabledInput.disabled = busy
+    refs.durationSelect.disabled = busy
+    refs.priceInput.disabled = busy
     refs.extensionSaveButton.disabled = busy
     refs.extensionSaveButton.textContent = busy ? 'Сохраняем…' : 'Сохранить'
   }
@@ -1546,7 +1651,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     settingsLoaded = true
     updatePreviewButton()
     updateScheduleControls()
-    refs.status.textContent = 'Настройки загружены.'
+    refs.status.textContent = ''
   }
 
   const savePublicCardSettings = async () => {
@@ -1605,6 +1710,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (disposed || publicCardSaveAbort !== controller) return
     publicCardSaveAbort = null
     setPublicCardBusy(false)
+    notifyDraftChange()
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       renderApiError(refs.status, result.error, isDebug)
@@ -1647,6 +1753,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (disposed || reviewLinkSaveAbort !== controller) return
     reviewLinkSaveAbort = null
     setReviewLinkBusy(false)
+    notifyDraftChange()
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       renderApiError(refs.status, result.error, isDebug)
@@ -1669,6 +1776,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (disposed || reviewLinkSaveAbort !== controller) return
     reviewLinkSaveAbort = null
     setReviewLinkBusy(false)
+    notifyDraftChange()
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       renderApiError(refs.status, result.error, isDebug)
@@ -1713,13 +1821,16 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (disposed || scheduleSaveAbort !== controller) return
     scheduleSaveAbort = null
     setScheduleBusy(false)
+    notifyDraftChange()
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       renderApiError(refs.status, result.error, isDebug)
       return
     }
     currentScheduleSettings = result.data
-    dirtyScheduleWeekdays.clear()
+    dirtyScheduleWeekdays.delete(weekday)
+    const savedRow = refs.weeklyScheduleList.querySelector<HTMLElement>(`[data-weekday="${weekday}"]`)
+    if (savedRow) savedRow.dataset.dirty = 'false'
     renderScheduleSettings(refs, currentScheduleSettings, scheduleCallbacks)
     refs.status.textContent = 'Часы работы сохранены.'
     showToast('Часы работы сохранены.')
@@ -1788,6 +1899,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (disposed || scheduleSaveAbort !== controller) return
     scheduleSaveAbort = null
     setScheduleBusy(false)
+    notifyDraftChange()
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       renderApiError(refs.status, result.error, isDebug)
@@ -1797,7 +1909,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     renderScheduleSettings(refs, currentScheduleSettings, scheduleCallbacks)
     refs.overrideList.hidden = false
     refs.showOverridesButton.textContent = 'Скрыть исключения'
-    closeOverrideForm()
+    closeOverrideForm(true)
     const successMessage = isClosed ? 'Исключение сохранено.' : 'Особые часы сохранены.'
     refs.status.textContent = successMessage
     showToast(successMessage)
@@ -1818,6 +1930,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (disposed || scheduleSaveAbort !== controller) return
     scheduleSaveAbort = null
     setScheduleBusy(false)
+    notifyDraftChange()
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       renderApiError(refs.status, result.error, isDebug)
@@ -1832,6 +1945,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const scheduleCallbacks: ScheduleCallbacks = {
+    compact: access.role === 'OWNER',
     onSaveDay: (weekday, isClosed, opensAt, closesAt) =>
       void saveScheduleDay(weekday, isClosed, opensAt, closesAt),
     onDayDirtyChange: (weekday, isDirty) => {
@@ -1878,6 +1992,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (disposed || bookingSaveAbort !== controller) return
     bookingSaveAbort = null
     setBookingBusy(false)
+    notifyDraftChange()
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       renderApiError(refs.status, result.error, isDebug)
@@ -1928,6 +2043,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     if (disposed || extensionSaveAbort !== controller) return
     extensionSaveAbort = null
     setExtensionBusy(false)
+    notifyDraftChange()
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       renderApiError(refs.status, result.error, isDebug)
@@ -1956,7 +2072,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       refs.status.textContent = 'Дождитесь загрузки настроек.'
       return
     }
-    if (publicCardIsDirty() || scheduleIsDirty()) {
+    if (hasUnsavedChanges()) {
       refs.status.textContent = UNSAVED_PREVIEW_MESSAGE
       showToast(UNSAVED_PREVIEW_MESSAGE)
       return
@@ -2160,12 +2276,54 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     }))
   })
   disposables.push(on(refs.overrideSaveButton, 'click', () => void saveScheduleOverride()))
-  disposables.push(on(refs.overrideCancelButton, 'click', closeOverrideForm))
+  disposables.push(on(refs.overrideCancelButton, 'click', () => closeOverrideForm()))
   disposables.push(on(refs.bookingSaveButton, 'click', () => void saveBookingSettings()))
   disposables.push(on(refs.extensionSaveButton, 'click', () => void saveShiftExtensionSettings()))
   disposables.push(on(refs.backButton, 'click', () => {
-    window.location.hash = '#/dashboard'
+    options.onBack?.()
   }))
+
+  // Retention includes unfinished/raw text, even when the save contract normalizes whitespace
+  // or a country search has not yet selected a structured value.
+  const hasRawCardDraft = () => publicCardSnapshot !== null && (
+    refs.countryInput.value !== countryName(publicCardSnapshot.countryCode) ||
+    refs.cityInput.value !== (publicCardSnapshot.city ?? '') ||
+    refs.addressInput.value !== (publicCardSnapshot.address ?? '') ||
+    refs.guestContactInput.value !== (publicCardSnapshot.guestContact ?? '') ||
+    refs.cardDescriptionInput.value !== (publicCardSnapshot.cardDescription ?? '')
+  )
+  const hasUnsavedChanges = () => !discarded && (hasRawCardDraft() || publicCardIsDirty() || reviewLinkIsDirty() || (currentReviewLinkSettings !== null && refs.reviewLinkInput.value !== (currentReviewLinkSettings.publicReviewUrl ?? '')) || scheduleIsDirty() || staffModuleIsDirty() ||
+    (currentBookingSettings !== null && refs.holdInput.value !== String(currentBookingSettings.holdMinutes)) ||
+    (currentShiftExtensionSettings !== null && (
+      refs.enabledInput.checked !== currentShiftExtensionSettings.enabled ||
+      refs.durationSelect.value !== String(currentShiftExtensionSettings.durationMinutes) ||
+      refs.priceInput.value !== rubInputValue(currentShiftExtensionSettings.priceMinor)
+    )))
+  const announceUnsaved = () => {
+    const message = 'Есть несохранённые изменения. Можно остаться и сохранить их или подтвердить выход без сохранения.'
+    refs.status.textContent = message
+    showToast(message)
+  }
+  const isSaving = () => Boolean(publicCardSaving || reviewLinkSaving || scheduleSaving || bookingSaveAbort || extensionSaveAbort || staffModuleSaving)
+  const canLeave = () => {
+    if (isSaving()) {
+      refs.status.textContent = 'Дождитесь завершения сохранения.'
+      showToast('Дождитесь завершения сохранения.')
+      return false
+    }
+    if (hasUnsavedChanges()) {
+      announceUnsaved()
+      if (!window.confirm('Выйти без сохранения? Несохранённые изменения этой формы будут удалены.')) return false
+      discarded = true
+      notifyDraftChange()
+    }
+    return true
+  }
+  options.setLeaveGuard?.(canLeave)
+  options.setDraftState?.({ hasUnsavedChanges, isSaving })
+  disposables.push(on(root, 'input', notifyDraftChange))
+  disposables.push(on(root, 'change', notifyDraftChange))
+  disposables.push(on(root, 'click', notifyDraftChange))
 
   void load()
   void loadStaffModuleSettings()
