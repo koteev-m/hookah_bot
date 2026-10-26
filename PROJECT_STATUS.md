@@ -1,5 +1,135 @@
 # Project Status
 
+## HT-VENUE-MENU-TABLES-QR-UX03-FIX-P2 — local FIXED (2026-10-26)
+
+**HT_VENUE_MENU_TABLES_QR_UX03_P2_FIXED** — local validation boundary; ready for short review.
+
+Identity gate PASS: task `HT-VENUE-MENU-TABLES-QR-UX03-FIX-P2`, project `Hookah_Tootah`,
+repo `hookah_bot_ANT`; expected/observed physical root
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, Git common dir/root-owned Git dir/index,
+origin `github.com/koteev-m/hookah_bot`, branch `codex/ht-venue-menu-tables-qr-ux03`, exact HEAD
+`2dc6f97b2eac34d64d4e760f84745a0929ca8285`. Base/parent/ancestry NOT_SUPPLIED.
+Instruction origins (session, empty global AGENTS, repository AGENTS; no narrower overrides),
+Git overrides/config/includes/redirections and worktree registration verified; no foreign authority.
+No branch/worktree/index/ref/stash mutation. Original uncommitted UX03 changes preserved.
+
+P2-1: successful menu mutations previously lost submitted-form context after a failed GET.
+Screen-local pending successes now survive repeated GET errors independently of interaction generation.
+Only an unchanged submitted form is blocked from resubmission and omitted on confirmed refresh;
+newer and independent drafts, current focus/disclosure and venue isolation survive. Retry runs GET only.
+Confirmed analogous category rename/item create/edit paths use the same fix; no Menu UI rewrite.
+P2-2: unverified Telegram responses and post-send audit failure now return the existing INVALID_INPUT
+error envelope with additive `details.deliveryOutcome=unknown` and the check-private-chat warning.
+UI also warns on lost HTTP responses/generic server errors/unconfirmed success, without automatic resend
+or a retry shortcut. Confirmed success, definite denials, current RBAC/recipient/private-chat,
+traffic/maintenance/rate checks and mandatory audit attempt are preserved. No token data in errors.
+
+Final validation: TypeScript typecheck PASS; production build PASS (existing >500 kB Vite warning);
+targeted Playwright 17/17 PASS; final full Chromium smoke 343/343 PASS (2 workers, 2.6m).
+Backend: tables/Telegram 22/22, Menu/shift-check/RBAC 142/142, Guest QR/session/token 685/685:
+**849 PASS, zero failures/errors/skips**. Kotlin compile and ktlintCheck PASS; diff-check PASS.
+PostgreSQL: batch concurrency/token/audit/rollback 1/1; Guest resolve suite 27/27 (20 database cases
+plus 7 policy guards); activation rollback 8/8. These are disposable Testcontainers PostgreSQL17
+with production migrations, not the listening local working database. Both migration trees equal HEAD.
+
+Initial environment attempts hit sandbox loopback/cache restrictions and docker-java/Docker API
+incompatibility; authorized local runs used process-only `-Dapi.version=1.44`, no system configuration
+change. The newly executable UX03 batch test exposed an invalid seed status (`published`); corrected
+only the fixture to current V19 `PUBLISHED`, retaining all assertions. A new mock line's ktlint violation
+was corrected. Final commands pass; original browser test source remains intact with appended cases,
+and original backend assertions are retained/strengthened.
+
+Commands:
+- `miniapp/node_modules/.bin/tsc --project miniapp/tsconfig.json --noEmit`
+- `npm --prefix miniapp run build`
+- `MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --workers=2 --grep 'UX03|Telegram QR delivery'`
+- `MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --workers=2`
+- `_JAVA_OPTIONS='-Xmx4g -Dapi.version=1.44' ./gradlew --offline --no-daemon --max-workers=1 :backend:app:test`
+  in separate groups: `*VenueTableRoutesTest`, `*VenueTableBatchPostgresTest`,
+  `*TelegramDocumentDeliveryTest`, `*TelegramApiClientTrafficPolicyTest`; then `*VenueMenuRoutesTest`,
+  `*VenueMenuRepositoryTest`, `*VenueRbacRoutesTest`; then `*GuestTableResolve*Test`,
+  `*GuestTableContextActivationRepositoryTest`, `*GuestTableContextActivationPostgresTest`,
+  `*TelegramBotRouterTableTokenTest`; all with `--console=plain`.
+- Same Gradle flags with `:backend:app:compileKotlin :backend:app:ktlintCheck`; `git diff --check`.
+Evidence: [command logs / per-group XML](.tmp-checks/ht-ux03-p2/),
+[P2-only diff](.tmp-checks/ht-ux03-p2/p2-only.diff),
+[preservation hashes](.tmp-checks/ht-ux03-p2/preservation.json),
+[observed Git status](.tmp-checks/ht-ux03-p2/git-status.txt).
+
+P2 changes only: `miniapp/src/screens/venueMenu.ts`, `venueTables.ts`;
+`miniapp/e2e/guest-smoke.spec.ts`, `venue-tables-qr.spec.ts`;
+backend `miniapp/venue/tables/VenueTableRoutes.kt`, tests `miniapp/venue/VenueTableRoutesTest.kt`,
+`VenueTableBatchPostgresTest.kt` (seed correction only);
+docs `MENU_OPTIONS_STOPLIST.md`, `VENUE_OPERATIONS.md`, `TESTING_QA_SMOKE_STRATEGY.md`; this checkpoint.
+All other existing UX03 files and all four untracked SQL helpers are byte-for-byte unchanged.
+Observed status remains 19 modified tracked files, 3 new UX03 tests and 4 original untracked helpers;
+nothing staged. No commit/push/PR/merge/deploy/SSH, real Telegram send, server/working DB or migration
+change. No unfinished test operation. Staging/manual Telegram iPhone/Android release smoke remains
+PENDING and needs separate authorization; local results do not prove deployed behavior.
+Next: short independent review of P2-only diff; commit/PR only after separate explicit authorization.
+
+
+## HT-VENUE-MENU-TABLES-QR-UX03 — local READY (2026-10-26)
+
+Identity gate PASS: `Hookah_Tootah` / `hookah_bot_ANT`, primary physical checkout
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, common dir `.git` in that checkout,
+origin `github.com/koteev-m/hookah_bot`. Exact expected/observed starting `main`/HEAD:
+`2dc6f97b2eac34d64d4e760f84745a0929ca8285`; parent/ancestry NOT_SUPPLIED. Instruction origins,
+Git dir/index/config/overrides and registered checkout verified. Local feature branch
+`codex/ht-venue-menu-tables-qr-ux03`; same HEAD, uncommitted changes, no new worktree.
+
+**HT_VENUE_MENU_TABLES_QR_UX03_READY** (local only).
+
+Implemented: collapsed item-scoped hookah flavors with retained in-screen editor drafts; one atomic
+numeric table batch with backward-compatible `tableNumbers`; protected single PNG / bulk PDF / ZIP
+and explicit own-private-chat binary Telegram delivery. No schema migration. PDF is the UI primary;
+omitted-format API ZIP stays compatible. No Guest menu/order/session/token rotation contract change.
+Batch audit is transactional with tables/tokens. Export does not alter tokens. Telegram uses verified
+JWT recipient, exact private chat, current venue permission, traffic/maintenance gates, bounded
+rate/size/count, confirmed message result and no automatic retry/public download URL. Private delivery
+is not atomically coupled to post-send audit; unconfirmed outcomes require checking the chat.
+
+Validation: backend tables/Telegram **21 PASS + 1 PostgreSQL SKIP**; menu/shift-check/RBAC **142 PASS**;
+Guest QR/session/token **657 PASS + 20 PostgreSQL SKIP**. Docker unavailable: PostgreSQL not verified.
+TypeScript, production build, Kotlin compile and ktlintCheck PASS. Vite's existing >500 kB chunk
+warning remains. Final full Mini App smoke **330/330 PASS (2.5m, Chromium, 2 workers)**.
+Total backend evidence: **820 PASS, 21 PostgreSQL SKIP, zero final failures**. Earlier broad backend run hit confirmed JVM heap
+OOM; split groups with `_JAVA_OPTIONS=-Xmx4g` passed. Earlier smoke found four Guest cases lacking the
+Telegram identity fixture and a label test loading an external SDK; fixtures now deterministic with
+all assertions retained. A scroll test now waits for user scroll to settle before the unchanged 8 px
+assertion. One subsequent full run had an existing promotion-form DOM-detachment timeout (329/330);
+final 330/330 rerun covers that case, the last editor focus correction and deleted-flavor isolation.
+No tests disabled or assertions weakened.
+
+Commands (all local, no real Telegram sends):
+- `miniapp/node_modules/.bin/tsc --project miniapp/tsconfig.json --noEmit`
+- `npm --prefix miniapp run build`
+- `MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --workers=2`
+- `_JAVA_OPTIONS=-Xmx4g ./gradlew --offline --no-daemon --max-workers=1 :backend:app:test`
+  with separate selectors: `*VenueTableRoutesTest`, `*VenueTableBatchPostgresTest`,
+  `*TelegramDocumentDeliveryTest`, `*TelegramApiClientTrafficPolicyTest`; then
+  `*VenueMenuRoutesTest`, `*VenueMenuRepositoryTest`, `*VenueRbacRoutesTest`; then
+  `*GuestTableResolve*Test`, `*GuestTableContextActivationRepositoryTest`, `*TelegramBotRouterTableTokenTest`.
+- Same Gradle flags with `:backend:app:compileKotlin :backend:app:ktlintCheck`; `git diff --check`.
+Evidence: `.tmp-checks/ht-ux03/` (test XML by group and command logs; local ignored artifacts).
+
+Changed files (all within this task): `miniapp/src/screens/venueMenu.ts`, `venueTables.ts`;
+`miniapp/src/shared/api/venueApi.ts`, `venueDtos.ts`; `miniapp/src/style.css`;
+`miniapp/e2e/guest-smoke.spec.ts`, `booking-label-parity.spec.ts`, new `venue-tables-qr.spec.ts`;
+backend `Application.kt`, `miniapp/security/MiniAppAbuseProtection.kt`, `miniapp/venue/tables/`
+`VenueTableDtos.kt`, `VenueTableRepository.kt`, `VenueTableRoutes.kt`, `telegram/TelegramApiClient.kt`;
+tests `miniapp/venue/VenueTableRoutesTest.kt`, new `VenueTableBatchPostgresTest.kt`, new
+`telegram/TelegramDocumentDeliveryTest.kt`; docs `VENUE_OPERATIONS.md`, `MENU_OPTIONS_STOPLIST.md`,
+`SECURITY_RBAC_MATRIX.md`, `TESTING_QA_SMOKE_STRATEGY.md`; this checkpoint.
+
+Real Telegram/iPhone/Android, staging and PostgreSQL concurrency remain NOT_VERIFIED/PENDING.
+Staging smoke is required before release and needs separate authorization. No stage/commit/push/PR/
+merge/deploy/SSH, working-data/secret/server-migration changes or real Telegram sends. Four original
+untracked SQL helpers in `scripts/dev/` are untouched. No external operation is pending.
+Observed final `git status --short`: 19 modified tracked files, 3 new task test files, and the
+4 original untracked SQL helpers; nothing staged. No local test server/worker operation remains.
+Next: local diff review, then separately authorized release/staging and real Telegram/iPhone smoke.
+
 ## HT-VENUE-OWNER-UX02-HISTORY-COMPAT — local compatibility ready (2026-10-26)
 
 Identity gate PASS: `Hookah_Tootah` / `hookah_bot_ANT`, physical worktree

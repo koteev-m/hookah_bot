@@ -807,6 +807,7 @@ export type VenueTableBatchCreateRequest = {
   count: number
   startNumber?: number
   prefix?: string
+  tableNumbers?: number[]
 }
 
 export type VenueTableCreatedDto = {

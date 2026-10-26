@@ -4,6 +4,31 @@
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
+UX03 local regression scope (`HT-VENUE-MENU-TABLES-QR-UX03`): native collapsed hookah flavors,
+90-flavor fixture, keyboard/mobile layout, mutation/retry draft retention and venue isolation;
+sequential/individual table numbers, strict validation, late conflict and audit rollback, table/token
+identity, Staff/foreign denial; PNG decoding, PDF page labels, ZIP regression, confirmed mocked
+Telegram multipart delivery, policy/size/recipient/error/rate checks and browser URL lifetime/fallback.
+Run TypeScript, production build, full Playwright, Kotlin compile/ktlint and focused table/Telegram,
+Venue RBAC/Menu/shift-check and Guest table/session tests. `VenueTableBatchPostgresTest` additionally
+checks competing batches on PostgreSQL when Docker is available; a skipped test is not PostgreSQL PASS.
+UX03 P2 regressions additionally cover successful create/edit followed by repeated GET failures,
+no duplicate mutation, unchanged-form submission guard, newer/independent drafts and late-response
+venue isolation; category rename and item create/edit share this refresh lifecycle. QR delivery covers
+mocked Telegram acceptance followed by audit failure, lost Telegram/HTTP responses, warning without
+automatic resend, confirmed success and definite RBAC/validation rejection. Testcontainers with newer
+Docker may require process-local `_JAVA_OPTIONS='-Xmx4g -Dapi.version=1.44'`; no daemon configuration change.
+
+Manual release smoke is **PENDING**, requires separate authorization and an authorized test venue:
+open Owner menu on iPhone Telegram, expand one of ten hookahs, edit a flavor and verify retention
+and other categories; create a batch with individual free numbers and verify conflict creates none;
+request one PNG and all PDF through explicit **Отправить в Telegram**, open the private-chat files,
+check readable table numbers and scan a QR into the correct Guest table/session. Test blocked bot /
+missing private chat, repeat clicks, Staff/foreign denial, and desktop PDF/ZIP saving. Verify existing
+printed QR and visits remain unchanged; never use token reissue just to test a download. UX02 Settings
+navigation and shift-check remain mandatory regressions. Browser mocks do not prove iOS WebView or
+real Telegram behavior; no real send is authorized by this local task.
+
 Current merged feature checkpoint: PR #198 is merged at authoritative `main`
 `465ce33c4a9e244ad5f9771beadf35cfa7b8d9d4`; CI #504, CI #505 and post-merge CI #506
 passed, and the remote PR branch was deleted. Automated merge/CI gates are closed, but the

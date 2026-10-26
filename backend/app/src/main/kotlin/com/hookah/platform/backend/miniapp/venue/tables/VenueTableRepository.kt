@@ -85,7 +85,10 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun listTablesWithTokens(venueId: Long): List<VenueTableToken> {
+    suspend fun listTablesWithTokens(
+        venueId: Long,
+        tableId: Long? = null,
+    ): List<VenueTableToken> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -101,10 +104,14 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                           ON tt.table_id = vt.id AND tt.is_active = true
                         WHERE vt.venue_id = ?
                           AND vt.is_active = true
+                        AND (? IS NULL OR vt.id = ?)
                         ORDER BY vt.table_number, vt.id
+                        LIMIT 501
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
+                        statement.setObject(2, tableId, java.sql.Types.BIGINT)
+                        statement.setObject(3, tableId, java.sql.Types.BIGINT)
                         statement.executeQuery().use { rs ->
                             val result = mutableListOf<VenueTableToken>()
                             while (rs.next()) {
@@ -236,7 +243,15 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         venueId: Long,
         startNumber: Int,
         count: Int,
+    ): List<VenueTableCreated> = batchCreateTables(venueId, List(count) { startNumber + it })
+
+    suspend fun batchCreateTables(
+        venueId: Long,
+        tableNumbers: List<Int>,
+        beforeCommit: (Connection, List<VenueTableCreated>) -> Unit = { _, _ -> },
     ): List<VenueTableCreated> {
+        require(tableNumbers.size in 1..500 && tableNumbers.all { it > 0 })
+        require(tableNumbers.distinct().size == tableNumbers.size)
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -244,8 +259,7 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                     connection.autoCommit = false
                     try {
                         val result = mutableListOf<VenueTableCreated>()
-                        for (index in 0 until count) {
-                            val tableNumber = startNumber + index
+                        for (tableNumber in tableNumbers) {
                             val tableId = insertTable(connection, venueId, tableNumber)
                             val issuedAt = Instant.now()
                             insertToken(connection, tableId, issuedAt)
@@ -257,6 +271,7 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                                 ),
                             )
                         }
+                        beforeCommit(connection, result)
                         connection.commit()
                         result
                     } catch (e: Exception) {

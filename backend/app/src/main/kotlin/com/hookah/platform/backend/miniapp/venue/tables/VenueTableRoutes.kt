@@ -7,12 +7,17 @@ import com.hookah.platform.backend.api.ConfigException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
+import com.hookah.platform.backend.miniapp.security.enforceMiniAppRateLimit
+import com.hookah.platform.backend.miniapp.security.throwMiniAppRateLimited
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
 import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import com.hookah.platform.backend.miniapp.venue.requireVenueId
 import com.hookah.platform.backend.miniapp.venue.resolveVenueRole
+import com.hookah.platform.backend.telegram.TelegramApiClient
+import com.hookah.platform.backend.telegram.TelegramCallResult
 import com.hookah.platform.backend.telegram.buildTelegramStartUrl
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import com.lowagie.text.Document
@@ -28,7 +33,7 @@ import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
-import io.ktor.server.response.respondOutputStream
+import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -65,11 +70,13 @@ private data class QrManifestEntry(
     val fileName: String,
 )
 
-fun Route.venueTableRoutes(
+internal fun Route.venueTableRoutes(
     venueAccessRepository: VenueAccessRepository,
     venueTableRepository: VenueTableRepository,
     auditLogRepository: AuditLogRepository,
     telegramBotUsername: String?,
+    telegramApiClient: TelegramApiClient? = null,
+    abuseProtection: MiniAppAbuseProtection = MiniAppAbuseProtection(),
 ) {
     route("/venue/tables") {
         get {
@@ -110,43 +117,50 @@ fun Route.venueTableRoutes(
             if (count <= 0 || count > MAX_TABLE_CREATE) {
                 throw InvalidInputException("count must be between 1 and $MAX_TABLE_CREATE")
             }
-            val startNumber = request.startNumber ?: venueTableRepository.findNextTableNumber(venueId)
-            if (startNumber <= 0) {
-                throw InvalidInputException("startNumber must be a positive number")
-            }
-            if (startNumber > Int.MAX_VALUE - count + 1) {
-                throw InvalidInputException("startNumber and count exceed maximum table number")
-            }
+            val tableNumbers =
+                request.tableNumbers?.also { numbers ->
+                    if (request.startNumber != null || numbers.size != count || numbers.any { it <= 0 } ||
+                        numbers.distinct().size != numbers.size
+                    ) {
+                        throw InvalidInputException("Укажите $count разных положительных номеров без startNumber.")
+                    }
+                } ?: run {
+                    val start = request.startNumber ?: venueTableRepository.findNextTableNumber(venueId)
+                    if (start <= 0 || start > Int.MAX_VALUE - count + 1) {
+                        throw InvalidInputException("Номера столов должны быть от 1 до ${Int.MAX_VALUE}.")
+                    }
+                    List(count) { start + it }
+                }
             val prefix = request.prefix?.trim().takeUnless { it.isNullOrBlank() }
-            try {
-                venueTableRepository.ensureTablesAvailable(venueId, startNumber, count)
-            } catch (_: TableNumberConflictException) {
-                throw InvalidInputException("Table numbers already exist in the requested range")
-            }
             val created =
                 try {
-                    venueTableRepository.batchCreateTables(venueId, startNumber, count)
-                } catch (_: TableNumberConflictException) {
-                    throw InvalidInputException("Table numbers already exist in the requested range")
-                }
-            auditLogRepository.appendJson(
-                actorUserId = userId,
-                action = "TABLES_BATCH_CREATE",
-                entityType = "venue",
-                entityId = venueId,
-                payload =
-                    buildJsonObject {
-                        put("count", created.size)
-                        put("startNumber", startNumber)
-                        prefix?.let { put("prefix", it) }
-                        put(
-                            "tableIds",
-                            buildJsonArray {
-                                created.forEach { add(JsonPrimitive(it.tableId)) }
-                            },
+                    venueTableRepository.batchCreateTables(venueId, tableNumbers) { connection, tables ->
+                        auditLogRepository.appendJson(
+                            connection = connection,
+                            actorUserId = userId,
+                            action = "TABLES_BATCH_CREATE",
+                            entityType = "venue",
+                            entityId = venueId,
+                            payload =
+                                buildJsonObject {
+                                    put("count", tables.size)
+                                    if (request.tableNumbers == null) put("startNumber", tableNumbers.first())
+                                    put(
+                                        "tableNumbers",
+                                        buildJsonArray { tables.forEach { add(JsonPrimitive(it.tableNumber)) } },
+                                    )
+                                    put(
+                                        "tableIds",
+                                        buildJsonArray { tables.forEach { add(JsonPrimitive(it.tableId)) } },
+                                    )
+                                },
                         )
-                    },
-            )
+                    }
+                } catch (_: TableNumberConflictException) {
+                    throw InvalidInputException(
+                        "Один из номеров уже занят. Столы не созданы. Исправьте номера и повторите.",
+                    )
+                }
             call.respond(
                 VenueTableBatchCreateResponse(
                     count = created.size,
@@ -274,62 +288,192 @@ fun Route.venueTableRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             val role = resolveVenueRole(venueAccessRepository, userId, venueId)
-            val permissions = VenuePermissions.forRole(role)
-            if (!permissions.contains(VenuePermission.TABLE_QR_EXPORT)) {
+            if (!VenuePermissions.forRole(role).contains(VenuePermission.TABLE_QR_EXPORT)) throw ForbiddenException()
+            val format = call.request.queryParameters["format"]?.trim()?.lowercase() ?: "zip"
+            val rawTableId = call.request.queryParameters["tableId"]
+            val tableId = rawTableId?.toLongOrNull()
+            if (rawTableId != null && (tableId == null || tableId <= 0)) {
+                throw InvalidInputException(
+                    "Некорректный стол.",
+                )
+            }
+            val file = prepareQrExport(venueTableRepository, venueId, telegramBotUsername, format, tableId)
+            call.response.header(HttpHeaders.CacheControl, "no-store")
+            call.response.header(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment.withParameter(
+                    ContentDisposition.Parameters.FileName,
+                    file.filename,
+                ).toString(),
+            )
+            auditLogRepository.appendJson(
+                userId,
+                "TABLE_QR_EXPORT",
+                "venue",
+                venueId,
+                buildJsonObject {
+                    put("format", format)
+                    put("count", file.count)
+                },
+            )
+            call.respondBytes(file.bytes, file.contentType)
+        }
+
+        post("/qr-delivery") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            if (userId <= 0 || !VenuePermissions.forRole(role).contains(VenuePermission.TABLE_QR_EXPORT)) {
                 throw ForbiddenException()
             }
-            val format = call.request.queryParameters["format"]?.trim()?.lowercase() ?: "zip"
-            val botUsername =
-                telegramBotUsername?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
-                    ?: throw ConfigException("telegram.botUsername is required for QR export")
-            val tables = venueTableRepository.listTablesWithTokens(venueId)
-            if (tables.isEmpty()) {
-                throw InvalidInputException("No tables to export")
+            val request = call.receive<VenueQrDeliveryRequest>()
+            if (request.format !in setOf("pdf", "png")) {
+                throw InvalidInputException(
+                    "Для Telegram выберите PDF или PNG.",
+                )
             }
-            if (tables.size > MAX_TABLE_EXPORT) {
-                throw InvalidInputException("Maximum export size is $MAX_TABLE_EXPORT tables")
+            enforceMiniAppRateLimit(call, abuseProtection.tryQrDelivery(userId))
+            val api =
+                telegramApiClient ?: throw InvalidInputException(
+                    "Бот временно недоступен. Попробуйте позже или скачайте файл.",
+                )
+            // JWT subject is the server-verified Telegram user id, never a client-supplied recipient.
+            val chat = api.getChat(userId)
+            if (chat == null || chat.id != userId || chat.type != "private") {
+                throw InvalidInputException(
+                    "Личный чат с ботом недоступен. Откройте бота, нажмите Старт и разблокируйте его, затем повторите.",
+                )
             }
-            val timestamp = exportTimestampFormatter.format(Instant.now())
-            val filenameBase = "venue-$venueId-tables-$timestamp"
-            call.response.header(HttpHeaders.CacheControl, "no-store")
-            when (format) {
-                "zip" -> {
-                    call.response.header(
-                        HttpHeaders.ContentDisposition,
-                        ContentDisposition.Attachment.withParameter(
-                            ContentDisposition.Parameters.FileName,
-                            "$filenameBase.zip",
-                        ).toString(),
-                    )
-                    call.respondOutputStream(ContentType.Application.Zip) {
-                        writeZipPackage(this, tables, botUsername)
+            val file =
+                prepareQrExport(venueTableRepository, venueId, telegramBotUsername, request.format, request.tableId)
+            // Recheck current membership after generation and before disclosing the file to Telegram.
+            val currentRole = resolveVenueRole(venueAccessRepository, userId, venueId)
+            if (!VenuePermissions.forRole(
+                    currentRole,
+                ).contains(VenuePermission.TABLE_QR_EXPORT)
+            ) {
+                throw ForbiddenException()
+            }
+            when (val sent = api.sendDocumentBytes(userId, file.bytes, file.filename, file.contentType)) {
+                is TelegramCallResult.Success -> Unit
+                is TelegramCallResult.Failure -> {
+                    if (sent.errorCode == null || sent.errorCode >= 500) throw qrDeliveryUnconfirmed()
+                    if (sent.retryAfterSeconds != null) {
+                        throwMiniAppRateLimited(
+                            call,
+                            sent.retryAfterSeconds.toLong().coerceAtLeast(1),
+                        )
                     }
-                }
-                "pdf" -> {
-                    call.response.header(
-                        HttpHeaders.ContentDisposition,
-                        ContentDisposition.Attachment.withParameter(
-                            ContentDisposition.Parameters.FileName,
-                            "$filenameBase.pdf",
-                        ).toString(),
+                    throw InvalidInputException(
+                        "Отправка не подтверждена. Проверьте личный чат с ботом и блокировку. " +
+                            "Перед повтором убедитесь, что файл не пришёл.",
                     )
-                    call.respondOutputStream(ContentType.Application.Pdf) {
-                        writePdfPackage(this, tables, botUsername)
-                    }
                 }
-                else -> throw InvalidInputException("format must be zip or pdf")
+                TelegramCallResult.TrafficDenied -> throw InvalidInputException(
+                    "Отправка временно ограничена. Попробуйте позже или скачайте файл.",
+                )
             }
-            auditLogRepository.appendJson(
-                actorUserId = userId,
-                action = "TABLE_QR_EXPORT",
-                entityType = "venue",
-                entityId = venueId,
-                payload =
+            try {
+                auditLogRepository.appendJson(
+                    userId,
+                    "TABLE_QR_TELEGRAM_SENT",
+                    "venue",
+                    venueId,
                     buildJsonObject {
-                        put("format", format)
-                        put("count", tables.size)
+                        put("format", request.format)
+                        put("count", file.count)
                     },
-            )
+                )
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Telegram delivery cannot be rolled back when the subsequent audit fails.
+                throw qrDeliveryUnconfirmed()
+            }
+            call.response.header(HttpHeaders.CacheControl, "no-store")
+            call.respond(VenueQrDeliveryResponse(sent = true))
+        }
+    }
+}
+
+private fun qrDeliveryUnconfirmed() =
+    InvalidInputException(
+        "Файл мог быть отправлен. Проверьте личный чат с ботом перед повторной отправкой.",
+        details = buildJsonObject { put("deliveryOutcome", "unknown") },
+    )
+
+private data class QrExport(
+    val bytes: ByteArray,
+    val filename: String,
+    val contentType: ContentType,
+    val count: Int,
+)
+
+private suspend fun prepareQrExport(
+    repository: VenueTableRepository,
+    venueId: Long,
+    username: String?,
+    format: String,
+    tableId: Long?,
+): QrExport {
+    if (format !in setOf("pdf", "zip", "png") ||
+        (format == "png") != (tableId != null) ||
+        (tableId != null && tableId <= 0)
+    ) {
+        throw InvalidInputException("Выберите PDF/ZIP для всех столов или PNG для одного стола.")
+    }
+    val botUsername =
+        username?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
+            ?: throw ConfigException("telegram.botUsername is required for QR export")
+    val tables = repository.listTablesWithTokens(venueId, tableId)
+    if (tables.isEmpty()) {
+        if (tableId != null) throw NotFoundException()
+        throw InvalidInputException("Нет активных столов с QR для экспорта.")
+    }
+    if (tables.size > MAX_TABLE_EXPORT) {
+        throw InvalidInputException(
+            "Можно выдать не более $MAX_TABLE_EXPORT QR за раз.",
+        )
+    }
+    val output = LimitedQrOutput()
+    val contentType =
+        when (format) {
+            "pdf" -> {
+                writePdfPackage(output, tables, botUsername)
+                ContentType.Application.Pdf
+            }
+            "zip" -> {
+                writeZipPackage(output, tables, botUsername)
+                ContentType.Application.Zip
+            }
+            else -> {
+                output.write(generateQrPng(buildTelegramStartUrl(botUsername, tables.single().token)))
+                ContentType.Image.PNG
+            }
+        }
+    val label = if (tableId == null) "tables" else "table-${tables.single().tableNumber}"
+    val filename = "venue-$venueId-$label-${exportTimestampFormatter.format(Instant.now())}.$format"
+    return QrExport(output.toByteArray(), filename, contentType, tables.size)
+}
+
+private class LimitedQrOutput : ByteArrayOutputStream() {
+    override fun write(
+        bytes: ByteArray,
+        offset: Int,
+        length: Int,
+    ) {
+        checkSize(length)
+        super.write(bytes, offset, length)
+    }
+
+    override fun write(value: Int) {
+        checkSize(1)
+        super.write(value)
+    }
+
+    private fun checkSize(length: Int) {
+        if (count.toLong() + length > TelegramApiClient.MAX_DOCUMENT_BYTES) {
+            throw InvalidInputException("Файл превышает 16 МБ. Получите QR отдельных столов в PNG.")
         }
     }
 }
@@ -380,9 +524,8 @@ private fun writePdfPackage(
         if (index > 0) {
             document.newPage()
         }
-        val label = "Стол №${table.tableNumber}"
         val url = buildTelegramStartUrl(botUsername, table.token)
-        val title = Paragraph(label).apply { alignment = Element.ALIGN_CENTER }
+        val title = Paragraph("Table ${table.tableNumber}").apply { alignment = Element.ALIGN_CENTER }
         document.add(title)
         val qrBytes = generateQrPng(url)
         val image =

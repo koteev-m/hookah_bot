@@ -192,6 +192,22 @@ Target decision:
 
 Current implementation from docs: Staff has `MENU_VIEW` and `MENU_AVAILABILITY_MANAGE`, and operational item/option stop-list is documented as aligned between Bot and Mini App. Treat that as the current global policy until a per-venue Staff stop-list flag exists.
 
+## Compact Venue hookah editing — UX03
+
+The Venue constructor renders hookah name, price and availability with a native keyboard-accessible
+`Вкусы · N` disclosure, collapsed initially. Opening a hookah reveals only its item-scoped flavors,
+base-profile action and manual add/edit/delete/price/availability controls. Other categories and
+Guest Menu keep their existing model and rendering. Shift-check behavior and menu ordering are unchanged.
+
+Expansion belongs to the mounted venue screen, never a global or persisted cross-venue state.
+Authoritative reloads preserve expanded sections and unsaved inline forms, including exact raw
+price/name input when the form is not focused. A successful save clears only the submitted unchanged
+form; newer edits and other forms survive. A confirmed mutation stays pending across failed GETs;
+its unchanged form cannot submit again until an authoritative reload clears it. Retrying only reloads
+the menu, including after repeated GET failures. Failure/retry retains independent drafts and the current editor.
+Deleting an entity never restores its old editor into a different entity. This in-screen retention
+is not durable storage: leaving/reloading the app can discard drafts.
+
 ## Telegram / Mini App Surface Parity
 
 | Feature | Telegram bot | Guest Mini App | Venue Mini App | Platform Mini App | Staff-chat |

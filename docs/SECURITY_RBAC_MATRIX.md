@@ -90,7 +90,25 @@ Tokens and client-provided ids are context pointers, not authority:
 - Staff-chat callbacks are shortcuts only; every callback must re-check actor role, venue scope and entity state server-side.
 - Client analytics events are low-trust diagnostics and cannot drive money, access, billing, order state or venue lifecycle.
 
-### Public-pilot admission boundary
+### Table QR export/delivery — UX03 boundary
+
+Authenticated own-venue `TABLE_QR_EXPORT` governs PDF/ZIP and single-table PNG as well as explicit
+Telegram delivery. `TABLE_VIEW` alone discloses no tokens; Staff/foreign membership cannot export.
+Recipient authority is exclusively the verified Telegram session subject plus an exact private-chat
+check. The delivery request cannot nominate another user, group or channel. The existing bot client's
+traffic/maintenance gates apply to chat lookup and binary document upload. Current venue permission
+is rechecked immediately before sending; bounded actor/global rate limits and a 16 MiB/500-table
+cap apply. No public export endpoint, token-bearing download URL, raw QR/token logs or automatic
+Telegram retry is introduced. A confirmed Telegram response is required for success. Delivery is
+not transactionally atomic with its post-send audit; a later audit/network failure is unconfirmed
+and requires checking the chat before manual retry. Real-device evidence remains pending.
+
+Batch numeric table creation keeps `TABLE_MANAGE` and server venue scope. Explicit numbers are
+validated and unique within request and venue. Tables, tokens and one successful batch audit share
+one JDBC transaction; conflicts and audit failures roll back all batch writes. No migration or changes
+to existing table IDs, tokens, sessions or RBAC grants are introduced.
+
+## Public-pilot admission boundary
 
 - `ALLOWLIST` is retained as exact, static, fail-closed implementation/test compatibility. Its
   operational isolated-smoke role is superseded and has no current normal-staging, public-pilot,

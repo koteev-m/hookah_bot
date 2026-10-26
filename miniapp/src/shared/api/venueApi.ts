@@ -1863,7 +1863,7 @@ export async function venueRotateTableTokens(
 
 export async function venueExportQrPackage(
   backendUrl: string,
-  params: { venueId: number; format: 'zip' | 'pdf' },
+  params: { venueId: number; format: 'zip' | 'pdf' | 'png'; tableId?: number },
   deps: RequestDependencies,
   signal?: AbortSignal
 ) {
@@ -1871,10 +1871,24 @@ export async function venueExportQrPackage(
     venueId: String(params.venueId),
     format: params.format
   })
+  if (params.tableId != null) search.set('tableId', String(params.tableId))
   return requestBinary(
     backendUrl,
     `/api/venue/tables/qr-package?${search.toString()}`,
     { signal },
+    deps
+  )
+}
+
+export async function venueSendQrToTelegram(
+  backendUrl: string,
+  params: { venueId: number; format: 'pdf' | 'png'; tableId?: number },
+  deps: RequestDependencies
+) {
+  return requestApi<{ sent: boolean }>(
+    backendUrl,
+    `/api/venue/tables/qr-delivery?venueId=${params.venueId}`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format: params.format, tableId: params.tableId }) },
     deps
   )
 }

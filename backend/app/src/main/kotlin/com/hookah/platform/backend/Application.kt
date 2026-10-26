@@ -1453,6 +1453,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueTableRepository = venueTableRepository,
                     auditLogRepository = auditLogRepository,
                     telegramBotUsername = telegramConfig.botUsername,
+                    telegramApiClient = telegramApiClient,
+                    abuseProtection = miniAppAbuseProtection,
                 )
                 venueMenuRoutes(
                     venueAccessRepository = venueAccessRepository,
