@@ -344,6 +344,56 @@ Dangerous actions:
 Current vs target:
 - Table/QR basics exist, while single CRUD/diagnostics/QR rotate audit need verification in the current implementation docs.
 
+### Venue tables and QR — UX03 local implementation
+
+`HT-VENUE-MENU-TABLES-QR-UX03` keeps numeric table labels and existing table/session/token
+identity. The creation form previews up to 500 editable positive integer numbers, proposes the
+next sequence and checks duplicates/occupied numbers. A server conflict preserves the form;
+creation is one request, one transaction for the full batch, tokens and `TABLES_BATCH_CREATE`.
+No schema migration is needed. No table is created on conflict or audit failure.
+
+API (authenticated, `venueId` remains required):
+
+- `POST /api/venue/tables/batch-create`: existing `{count, startNumber?, prefix?}` remains
+  accepted. Optional `tableNumbers: Int[]` must have exactly `count` distinct positive numbers
+  (1..2147483647), `count` 1..500, and cannot be combined with `startNumber`. Existing `prefix`
+  compatibility is retained; the new UI supplies only numeric numbers. `TABLE_MANAGE` and current
+  venue membership remain required. Database uniqueness protects concurrent creates.
+- `GET /api/venue/tables/qr-package`: UI requests `format=pdf` as the primary format.
+  Existing omitted-format ZIP and explicit `format=zip` contracts are preserved.
+  `format=png&tableId=...` exports exactly one active own-venue table. PDF has one numbered page
+  per table (`Table N`, using the portable built-in PDF font). ZIP contains PNGs and its existing
+  manifest. MIME/attachment filenames and `Cache-Control: no-store` are set. Exports are bounded
+  to 500 tables and 16 MiB, and do not rotate tokens or touch visits/orders.
+- `POST /api/venue/tables/qr-delivery`: explicit `{format: "pdf"}` or
+  `{format: "png", tableId}` sends a binary document through the existing bot client. It accepts
+  no recipient authority from the body. The recipient is the authenticated Telegram JWT subject;
+  `getChat` must verify that exact positive id and private chat. Current `TABLE_QR_EXPORT`/venue
+  scope is checked and checked again before sending. Existing traffic/maintenance policies apply;
+  bounded process-local rate protection allows one attempt per actor/10 seconds and 30 global/minute.
+  Telegram `retry_after` is returned as rate limiting. There is no automatic send retry or outbox
+  replay: a timeout is unconfirmed and the user must check the chat before retrying. Success requires
+  Telegram `ok`, a positive message id and matching private recipient, then records
+  `TABLE_QR_TELEGRAM_SENT` with format/count only. No QR token or document content is logged.
+  Lost/unverifiable Telegram responses and post-send audit failures return the existing
+  `INVALID_INPUT` envelope with additive `details.deliveryOutcome: "unknown"` and no confirmed success.
+  The UI also treats a lost HTTP response or generic server failure as unconfirmed delivery:
+  «Файл мог быть отправлен. Проверьте личный чат с ботом перед повторной отправкой.»
+  No automatic send retry or retry shortcut is shown for this warning. Definite authorization,
+  validation, private-chat and rate/policy rejections retain their ordinary handling.
+
+On iPhone inside Telegram, the primary action is **Отправить в Telegram** (PDF), with a PNG
+send action per table. A missing/blocked private chat asks the user to open/start/unblock the bot.
+On desktop, **Все QR в PDF**, **QR этого стола** and secondary **ZIP для компьютера** use the
+authenticated binary response. Object URLs live for five minutes for asynchronous reads and a
+visible manual fallback, then expire. The UI reports preparation/initiated saving, never that a
+file was downloaded. No public URL, bearer-in-URL or `WebApp.downloadFile` is introduced.
+Reissuing one/all QR remains a separate action with explicit old-QR invalidation confirmation.
+
+Real Telegram/iPhone delivery and download behavior remain **PENDING manual smoke**. Local
+mock/browser tests do not establish deployed runtime behavior. The local process limiter is
+not distributed or durable across restarts; persistent exactly-once Telegram delivery is not claimed.
+
 ## Staff / Roles / Invites
 
 Target:

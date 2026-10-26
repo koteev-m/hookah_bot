@@ -3583,3 +3583,15 @@ input[type="number"] {
   color: #ffffff;
   font-size: 0.75rem;
 }
+
+/* Native details keeps collapsed flavors out of keyboard navigation. */
+.venue-menu-flavors { display: block; margin: 0; }
+.venue-menu-flavor-summary { cursor: pointer; min-height: 44px; padding: 0.65rem 0; box-sizing: border-box; font-weight: 600; }
+.venue-menu-flavor-summary:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.venue-menu-flavors[open] > .venue-menu-option-header { margin-bottom: 0.5rem; }
+.venue-menu-hookah { gap: 0.4rem; }
+.venue-menu-hookah .venue-menu-item-info { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.venue-table-numbers { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 0.5rem; grid-column: 1 / -1; }
+.venue-table-numbers label { min-width: 0; }
+.venue-table-numbers input { box-sizing: border-box; width: 100%; min-height: 44px; }
+.venue-table-validation { grid-column: 1 / -1; overflow-wrap: anywhere; }

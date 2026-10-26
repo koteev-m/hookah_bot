@@ -55,6 +55,10 @@ internal class MiniAppAbuseProtection(
     digestKey: ByteArray = randomDigestKey(),
 ) {
     private sealed interface BucketKey {
+        data object QrDeliveryGlobal : BucketKey
+
+        data class QrDeliveryActor(val userId: Long) : BucketKey
+
         data object AuthPreGlobal : BucketKey
 
         data class AuthPreSource(val digest: String) : BucketKey
@@ -150,6 +154,14 @@ internal class MiniAppAbuseProtection(
             ),
         )
     }
+
+    fun tryQrDelivery(userId: Long): MiniAppRateLimitDecision =
+        acquire(
+            listOf(
+                Requirement(BucketKey.QrDeliveryGlobal, MiniAppRateLimitPolicy(30, Duration.ofMinutes(1))),
+                Requirement(BucketKey.QrDeliveryActor(userId), MiniAppRateLimitPolicy(1, Duration.ofSeconds(10))),
+            ),
+        )
 
     internal fun bucketCountForTesting(): Int = synchronized(buckets) { buckets.size }
 

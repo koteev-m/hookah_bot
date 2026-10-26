@@ -412,6 +412,8 @@ function getOptionCopy(isHookah: boolean) {
 type MutationFailureHandler = (message: string) => void
 
 type MenuMutationHandlers = {
+  expandedFlavorIds: Set<number>
+  canFocusEditor: () => boolean
   onEditItem: (
     item: VenueMenuItemDto,
     name: string,
@@ -502,7 +504,7 @@ function renderOptionRow(
   canManage: boolean,
   canManageAvailability: boolean,
   copy: ReturnType<typeof getOptionCopy>,
-  handlers: Pick<MenuMutationHandlers, 'onEditOption' | 'onDeleteOption' | 'onSetOptionAvailability'>
+  handlers: Pick<MenuMutationHandlers, 'onEditOption' | 'onDeleteOption' | 'onSetOptionAvailability' | 'canFocusEditor'>
 ) {
   const row = el('div', { className: 'venue-menu-option' })
   row.dataset.optionId = String(option.id)
@@ -594,7 +596,7 @@ function renderOptionRow(
     append(form, name.field, price.field, actions)
     append(actions, save, cancel)
     row.replaceChildren(form, feedback)
-    name.input.focus()
+    if (handlers.canFocusEditor()) name.input.focus()
   }
 
   renderReadOnly()
@@ -616,6 +618,7 @@ function renderItemRow(
 
   const row = el('div', { className: 'venue-menu-item' })
   row.dataset.itemId = String(item.id)
+  if (isHookah) row.classList.add('venue-menu-hookah')
   const feedback = buildMutationFeedback()
 
   const renderReadOnly = () => {
@@ -690,9 +693,22 @@ function renderItemRow(
   }
 
   const renderOptionSection = () => {
-    const optionSection = el('div', { className: 'venue-menu-option-section' })
+    const optionSection = isHookah
+      ? el('details', { className: 'venue-menu-option-section venue-menu-flavors' })
+      : el('div', { className: 'venue-menu-option-section' })
+    if (optionSection instanceof HTMLDetailsElement) {
+      optionSection.open = handlers.expandedFlavorIds.has(item.id)
+      const summary = el('summary', { className: 'venue-menu-flavor-summary', text: `Вкусы · ${itemOptions.length}` })
+      summary.dataset.menuControl = 'item-flavors'
+      optionSection.appendChild(summary)
+      optionSection.addEventListener('toggle', () => {
+        if (!optionSection.isConnected) return
+        if (optionSection.open) handlers.expandedFlavorIds.add(item.id)
+        else handlers.expandedFlavorIds.delete(item.id)
+      })
+    }
     const optionHeader = el('div', { className: 'venue-menu-option-header' })
-    optionHeader.appendChild(el('span', { className: 'venue-menu-options-title', text: optionCopy.title }))
+    if (!isHookah) optionHeader.appendChild(el('span', { className: 'venue-menu-options-title', text: optionCopy.title }))
     const addActions = el('div', { className: 'venue-inline-actions' })
     if (canApplyBaseFlavorProfiles) {
       const applyBaseButton = el('button', { className: 'button-small', text: 'Добавить базовые вкусы' }) as HTMLButtonElement
@@ -710,7 +726,7 @@ function renderItemRow(
       addOptionButton.addEventListener('click', () => {
         if (addForm) {
           addForm.hidden = !addForm.hidden
-          if (!addForm.hidden) addForm.querySelector<HTMLInputElement>('input')?.focus()
+          if (!addForm.hidden && handlers.canFocusEditor()) addForm.querySelector<HTMLInputElement>('input')?.focus()
           return
         }
         addForm = el('form', { className: 'venue-menu-inline-form venue-menu-option-create-form' })
@@ -745,7 +761,7 @@ function renderItemRow(
         append(formActions, save, cancel)
         append(addForm, name.field, price.field, formActions)
         optionSection.insertBefore(addForm, optionsList)
-        name.input.focus()
+        if (handlers.canFocusEditor()) name.input.focus()
       })
       addActions.appendChild(addOptionButton)
     }
@@ -795,7 +811,7 @@ function renderItemRow(
     append(actions, save, cancel)
     append(form, name.field, price.field, actions)
     row.replaceChildren(form, feedback)
-    name.input.focus()
+    if (handlers.canFocusEditor()) name.input.focus()
   }
 
   renderReadOnly()
@@ -890,7 +906,7 @@ function renderCategoryCard(
     append(actions, save, cancel)
     append(renameForm, name.field, actions)
     body.insertBefore(renameForm, list)
-    name.input.focus()
+    if (handlers.canFocusEditor()) name.input.focus()
   }
 
   renameButton.addEventListener('click', showRenameForm)
@@ -990,6 +1006,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   let shiftConfirming = false
   let shiftNeedsRefresh = false
   const expandedCategoryIds = new Set<number>()
+  const expandedFlavorIds = new Set<number>()
   const draftItemAvailability = new Map<number, boolean>()
   const draftOptionAvailability = new Map<number, { itemId: number; isAvailable: boolean }>()
   const selectedItemIds = new Set<number>()
@@ -1078,6 +1095,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     anchorSelector?: string | null
     anchorTop?: number | null
     focusSelector?: string | null
+    submittedForm?: MenuActiveInteractionContext | null
   }
 
   const categorySummarySelector = (categoryId: number) =>
@@ -1126,7 +1144,8 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       restoreGeneration,
       categoryId,
       anchorSelector: context.anchorSelector ?? anchor?.selector ?? null,
-      anchorTop: anchor?.target.getBoundingClientRect().top ?? null
+      anchorTop: anchor?.target.getBoundingClientRect().top ?? null,
+      submittedForm: captureActiveMenuInteraction()
     } satisfies MenuRestoreContext
   }
 
@@ -1186,6 +1205,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     itemId: number | null
     optionId: number | null
     formKind: MenuFormKind | null
+    formHidden: boolean
     formControls: MenuFormControlState[]
     focusedFormControlIndex: number
     focusedFormButtonIndex: number
@@ -1211,8 +1231,8 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     return null
   }
 
-  const captureActiveMenuInteraction = (): MenuActiveInteractionContext => {
-    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const captureActiveMenuInteraction = (node?: HTMLElement): MenuActiveInteractionContext => {
+    const active = node ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
     const dynamicActive = active && refs.categories.contains(active) ? active : null
     const categoryNode = dynamicActive?.closest<HTMLElement>('.venue-menu-category') ?? null
     const itemNode = dynamicActive?.closest<HTMLElement>('.venue-menu-item') ?? null
@@ -1234,6 +1254,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       itemId: readMenuEntityId(itemNode, 'itemId'),
       optionId: readMenuEntityId(optionNode, 'optionId'),
       formKind,
+      formHidden: form?.hidden ?? false,
       formControls: formControls.map((control) => ({
         value: control.value,
         checked: control instanceof HTMLInputElement ? control.checked : null,
@@ -1259,13 +1280,13 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       const option = refs.categories.querySelector<HTMLElement>(
         `.venue-menu-option[data-option-id="${context.optionId}"]`
       )
-      if (option) return option
+      return option
     }
     if (context.itemId != null) {
       const item = refs.categories.querySelector<HTMLElement>(
         `.venue-menu-item[data-item-id="${context.itemId}"]`
       )
-      if (item) return item
+      return item
     }
     if (context.categoryId != null) {
       return refs.categories.querySelector<HTMLElement>(
@@ -1275,7 +1296,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     return null
   }
 
-  const restoreActiveMenuInteraction = (context: MenuActiveInteractionContext) => {
+  const restoreActiveMenuInteraction = (context: MenuActiveInteractionContext, restoreFocus = true) => {
     if (
       disposed ||
       context.interactionGeneration !== interactionGeneration ||
@@ -1306,9 +1327,11 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
         const trigger = triggerKey[context.formKind]
           ? scope.querySelector<HTMLElement>(`[data-menu-control="${triggerKey[context.formKind]}"]`)
           : null
-        trigger?.click()
+        form = scope.querySelector<HTMLFormElement>(formSelector[context.formKind])
+        if (!form) trigger?.click()
         scope = findActiveInteractionScope(context)
         form = scope?.querySelector<HTMLFormElement>(formSelector[context.formKind]) ?? null
+        if (form) form.hidden = context.formHidden
       }
 
       if (form) {
@@ -1325,8 +1348,9 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
         const focusedControl = controls[context.focusedFormControlIndex]
         const focusedButton = buttons[context.focusedFormButtonIndex]
         const focusTarget = focusedControl ?? focusedButton ?? null
-        focusTarget?.focus({ preventScroll: true })
+        if (restoreFocus) focusTarget?.focus({ preventScroll: true })
         if (
+          restoreFocus &&
           focusedControl &&
           (focusedControl instanceof HTMLInputElement || focusedControl instanceof HTMLTextAreaElement)
         ) {
@@ -1335,7 +1359,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             focusedControl.setSelectionRange(state.selectionStart, state.selectionEnd)
           }
         }
-      } else if (scope && context.focusControl) {
+      } else if (restoreFocus && scope && context.focusControl) {
         const focusTarget =
           context.focusControl === 'entity-heading'
             ? scope.querySelector<HTMLElement>('[data-menu-focus="true"]')
@@ -1343,11 +1367,12 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
         focusTarget?.focus({ preventScroll: true })
       }
 
-      window.scrollTo({ left: context.scrollX, top: context.scrollY, behavior: 'auto' })
+      if (restoreFocus) window.scrollTo({ left: context.scrollX, top: context.scrollY, behavior: 'auto' })
       programmaticScrollPosition = { x: window.scrollX, y: window.scrollY }
     } finally {
       programmaticRestoreDepth -= 1
     }
+    if (!restoreFocus) return
     if (activeInteractionScrollFrame != null) {
       window.cancelAnimationFrame(activeInteractionScrollFrame)
     }
@@ -1402,7 +1427,34 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     onFailure?.(mutationErrorMessage(error))
   }
 
+  // Mutation success survives failed refreshes independently of focus/scroll generations.
+  const pendingMenuMutations: MenuRestoreContext[] = []
+  const isSubmittedMenuForm = (draft: MenuActiveInteractionContext) =>
+    pendingMenuMutations.some(({ submittedForm: submitted }) =>
+      draft.formKind && submitted?.formKind === draft.formKind &&
+      submitted.categoryId === draft.categoryId && submitted.itemId === draft.itemId &&
+      submitted.optionId === draft.optionId &&
+      JSON.stringify(submitted.formControls.map(({ value, checked }) => [value, checked])) ===
+        JSON.stringify(draft.formControls.map(({ value, checked }) => [value, checked])))
+
+  const updateSubmittedMenuForms = () => {
+    refs.categories.querySelectorAll<HTMLFormElement>('form').forEach((form) => {
+      const submitted = isSubmittedMenuForm(captureActiveMenuInteraction(form))
+      form.querySelectorAll<HTMLButtonElement>('button[type="submit"]').forEach((button) => {
+        if (submitted) {
+          button.dataset.menuMutationPending = 'true'
+          button.disabled = true
+        } else if (button.dataset.menuMutationPending === 'true') {
+          delete button.dataset.menuMutationPending
+          button.disabled = false
+        }
+      })
+    })
+  }
+
   const refreshAfterMutation = async (context: MenuRestoreContext, successMessage: string) => {
+    pendingMenuMutations.push(context)
+    updateSubmittedMenuForms()
     announceMenuSuccess(context, successMessage)
     await loadMenu({ restoreContext: context })
   }
@@ -1857,7 +1909,17 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     }
   }
 
-  const renderMenu = () => {
+  const renderMenu = (active?: MenuActiveInteractionContext | null) => {
+    const drafts = Array.from(refs.categories.querySelectorAll<HTMLFormElement>('form'))
+      .map((form) => captureActiveMenuInteraction(form))
+      .filter((draft) => !(active?.formKind === draft.formKind && active.categoryId === draft.categoryId &&
+        active.itemId === draft.itemId && active.optionId === draft.optionId))
+      .filter((draft) => draft.formKind && !isSubmittedMenuForm(draft))
+    refs.categories.querySelectorAll<HTMLDetailsElement>('.venue-menu-flavors').forEach((details) => {
+      const id = Number(details.closest<HTMLElement>('[data-item-id]')?.dataset.itemId)
+      if (details.open) expandedFlavorIds.add(id)
+      else expandedFlavorIds.delete(id)
+    })
     refs.categories.replaceChildren()
     refs.editingCategoryCount.textContent = String(menu.length)
     refs.editingItemCount.textContent = String(
@@ -1880,6 +1942,8 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
           canManageAvailability,
           expandedCategoryIds.has(category.id),
           {
+          expandedFlavorIds,
+          canFocusEditor: () => programmaticRestoreDepth === 0,
           onExpandedChange: (categoryId, expanded) => {
             if (expanded) expandedCategoryIds.add(categoryId)
             else expandedCategoryIds.delete(categoryId)
@@ -2140,6 +2204,12 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
         )
       )
     })
+    drafts.forEach((draft) => {
+      // Never restore a deleted entity into its parent scope.
+      if (draft.optionId != null && !findOptionById(draft.optionId)) return
+      if (draft.itemId != null && !findItemById(draft.itemId)) return
+      restoreActiveMenuInteraction(draft, false)
+    })
     renderShiftCheck()
   }
 
@@ -2150,6 +2220,15 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       refs.categories.replaceChildren(el('p', { className: 'venue-empty', text: 'Недостаточно прав для просмотра меню.' }))
       return false
     }
+    const retryContext = refs.errorActions.contains(document.activeElement)
+      ? pendingMenuMutations.at(-1)
+      : null
+    const restoreContext = options.restoreContext ?? (retryContext ? {
+      ...retryContext,
+      interactionGeneration,
+      restoreGeneration,
+      anchorTop: findMenuAnchor(retryContext)?.target.getBoundingClientRect().top ?? null
+    } : null)
     hideError()
     setStatus('Загрузка...')
     if (loadAbort) {
@@ -2179,6 +2258,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       }
       bootstrapCompleted = true
     }
+    const refreshedMutations = [...pendingMenuMutations]
     const result = await venueGetMenu(backendUrl, venueId, deps, controller.signal)
     if (disposed || loadSeq !== seq) return false
     loadAbort = null
@@ -2195,15 +2275,16 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     } else {
       rebaseShiftDraft(result.data.categories, previousItemDrafts, previousOptionDrafts)
     }
+    const activeInteraction = captureActiveMenuInteraction()
     const currentInteractionContext =
-      options.restoreContext && !canRestoreMenuContext(options.restoreContext)
-        ? captureActiveMenuInteraction()
+      !canRestoreMenuContext(restoreContext) && !isSubmittedMenuForm(activeInteraction)
+        ? activeInteraction
         : null
     if (currentInteractionContext) refs.categories.style.overflowAnchor = 'none'
     menu = result.data.categories
     shiftNeedsRefresh = false
-    if (canRestoreMenuContext(options.restoreContext) && options.restoreContext.categoryId != null) {
-      expandedCategoryIds.add(options.restoreContext.categoryId)
+    if (canRestoreMenuContext(restoreContext) && restoreContext.categoryId != null) {
+      expandedCategoryIds.add(restoreContext.categoryId)
     }
     if (currentInteractionContext?.categoryId != null && currentInteractionContext.categoryExpanded != null) {
       if (currentInteractionContext.categoryExpanded) {
@@ -2212,7 +2293,11 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
         expandedCategoryIds.delete(currentInteractionContext.categoryId)
       }
     }
-    renderMenu()
+    renderMenu(currentInteractionContext)
+    refreshedMutations.forEach((context) => {
+      const index = pendingMenuMutations.indexOf(context)
+      if (index >= 0) pendingMenuMutations.splice(index, 1)
+    })
     if (refs.shiftCheck && options.shiftRefresh) {
       refs.shiftCheck.status.textContent =
         'Проверка обновлена. Проверьте изменения и подтвердите ещё раз.'
@@ -2221,7 +2306,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
     if (currentInteractionContext) {
       restoreActiveMenuInteraction(currentInteractionContext)
     } else {
-      restoreMenuContext(options.restoreContext)
+      restoreMenuContext(restoreContext)
     }
     return true
   }
@@ -2413,6 +2498,20 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   }
 
   const disposables: Array<() => void> = []
+  const preventSubmittedMenuForm = (event: Event) => {
+    if (!(event.target instanceof HTMLFormElement) ||
+        !isSubmittedMenuForm(captureActiveMenuInteraction(event.target))) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    showToast('Изменения сохранены. Обновите меню, чтобы увидеть результат.')
+  }
+  refs.categories.addEventListener('submit', preventSubmittedMenuForm, true)
+  refs.categories.addEventListener('input', updateSubmittedMenuForms)
+  disposables.push(() => {
+    refs.categories.removeEventListener('submit', preventSubmittedMenuForm, true)
+    refs.categories.removeEventListener('input', updateSubmittedMenuForms)
+    pendingMenuMutations.length = 0
+  })
   const recordUserInteraction = () => {
     if (disposed || programmaticRestoreDepth > 0) return
     if (activeInteractionScrollFrame != null) {

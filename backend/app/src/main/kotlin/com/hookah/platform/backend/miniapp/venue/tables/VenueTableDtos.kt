@@ -21,6 +21,7 @@ data class VenueTableBatchCreateRequest(
     val count: Int,
     val startNumber: Int? = null,
     val prefix: String? = null,
+    val tableNumbers: List<Int>? = null,
 )
 
 @Serializable
@@ -54,4 +55,15 @@ data class VenueTableRotateTokensRequest(
 data class VenueTableRotateTokensResponse(
     val rotatedCount: Int,
     val tableIds: List<Long>,
+)
+
+@Serializable
+data class VenueQrDeliveryRequest(
+    val format: String = "pdf",
+    val tableId: Long? = null,
+)
+
+@Serializable
+data class VenueQrDeliveryResponse(
+    val sent: Boolean,
 )

@@ -377,6 +377,53 @@ class TelegramApiClient(
         }.getOrDefault(false)
     }
 
+    suspend fun sendDocumentBytes(
+        chatId: Long,
+        bytes: ByteArray,
+        filename: String,
+        contentType: ContentType,
+    ): TelegramCallResult {
+        if (chatId <= 0 || !trafficPolicy.allowsOutboundChat(chatId) || !maintenancePolicy.allowsOutboundChat(chatId)) {
+            return TelegramCallResult.TrafficDenied
+        }
+        require(bytes.isNotEmpty() && bytes.size <= MAX_DOCUMENT_BYTES)
+        require(filename.matches(Regex("[A-Za-z0-9_.-]{1,120}")))
+        return try {
+            val response: TelegramResponse<JsonObject> =
+                client.submitFormWithBinaryData(
+                    url = "$baseUrl/sendDocument",
+                    formData =
+                        formData {
+                            append("chat_id", chatId.toString())
+                            append(
+                                "document",
+                                bytes,
+                                Headers.build {
+                                    append(HttpHeaders.ContentType, contentType.toString())
+                                    append(HttpHeaders.ContentDisposition, "filename=\"$filename\"")
+                                },
+                            )
+                        },
+                ).safeBody()
+            val message = response.result
+            val chat = message?.get("chat") as? JsonObject
+            if (response.ok && (message?.get("message_id") as? JsonPrimitive)?.longOrNull?.let { it > 0 } == true &&
+                (chat?.get("id") as? JsonPrimitive)?.longOrNull == chatId &&
+                (chat["type"] as? JsonPrimitive)?.contentOrNull == "private"
+            ) {
+                TelegramCallResult.Success(message)
+            } else {
+                logApiFailure("sendDocument", response.errorCode, response.parameters?.retryAfterSeconds)
+                TelegramCallResult.Failure(response.errorCode, null, response.parameters?.retryAfterSeconds)
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            logApiException("sendDocument", error)
+            TelegramCallResult.Failure(null, null, null)
+        }
+    }
+
     suspend fun deleteMessage(
         chatId: Long,
         messageId: Long,
@@ -442,15 +489,17 @@ class TelegramApiClient(
         )
     }
 
-    private companion object {
-        val commandScopeTypes =
+    companion object {
+        const val MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
+
+        private val commandScopeTypes =
             setOf(
                 "default",
                 "all_private_chats",
                 "all_group_chats",
                 "all_chat_administrators",
             )
-        val outboxMethods =
+        private val outboxMethods =
             setOf(
                 "sendMessage",
                 "editMessageText",

@@ -28,6 +28,10 @@ test('authoritative booking labels do not change with the browser timezone', asy
   for (const timezoneId of bookingLabelFixture.browserTimezones) {
     const context = await browser.newContext({ timezoneId })
     const page = await context.newPage()
+    // This pure label test must not wait for the external Telegram SDK.
+    await page.route('https://telegram.org/js/telegram-web-app.js', (route) =>
+      route.fulfill({ contentType: 'application/javascript', body: '' })
+    )
     try {
       await page.goto('./')
       const actualLabels = await page.evaluate(
