@@ -1821,13 +1821,31 @@ async function openVenueSection(page: Page, name: string) {
   await expect(page.locator('.venue-access-state')).toContainText('Роль:')
   const owner = await page.locator('.venue-owner-shell').count() > 0
   const label = owner && name === 'Обзор' ? 'Главная' : name
-  if (owner && !['Главная', 'Заказы', 'Настройки'].includes(label)) {
-    await page.locator('[data-nav-route="more"]').click()
+  if (!owner || ['Главная', 'Заказы', 'Настройки'].includes(label)) {
+    const button = label === 'Переписки' ? page.locator('[data-nav-route="messages"]') : page.locator('nav').getByRole('button', { name: label, exact: true })
+    await button.click()
+    return
   }
-  const button = label === 'Переписки'
-    ? page.locator('[data-nav-route="messages"]')
-    : page.locator('nav').getByRole('button', { name: label, exact: true })
-  await button.click()
+  const operations: Record<string, string> = { 'Брони': 'Бронирования', 'Вызовы': 'Вызовы гостей', 'Переписки': 'Переписки', 'Запросы продления': 'Запросы продления', 'График смен': 'График смен' }
+  if (operations[label]) {
+    await page.locator('[data-nav-route="dashboard"]').click()
+    await page.locator('.venue-owner-home').getByRole('link', { name: new RegExp(`^${operations[label]}`) }).click()
+    return
+  }
+  if (label === 'Предпросмотр для гостя') {
+    await page.evaluate(() => { window.location.hash = '#/guest-preview' })
+    return
+  }
+  const settings: Record<string, string> = { 'Заказное меню': 'Меню', 'Столы и QR': 'Столы и QR', 'Акции': 'Акции', 'Персонал': 'Команда и доступ', 'Чат персонала': 'Команда и доступ', 'Предпросмотр для гостя': 'Карточка заведения' }
+  if (settings[label]) {
+    await page.locator('[data-nav-route="settings"]').click()
+    await page.getByRole('link', { name: settings[label], exact: true }).click()
+    if (label === 'Персонал') await page.getByRole('link', { name: 'Персонал и приглашения', exact: true }).click()
+    if (label === 'Чат персонала') await page.getByRole('link', { name: 'Чат персонала', exact: true }).click()
+    return
+  }
+  await page.locator('[data-nav-route="more"]').click()
+  await page.locator('.venue-owner-more').getByRole('link', { name: label, exact: true }).click()
 }
 
 async function clickTelegramBackButton(page: Page) {
@@ -8674,7 +8692,8 @@ async function mockPlatformOwnershipApi(
 
 const ownerUxPermissions = [
   'ORDER_QUEUE_VIEW', 'BOOKING_VIEW', 'SUPPORT_MANAGE', 'SHIFT_EXTENSION_VIEW',
-  'MENU_VIEW', 'TABLE_VIEW', 'STAFF_SCHEDULE_VIEW', 'FEEDBACK_VIEW', 'STAFF_CHAT_LINK'
+  'MENU_VIEW', 'TABLE_VIEW', 'STAFF_SCHEDULE_VIEW', 'FEEDBACK_VIEW', 'STAFF_CHAT_LINK',
+  'BOOKING_MANAGE', 'SHIFT_EXTENSION_SETTINGS', 'STAFF_MODULE_SETTINGS_MANAGE', 'VENUE_SETTINGS'
 ]
 
 async function mockOwnerUx(page: Page, status = 'DRAFT', permissions = ownerUxPermissions) {
@@ -8709,22 +8728,22 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 
     await page.goto('?mode=venue&venueId=1#/dashboard')
     await expect(page.getByRole('heading', { name: 'Микс', exact: true })).toBeVisible()
     await expect(page.locator('.venue-header')).toContainText('Москва · Черновик')
-    await expect(page.getByRole('heading', { name: 'Подготовьте заведение' })).toBeInViewport()
+    await expect(page.getByRole('heading', { name: 'Работа заведения' })).toBeInViewport()
     await expect(page.locator('.venue-owner-home')).toContainText('не видна гостям')
     await expect(page.locator('.venue-owner-nav button:visible')).toHaveCount(4)
     await expect(page.locator('.venue-nav')).toBeHidden()
     await expect(page.locator('[data-nav-route="dashboard"]')).toHaveAttribute('aria-current', 'page')
     const actions = page.locator('.venue-owner-action')
-    await expect(actions).toHaveCount(6)
+    await expect(actions).toHaveCount(7)
     for (const action of await actions.all()) await expect(action).toBeInViewport()
-    await expect(page.getByRole('link', { name: 'Карточка заведения Адрес и описание' })).toHaveAttribute('href', '#/settings')
-    await expect(page.getByRole('link', { name: 'Часы работы В настройках заведения' })).toHaveAttribute('href', '#/settings')
+    await expect(page.getByRole('link', { name: 'Настроить заведение' })).toHaveAttribute('href', '#/settings')
+    await expect(page.locator('.venue-summary-row').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:1')
     await expect(page.locator('.ownership-workspace')).toHaveCount(0)
     await expectNoHorizontalOverflow(page)
     const navBox = await page.locator('.venue-owner-nav').boundingBox()
     const contentBox = await page.locator('.venue-owner-home').boundingBox()
     expect(contentBox!.y).toBeGreaterThanOrEqual(navBox!.y + navBox!.height)
-    await page.screenshot({ path: testInfo.outputPath(`owner-draft-${viewport.width}.png`), fullPage: true })
+    await page.screenshot({ path: testInfo.outputPath(`owner-draft-${viewport.width}.png`), fullPage: true, animations: 'disabled' })
   })
 }
 
@@ -8736,9 +8755,10 @@ test('owner UX published metrics, unread badge, switching and portfolio history'
   await expect(page.locator('.venue-summary-row').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:1')
   await expect(page.locator('.venue-summary-row').filter({ hasText: 'В работе:' })).toHaveText('В работе:1')
   await expect(page.locator('.venue-summary')).toContainText('Чат персонала:привязан')
-  await expect(page.locator('.venue-owner-actions a')).toHaveText(['Заказы', 'Брони', 'Вызовы', 'Переписки'])
-  await expect(page.getByRole('button', { name: 'Ещё, непрочитанных сообщений: 3', exact: true })).toBeVisible()
-  await page.screenshot({ path: testInfo.outputPath('owner-published-390.png'), fullPage: true })
+  await expect(page.locator('.venue-owner-actions a')).toHaveText(['ЗаказыОчередь заказов', 'Бронирования', 'Вызовы гостей', 'Переписки3', 'Запросы продления', 'График смен', 'Стоп-лист и меню'])
+  await expect(page.getByRole('link', { name: 'Переписки, непрочитанных: 3', exact: true })).toBeVisible()
+  await expect(page.locator('[data-owner-messages] .nav-unread-badge')).toHaveCSS('color', 'rgb(255, 255, 255)')
+  await page.screenshot({ path: testInfo.outputPath('owner-published-390.png'), fullPage: true, animations: 'disabled' })
   await page.getByRole('combobox', { name: 'Выбрать заведение' }).selectOption('2')
   await expect(page.locator('.venue-header')).toContainText('Дымный берег')
   await expect(page.locator('.venue-header')).toContainText('Казань · Опубликовано')
@@ -8765,11 +8785,13 @@ test('owner UX all allowed routes, active navigation, browser and Telegram back'
   await mockOwnerUx(page)
   await page.goto('?mode=venue&venueId=1#/dashboard')
   await showVenueSections(page)
-  const routes = ['ownership', 'bookings', 'messages', 'calls', 'extensions', 'shifts', 'guest-preview', 'menu', 'promotions', 'tables', 'staff', 'chat', 'subscription', 'stats', 'feedback', 'support']
-  await expect(page.locator('.venue-owner-more [data-nav-route]:visible')).toHaveCount(routes.length)
-  await page.screenshot({ path: testInfo.outputPath('owner-more-390.png'), fullPage: true })
+  const routes = ['ownership', 'stats', 'feedback', 'subscription', 'support']
+  await expect(page.locator('.venue-owner-more a')).toHaveCount(5)
+  await expect(page.locator('.venue-owner-nav [aria-current="page"]')).toHaveCount(1)
+  await expect(page.locator('.venue-owner-nav [data-active="true"]')).toHaveCount(1)
+  await page.screenshot({ path: testInfo.outputPath('owner-more-390.png'), fullPage: true, animations: 'disabled' })
   for (const route of routes) {
-    await page.locator(`.venue-owner-more [data-nav-route="${route}"]`).click()
+    await page.locator(`.venue-owner-more a[href="#/${route}"]`).click()
     await expect(page).toHaveURL(new RegExp(`#/${route}$`))
     await expect(page.locator('.screen-root')).not.toBeEmpty()
     await expect(page.getByText('У вас нет доступа к этому разделу.', { exact: true })).toHaveCount(0)
@@ -8778,11 +8800,7 @@ test('owner UX all allowed routes, active navigation, browser and Telegram back'
     await expect(page.getByRole('heading', { name: 'Ещё', exact: true })).toBeVisible()
     await expectNoHorizontalOverflow(page)
   }
-  await page.locator('[data-nav-route="menu"]').click()
-  await expect(page.locator('[data-nav-route="menu"]')).toHaveAttribute('aria-current', 'page')
   await clickTelegramBackButton(page)
-  await expect(page).toHaveURL(/#\/more$/)
-  await page.getByRole('button', { name: '← Назад', exact: true }).click()
   await expect(page).toHaveURL(/#\/dashboard$/)
   for (const route of ['orders', 'settings']) {
     await page.locator(`[data-nav-route="${route}"]`).click()
@@ -8791,10 +8809,17 @@ test('owner UX all allowed routes, active navigation, browser and Telegram back'
     await clickTelegramBackButton(page)
     await expect(page).toHaveURL(/#\/dashboard$/)
   }
-  await page.getByRole('link', { name: 'Заказное меню', exact: true }).click()
-  await expect(page.locator('[data-nav-route="menu"]')).toHaveAttribute('aria-current', 'page')
+  await page.getByRole('link', { name: 'Стоп-лист и меню', exact: true }).click()
+  await expect(page).toHaveURL(/#\/menu$/)
+  await expect(page.locator('.screen-root h2')).toHaveText('Меню')
   await clickTelegramBackButton(page)
   await expect(page).toHaveURL(/#\/dashboard$/)
+  for (const route of ['bookings', 'messages', 'calls', 'extensions', 'shifts', 'guest-preview', 'menu', 'promotions', 'tables', 'staff', 'chat']) {
+    await page.evaluate((value) => { window.location.hash = `#/${value}` }, route)
+    await expect(page).toHaveURL(new RegExp(`#/${route}$`))
+    await expect(page.locator('.screen-root')).not.toBeEmpty()
+    await expect(page.getByText('У вас нет доступа к этому разделу.', { exact: true })).toHaveCount(0)
+  }
   expect(errors).toEqual([])
 })
 
@@ -8816,7 +8841,7 @@ test('owner UX mobile long settings form remains editable with a reduced viewpor
   await page.setViewportSize({ width: 390, height: 844 })
   await installTelegramWebApp(page, 123456789)
   const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ['BOOKING_MANAGE', 'SHIFT_EXTENSION_SETTINGS'] })
-  await page.goto('?mode=venue#/settings')
+  await page.goto('?mode=venue#/settings/card')
   const card = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) })
   const input = card.getByPlaceholder(/авторские чаши/)
   await input.fill('Новое описание из мобильного кабинета.')
@@ -8865,7 +8890,7 @@ test('owner UX switching to a venue with another role restores its original navi
   await selector.selectOption('1')
   await expect(page.locator('.venue-owner-nav')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Ещё', exact: true })).toBeVisible()
-  await expect(page.locator('.venue-owner-more [data-nav-route="subscription"]')).toBeVisible()
+  await expect(page.locator('.venue-owner-more a[href="#/subscription"]')).toBeVisible()
 })
 
 for (const role of ['MANAGER', 'STAFF'] as const) {
@@ -9005,11 +9030,12 @@ test('ownership dashboard opens non-public venues without reading the guest venu
   await page.locator('.venue-order-row').filter({ hasText: 'Микс' }).getByRole('button', { name: 'Открыть' }).click()
   await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
   await expect(page.locator('.venue-access-state')).toHaveText('Роль: владелец')
-  await expect(page.getByText('Карточка ещё не опубликована и не видна гостям.', { exact: false })).toBeVisible()
+  await expect(page.getByText('Карточка не опубликована и не видна гостям.', { exact: false })).toBeVisible()
   await openVenueSection(page, 'Мои заведения')
   await page.locator('.venue-order-row').filter({ hasText: 'Скрытая' }).getByRole('button', { name: 'Открыть' }).click()
   await expect(page.getByRole('heading', { name: 'Скрытая' })).toBeVisible()
-  await expect(page.locator('.venue-dashboard .status')).toContainText('Обновлено:')
+  await expect(page.locator('.venue-owner-home')).toContainText('Заведение скрыто от гостей.')
+  await expect(page.locator('.venue-owner-home a')).toHaveCount(0)
   expect(guestVenueReads).toEqual([])
 
   const guestStatus = await page.evaluate(async () => (await fetch('/api/guest/venue/1')).status)
@@ -13857,8 +13883,9 @@ test('venue owner links tests and unlinks staff chat from mini app', async ({ pa
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await showVenueSections(page)
-  await expect(page.getByRole('button', { name: 'Чат персонала', exact: true })).toBeVisible()
+  await openVenueSection(page, 'Настройки')
+  await page.getByRole('link', { name: 'Команда и доступ', exact: true }).click()
+  await expect(page.getByRole('link', { name: 'Чат персонала', exact: true })).toBeVisible()
   await openVenueSection(page, 'Чат персонала')
   await expect(page.getByRole('heading', { name: 'Чат персонала' })).toBeVisible()
   await expect(page.getByText('Чат персонала не подключён')).toBeVisible()
@@ -15695,10 +15722,7 @@ test('venue owner opens the published guest preview with public read-only conten
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await showVenueSections(page)
-  const previewNav = page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true })
-  await expect(previewNav).toBeVisible()
-  await previewNav.click()
+  await openVenueSection(page, 'Предпросмотр для гостя')
 
   const preview = page.locator('.screen-root')
   await expect(preview.getByRole('heading', { name: 'Предпросмотр для гостя', exact: true })).toBeVisible()
@@ -15944,7 +15968,7 @@ test('settings preview blocks unsaved public card and schedule changes, then sho
         venueName: 'Черновик',
         venueCity: 'Москва',
         venueStatus: 'DRAFT',
-        role: 'OWNER',
+        role: 'MANAGER',
         permissions: []
       }
     ],
@@ -16262,11 +16286,8 @@ test('venue guest preview ignores table cart and order context and uses GET-only
     `?mode=venue&table_token=${encodeURIComponent(tableToken)}#tgWebAppData=${encodeURIComponent(mockInitData)}`
   )
 
-  await showVenueSections(page)
-  const previewNav = page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true })
-  await expect(previewNav).toBeVisible()
   api.clearTraffic()
-  await previewNav.click()
+  await openVenueSection(page, 'Предпросмотр для гостя')
 
   const preview = page.locator('.screen-root')
   await expect(preview.getByRole('heading', { name: 'Микс', exact: true })).toBeVisible()
@@ -16405,6 +16426,7 @@ test('venue owner disables and re-enables staff module without resetting nested 
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Настройки')
+  await page.getByRole('link', { name: 'Команда и доступ', exact: true }).click()
 
   const card = page.getByTestId('staff-module-settings')
   const master = card.getByTestId('staff-module-master')
@@ -16521,6 +16543,7 @@ test('staff module settings venue switch ignores a late response from the previo
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Настройки')
+  await page.getByRole('link', { name: 'Команда и доступ', exact: true }).click()
   await expect.poll(() => venueOneRequestStarted).toBe(true)
 
   const venueSelect = page.locator('.venue-controls select.venue-select')
@@ -16627,6 +16650,7 @@ test('venue owner configures public review link settings', async ({ page }) => {
 
   await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
   await openVenueSection(page, 'Настройки')
+  await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
   const reviewCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Ссылка для отзывов' }) })
   await expect(reviewCard).toContainText('Эту кнопку покажем гостю только после оценки 5/5')
   await expect(reviewCard).toContainText('Где взять ссылку: откройте карточку заведения в Яндекс.Картах')
@@ -18790,7 +18814,7 @@ test('venue owner subscription screen separates refresh from checkout ensure', a
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await showVenueSections(page)
-  await expect(page.getByRole('button', { name: 'Подписка', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Подписка', exact: true })).toBeVisible()
   await openVenueSection(page, 'Подписка')
   await expect(page.getByRole('heading', { name: 'Подписка' })).toBeVisible()
   await expect(page.getByText('Статус: Активна')).toBeVisible()
@@ -18853,7 +18877,7 @@ test('venue owner sees statistics section', async ({ page }) => {
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await showVenueSections(page)
-  await expect(page.getByRole('button', { name: 'Статистика', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Статистика', exact: true })).toBeVisible()
   await openVenueSection(page, 'Статистика')
   await expect(page.getByRole('heading', { name: 'Статистика' })).toBeVisible()
   await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Средний чек' })).toContainText(/1\s*250/)
@@ -19839,7 +19863,7 @@ test('venue owner sees feedback section and staff does not', async ({ page }) =>
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await showVenueSections(page)
-  await expect(page.getByRole('button', { name: 'Отзывы', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Отзывы', exact: true })).toBeVisible()
   await openVenueSection(page, 'Отзывы')
   await expect(page.getByRole('heading', { name: 'Отзывы', exact: true })).toBeVisible()
   await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Отзывы' })).toContainText('2')
@@ -22639,5 +22663,976 @@ for (const status of [404, 403, 500]) {
     await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
     expect(resolutions).toBe(2)
     expect(await page.evaluate(() => (window as unknown as ScannerWindow).__qrAppCloseCount)).toBe(0)
+  })
+}
+
+for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
+  test(`owner UX02 settings catalog and all subsections ${viewport.width}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport)
+    await installTelegramWebApp(page, 123456789)
+    await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+    await page.goto('?mode=venue#/settings')
+    const catalog = page.locator('.venue-settings-catalog')
+    await expect(catalog.getByRole('link')).toHaveText(['Карточка заведения', 'Часы работы', 'Меню', 'Столы и QR', 'Команда и доступ', 'Бронирование', 'Продление времени', 'Акции'])
+    await expect(page.locator('.venue-settings')).toHaveCount(0)
+    await expectNoHorizontalOverflow(page)
+    await page.screenshot({ path: testInfo.outputPath(`owner-catalog-${viewport.width}.png`), fullPage: true, animations: 'disabled' })
+    for (const [label, route, heading] of [
+      ['Карточка заведения', 'settings/card', 'Карточка заведения'],
+      ['Часы работы', 'settings/hours', 'Часы работы'],
+      ['Меню', 'menu', 'Меню'],
+      ['Столы и QR', 'tables', 'Столы'],
+      ['Команда и доступ', 'settings/team', 'Команда и доступ'],
+      ['Бронирование', 'settings/booking', 'Бронирование'],
+      ['Продление времени', 'settings/extension', 'Продление времени'],
+      ['Акции', 'promotions', 'Акции']
+    ]) {
+      await catalog.getByRole('link', { name: label, exact: true }).click()
+      await expect(page).toHaveURL(new RegExp(`#/${route}$`))
+      await expect(page.locator('.screen-root h2').first()).toContainText(heading)
+      await expect(page.locator('.venue-owner-nav [data-nav-route="settings"]')).toHaveAttribute('aria-current', 'page')
+      if (route.startsWith('settings/')) {
+        await expect(page.locator('.venue-settings > section.card')).toHaveCount(route === 'settings/card' ? 2 : 1)
+        await expect(page.getByText('Настройки загружены.', { exact: true })).toHaveCount(0)
+        await expect(page.getByRole('button', { name: 'Вернуться в обзор' })).toHaveCount(0)
+      }
+      if (route === 'settings/card') {
+        await expect(page.getByPlaceholder('Начните вводить город')).toHaveValue('Москва')
+        await page.screenshot({ path: testInfo.outputPath(`owner-card-${viewport.width}.png`), fullPage: true, animations: 'disabled' })
+      }
+      if (route === 'settings/hours') {
+        await expect(page.locator('.venue-schedule-day')).toHaveCount(7)
+        await expect(page.locator('.venue-day-editor:visible')).toHaveCount(0)
+        await page.screenshot({ path: testInfo.outputPath(`owner-hours-${viewport.width}.png`), fullPage: true, animations: 'disabled' })
+      }
+      await expectNoHorizontalOverflow(page)
+      await page.goBack()
+      await expect(catalog).toBeVisible()
+    }
+    await page.getByRole('button', { name: 'Ещё', exact: true }).click()
+    await expect(page.locator('.venue-owner-more a')).toHaveText(['Мои заведения', 'Статистика', 'Отзывы', 'Подписка', 'Поддержка'])
+    await expectNoHorizontalOverflow(page)
+  })
+}
+
+test('owner UX02 compact week retains dirty days across collapse, another save and exceptions', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const schedule = buildVenueScheduleSettings()
+  schedule.weeklyHours[5] = { weekday: 6, opensAt: '00:00', closesAt: '00:00', isClosed: false, configured: true }
+  schedule.weeklyHours[6].configured = false
+  const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', scheduleSettings: schedule })
+  await page.goto('?mode=venue#/settings/hours')
+  const day = (n: number) => page.locator(`.venue-schedule-day[data-weekday="${n}"]`)
+  await expect(page.locator('.venue-schedule-day')).toHaveCount(7)
+  await expect(day(6)).toContainText('Круглосуточно')
+  await expect(day(7)).toContainText('Не настроено')
+  await expect(page.getByText('Добавить день', { exact: true })).toHaveCount(0)
+  await day(1).getByRole('button', { name: /Изменить/ }).click()
+  await day(1).getByLabel('Закрываемся', { exact: true }).fill('03:30')
+  await day(2).getByRole('button', { name: /Изменить/ }).click()
+  await expect(day(1).getByLabel('Закрываемся', { exact: true })).toBeHidden()
+  await expect(page.locator('.venue-day-editor:visible')).toHaveCount(1)
+  await expect(day(1)).toContainText('Не сохранено')
+  await day(2).getByLabel('Закрыто', { exact: true }).check()
+  await day(2).getByRole('button', { name: 'Сохранить день', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Часы работы сохранены.')
+  await expect(day(1).getByLabel('Закрываемся', { exact: true })).toHaveValue('03:30')
+  await page.getByRole('button', { name: 'Закрыть период', exact: true }).click()
+  const exception = page.getByTestId('schedule-exception-form')
+  await exception.locator('input[type=date]').nth(0).fill('2030-02-10')
+  await exception.locator('input[type=date]').nth(1).fill('2030-02-11')
+  await exception.locator('textarea').fill('Особое событие')
+  await page.getByRole('button', { name: 'Изменить часы на период' }).click()
+  await expect(exception.locator('textarea')).toHaveValue('Особое событие')
+  await exception.getByRole('button', { name: 'Отмена', exact: true }).click()
+  await expect(exception).toBeVisible()
+  await exception.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Исключение сохранено.')
+  await expect(day(1).getByLabel('Закрываемся', { exact: true })).toHaveValue('03:30')
+  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText(unsavedPreviewMessage)
+  await day(1).getByRole('button', { name: /Изменить/ }).click()
+  await day(1).getByRole('button', { name: 'Сохранить день', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Часы работы сохранены.')
+  expect(api.getScheduleSettings().weeklyHours[0].closesAt).toBe('03:30')
+  expect(api.getScheduleSettings().weeklyHours[1].isClosed).toBe(true)
+  expect(api.getScheduleSettings().dateOverrides).toHaveLength(2)
+  await day(7).getByRole('button', { name: /Изменить/ }).click()
+  await day(7).getByRole('button', { name: 'Сохранить день', exact: true }).click()
+  await expect(day(7)).not.toContainText('Не настроено')
+  await page.getByRole('button', { name: '← Настройки', exact: true }).click()
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+})
+
+test('owner UX02 unsaved card blocks navigation, history and venue switch until explicit save', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ['VENUE_SETTINGS'] })
+  await page.route('**/api/venue/me', (route) => route.fulfill(jsonResponse({ userId: 123456789, venues: [
+    { venueId: 1, venueName: 'Первое', venueStatus: 'DRAFT', role: 'OWNER', permissions: ['VENUE_SETTINGS'] },
+    { venueId: 2, venueName: 'Второе', venueStatus: 'PUBLISHED', role: 'OWNER', permissions: ['VENUE_SETTINGS'] }
+  ] })))
+  await page.route('**/api/venue/2/public-card', (route) => route.fulfill(jsonResponse(buildPublicCardSettings({ venueId: 2, city: 'Казань', cardDescription: 'Описание второго' }))))
+  await page.route('**/api/venue/2/public-review-url', (route) => route.fulfill(jsonResponse({ venueId: 2, publicReviewUrl: null })))
+  await page.goto('?mode=venue&venueId=1#/settings')
+  await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await description.fill('Несохранённое первое')
+  await page.getByRole('button', { name: 'Главная', exact: true }).click()
+  await expect(page.locator('p.status')).toContainText('Есть несохранённые изменения.')
+  await expect(page).toHaveURL(/#\/settings\/card$/)
+  await clickTelegramBackButton(page)
+  await expect(description).toHaveValue('Несохранённое первое')
+  await page.evaluate(() => history.back())
+  await expect(page).toHaveURL(/#\/settings\/card$/)
+  await expect(description).toHaveValue('Несохранённое первое')
+  await page.locator('.venue-select').selectOption('2')
+  await expect(page.locator('.venue-select')).toHaveValue('1')
+  await expect(page).toHaveURL(/venueId=1/)
+  await expect(description).toHaveValue('Несохранённое первое')
+  await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  expect(api.getPublicCardSettings().cardDescription).toBe('Несохранённое первое')
+  await page.locator('.venue-select').selectOption('2')
+  await expect(description).toHaveValue('Описание второго')
+  await expect(page.getByPlaceholder('Начните вводить город')).toHaveValue('Казань')
+  await page.locator('.venue-select').selectOption('1')
+  await expect(description).toHaveValue('Несохранённое первое')
+  await page.goBack()
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+  await page.goForward()
+  await expect(description).toHaveValue('Несохранённое первое')
+})
+
+test('owner UX02 cancelled browser Back preserves subsequent Back and Forward history', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  const writes: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'PUT' && request.url().includes('/public-card')) writes.push(request.url())
+  })
+  await page.goto('?mode=venue#/dashboard')
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
+  const length = await page.evaluate(() => history.length)
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await description.fill('История без потерь')
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.evaluate(() => history.back())
+    await expect(page).toHaveURL(/#\/settings\/card$/)
+    await expect(description).toHaveValue('История без потерь')
+    await expect(page.locator('p.status')).toContainText('Есть несохранённые изменения.')
+  }
+  await page.getByRole('button', { name: 'Главная', exact: true }).click()
+  await expect(description).toHaveValue('История без потерь')
+  expect(writes).toHaveLength(0)
+  await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  expect(api.getPublicCardSettings().cardDescription).toBe('История без потерь')
+  expect(writes).toHaveLength(1)
+  for (let cycle = 0; cycle < 2; cycle++) {
+    await page.goBack()
+    await expect(page).toHaveURL(/#\/settings$/)
+    await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+    await page.goBack()
+    await expect(page).toHaveURL(/#\/dashboard$/)
+    await page.goForward()
+    await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+    await page.goForward()
+    await expect(description).toHaveValue('История без потерь')
+  }
+  expect(await page.evaluate(() => history.length)).toBe(length)
+  expect(writes).toHaveLength(1)
+})
+
+test.beforeEach(async ({ page }, testInfo) => {
+  if (!testInfo.title.startsWith('owner UX02 harden')) return
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'navigation', { value: undefined, configurable: true })
+    const events: unknown[] = []
+    Object.assign(window, { historyEvidence: events })
+    for (const type of ['popstate', 'hashchange']) window.addEventListener(type, (event) => {
+      events.push({ type, hash: location.hash, state: history.state, cancelable: event.cancelable })
+    })
+  })
+})
+
+test.afterEach(async ({ page }, testInfo) => {
+  if (!testInfo.title.startsWith('owner UX02 harden')) return
+  await testInfo.attach('native-history-evidence', { contentType: 'application/json', body: JSON.stringify(await page.evaluate(() => ({
+    hash: location.hash, state: history.state, length: history.length,
+    draft: document.querySelector<HTMLTextAreaElement>('textarea[placeholder*="авторские чаши"]')?.value,
+    events: (window as unknown as { historyEvidence: unknown[] }).historyEvidence
+  })), null, 2) })
+})
+
+for (const index of [null, 'invalid']) {
+  test(`owner UX02 harden existing unindexed history (${index}) retains dirty card in fallback`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+    // Seed real same-document entries before the router starts, not synthetic popstate events.
+    await page.addInitScript((index) => {
+      if (!location.search.includes('historySeed=1')) return
+      history.replaceState({ legacy: 'home' }, '', '#/dashboard')
+      history.pushState({ legacy: 'settings', ...(index === null ? {} : { hookahVenueHistoryIndex: index }) }, '', '#/settings')
+      history.pushState(null, '', '#/settings/card')
+    }, index)
+    await page.goto('?mode=venue&venueId=1&historySeed=1#/dashboard')
+    const description = page.getByPlaceholder(/авторские чаши/)
+    await expect(description).toHaveValue('')
+    const length = await page.evaluate(() => history.length)
+    await description.fill('Неразмеченная история')
+    await page.evaluate(() => history.back())
+    // Back cannot be cancelled here: URL/screen move, the exact editor stays in memory.
+    await expect(page).toHaveURL(/#\/settings$/)
+    await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+    await expect(page.locator('.venue-draft-notice')).toContainText('Есть несохранённый черновик.')
+    await page.goForward()
+    await expect(description).toHaveValue('Неразмеченная история')
+    await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+    await page.goBack()
+    await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+    expect(await page.evaluate(() => history.state)).toEqual({ legacy: 'settings', ...(index === null ? {} : { hookahVenueHistoryIndex: index }) })
+    await page.goBack()
+    await expect(page).toHaveURL(/#\/dashboard$/)
+    expect(await page.evaluate(() => history.state)).toEqual({ legacy: 'home' })
+    await page.goForward()
+    await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+    await page.goForward()
+    await expect(description).toHaveValue('Неразмеченная история')
+    expect(await page.evaluate(() => history.length)).toBe(length)
+  })
+}
+
+test('owner UX02 harden overlapping Back never submits compensation and retains original card', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await page.goto('?mode=venue&venueId=1#/dashboard')
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await description.fill('Два перехода назад')
+  // Preserve the old compensation trap as a negative assertion: no go(delta) may be submitted.
+  await page.evaluate(() => {
+    const nativeGo = history.go.bind(history)
+    const pending: number[] = []
+    history.go = (delta = 0) => { pending.push(delta) }
+    Object.assign(window, { releaseHistoryCompensation: () => {
+      history.go = nativeGo
+      if (pending.length) throw new Error(`Unexpected compensation: ${pending}`)
+    } })
+    history.back()
+  })
+  await expect(page).toHaveURL(/#\/settings$/)
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+  await expect(page.locator('.venue-draft-notice')).toBeVisible()
+  await page.evaluate(() => history.back())
+  await expect(page).toHaveURL(/#\/dashboard$/)
+  await page.evaluate(() => (window as unknown as { releaseHistoryCompensation: () => void }).releaseHistoryCompensation())
+  await expect(page).toHaveURL(/#\/dashboard$/)
+  await expect(page.locator('.venue-settings')).toHaveCount(0)
+  await page.goForward()
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+  await page.goForward()
+  await expect(page).toHaveURL(/#\/settings\/card$/)
+  await expect(description).toHaveValue('Два перехода назад')
+  await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await page.getByRole('button', { name: 'Главная', exact: true }).click()
+  await expect(page).toHaveURL(/#\/dashboard$/)
+  await expect(page.locator('.venue-settings')).toHaveCount(0)
+})
+
+for (const traversal of ['double-back', 'multi-entry'] as const) {
+  test(`owner UX02 harden native ${traversal} preserves dirty card and later navigation`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+    await page.goto('?mode=venue&venueId=1#/dashboard')
+    await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+    await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
+    const description = page.getByPlaceholder(/авторские чаши/)
+    await expect(description).toHaveValue('')
+    await description.fill('Сразу на две записи')
+    await page.evaluate((traversal) => {
+      if (traversal === 'double-back') { history.back(); history.back() }
+      else history.go(-2)
+    }, traversal)
+    await expect(page).toHaveURL(/#\/dashboard$/)
+    await expect(page.locator('.venue-settings')).toHaveCount(0)
+    await expect(page.locator('.venue-draft-notice')).toBeVisible()
+    await page.evaluate(() => history.go(2))
+    await expect(description).toHaveValue('Сразу на две записи')
+    await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+    await page.evaluate(() => history.go(-2))
+    await expect(page).toHaveURL(/#\/dashboard$/)
+    await expect(page.locator('.venue-settings')).toHaveCount(0)
+    await page.evaluate(() => history.go(2))
+    await expect(description).toHaveValue('Сразу на две записи')
+  })
+}
+
+test('owner UX02 harden unindexed multi-entry Forward restores dirty direct form', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await page.goto('?mode=venue&venueId=1#/settings/card')
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await page.getByRole('button', { name: '← Настройки', exact: true }).click()
+  await page.getByRole('link', { name: 'Часы работы', exact: true }).click()
+  await expect(page.locator('.venue-schedule-day')).toHaveCount(7)
+  // An existing same-document destination with unrelated state, on the forward side.
+  await page.evaluate(() => { history.replaceState({ legacy: 'hours' }, ''); history.go(-2) })
+  await expect(description).toHaveValue('')
+  await description.fill('Неразмеченная история впереди')
+  await page.evaluate(() => history.go(2))
+  await expect(page).toHaveURL(/#\/settings\/hours$/)
+  await expect(page.locator('.venue-schedule-day')).toHaveCount(7)
+  expect(await page.evaluate(() => history.state)).toEqual({ legacy: 'hours' })
+  await expect(page.locator('.venue-draft-notice')).toBeVisible()
+  await page.evaluate(() => history.go(-2))
+  await expect(description).toHaveValue('Неразмеченная история впереди')
+  await page.evaluate(() => history.go(2))
+  await expect(page.locator('.venue-schedule-day')).toHaveCount(7)
+  await page.evaluate(() => history.go(-2))
+  await expect(description).toHaveValue('Неразмеченная история впереди')
+})
+
+test('owner UX02 direct form and cancelled Forward preserve subsection history', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await page.goto('?mode=venue#/settings/card')
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await page.getByRole('button', { name: '← Настройки', exact: true }).click()
+  await page.getByRole('link', { name: 'Часы работы', exact: true }).click()
+  await expect(page.locator('.venue-schedule-day')).toHaveCount(7)
+  await page.goBack()
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+  await page.goBack()
+  await expect(description).toHaveValue('')
+  const length = await page.evaluate(() => history.length)
+  await description.fill('Прямая ссылка')
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.evaluate(() => history.forward())
+    await expect(page).toHaveURL(/#\/settings\/card$/)
+    await expect(description).toHaveValue('Прямая ссылка')
+  }
+  // This path saves explicitly; the separate discard regression checks confirmed exit.
+  await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await page.goForward()
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+  await page.goForward()
+  await expect(page).toHaveURL(/#\/settings\/hours$/)
+  await expect(page.locator('.venue-schedule-day')).toHaveCount(7)
+  await page.goBack()
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+  await page.goBack()
+  await expect(description).toHaveValue('Прямая ссылка')
+  expect(await page.evaluate(() => history.length)).toBe(length)
+})
+
+test('owner UX02 document Back honours native discard confirmation for a direct form', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  const initialCard = api.getPublicCardSettings()
+  await page.goto('?mode=venue#/dashboard')
+  await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toBeVisible()
+  // A full document navigation, unlike an in-app hash link, uses the native beforeunload guard.
+  await page.goto('?mode=venue&venueId=1&historyDirect=1#/settings/card')
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await description.fill('Не сохранять при выходе')
+  const dismissed = page.waitForEvent('dialog').then(async (dialog) => {
+    expect(dialog.type()).toBe('beforeunload')
+    await dialog.dismiss()
+  })
+  await page.evaluate(() => history.back())
+  await dismissed
+  await expect(description).toHaveValue('Не сохранять при выходе')
+  const accepted = page.waitForEvent('dialog').then(async (dialog) => {
+    expect(dialog.type()).toBe('beforeunload')
+    await dialog.accept()
+  })
+  await page.goBack()
+  await accepted
+  await expect(page).toHaveURL(/#\/dashboard$/)
+  expect(api.getPublicCardSettings()).toEqual(initialCard)
+  await page.goForward()
+  await expect(description).toHaveValue('')
+})
+
+test('owner UX02 saved preview returns to the exact settings subsection', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueGuestPreviewApi(page, { role: 'OWNER' })
+  await page.goto('?mode=venue#/settings/card')
+  await page.getByPlaceholder(/авторские чаши/).fill('Изменённая карточка')
+  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText(unsavedPreviewMessage)
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await expect(page).toHaveURL(/#\/guest-preview\?from=settings&section=card$/)
+  await expect(page.locator('.screen-root')).toContainText('Изменённая карточка')
+  await expect(page.getByRole('button', { name: '← Назад', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Вернуться к настройкам', exact: true }).click()
+  await expect(page).toHaveURL(/#\/settings\/card$/)
+  await expect(page.getByPlaceholder(/авторские чаши/)).toHaveValue('Изменённая карточка')
+  await page.getByRole('button', { name: '← Настройки', exact: true }).click()
+  await page.getByRole('link', { name: 'Часы работы', exact: true }).click()
+  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await expect(page).toHaveURL(/#\/guest-preview\?from=settings&section=hours$/)
+  await expect(page.getByRole('heading', { name: 'Предпросмотр для гостя', exact: true })).toBeVisible()
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/settings\/hours$/)
+  await expect(page.locator('.venue-schedule-day')).toHaveCount(7)
+  expect(api.getPreviewRequests()).toHaveLength(2)
+})
+
+test('owner UX02 booking and extension forms save explicitly and protect unsaved values', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await page.goto('?mode=venue#/settings/booking')
+  await expect(page.getByRole('heading', { name: 'Бронирование', exact: true })).toBeVisible()
+  const hold = page.locator('.venue-settings input[type=number]')
+  await expect(hold).toHaveValue('30')
+  await hold.fill('45')
+  await page.getByRole('button', { name: '← Настройки' }).click()
+  await expect(hold).toHaveValue('45')
+  await expect(page.locator('p.status')).toContainText('Есть несохранённые изменения.')
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Настройки брони сохранены.')
+  expect(api.getBookingSettings().holdMinutes).toBe(45)
+  await page.getByRole('button', { name: '← Настройки' }).click()
+  await page.getByRole('link', { name: 'Продление времени', exact: true }).click()
+  await page.getByLabel('Показывать гостям возможность продления').check()
+  await page.getByPlaceholder('3000').fill('2500')
+  await page.getByRole('button', { name: 'Ещё', exact: true }).click()
+  await expect(page.getByPlaceholder('3000')).toHaveValue('2500')
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Настройки сохранены.')
+  expect(api.getSettings()).toMatchObject({ enabled: true, priceMinor: 250000 })
+  await page.getByRole('button', { name: 'Ещё', exact: true }).click()
+  await expect(page.locator('.venue-owner-more')).toBeVisible()
+})
+
+test('owner UX02 load errors do not become zero counts and denied settings do not call APIs', async ({ page }) => {
+  await mockOwnerUx(page, 'DRAFT', ['ORDER_QUEUE_VIEW'])
+  await page.route('**/api/venue/*/staff-calls**', (route) => route.fulfill(jsonResponse({ error: { code: 'INTERNAL_ERROR' } }, 500)))
+  await page.goto('?mode=venue#/dashboard')
+  await expect(page.locator('.venue-summary-row').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:ошибка')
+  await expect(page.locator('.venue-dashboard .error-card')).toBeVisible()
+  const requests: string[] = []
+  page.on('request', (request) => { if (request.url().includes('/api/venue/')) requests.push(request.url()) })
+  for (const section of ['booking', 'extension']) {
+    await page.evaluate((value) => { window.location.hash = `#/settings/${value}` }, section)
+    await expect(page.locator('p.status')).toHaveText('У вас нет доступа к настройкам заведения.')
+    await expect(page.locator('.venue-settings input')).toHaveCount(0)
+  }
+  expect(requests.filter((url) => /booking-settings|shift-extension\/settings/.test(url))).toEqual([])
+})
+
+test('owner UX02 reduced-height schedule keeps focused fields and save reachable', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 420 })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER' })
+  await page.goto('?mode=venue#/settings/hours')
+  const monday = page.locator('.venue-schedule-day[data-weekday="1"]')
+  await monday.getByRole('button', { name: /Изменить/ }).click()
+  const closes = monday.getByLabel('Закрываемся', { exact: true })
+  await closes.fill('02:00')
+  await closes.focus()
+  await closes.scrollIntoViewIfNeeded()
+  await expect(closes).toBeInViewport()
+  const save = monday.getByRole('button', { name: 'Сохранить день', exact: true })
+  await save.scrollIntoViewIfNeeded()
+  await expect(save).toBeInViewport()
+  expect(await save.evaluate((button) => {
+    const box = button.getBoundingClientRect()
+    return button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))
+  })).toBe(true)
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: testInfo.outputPath('owner-hours-keyboard-390.png'), fullPage: true, animations: 'disabled' })
+  await save.click()
+  await expect(page.locator('p.status')).toHaveText('Часы работы сохранены.')
+  expect(api.getScheduleSettings().weeklyHours[0].closesAt).toBe('02:00')
+})
+
+test('owner UX02 pending save blocks venue switch and additional edits', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await page.route('**/api/venue/me', (route) => route.fulfill(jsonResponse({ userId: 123456789, venues: [1, 2].map((venueId) => ({
+    venueId, venueName: `Заведение ${venueId}`, venueStatus: 'DRAFT', role: 'OWNER', permissions: ownerUxPermissions
+  })) })))
+  let release = () => undefined
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/api/venue/1/schedule/weekly/1', async (route) => { await pending; await route.fallback() })
+  await page.goto('?mode=venue&venueId=1#/settings/hours')
+  const monday = page.locator('.venue-schedule-day[data-weekday="1"]')
+  await monday.getByRole('button', { name: /Изменить/ }).click()
+  await monday.getByLabel('Закрываемся', { exact: true }).fill('02:30')
+  await monday.getByRole('button', { name: 'Сохранить день', exact: true }).click()
+  await expect(monday.getByLabel('Закрываемся', { exact: true })).toBeDisabled()
+  await page.locator('.venue-select').selectOption('2')
+  await expect(page.locator('.venue-select')).toHaveValue('1')
+  await expect(page.locator('p.status')).toHaveText('Дождитесь завершения сохранения.')
+  await page.getByRole('button', { name: 'Главная', exact: true }).click()
+  await expect(page).toHaveURL(/#\/settings\/hours$/)
+  release()
+  await expect(page.locator('p.status')).toHaveText('Часы работы сохранены.')
+  expect(api.getScheduleSettings().weeklyHours[0].closesAt).toBe('02:30')
+  await page.getByRole('button', { name: 'Главная', exact: true }).click()
+  await expect(page.locator('.venue-owner-home')).toBeVisible()
+})
+
+for (const section of ['card', 'hours', 'booking', 'extension', 'team'] as const) {
+  test(`owner UX02 compat fallback retains ${section}, returns without refetch and clears after save`, async ({ page }, testInfo) => {
+    if (section === 'card') await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
+    await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+    const requests: Array<{ method: string; url: string }> = []
+    page.on('request', (request) => {
+      if (/\/api\/venue\/1\/(public-card|public-review-url|schedule|booking-settings|shift-extension-settings|staff-module-settings)/.test(request.url())) {
+        requests.push({ method: request.method(), url: request.url() })
+      }
+    })
+    await page.goto(`?mode=venue&venueId=1#/settings/${section}`)
+    const field = section === 'card' ? page.getByPlaceholder(/авторские чаши/)
+      : section === 'hours' ? page.locator('.venue-schedule-day[data-weekday="1"]').getByLabel('Закрываемся', { exact: true })
+        : section === 'booking' ? page.getByPlaceholder('15', { exact: true })
+          : section === 'extension' ? page.getByPlaceholder('3000') : page.getByTestId('staff-module-guest-visible')
+    const value = section === 'card' ? '  Точный текст черновика  ' : section === 'hours' ? '03:45' : section === 'booking' ? '45' : '2500'
+    if (section === 'hours') await page.locator('.venue-schedule-day[data-weekday="1"]').getByRole('button', { name: /Изменить/ }).click()
+    if (section === 'team') await field.uncheck()
+    else await field.fill(value)
+    await expect(page.locator('.venue-draft-notice')).toContainText('только в памяти этого окна')
+    if (section === 'card') {
+      await expectNoHorizontalOverflow(page)
+      await page.screenshot({ path: testInfo.outputPath('compat-draft-390.png'), fullPage: true })
+    }
+    const reads = requests.filter((request) => request.method === 'GET').length
+    const historyLength = await page.evaluate(() => history.length)
+    // Native hash assignment is not cancellable by the legacy popstate/hashchange listeners.
+    await page.evaluate(() => { location.hash = '#/settings' })
+    await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+    await expect(page.locator('.venue-settings')).toHaveCount(0)
+    await expect(page.locator('.venue-draft-notice').getByRole('link')).toHaveAttribute('href', `#/settings/${section}`)
+    for (let cycle = 0; cycle < 3; cycle++) {
+      await page.goBack()
+      await expect(page).toHaveURL(new RegExp(`#/settings/${section}$`))
+      if (section === 'team') await expect(field).not.toBeChecked()
+      else await expect(field).toHaveValue(value)
+      await page.goForward()
+      await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+    }
+    expect(requests.filter((request) => request.method === 'GET')).toHaveLength(reads)
+    expect(requests.filter((request) => request.method !== 'GET')).toEqual([])
+    expect(await page.evaluate(() => history.length)).toBe(historyLength + 1)
+    await page.goBack()
+    const save = section === 'card'
+      ? page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true })
+      : section === 'hours' ? page.getByRole('button', { name: 'Сохранить день', exact: true }).first()
+        : section === 'team' ? page.getByTestId('staff-module-save') : page.getByRole('button', { name: 'Сохранить', exact: true })
+    await save.click()
+    await expect(page.locator('.venue-draft-notice')).toBeHidden()
+    expect(requests.filter((request) => request.method !== 'GET')).toHaveLength(1)
+    await page.goForward()
+    await page.goBack()
+    if (section === 'team') await expect(field).not.toBeChecked()
+    else await expect(field).toHaveValue(value.trim())
+    expect(requests.filter((request) => request.method === 'GET').length).toBeGreaterThan(reads)
+    expect(requests.filter((request) => request.method !== 'GET')).toHaveLength(1)
+    await expect(page.locator('.venue-draft-notice')).toBeHidden()
+  })
+}
+
+for (const fallback of [false, true]) {
+  test(`owner UX02 compat explicit discard and Telegram/top guard (fallback=${fallback})`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    if (fallback) await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
+    const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+    const writes: string[] = []
+    page.on('request', (request) => { if (request.method() !== 'GET' && request.url().includes('/api/venue/')) writes.push(request.url()) })
+    await page.goto('?mode=venue&venueId=1#/settings/card')
+    const description = page.getByPlaceholder(/авторские чаши/)
+    await expect(description).toHaveValue('')
+    await description.fill('Отказаться только явно')
+    let confirmations = 0
+    const dismiss = async (dialog: import('@playwright/test').Dialog) => {
+      expect(dialog.message()).toContain('Несохранённые изменения этой формы будут удалены')
+      confirmations++
+      await dialog.dismiss()
+    }
+    page.on('dialog', dismiss)
+    await clickTelegramBackButton(page)
+    await page.getByRole('button', { name: 'Главная', exact: true }).click()
+    await expect(description).toHaveValue('Отказаться только явно')
+    expect(confirmations).toBe(2)
+    page.off('dialog', dismiss)
+    page.once('dialog', (dialog) => dialog.accept())
+    await clickTelegramBackButton(page)
+    await expect(page).toHaveURL(/#\/settings$/)
+    await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+    await expect(page.locator('.venue-draft-notice')).toBeHidden()
+    await page.goBack()
+    await expect(description).toHaveValue('')
+    expect(api.getPublicCardSettings().cardDescription).toBeNull()
+    expect(writes).toEqual([])
+  })
+}
+
+test('owner UX02 compat Navigation API cancels native unknown-entry rapid Back without altering keys', async ({ page }, testInfo) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await page.addInitScript(() => {
+    history.replaceState({ legacy: 'home' }, '', '#/dashboard')
+    history.pushState({ legacy: 'settings' }, '', '#/settings')
+    history.pushState(null, '', '#/settings/card')
+    const nav = (window as any).navigation
+    ;(window as any).navigateEvidence = []
+    nav.addEventListener('navigate', (event: any) => {
+      ;(window as any).navigateEvidence.push({ type: event.navigationType, cancelable: event.cancelable, canIntercept: event.canIntercept })
+    })
+  })
+  await page.goto('?mode=venue&venueId=1#/dashboard')
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await description.fill('Отмена до смены URL')
+  const entries = await page.evaluate(() => (window as any).navigation.entries().map((entry: any) => ({ key: entry.key, url: entry.url })))
+  const currentKey = await page.evaluate(() => (window as any).navigation.currentEntry.key)
+  await page.evaluate(() => { history.back(); history.back() })
+  await expect(page.locator('p.status')).toContainText('Есть несохранённые изменения.')
+  await expect(description).toHaveValue('Отмена до смены URL')
+  await expect(page).toHaveURL(/#\/settings\/card$/)
+  const evidence = await page.evaluate(() => ({
+    events: (window as any).navigateEvidence,
+    key: (window as any).navigation.currentEntry.key,
+    entries: (window as any).navigation.entries().map((entry: any) => ({ key: entry.key, url: entry.url }))
+  }))
+  expect(evidence.events.filter((event: any) => event.type === 'traverse')).toEqual([
+    { type: 'traverse', cancelable: true, canIntercept: true },
+    { type: 'traverse', cancelable: true, canIntercept: true }
+  ])
+  expect(evidence.entries).toEqual(entries)
+  expect(evidence.key).toBe(currentKey)
+  await testInfo.attach('navigation-api-cancellation', { body: JSON.stringify(evidence), contentType: 'application/json' })
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.evaluate(() => history.back())
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+  expect(await page.evaluate(() => history.state)).toEqual({ legacy: 'settings' })
+  await page.goForward()
+  await expect(description).toHaveValue('')
+})
+
+test('owner UX02 compat noncancelable browser Back uses fallback despite canIntercept', async ({ page }, testInfo) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await page.addInitScript(() => {
+    history.replaceState(null, '', '#/settings')
+    history.pushState(null, '', '#/settings/card')
+    ;(window as any).navigateEvidence = []
+    ;(window as any).navigation.addEventListener('navigate', (event: any) => {
+      if (event.navigationType !== 'traverse') return
+      ;(window as any).navigateEvidence.push({ cancelable: event.cancelable, canIntercept: event.canIntercept })
+      console.log('native-traverse-observed')
+    })
+  })
+  await page.goto('?mode=venue&venueId=1#/settings/card')
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await description.fill('Повторный браузерный Back')
+  const cdp = await page.context().newCDPSession(page)
+  const history = await cdp.send('Page.getNavigationHistory')
+  const entryId = history.entries[history.currentIndex - 1].id
+  // Browser-UI traversal consumes history-action activation when cancelled. A second Back
+  // without a new gesture must proceed. No synthetic NavigateEvent or production hook.
+  const dismissed = page.waitForEvent('dialog').then((dialog) => dialog.dismiss())
+  await cdp.send('Page.navigateToHistoryEntry', { entryId })
+  await dismissed
+  const traversed = page.waitForEvent('console', { predicate: (message) => message.text() === 'native-traverse-observed' })
+  await cdp.send('Page.navigateToHistoryEntry', { entryId })
+  await traversed
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+  await expect(page.locator('.venue-draft-notice')).toBeVisible()
+  const evidence = await page.evaluate(() => (window as any).navigateEvidence)
+  expect(evidence).toEqual([
+    { cancelable: true, canIntercept: true },
+    { cancelable: false, canIntercept: true }
+  ])
+  await testInfo.attach('noncancelable-navigation', { body: JSON.stringify(evidence), contentType: 'application/json' })
+  await page.goForward()
+  await expect(description).toHaveValue('Повторный браузерный Back')
+})
+
+for (const secondRole of ['OWNER', 'MANAGER'] as const) {
+  test(`owner UX02 compat fallback isolates two venues and ${secondRole} context while second stays selected`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'navigation', { value: undefined, configurable: true })
+      history.replaceState({ legacy: 'first' }, '', '?mode=venue&venueId=1#/settings/card')
+      history.pushState({ legacy: 'second' }, '', '?mode=venue&venueId=2#/settings/card')
+    })
+    const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+    await page.route('**/api/venue/me', (route) => route.fulfill(jsonResponse({ userId: 123456789, venues: [
+      { venueId: 1, venueName: 'Первое', role: 'OWNER', permissions: ownerUxPermissions },
+      { venueId: 2, venueName: 'Второе', role: secondRole, permissions: ownerUxPermissions }
+    ] })))
+    let secondCard = buildPublicCardSettings({ venueId: 2, name: 'Второе', city: 'Казань', cardDescription: 'Сервер второго' })
+    const writes: number[] = []
+    await page.route('**/api/venue/2/public-card', async (route) => {
+      if (route.request().method() === 'PUT') { writes.push(2); secondCard = { ...secondCard, ...route.request().postDataJSON() } }
+      await route.fulfill(jsonResponse(secondCard))
+    })
+    await page.route('**/api/venue/2/public-review-url', (route) => route.fulfill(jsonResponse({ venueId: 2, publicReviewUrl: null })))
+    await page.goto('?mode=venue&venueId=2#/settings/card')
+    const description = page.getByPlaceholder(/авторские чаши/)
+    await expect(description).toHaveValue('Сервер второго')
+    await description.fill('Черновик второго')
+    await page.goBack()
+    await expect(page.getByLabel('Выбрать заведение')).toHaveValue('1')
+    await expect(page).toHaveURL(/venueId=1#\/settings\/card$/)
+    await expect(description).toHaveValue('')
+    await expect(page.locator('.venue-draft-notice')).toBeHidden()
+    await description.fill('Черновик первого')
+    await page.goForward()
+    await expect(page.getByLabel('Выбрать заведение')).toHaveValue('2')
+    await expect(page).toHaveURL(/venueId=2#\/settings\/card$/)
+    await expect(description).toHaveValue('Черновик второго')
+    await expect(page.locator('.venue-access-state')).toContainText(secondRole === 'OWNER' ? 'владелец' : 'менеджер')
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await page.evaluate(() => { location.hash = '#/settings' })
+      await expect(page).toHaveURL(/venueId=2#\/settings$/)
+      await expect(page.getByLabel('Выбрать заведение')).toHaveValue('2')
+      await page.goBack()
+      await expect(description).toHaveValue('Черновик второго')
+      await expect(page.getByLabel('Выбрать заведение')).toHaveValue('2')
+    }
+    expect(writes).toEqual([])
+    const storageContainsDraft = await page.evaluate(() => [localStorage, sessionStorage].some((storage) => Object.values(storage).some((value) => String(value).includes('Черновик'))))
+    expect(storageContainsDraft).toBe(false)
+    await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await expect(page.locator('.venue-draft-notice')).toBeHidden()
+    expect(writes).toEqual([2])
+    expect(api.getPublicCardSettings().cardDescription).toBeNull()
+    await page.goBack()
+    await expect(page.getByLabel('Выбрать заведение')).toHaveValue('1')
+    await expect(description).toHaveValue('Черновик первого')
+  })
+}
+
+test('owner UX02 compat fallback preserves raw text, review and date-exception drafts independently', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  const writes: string[] = []
+  page.on('request', (request) => { if (request.method() !== 'GET' && request.url().includes('/api/venue/')) writes.push(request.url()) })
+  await page.goto('?mode=venue&venueId=1#/settings/card')
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await description.fill('   ')
+  const review = page.getByPlaceholder('https://yandex.ru/maps/.../reviews')
+  await review.fill('https://yandex.ru/maps/org/draft/reviews')
+  await page.evaluate(() => { location.hash = '#/settings/hours' })
+  await expect(page.locator('.venue-schedule-day')).toHaveCount(7)
+  await page.getByRole('button', { name: 'Закрыть период', exact: true }).click()
+  const exception = page.getByTestId('schedule-exception-form')
+  await exception.locator('input[type=date]').nth(0).fill('2030-02-10')
+  await exception.locator('input[type=date]').nth(1).fill('2030-02-11')
+  await exception.locator('textarea').fill('  Точный текст исключения  ')
+  await page.goBack()
+  await expect(description).toHaveValue('   ')
+  await expect(review).toHaveValue('https://yandex.ru/maps/org/draft/reviews')
+  await page.goForward()
+  await expect(exception.locator('textarea')).toHaveValue('  Точный текст исключения  ')
+  await expect(exception.locator('input[type=date]').nth(0)).toHaveValue('2030-02-10')
+  await expect(exception.locator('input[type=date]').nth(1)).toHaveValue('2030-02-11')
+  expect(writes).toEqual([])
+})
+
+test('owner UX02 compat fallback pending explicit save finishes offscreen and releases draft', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
+  const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  let release = () => undefined
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  let writes = 0
+  await page.route('**/api/venue/1/public-card', async (route) => {
+    if (route.request().method() === 'PUT') { writes++; await pending }
+    await route.fallback()
+  })
+  await page.goto('?mode=venue&venueId=1#/settings/card')
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await description.fill('Явное сохранение')
+  await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(description).toBeDisabled()
+  await page.evaluate(() => { location.hash = '#/settings' })
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+  await expect(page.locator('.venue-draft-notice')).toBeVisible()
+  release()
+  await expect(page.locator('.venue-draft-notice')).toBeHidden()
+  expect(api.getPublicCardSettings().cardDescription).toBe('Явное сохранение')
+  await page.goBack()
+  await expect(description).toHaveValue('Явное сохранение')
+  await expect(description).toBeEnabled()
+  expect(writes).toBe(1)
+})
+
+test('owner UX02 compat failed save retains draft and full reload does not persist it', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  let writes = 0
+  await page.route('**/api/venue/1/public-card', async (route) => {
+    if (route.request().method() === 'PUT') {
+      writes++
+      await route.fulfill(jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'Сохранение не выполнено' } }, 500))
+    } else await route.fallback()
+  })
+  await page.goto('?mode=venue&venueId=1#/settings/card')
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await expect(description).toHaveValue('')
+  await description.fill('Только в памяти окна')
+  await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(page.locator('p.status')).toHaveText('Сохранение не выполнено')
+  await page.evaluate(() => { location.hash = '#/settings' })
+  await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+  await page.goBack()
+  await expect(description).toHaveValue('Только в памяти окна')
+  await expect(page.locator('.venue-draft-notice')).toContainText('При закрытии или перезагрузке данные могут потеряться')
+  page.once('dialog', async (dialog) => { expect(dialog.type()).toBe('beforeunload'); await dialog.accept() })
+  await page.reload()
+  await expect(description).toHaveValue('')
+  await expect(page.locator('.venue-draft-notice')).toBeHidden()
+  expect(writes).toBe(1)
+})
+
+for (const change of ['user', 'role', 'permissions'] as const) {
+  test(`owner UX02 live access refresh clears ${change} drafts without reload or autosave`, async ({ page }, testInfo) => {
+    await installTelegramWebApp(page, 123456789)
+    // Exercise retained editors through the real legacy navigation path, then the public
+    // "Обновить доступ" control. No imports of app internals or synthetic access events.
+    await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
+    await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+    let userId = 123456789
+    let role = 'OWNER'
+    let permissions = [...ownerUxPermissions]
+    const authUsers: number[] = []
+    const accessResponses: Array<{ userId: number; role: string; permissions: string[]; authorization: string | undefined }> = []
+    const writes: string[] = []
+    const documentRequests: string[] = []
+    page.on('request', (request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) documentRequests.push(request.url())
+      if (request.url().includes('/api/venue/') && request.method() !== 'GET') writes.push(`${request.method()} ${request.url()}`)
+    })
+    await page.route('**/api/auth/telegram', async (route) => {
+      const initData = route.request().postDataJSON().initData
+      const authenticatedUser = JSON.parse(new URLSearchParams(initData).get('user')!).id as number
+      authUsers.push(authenticatedUser)
+      await route.fulfill(jsonResponse({ token: `e2e-live-user-${authenticatedUser}`, expiresAtEpochSeconds: sessionExpiresAt }))
+    })
+    await page.route('**/api/venue/me', async (route) => {
+      accessResponses.push({ userId, role, permissions: [...permissions], authorization: route.request().headers().authorization })
+      await route.fulfill(jsonResponse({ userId, venues: [
+        { venueId: 1, venueName: 'Первое', role, permissions },
+        // Keep another legitimate OWNER membership so access can be restored using the UI
+        // after the first venue's role is revoked; it grants no rights to venue 1.
+        { venueId: 2, venueName: 'Второе', role: 'OWNER', permissions: ownerUxPermissions }
+      ] }))
+    })
+    await page.route('**/api/venue/ownership', (route) => route.fulfill(jsonResponse({ userId, venues: [], applications: [] })))
+    const section = change === 'permissions' ? 'extension' : 'card'
+    const field = change === 'permissions' ? page.getByPlaceholder('3000') : page.getByPlaceholder(/авторские чаши/)
+    const draft = change === 'permissions' ? '2500' : `Личный черновик A: ${change}`
+    await page.goto(`?mode=venue&venueId=1#/settings/${section}`)
+    await expect(field).toHaveValue('')
+    const shell = await page.locator('.venue-shell').elementHandle()
+    expect(shell).not.toBeNull()
+    const document = await page.evaluateHandle(() => window.document)
+    await field.fill(draft)
+
+    const openOwnership = async () => {
+      await page.evaluate(() => { location.hash = '#/ownership' })
+      await expect(page.getByRole('button', { name: 'Обновить доступ', exact: true })).toBeEnabled()
+    }
+    const refreshAccess = async () => {
+      const response = page.waitForResponse((response) => response.url().endsWith('/api/venue/me'))
+      await page.getByRole('button', { name: 'Обновить доступ', exact: true }).click()
+      expect((await response).status()).toBe(200)
+      await expect(page.locator('.venue-access-state')).not.toContainText('Загрузка')
+      await expect(page.getByRole('button', { name: 'Обновить доступ', exact: true })).toBeEnabled()
+      expect(accessResponses.at(-1)?.authorization).toBe(`Bearer e2e-live-user-${userId}`)
+    }
+    const openForm = async () => {
+      await page.evaluate((section) => { location.hash = `#/settings/${section}` }, section)
+      await expect(page).toHaveURL(new RegExp(`venueId=1#/settings/${section}$`))
+    }
+
+    // A refresh with unchanged access must retain the draft: this rules out an incidental
+    // remount/reset as the reason the later identity/access-change assertions pass.
+    await openOwnership()
+    await expect(page.locator('.venue-draft-notice')).toBeVisible()
+    await refreshAccess()
+    await openForm()
+    await expect(field).toHaveValue(draft)
+    await openOwnership()
+
+    if (change === 'user') {
+      userId = 987654321
+      await page.evaluate(({ userId, initData }) => {
+        const webApp = (window as any).Telegram.WebApp
+        webApp.initDataUnsafe.user.id = userId
+        webApp.initData = initData
+      }, { userId, initData: otherMockInitData })
+    } else if (change === 'role') {
+      role = 'STAFF'
+      permissions = ['ORDER_QUEUE_VIEW']
+    } else {
+      permissions = ownerUxPermissions.filter((permission) => permission !== 'SHIFT_EXTENSION_SETTINGS')
+    }
+    await refreshAccess()
+    await expect(page.locator('.venue-draft-notice')).toBeHidden()
+    await openForm()
+    if (change === 'user') {
+      await expect(field).toHaveValue('')
+      expect(authUsers).toEqual([123456789, 987654321])
+      await field.fill('Личный черновик B')
+    } else {
+      await expect(field).toBeHidden()
+      if (change === 'role') await expect(page.getByRole('heading', { name: 'Недостаточно прав', exact: true })).toBeVisible()
+    }
+    await page.screenshot({ path: testInfo.outputPath(`live-${change}-changed.png`), fullPage: true })
+    await openOwnership()
+
+    userId = 123456789
+    role = 'OWNER'
+    permissions = [...ownerUxPermissions]
+    if (change === 'user') {
+      await page.evaluate(({ userId, initData }) => {
+        const webApp = (window as any).Telegram.WebApp
+        webApp.initDataUnsafe.user.id = userId
+        webApp.initData = initData
+      }, { userId, initData: mockInitData })
+    }
+    await refreshAccess()
+    await expect(page.locator('.venue-draft-notice')).toBeHidden()
+    await openForm()
+    await expect(field).toHaveValue('')
+    await expect(page.locator('.venue-draft-notice')).toBeHidden()
+    expect(writes).toEqual([])
+    expect(documentRequests).toHaveLength(1)
+    expect(await document.evaluate((original) => original === window.document)).toBe(true)
+    expect(await shell!.evaluate((original) => original.isConnected && original === window.document.querySelector('.venue-shell'))).toBe(true)
+    expect(accessResponses).toHaveLength(4)
+    await page.screenshot({ path: testInfo.outputPath(`live-${change}-restored.png`), fullPage: true })
+    await testInfo.attach('live-access-lifecycle', {
+      body: JSON.stringify({ change, authUsers, accessResponses, writes, documentRequests, sameDocumentAndShell: true }),
+      contentType: 'application/json'
+    })
   })
 }

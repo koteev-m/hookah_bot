@@ -64,30 +64,68 @@ Role behavior:
 Current vs target:
 - Current dashboard is `PARTIAL`: operational counters and stats exist in slices, but one complete dashboard model with all cards above needs verification.
 
-### Owner Mini App home and navigation (HT-VENUE-OWNER-UX01)
+### Owner Mini App home and navigation (HT-VENUE-OWNER-UX02)
 
-Local UI scope: OWNER sees the selected venue name, optional city, the status returned by
-Venue access and a compact role label. The existing selector remains available for multiple
-venues. Missing status is shown as unknown; no readiness percentage or inferred completion
-state is displayed.
+Local UI scope: OWNER sees the selected venue name, city and authoritative status, the compact
+role label and the existing multi-venue selector. No readiness percentage or inferred completion
+state is displayed. This supersedes the UX01 DRAFT setup home and grouped More navigation.
 
-- Primary navigation: `Главная`, permission-gated `Заказы`, `Настройки`, `Ещё`.
-  `Ещё` retains the existing permission-filtered operations, setup, statistics and help routes,
-  including `Мои заведения`, application creation, active applications and history.
-- Navigation remains in document flow with safe-area padding. It does not cover form controls
-  when scrolling or reducing the viewport for a keyboard. Active routes use `aria-current`;
-  `Ещё` carries the existing aggregate unread count, with the detailed badge on `Переписки`.
-- DRAFT home explains that the card is not published or visible to guests. Card/address/description
-  and working hours both open the existing settings screen; menu, tables/QR, staff and guest
-  preview use existing routes and access checks. Operational polling is not started on DRAFT home.
-- Other statuses retain live staff-call counts and staff-chat state where access allows, with
-  shortcuts to orders, bookings, calls and messages. Status context does not grant publication,
-  availability or restoration. Publication/archive/restore and subscription rules are unchanged.
-- The selected venue home does not duplicate the ownership portfolio. MANAGER/STAFF retain
-  their existing navigation and route checks; server RBAC remains authoritative.
+- Four primary entries retain the UX01 visual style: `Главная`, permission-gated `Заказы`,
+  `Настройки`, `Ещё`. Orders opens the existing queue; the header/navigation stay in document flow
+  with safe-area padding and do not overlay forms when the viewport shrinks.
+- DRAFT and PUBLISHED share the operational home: orders, bookings, guest calls, conversations,
+  extension requests, shift schedule and operational stop-list/menu, filtered by existing access.
+  DRAFT adds a small unpublished notice and `Настроить заведение`, with no setup wizard.
+- The home retains API-backed staff-call counts and staff-chat status, plus the existing conversation
+  unread count next to `Переписки`. Failed loads show an error/unknown state, never invented zeroes.
+  The calls API is bounded to its existing 100-item window; this is not a new venue-wide analytics API.
+- HIDDEN/PAUSED/SUSPENDED/ARCHIVED/DELETED/unknown home states show truthful restrictions and do not
+  start operational polling or promise unavailable actions. Direct routes retain existing permission
+  checks and server denials. No lifecycle, subscription, publication or recovery rules change.
+- Owner Settings is a compact catalog with eight permission-filtered entries: venue card, hours,
+  menu, tables/QR, team/access, booking, time extension and promotions. Existing editors are reused.
+  `#/settings/card`, `/hours`, `/team`, `/booking`, `/extension` mount only the relevant settings
+  form/API slice; menu/tables/promotions retain their existing direct routes. Team/access links to
+  personnel/invites and staff-chat management and contains the existing team-module settings.
+  Operational shift viewing remains on Home; it is distinct from configuring the module.
+- The card form contains location, contacts, description, saved Guest Preview and the Owner-only
+  external review URL. Feedback viewing lives in More and is separate from that URL setting.
+  Mini App photo/PDF authoring is still absent; no upload placeholder is added (see media gap below).
+- Owner hours show seven saved weekday summaries, including unconfigured, closed and 24-hour states.
+  Only the selected day expands; `Сохранить день` writes the existing weekly endpoint. Overnight
+  intervals and date/range exceptions retain their API contract. Collapsing a day, editing another,
+  saving another day or an exception preserves dirty weekday inputs. Cancelling a dirty exception
+  requires explicit discard confirmation; switching exception forms cannot silently erase it.
+- History compatibility (HT-VENUE-OWNER-UX02-HISTORY-COMPAT): cancel same-document navigation
+  before commit only when `NavigateEvent.cancelable` is true. `canIntercept` does not authorize
+  cancellation. App links, top navigation, Telegram Back and venue selection check the form guard
+  before changing the URL: stay and save, or explicitly confirm discarding this form. Pending
+  explicit saves block those cancellable exits. Guest Preview continues to require saved state.
+- Without Navigation API, or for a noncancelable event, allow the browser traversal and render the
+  actual URL, including its venue selection. Never infer unknown history indices, compensate with
+  `go(delta)`, overwrite a previous URL or wait for a restoration flag. Repeated Back/Forward must
+  leave URL, selected venue and visible screen consistent; existing history state remains intact.
+- Unsaved settings editors are retained only in the current app instance, keyed by user, venue,
+  role, permission scope and exact settings section. Returning restores raw inputs, structured
+  location values, weekday edits and date exceptions without a refetch. Dirty/pending editors alone
+  are retained; successful explicit saves clear the corresponding dirty state, confirmed discard
+  releases the editor, and app disposal clears all retained editors. A pending explicit write may
+  finish after an unavoidable same-document exit; failure retains the draft, success releases it
+  when no other edits remain. No automatic save, new API contract or persistent draft storage.
+- A visible draft notice explains that data is only in this window's memory, offers return links
+  for the selected venue's retained forms, and states that closing/reloading may lose it. Drafts
+  are never copied between venues/roles. Native document unload warning is best effort, including
+  for detached drafts; in-memory recovery across full reload/closing is not guaranteed. Browser
+  support and Telegram host behavior remain a real-device release check.
+  Saved Guest Preview returns to its exact subsection; legacy `#/guest-preview?from=settings`
+  and direct routes remain supported. See the local validation report for browser evidence.
+- More contains only `Мои заведения`, `Статистика`, `Отзывы`, `Подписка`, `Поддержка`, filtered by
+  access. Portfolio/application history remains unchanged. MANAGER/STAFF keep their existing
+  navigation and settings layout; server RBAC remains authoritative.
 
-Validation is local and fixture-backed. Real iPhone Telegram safe-area/keyboard behavior and
-staging smoke remain release checks after separate publication/deployment authorization.
+Validation is local and fixture-backed. Real iPhone Telegram safe-area/native keyboard behavior
+and staging smoke remain release checks after separate publication/deployment authorization.
+See `docs/HT_VENUE_OWNER_UX02_LOCAL_VALIDATION.md` for exact scope and local evidence.
 
 ## Orders Queue
 

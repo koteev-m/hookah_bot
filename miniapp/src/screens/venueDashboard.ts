@@ -16,7 +16,7 @@ export type VenueDashboardOptions = {
   isDebug: boolean
   venueId: number
   access: VenueAccessDto
-  canAccessRoute: (route: 'settings' | 'menu' | 'tables' | 'staff' | 'guest-preview' | 'orders' | 'bookings' | 'calls' | 'messages') => boolean
+  canAccessRoute: (route: 'settings' | 'menu' | 'tables' | 'staff' | 'guest-preview' | 'orders' | 'bookings' | 'calls' | 'messages' | 'extensions' | 'shifts' | 'chat') => boolean
 }
 
 type DashboardRefs = {
@@ -136,40 +136,41 @@ function isInWorkStaffCallStatus(status: string) {
 function buildOwnerHome(options: VenueDashboardOptions): HTMLElement {
   const { access, canAccessRoute } = options
   const status = access.venueStatus?.trim().toUpperCase()
-  const draft = status === 'DRAFT'
+  const operational = status === 'DRAFT' || status === 'PUBLISHED'
   const card = el('section', { className: 'card venue-owner-home' })
   const messages: Record<string, string> = {
-    DRAFT: 'Карточка ещё не опубликована и не видна гостям. Подготовьте заведение: заполните данные, добавьте меню, столы и команду.',
-    PUBLISHED: 'Заведение опубликовано. Здесь — текущие вызовы и быстрый доступ к работе заведения.',
-    HIDDEN: 'Заведение скрыто от гостей. Сохранённую карточку можно проверить в предпросмотре.',
+    DRAFT: 'Карточка не опубликована и не видна гостям.',
+    HIDDEN: 'Заведение скрыто от гостей. Сохранённую карточку можно проверить в настройках.',
     PAUSED: 'Заведение на паузе. Доступность операций определяется текущими ограничениями заведения.',
     SUSPENDED: 'Работа заведения приостановлена. Уточните причину и дальнейшие действия в поддержке.',
     ARCHIVED: 'Заведение в архиве. Доступность восстановления определяется действующими правилами.',
     DELETED: 'Заведение удалено. Доступные действия определяются текущими ограничениями.'
   }
-  append(card,
-    el('h2', { text: draft ? 'Подготовьте заведение' : 'Работа заведения' }),
-    el('p', { className: 'venue-owner-context', text: messages[status ?? ''] ?? 'Статус публикации не подтверждён. Доступные разделы показаны ниже.' })
-  )
+  append(card, el('h2', { text: 'Работа заведения' }))
+  if (status !== 'PUBLISHED') {
+    append(card, el('p', { className: 'venue-owner-context', text: messages[status ?? ''] ?? 'Статус публикации не подтверждён. Доступность операций уточните в поддержке.' }))
+  }
+  if (status === 'DRAFT' && canAccessRoute('settings')) {
+    const setup = el('a', { className: 'venue-owner-setup', text: 'Настроить заведение' })
+    setup.href = '#/settings'
+    card.appendChild(setup)
+  }
   const actions = el('div', { className: 'venue-owner-actions' })
-  const items: Array<{ route: Parameters<typeof canAccessRoute>[0]; title: string; detail?: string }> = draft
+  const items: Array<{ route: Parameters<typeof canAccessRoute>[0]; title: string; detail?: string }> = operational
     ? [
-        { route: 'settings', title: 'Карточка заведения', detail: 'Адрес и описание' },
-        { route: 'settings', title: 'Часы работы', detail: 'В настройках заведения' },
-        { route: 'menu', title: 'Заказное меню' },
-        { route: 'tables', title: 'Столы и QR' },
-        { route: 'staff', title: 'Персонал' },
-        { route: 'guest-preview', title: 'Предпросмотр для гостя' }
+        { route: 'orders', title: 'Заказы', detail: 'Очередь заказов' },
+        { route: 'bookings', title: 'Бронирования' },
+        { route: 'calls', title: 'Вызовы гостей' },
+        { route: 'messages', title: 'Переписки' },
+        { route: 'extensions', title: 'Запросы продления' },
+        { route: 'shifts', title: 'График смен' },
+        { route: 'menu', title: 'Стоп-лист и меню' }
       ]
-    : [
-        { route: 'orders', title: 'Заказы' },
-        { route: 'bookings', title: 'Брони' },
-        { route: 'calls', title: 'Вызовы' },
-        { route: 'messages', title: 'Переписки' }
-      ]
+    : []
   items.filter((item) => canAccessRoute(item.route)).forEach((item) => {
     const link = el('a', { className: 'venue-owner-action' })
     link.href = `#/${item.route}`
+    if (item.route === 'messages') link.dataset.ownerMessages = 'true'
     append(link, el('strong', { text: item.title }))
     if (item.detail) append(link, el('span', { text: item.detail }))
     actions.appendChild(link)
@@ -183,8 +184,8 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
   if (!root) return () => undefined
 
   const owner = access.role === 'OWNER'
-  const draft = owner && access.venueStatus?.trim().toUpperCase() === 'DRAFT'
-  if (draft) {
+  const operational = ['DRAFT', 'PUBLISHED'].includes(access.venueStatus?.trim().toUpperCase() ?? '')
+  if (owner && !operational) {
     root.replaceChildren(buildOwnerHome(options))
     return () => undefined
   }

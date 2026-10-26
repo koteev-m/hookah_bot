@@ -68,6 +68,44 @@ MULTI-TENANT ISOLATION / IMPLEMENTED ON HT-12C BASE / RELEASE EXECUTION STILL RE
 V124/V125 preflight, migration and two-account staging requirements remain regression/release
 evidence; it is not the current slice and is not marked staging-complete.
 
+## Owner workspace UX02 regression (local frontend)
+
+For `HT-VENUE-OWNER-UX02`, run TypeScript, production build and the entire configured frontend
+Playwright suite. Existing operational assertions remain; navigation assertions follow the new
+Owner catalog and five-entry More page. Required deterministic coverage:
+
+- DRAFT/PUBLISHED work home, restricted lifecycle/unknown states, actual call counts, failed-load
+  states, unread badge and preserved four-entry navigation/permissions;
+- all eight catalog destinations, isolated forms, team-module configuration versus work schedule,
+  direct links, browser/Telegram back and saved preview returning to its exact subsection;
+- public card/review URL, booking, extension and team settings saves; failed saves and dirty/in-flight
+  navigation/venue-switch protection; late responses cannot replace another venue's data;
+- cancellable native Back/Forward and app/Telegram navigation: stay or explicitly discard; unchanged
+  history entries/keys/length, save clears only its draft, no automatic/duplicate writes;
+- unindexed/invalid-state history in both directions, two rapid native Back calls, overlapping Back
+  with a compensation trap (must receive zero calls), and multi-entry traversal. The six original
+  hardening regressions remain tests: fallback follows URL/screen and restores draft on return;
+- Navigation API enabled and hidden: cancellation only with `cancelable=true`; real Chromium
+  browser-UI repeated Back produces `cancelable=false, canIntercept=true` and must use fallback.
+  Programmatic History API Back and browser-UI Back are distinct fixtures; do not infer one from
+  the other or replace native events with synthetic popstate;
+- all five settings sections retain raw form state in-memory across repeated fallback traversal,
+  with no refetch on draft return, one write per explicit save, failed/pending write behavior,
+  confirmed discard, independent review/date-exception fields and full reload without persistence;
+- two venues including second-kept-selected navigation, query-only same-document traversal,
+  OWNER/MANAGER separation, matching URL/selector/fields and no draft text in browser storage;
+- direct-form document Back with native discard cancellation/acceptance, saved preview return,
+  visible memory-only notice and 390px draft layout; never claim native Telegram from Chromium;
+- seven compact weekdays, unconfigured/closed/24-hour/overnight state, dirty collapse/reopen,
+  another-day/exception saves preserving drafts, and date/range exception creation/edit/removal;
+- existing MANAGER/STAFF, RBAC denial, portfolio/application history and authoritative conversation
+  unread/thread regressions;
+- 390×844, 390×420 keyboard-sized viewport and desktop; focused fields/save buttons reachable,
+  no horizontal overflow; inspect local PNGs of DRAFT/PUBLISHED home, catalog, card, week and More.
+
+Fixture-backed Chromium is local evidence only. A separately authorized staging/real iPhone Telegram
+smoke is still needed before release; no backend/API/DB changes are part of this UI task.
+
 ## Core Rule
 
 Quality gates must match the blast radius of the change. Do not claim a feature is release-ready from local-only checks when it changes backend runtime, Mini App behavior, Telegram bot, staff-chat, billing/security or migrations. Do not run staging deploy for docs-only changes.
