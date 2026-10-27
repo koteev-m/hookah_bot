@@ -47,6 +47,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -1167,10 +1168,15 @@ class VenueStaffRoutesTest {
                     val pending = json.decodeFromString(PendingInvitesResponse.serializer(), pendingText).invites
                     assertEquals(createdInvites.size, pending.size)
                     assertEquals(createdInvites.map { it.handle }.toSet(), pending.map { it.handle }.toSet())
+                    val creationTimes = pending.map { Instant.parse(it.createdAt) }
+                    assertEquals(creationTimes.sortedDescending(), creationTimes)
                     createdInvites.forEach { invite ->
                         val row = pending.single { it.handle == invite.handle }
                         assertEquals(invite.role, row.role)
-                        assertEquals(invite.expiresAt, row.expiresAt)
+                        // H2 TIMESTAMP(6) rounds the persisted Instant; create retains JVM precision.
+                        val persistedExpiry =
+                            Instant.parse(invite.expiresAt).plusNanos(500).truncatedTo(ChronoUnit.MICROS)
+                        assertEquals(persistedExpiry, Instant.parse(row.expiresAt))
                         assertEquals("PENDING", row.status)
                         assertTrue(invite.inviteCode !in pendingText)
                         assertTrue(invite.deepLink!! !in pendingText)

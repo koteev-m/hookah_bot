@@ -72,6 +72,18 @@ RBAC or accept/revoke logic change; H2 route tests do not claim fresh PostgreSQL
 Separate authorized staging/iPhone smoke remains required; no real send/revoke/member mutation is
 authorized by local tests. Addressed invites and durable photo upload remain design proposals.
 
+UX06 CI regressions: compare create/pending handles exactly. For the H2 route fixture,
+compare expiry as an Instant rounded to TIMESTAMP(6) microseconds; creation retains JVM
+nanoseconds and pending reads persisted precision. Fixed-clock repository samples cover
+round-down, half-microsecond round-up and carry into the next second, without changing the API.
+Run `scripts/test-v126-prerequisite-timeout.py` on Linux for signal/deadline fixtures. Its child
+installs explicit INT/TERM dispositions before atomically publishing its PID; the timeout mock
+separately acknowledges installed handlers. Test inherited ignored SIGINT and delayed parent
+setup, keeping exit codes 130/143, the two-second forwarding assertion and descendant cleanup.
+Readiness/communication failure regressions must also leave each recorded child group inactive
+before a subsequent subtest can replace its PID file; success-path cleanup assertions stay independent.
+This is local test-harness evidence, not deployment signal or release acceptance evidence.
+
 The remaining broader release smoke requires separate authorization and an authorized test venue:
 open Owner menu on iPhone Telegram, expand one of ten hookahs, edit a flavor and verify retention
 and other categories; create a batch with individual free numbers and verify conflict creates none;

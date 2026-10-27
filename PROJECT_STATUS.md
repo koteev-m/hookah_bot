@@ -1,5 +1,66 @@
 # Project Status
 
+## HT-UX06-CI-FAILURES-FIX-01 — local fixes validated (2026-10-27)
+
+**HT_UX06_CI_FIX_LOCAL_VALIDATED** — both reproduced test defects fixed; independent focused
+review PASS, no open P0/P1/P2. One local commit is authorized after final identity/preservation
+checks; commit identity is reported in the task result. No push, PR update, rerun, merge or deploy.
+Original red CI remains historical evidence; this does not claim a new CI or staging PASS.
+
+Identity gate PASS: `Hookah_Tootah`, physical primary root
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, Git/common dir `.git`, checkout-owned index,
+origin `github.com/koteev-m/hookah_bot`, branch `codex/ht-venue-staff-invites-ux06`.
+Starting/expected HEAD `ea47a273d79ca8dec590607a47f4096e82653cda`; verified first parent
+`446d6a6785ff43a2c9253bead77ed010712a6851`; separate BASE NOT_SUPPLIED. Root/global/session
+instruction origins verified, no narrower authority or path redirects. No new worktree.
+Initial status only four untracked SQL helpers; no pre-existing tracked edits.
+
+Diagnosis and changes:
+- Push CI [40561612292](https://github.com/koteev-m/hookah_bot/actions/runs/40561612292)
+  tested exact starting HEAD; PR CI
+  [40561707637](https://github.com/koteev-m/hookah_bot/actions/runs/40561707637) tested its merge
+  into the verified parent. Both report 1438 tests, one failure in the new invite handle test.
+  No JUnit artifacts were retained. Linux isolated reproduction identifies expiry equality at
+  original line 1173: `.406193543Z` vs stored `.406194Z`; handle equality already passed.
+  H2 TIMESTAMP(6) rounds JVM nanoseconds to microseconds; macOS clock precision hid the invalid
+  string-equality expectation. Route test now compares the exact rounded Instant and checks order;
+  repository samples cover rounding down, half-up and second carry. STAFF/MANAGER/STAFF, exact
+  handle set/count, repeated refresh and secret-free keys remain enforced. Production API,
+  schema/migrations, cap, RBAC, audit, accept/revoke and sorting code are unchanged.
+- PR Compose failed SIGINT elapsed 5.028s after accepting status130. Inherited SIG_IGN reproduces
+  the same five-second/130 failure on macOS and Linux; the child had no explicit INT handler.
+  A delayed wrapper also proves child readiness can precede parent handler installation.
+  Child handlers now precede atomic PID publication; timeout mock has a separate optional
+  handler-ready handshake. Forwarding still requires <2s and exact130/143; six-second independent
+  communication bound remains. Failed readiness/communication cleans the owned child group
+  before another subtest replaces its record. Old-cleanup negative control fails that regression.
+  Historical runner signal disposition/scheduling is unobserved; no deployment SIGINT defect
+  was established or deployment code changed.
+
+Validation: isolated backend baseline macOS PASS/Linux FAIL -> fixed Linux PASS; full
+VenueStaffRoutesTest35 plus invite/staff repositories, RBAC, audit, session/auth: **112/112 PASS
+on both macOS and Linux**, no skips/failures. Offline Gradle compileKotlin/ktlintCheck PASS.
+Linux uses Temurin21/H2, JUnit Platform and the same Gradle-compiled classes/runtime classpath
+in a network-disabled read-only container (aarch64, not the original CI x64 runner).
+Final Python fixture suite Linux **15/15 PASS**, macOS **14 PASS + one GNU-only skip**;
+Linux shell signal matrix PASS INT130/TERM143 plus header tests8/8. Shell/Python syntax and
+`git diff --check` PASS. No full release suite, new Actions run or PostgreSQL runtime claim.
+
+Evidence: [validation](.tmp-checks/ht-ux06-ci-fix/validation.json),
+[CI excerpts](.tmp-checks/ht-ux06-ci-fix/ci-excerpts.txt),
+[Linux backend baseline](.tmp-checks/ht-ux06-ci-fix/backend-baseline-linux.log),
+[Linux backend final](.tmp-checks/ht-ux06-ci-fix/backend-full-focused-linux.log),
+[macOS backend](.tmp-checks/ht-ux06-ci-fix/backend-full-focused-macos.log),
+[Linux signal baseline](.tmp-checks/ht-ux06-ci-fix/compose-ignored-int-baseline-linux.log),
+[Linux final](.tmp-checks/ht-ux06-ci-fix/compose-fixed-linux.log),
+[review](.tmp-checks/ht-ux06-ci-fix/review.md). One focused review found and closed one cleanup P2;
+no repeated broad audit. Four original SQL helpers remain byte-identical; stash/archive refs
+unchanged. Test artifacts only under ignored `.tmp-checks`; no real external operation.
+These test-only fixes need no staging deploy; the UX06 feature retains its separate staging/iPhone
+acceptance requirements. Next: separately authorized publication and fresh exact-SHA CI; no
+automatic push/rerun or CI monitoring in this task.
+
+
 ## HT-VENUE-STAFF-INVITES-UX06 — local READY (2026-10-27)
 
 **HT_VENUE_STAFF_INVITES_UX06_LOCAL_READY** — agreed UI and additive handle contract only.
