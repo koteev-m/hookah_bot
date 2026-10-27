@@ -11,6 +11,7 @@ import {
 } from '../shared/api/venueApi'
 import type { VenueAccessDto, VenueTableDto } from '../shared/api/venueDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
+import { getTelegramContext } from '../shared/telegram'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
@@ -62,7 +63,7 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
   })
 }
 
-function buildTablesDom(root: HTMLDivElement): TablesRefs {
+function buildTablesDom(root: HTMLDivElement, isTelegram: boolean): TablesRefs {
   const wrapper = el('div', { className: 'venue-tables' })
   const header = el('div', { className: 'card' })
   const title = el('h2', { text: 'Столы и QR' })
@@ -89,13 +90,17 @@ function buildTablesDom(root: HTMLDivElement): TablesRefs {
   const rotateAllButton = el('button', { className: 'button-secondary', text: 'Переиздать токены (все)' }) as HTMLButtonElement
 
   const exportRow = el('div', { className: 'venue-form-row' })
-  const exportButton = el('button', { text: 'Все QR в PDF' }) as HTMLButtonElement
+  const exportButton = el('button', { text: isTelegram ? 'Отправить все QR в Telegram' : 'Все QR в PDF' }) as HTMLButtonElement
   const zipButton = el('button', { className: 'button-secondary', text: 'ZIP для компьютера' }) as HTMLButtonElement
   const sendButton = el('button', { text: 'Отправить в Telegram' }) as HTMLButtonElement
   const downloadLink = el('a', { text: 'Открыть подготовленный файл' }) as HTMLAnchorElement
   downloadLink.hidden = true
-  const hint = el('p', { text: 'На iPhone в Telegram выберите «Отправить в Telegram»: PDF придёт в ваш личный чат с ботом. Для отдельного стола доступен PNG. На компьютере можно сохранить PDF или ZIP.' })
-  append(exportRow, sendButton, exportButton, zipButton, hint, downloadLink)
+  const hint = el('p', { text: isTelegram
+    ? 'Все QR придут в PDF в ваш личный чат с ботом, QR отдельного стола — в PNG. Если чат недоступен, откройте бота и нажмите «Старт» или разблокируйте его, затем отправьте файл снова.'
+    : 'Сохраните все QR в PDF или ZIP, QR отдельного стола — в PNG.' })
+  append(exportRow, exportButton)
+  if (!isTelegram) append(exportRow, sendButton, zipButton, downloadLink)
+  append(exportRow, hint)
 
   append(header, title, form, rotateAllButton, exportRow)
 
@@ -141,6 +146,7 @@ function renderTableRow(
   canRotate: boolean,
   onRotate: (tableId: number) => void,
   canExport: boolean,
+  isTelegram: boolean,
   onExport: (tableId: number, send: boolean) => void
 ) {
   const row = el('div', { className: 'venue-table-row' })
@@ -153,11 +159,14 @@ function renderTableRow(
 
   const actions = el('div', { className: 'venue-table-actions' })
   if (canExport) {
-    const png = el('button', { className: 'button-small', text: 'QR этого стола' })
-    const send = el('button', { className: 'button-small button-secondary', text: 'Отправить PNG в Telegram' })
-    png.addEventListener('click', () => onExport(table.tableId, false))
-    send.addEventListener('click', () => onExport(table.tableId, true))
-    append(actions, png, send)
+    const png = el('button', { className: 'button-small', text: isTelegram ? 'Отправить QR в Telegram' : 'QR этого стола' })
+    png.addEventListener('click', () => onExport(table.tableId, isTelegram))
+    append(actions, png)
+    if (!isTelegram) {
+      const send = el('button', { className: 'button-small button-secondary', text: 'Отправить PNG в Telegram' })
+      send.addEventListener('click', () => onExport(table.tableId, true))
+      append(actions, send)
+    }
   }
   const rotateButton = el('button', { className: 'button-small', text: 'Переиздать токен' }) as HTMLButtonElement
   rotateButton.addEventListener('click', () => onRotate(table.tableId))
@@ -176,7 +185,8 @@ function renderTableRow(
 export function renderVenueTablesScreen(options: VenueTablesOptions) {
   const { root, backendUrl, isDebug, venueId, access } = options
   if (!root) return () => undefined
-  const refs = buildTablesDom(root)
+  const { hasTelegramLaunchData: isTelegram } = getTelegramContext()
+  const refs = buildTablesDom(root, isTelegram)
   const deps = buildApiDeps(isDebug)
 
   let disposed = false
@@ -246,7 +256,7 @@ export function renderVenueTablesScreen(options: VenueTablesOptions) {
       return
     }
     tables.forEach((table) => {
-      refs.list.appendChild(renderTableRow(table, canRotate, (tableId) => void rotateToken(tableId), canExport, (tableId, send) => void exportQr('png', send, tableId)))
+      refs.list.appendChild(renderTableRow(table, canRotate, (tableId) => void rotateToken(tableId), canExport, isTelegram, (tableId, send) => void exportQr('png', send, tableId)))
     })
   }
 
@@ -378,16 +388,18 @@ export function renderVenueTablesScreen(options: VenueTablesOptions) {
     void loadTables()
   }
 
-  const exportQr = async (format: 'pdf' | 'zip' | 'png', send = false, tableId?: number) => {
+  const exportQr = async (format: 'pdf' | 'zip' | 'png', send = isTelegram, tableId?: number) => {
     if (!canExport || exporting) return
+    if (isTelegram && format === 'zip') return
+    const sendToTelegram = isTelegram || send
     exporting = true
     const buttons = [...Array.from(refs.exportRow.querySelectorAll<HTMLButtonElement>('button')),
       ...Array.from(refs.list.querySelectorAll<HTMLButtonElement>('button'))]
     buttons.forEach((button) => { button.disabled = true })
     hideError()
-    setStatus(send ? 'Отправляем документ…' : 'Готовим файл…')
+    setStatus(sendToTelegram ? 'Отправляем документ…' : 'Готовим файл…')
     try {
-      if (send && format !== 'zip') {
+      if (sendToTelegram && format !== 'zip') {
         const result = await venueSendQrToTelegram(backendUrl, { venueId, format, tableId }, deps)
         if (disposed) return
         if (!result.ok) {

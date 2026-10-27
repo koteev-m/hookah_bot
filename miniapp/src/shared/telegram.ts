@@ -44,7 +44,11 @@ export type TelegramWebAppLike = {
 }
 
 export type TelegramContext = {
+  // SDK presence only; also true in an ordinary browser that loads Telegram's script.
   isTelegram: boolean
+  // Raw launch data for the authenticated Mini App flow, not proof of authorization.
+  // Keyboard-button/inline launches can have empty data and still expose SDK capabilities.
+  hasTelegramLaunchData: boolean
   initData: string | null
   tableToken: string | null
   tableSessionId: number | null
@@ -251,6 +255,7 @@ export function getTelegramContext(): TelegramContext {
     typeof rawUserId === 'number' && rawUserId > 0 ? rawUserId : parseTelegramUserIdFromInitData(initData)
   return {
     isTelegram: Boolean(webApp),
+    hasTelegramLaunchData: normalizeNonEmpty(initData) !== null,
     initData,
     tableToken,
     tableSessionId,

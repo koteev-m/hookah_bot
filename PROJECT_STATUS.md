@@ -1,5 +1,109 @@
 # Project Status
 
+## HT-VENUE-QR-TELEGRAM-DOWNLOAD-UX04-FIX-P1 — local FIXED (2026-10-27)
+
+**HT_VENUE_QR_TELEGRAM_DOWNLOAD_UX04_P1_FIXED** — local frontend boundary; ready for focused
+re-review. Supersedes the SDK-presence criterion in the UX04 READY checkpoint below.
+
+Identity gate PASS: task `HT-VENUE-QR-TELEGRAM-DOWNLOAD-UX04-FIX-P1`, project `Hookah_Tootah`;
+expected/observed physical primary root `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`,
+Git/common dir and checkout-owned index in `.git`, origin `github.com/koteev-m/hookah_bot`.
+Branch `codex/ht-venue-qr-telegram-download-ux04` and exact HEAD
+`4515224ad78b35bff93f4606ab596232c2986fee` match supplied constraints. Base/parent NOT_SUPPLIED.
+Inherited/repo instructions agree; global AGENTS empty, no narrower instructions or Git identity
+override/include/redirect mismatch. Gate repeated before official SDK retrieval. Initial five
+modified tracked UX04 files and four untracked SQL helpers preserved; no worktree/branch created.
+
+Root cause: `index.html` loads Telegram SDK in browsers too; SDK creates WebApp with empty
+initData/platform unknown, so `isTelegram = Boolean(webApp)` cannot select QR delivery safely.
+Added shared `hasTelegramLaunchData`, derived only from non-empty existing resolved initData
+(SDK or existing hash tgWebAppData fallback). Tables/QR uses that UX signal. Raw launch data is
+not authentication; auth gate, session logic and server checks are unchanged. Legacy `isTelegram`
+and SDK pointer/capabilities remain unchanged, including BackButton, scanner, ready/expand,
+chat/link actions, Guest/Venue user identity and start/table context. Official Telegram docs allow
+empty-data keyboard-button/inline-mode launches; these are not this product's authenticated Venue
+launch and are not reclassified globally. No UA/platform/function/query-only launch heuristics.
+
+Validation PASS:
+- `miniapp/node_modules/.bin/tsc --project miniapp/tsconfig.json --noEmit`;
+- `npm --prefix miniapp run build` (existing >500 kB bundle warning);
+- `MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --workers=2 telegram-context.spec.ts venue-tables-qr.spec.ts`: 39/39 (13 context + 26 QR);
+- same runner with `--grep 'UX03|UX04|Telegram QR delivery|table view without manage|table batch previews'`: 49/49;
+- full same runner `--workers=2`: 372/372, 2.6m, Chromium;
+- official SDK override, same context/QR specs with `--grep 'sdk-browser|sdk-bootstrap|SDK without launch'`: 4/4;
+- `git diff --check`; SQL helpers 4/4, index bytes and stash/archive refs unchanged.
+Initial sandbox Vite bind failed with EPERM before tests; authorized local execution passed.
+CI uses a deterministic reproduction of the relevant SDK bootstrap; it never fetches the CDN.
+Optional local `UX04_TELEGRAM_SDK_PATH` verified the same browser regression against the actual
+official script (SHA-256 `124bdff7ba3fe86c8ba5143467afec21e020405e74abdb92cfdda6c0ee3b5908`).
+Tests assert buttons, bearer/venue/format/table requests, no send during browser downloads,
+filename/MIME/Blob lifetime, no Telegram Blob/ZIP/navigation, auth rejection despite raw data,
+preserved SDK consumers, no auto retry, reopening and venue changes after errors/success.
+Original UX03/UX04 assertions retained.
+
+Evidence: [targeted](.tmp-checks/ht-ux04-p1/targeted.log),
+[UX03/UX04](.tmp-checks/ht-ux04-p1/ux03-ux04.log),
+[full smoke](.tmp-checks/ht-ux04-p1/full-playwright.log),
+[official SDK](.tmp-checks/ht-ux04-p1/official-sdk.log),
+[build](.tmp-checks/ht-ux04-p1/build.log),
+[input hashes](.tmp-checks/ht-ux04-p1/validation-inputs.json),
+[preservation](.tmp-checks/ht-ux04-p1/preservation-after.json).
+Changed surface: original five UX04 files plus `miniapp/src/shared/telegram.ts`, new
+`miniapp/e2e/telegram-context.spec.ts` and `miniapp/e2e/fixtures/telegram-launch.ts`.
+Observed Git: six modified tracked files, two new test files, original `?? scripts/dev/`;
+staging index empty. Backend/API/RBAC/DB/migrations unchanged. No stash/archive changes,
+commit/push/PR/merge/deploy, real Telegram send, bot settings or user-data changes.
+No unfinished test operation. Inline-button/menu/main/direct-link data shape and hash fallback
+are fixture-covered; real Telegram launch modes and iOS WebView are not device-smoke-confirmed.
+Separately authorized staging deploy and iPhone smoke remain required for runtime release evidence.
+Next: focused read-only P1 re-review; publication remains separately authorized.
+
+## HT-VENUE-QR-TELEGRAM-DOWNLOAD-UX04 — local READY (2026-10-27)
+
+**HT_VENUE_QR_TELEGRAM_DOWNLOAD_UX04_READY** — local frontend validation only.
+
+Identity gate PASS: task/project `HT-VENUE-QR-TELEGRAM-DOWNLOAD-UX04` / `Hookah_Tootah`;
+expected/observed physical checkout `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`,
+common dir/root-owned Git dir/index in its `.git`, origin `github.com/koteev-m/hookah_bot`.
+Session/repo AGENTS agree; global AGENTS is empty; no narrower instructions, foreign authority,
+Git ownership/namespace/override/include/redirection mismatch. EXPECTED_HEAD, EXPECTED_BASE and
+parent/ancestry constraints NOT_SUPPLIED. Initial UX03 HEAD was `342ea0c3f94fccda6cd4f097da9728b3e3da2591`;
+after gate PASS, authorized main fetch confirmed `4515224ad78b35bff93f4606ab596232c2986fee`.
+New ordinary local branch `codex/ht-venue-qr-telegram-download-ux04` starts at that exact
+`origin/main`/HEAD; primary checkout reused, no new worktree. Existing local `main` remains unchanged.
+
+Cause: Telegram WebView exposed direct Blob PDF/PNG opening alongside private-chat delivery,
+trapping iPhone users outside the Mini App screen. Existing `getTelegramContext().isTelegram`
+now selects one bulk **Отправить все QR в Telegram** PDF action and one per-table
+**Отправить QR в Telegram** PNG action, both through the existing guarded delivery API.
+No QR download/ZIP/manual Blob link in Telegram; no download fallback on send failure.
+Success/error/unknown outcomes retain Tables/QR, pending deduplication and no automatic resend.
+Browser PDF/PNG/ZIP Blob/filename/lifetime/fallback and explicit send actions are retained.
+No backend/API/RBAC/identity/venue-scope/token/DB/migration/bot-client changes.
+
+Validation PASS:
+- `miniapp/node_modules/.bin/tsc --project miniapp/tsconfig.json --noEmit`;
+- `npm --prefix miniapp run build` (existing Vite >500 kB warning);
+- `MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --workers=2 venue-tables-qr.spec.ts`: 18/18;
+- same command with `--grep 'UX03|UX04|Telegram QR delivery|table view without manage|table batch previews'`: 28/28;
+- full `MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --workers=2`: 351/351, 2.5m, Chromium;
+- `git diff --check`; original four SQL helpers SHA-256 identical.
+Initial sandbox Vite bind failed with EPERM; authorized local execution passed. Initial two new
+tests misclassified `/src/shared/api/` module loads as API calls; corrected the test filter to
+pathname `/api/`. All original UX03 assertions retained, with Telegram fixtures/labels updated.
+Evidence: [full smoke log](.tmp-checks/ht-ux04/full-playwright.log),
+[helper preservation](.tmp-checks/ht-ux04/preservation.json),
+[final Git status](.tmp-checks/ht-ux04/git-status.txt).
+
+Changed: `miniapp/src/screens/venueTables.ts`, `miniapp/e2e/venue-tables-qr.spec.ts`,
+`docs/VENUE_OPERATIONS.md`, `docs/TESTING_QA_SMOKE_STRATEGY.md`, this checkpoint.
+Observed Git: five modified tracked files, original `?? scripts/dev/`; index empty.
+No stash/archive ref changes, commit/push/PR/merge/deploy, real Telegram send or user-data changes.
+No unfinished test operation. User reports UX03 merged/staged and PDF/PNG private delivery working;
+UX04 itself is not deployed. Future separately authorized staging deploy and real iPhone smoke
+must verify single actions, retained screen/Back behavior, private-chat files and blocked bot.
+Next: review this local diff; publication/release requires separate authorization.
+
 ## HT-VENUE-MENU-TABLES-QR-UX03-FIX-P2 — local FIXED (2026-10-26)
 
 **HT_VENUE_MENU_TABLES_QR_UX03_P2_FIXED** — local validation boundary; ready for short review.

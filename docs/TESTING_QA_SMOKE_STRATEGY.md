@@ -19,10 +19,29 @@ mocked Telegram acceptance followed by audit failure, lost Telegram/HTTP respons
 automatic resend, confirmed success and definite RBAC/validation rejection. Testcontainers with newer
 Docker may require process-local `_JAVA_OPTIONS='-Xmx4g -Dapi.version=1.44'`; no daemon configuration change.
 
+UX04 frontend regression scope (`HT-VENUE-QR-TELEGRAM-DOWNLOAD-UX04`, P1 context correction):
+shared `hasTelegramLaunchData` uses non-empty raw SDK initData / existing hash tgWebAppData fallback,
+not SDK presence, platform, functions or start/query parameters. It selects one bulk PDF send and
+one PNG send per table for authenticated-flow launch data, regardless of iPhone/desktop user-agent.
+No QR-package request, Blob URL, download, popup or screen navigation occurs inside Telegram.
+Success, private-chat failure and the retained UX03 uncertain-delivery/definite-denial cases stay
+on Tables/QR with no automatic resend or download fallback. Export-denied controls remain absent
+in both contexts. Ordinary browser PDF/PNG/ZIP retain authenticated downloads, filenames, Blob
+lifetime/manual fallback and existing explicit send actions. Run TypeScript, production build,
+targeted `telegram-context.spec.ts`, `venue-tables-qr.spec.ts` / UX03 tests and full Playwright smoke;
+backend is unchanged. Cover no SDK, SDK bootstrap with empty initData/platform unknown, SDK data,
+hash fallback with/without SDK, unchanged start/table context, auth rejection despite raw launch
+data, BackButton/scanner/chat capabilities with empty/populated data, reopening and venue changes.
+The deterministic SDK bootstrap fixture keeps CI independent of the CDN; an optional local
+`UX04_TELEGRAM_SDK_PATH` supplies the official script to the same browser regression tests.
+Empty-data keyboard-button/inline launches are not authenticated Venue launches; the legacy
+SDK-presence flag and capability handling remain unchanged.
+
 Manual release smoke is **PENDING**, requires separate authorization and an authorized test venue:
 open Owner menu on iPhone Telegram, expand one of ten hookahs, edit a flavor and verify retention
 and other categories; create a batch with individual free numbers and verify conflict creates none;
-request one PNG and all PDF through explicit **Отправить в Telegram**, open the private-chat files,
+request one PNG through **Отправить QR в Telegram** and all PDF through **Отправить все QR в Telegram**,
+verify the Mini App stays on **Столы и QR** without opening files, then open the private-chat files,
 check readable table numbers and scan a QR into the correct Guest table/session. Test blocked bot /
 missing private chat, repeat clicks, Staff/foreign denial, and desktop PDF/ZIP saving. Verify existing
 printed QR and visits remain unchanged; never use token reissue just to test a download. UX02 Settings
