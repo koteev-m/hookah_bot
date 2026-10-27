@@ -405,12 +405,29 @@ in the browser. The UI reports preparation/initiated saving, never that a
 file was downloaded. No public URL, bearer-in-URL or `WebApp.downloadFile` is introduced.
 Reissuing one/all QR remains a separate action with explicit old-QR invalidation confirmation.
 
-The user confirmed UX03 is merged/deployed to staging and the same PDF/PNG delivery to the private
-chat works. UX04's changed iPhone Mini App flow remains **PENDING manual smoke** after a separately
-authorized release. Local mock/browser tests do not establish deployed runtime behavior. The local process limiter is
-not distributed or durable across restarts; persistent exactly-once Telegram delivery is not claimed.
+UX04 acceptance recorded from the user's HT-VENUE-TEAM-ACCESS-UX05 task (2026-10-27): PR #228
+merged, release `0a70795d1a3b6fb0ba89f2061c10fe7c63a8bbcd`, CI `40503171235`, attempt 1.
+The previous Codex HT70 deploy report records operation `207c31b248114e239b1588930545fc0b`
+as SUCCESS. The user confirmed real iPhone smoke: common PDF and individual PNG private-chat
+sending, retained Mini App screen and working navigation. These are supplied historical deploy
+and user-smoke evidence, not new connections, CI checks or device tests executed in UX05.
+Desktop ZIP saving remains manually unverified. This bounded UX04 acceptance does not accept
+UX05 changes. Local browser mocks alone do not establish deployed behavior. The local process
+limiter is not distributed or durable across restarts; persistent exactly-once delivery is not claimed.
 
 ## Staff / Roles / Invites
+
+UX05 local behavior: **Создать приглашение** creates a one-time link; access starts only after
+explicit acceptance in Telegram. Creation is blocked while pending and retains the last result
+and chosen role on error. **Обновить доступы и карточки** performs reads only, including after an
+invite is accepted outside this screen. Confirmed revocation removes its handle locally before
+refresh, so failed GET cannot relabel it as pending. The create response has no pending handle;
+never infer a recipient or match a secret to a revoked handle from role/timestamps. Server pending
+projection remains authoritative; expired/used/revoked rows are not new UI statuses.
+Membership role/removal requests are guarded per person. Removal confirmation explains that the
+card, shifts and history remain and access must later be invited again. No membership/card data
+is deleted by refreshing or disabling the optional module.
+
 
 Target:
 - Owner manages staff and roles.

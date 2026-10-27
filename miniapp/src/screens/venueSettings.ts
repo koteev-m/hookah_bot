@@ -231,7 +231,8 @@ function buildDom(root: HTMLDivElement, compact = false): VenueSettingsRefs {
     staffModuleNested,
     staffModuleGuestVisibleLabel,
     staffModuleSourceLabel,
-    staffModuleSourceChoices
+    staffModuleSourceChoices,
+    el('p', { className: 'field-help', text: 'Вручную — отметки в карточках команды. По графику — только активные смены по времени заведения. Публикация карточки и показ команды гостям включаются отдельно.' })
   )
 
   const staffModuleStatus = el('p', {

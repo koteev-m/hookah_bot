@@ -1,5 +1,117 @@
 # Project Status
 
+## HT-VENUE-TEAM-ACCESS-UX05 — local READY (2026-10-27)
+
+**HT_VENUE_TEAM_ACCESS_UX05_READY** — local readiness only; no publication or UX05 staging acceptance.
+
+Identity: preparatory `HT-VENUE-TEAM-ACCESS-UX05-BASE-PREP` gate PASS, then resumed UX05 gate PASS.
+Expected/observed physical root `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, Git/common dir
+and checkout-owned index in its `.git`, origin `github.com/koteev-m/hookah_bot`. Global AGENTS empty;
+repo/session instructions agree, no narrower instructions or identity-affecting overrides,
+includes, alternates or redirects. AGENTS unchanged. Initial tracked tree/index clean; only four
+original untracked SQL helpers. The original STOP was valid for the missing target object; the
+new preparatory task supplied no initial base and authorized obtaining it only after its PASS.
+
+Git sequence: initial `codex/ht-venue-qr-telegram-download-ux04` / HEAD
+`7b4abb77aaad67fbfd56ce8db12dbff1d7a68694` -> read-only remote main check and targeted no-tags fetch ->
+`origin/main = 0a70795d1a3b6fb0ba89f2061c10fe7c63a8bbcd` -> new ordinary local
+`codex/ht-venue-team-access-ux05` starting at that exact HEAD/base. Original HEAD is the merge's
+second parent; `merge-base --is-ancestor` passed. Initial branch constraint matched; initial
+base/parent/ancestry NOT_SUPPLIED. Resumed branch/HEAD/base matched; additional parents NOT_SUPPLIED.
+Same primary checkout, no worktree, no local main/UX04 rewrite or archive/stash changes.
+
+Confirmed issues and resulting behavior:
+- `miniapp/src/screens/venueStaff.ts`: misleading direct-add invitation label -> explicit
+  **Создать приглашение**, role/acceptance guidance and read-only **Обновить доступы и карточки**.
+  In-flight invite/create/profile/member guards stop accidental repeated requests. Last successful
+  invite and role survive an error. Confirmed revoke removes its opaque handle before a possibly
+  failing GET. The create DTO has no pending handle: no secret/recipient/status correlation guessed.
+- Card raw inputs previously came from DTOs on every render -> per-profile/per-create-target
+  screen-local drafts survive collapse, switching cards, unrelated mutations and read-only retry.
+  **Свернуть** retains; **Отмена** discards; successful save clears only its own draft. No local-storage
+  persistence; venue/account disposal clears state. Publication says **Карточка опубликована** and
+  does not promise current Guest visibility. Membership, card, publication and Today remain distinct.
+- Removal confirmation now explains retained card/shifts/history and a new invitation to restore access.
+  Settings clarify MANUAL vs SCHEDULE and separate publication/Guest visibility. Existing schedule,
+  timezone/overnight/default hours, explicit canceled restore and batch rules remain unchanged.
+- `venueChatLink.ts`: unknown initial state no longer appears disconnected or permits generation;
+  open-screen code expiry and copy-time guard prevent stale use. Failed/unconfirmed regeneration
+  stops advertising the old full code, warns and performs GET only. Clipboard false/failure selects
+  the command without false success. Code/test/unlink actions cannot compete while pending; queued
+  remains distinct from delivered. No auto generation/send/unlink or automatic send retry.
+
+Before-fix evidence: manual-card double click produced two POSTs; idle linkage code remained ready
+past expiry. Initial invite/draft reproduction harness had a delay-counter/path/locator error;
+those were diagnostic-test errors, corrected before final validation, not extra product diagnoses.
+Source evidence for unguarded invite/member/profile handlers and DTO-based draft reset is retained
+in the base diff. Existing assertions remain; only changed labels/copy were updated.
+
+Validation PASS:
+- `miniapp/node_modules/.bin/tsc --project miniapp/tsconfig.json --noEmit`;
+- `npm --prefix miniapp run build` (existing Vite >500 kB warning);
+- `MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --workers=2 --grep 'UX05|staff|Staff|staff module|manual Today|schedule source|future canceled'`: **64/64**;
+- full `MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --workers=2`: **387/387**, 2.8m, Chromium;
+- `_JAVA_OPTIONS='-Xmx4g' ./gradlew --offline --no-daemon --max-workers=1 :backend:app:test --tests '*VenueStaffRoutesTest' --tests '*VenueRbacRoutesTest' --console=plain`: **71/71** disposable H2 route tests;
+- `git diff --check`; docs UTF-8/fence/link sanity and `bash -n` parse-only SSH example.
+Final executed tests: FAIL 0, SKIP 0. PostgreSQL/concurrency suites not rerun: no backend/SQL/schema/
+role-policy changes. H2 and browser mocks are not new PostgreSQL or deployed-runtime evidence.
+No real working DB, Telegram messages/groups, SSH/SCP or VPS operation used.
+
+One independent targeted read-only review found two P2 draft races: pending create-mode replacement
+and delayed profile-link conflict clearing an independent form. Root fixed both, preserving the
+originating target/current editor, and added passing deferred-response regressions. Reviewer found
+no other concrete issue; no cyclic audit or second review pass. See [review](.tmp-checks/ht-ux05/review.md).
+
+Changed: `miniapp/src/screens/venueStaff.ts`, `venueChatLink.ts`, `venueSettings.ts`;
+`miniapp/e2e/guest-smoke.spec.ts` (15 added UX05 cases); `docs/VENUE_OPERATIONS.md`,
+`STAFF_PROFILES_SHIFTS_TIPS.md`, `TELEGRAM_FALLBACK_STAFF_CHAT.md`, `TESTING_QA_SMOKE_STRATEGY.md`,
+`STAGING_ORDINARY_RELEASE.md`, `STAGING_DEPLOYMENT.md`, `DEPLOYMENT_RUNBOOK.md`; this checkpoint.
+UX04 acceptance and agreed strict SSH/SCP contract are source-qualified in these existing docs;
+no duplicate runbook or SSH/executor/config/trust change. Backend/API/RBAC/schema/Guest DTOs unchanged.
+Owner/Manager/Staff/foreign denial, last Owner, accept/revoke claims, protected cards, own Staff edit/
+schedule privacy, module data retention and audit boundaries remain in current source and tests.
+
+Evidence: [targeted](.tmp-checks/ht-ux05/final-targeted.log),
+[full smoke](.tmp-checks/ht-ux05/full-playwright.log), [backend](.tmp-checks/ht-ux05/backend.log),
+[build](.tmp-checks/ht-ux05/final-build.log), [preservation](.tmp-checks/ht-ux05/preservation.json),
+[final Git status](.tmp-checks/ht-ux05/git-status.txt).
+Rendered local screenshots visually inspected: [mobile](.tmp-checks/ht-ux05/screenshots/team-mobile.png),
+[reduced-height keyboard simulation](.tmp-checks/ht-ux05/screenshots/team-keyboard.png),
+[desktop](.tmp-checks/ht-ux05/screenshots/team-desktop.png),
+[unconfirmed code result](.tmp-checks/ht-ux05/screenshots/chat-uncertain.png).
+These are mock-fixture Chromium UI, not a supplied screenshot or real device keyboard/Telegram smoke.
+
+Observed Git: 12 modified tracked files, original `?? scripts/dev/`; index empty. All four helpers
+match initial SHA-256 byte-for-byte. No commit/push/PR/merge/deploy, new worktree, backup, globals,
+server, Clubs, secrets, migrations or real invitation/member mutations. No unfinished operation.
+
+Future separately authorized staging smoke is required before UX05 acceptance: Owner/Manager create
+and accept a dedicated invitation, check pending/expiry/revoke without real-user cleanup; verify
+card vs membership, draft/collapse and Guest visibility; module off/on and MANUAL/SCHEDULE with
+an overnight shift; connect a dedicated chat with explicit code, queued test, unlink confirmation,
+Back and venue-switch/error behavior on iPhone. Keep existing roles/privacy and data-retention checks.
+Desktop ZIP remains manually unverified from UX04. Next: review this local diff; publication and
+staging execution require separate authorization.
+
+
+## UX04 accepted release — evidence reconciliation (2026-10-27)
+
+Supersedes the historical UX04 local-only / pending-deploy / pending-iPhone status below, only for
+this bounded accepted release. Source: user's HT-VENUE-TEAM-ACCESS-UX05 task, not a fresh server,
+CI or Telegram check in this task.
+
+- PR #228 merged; release `0a70795d1a3b6fb0ba89f2061c10fe7c63a8bbcd`;
+  supplied CI `40503171235`, attempt 1.
+- Previous Codex HT70 deploy report: operation `207c31b248114e239b1588930545fc0b` SUCCESS.
+- User confirmed real iPhone smoke: sending common PDF and individual PNG, retained Mini App
+  screen and working navigation. This is user evidence, not a Codex device-smoke run.
+- Desktop ZIP saving was not manually checked. Broader unrelated checks retain their own gates.
+- SSH docs now record the agreed strict Hookah SSH/SCP profile from completed diagnostics and
+  UX03/UX04 deploy evidence; no new connection, trust/config/executor/server change was made.
+  Banner-timeout cause remains unknown; historical ControlMaster is separate from current HT70.
+- UX04 acceptance does not accept or deploy UX05 changes. Older checkpoints remain historical.
+
+
 ## HT-VENUE-QR-TELEGRAM-DOWNLOAD-UX04-FIX-P1 — local FIXED (2026-10-27)
 
 **HT_VENUE_QR_TELEGRAM_DOWNLOAD_UX04_P1_FIXED** — local frontend boundary; ready for focused

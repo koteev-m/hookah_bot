@@ -132,6 +132,50 @@ python3 -B /opt/hookah-bot/simple_staging.py inspect --directory /opt/hookah-bot
   --candidate /opt/hookah-bot/candidate.json > /opt/hookah-bot/candidate-inspected.json
 ```
 
+### Текущий строгий SSH/SCP-профиль Hookah (HT70)
+
+Согласованный endpoint — `178.20.209.5:22`, hostname — `afraid-amber.ptr.network`.
+Заранее проверенный публичный host-key pin: `ssh-ed25519`, fingerprint
+`SHA256:zpgtCw+yuSj+kjxAzuBb6TYMuEarfKtsLTg0g6htgTk`.
+Источник: завершённая диагностика и успешные UX03/UX04 deploy, сообщённые пользователем
+в HT-VENUE-TEAM-ACCESS-UX05. Это фиксация принятого контракта, не новое подключение
+или проверка сервера сегодня. Причина прежнего SSH banner timeout осталась неизвестной;
+исправление sshd или снятие блокировки не установлено.
+
+SSH и SCP используют один строгий набор параметров: exact endpoint/port, проверенный
+публичный ключ в отдельном заранее подготовленном pin-файле, `ssh-ed25519` only,
+`StrictHostKeyChecking=yes`, `UpdateHostKeys=no`, `VerifyHostKeyDNS=no`, `CheckHostIP=no`
+(проверяется точный закреплённый alias, без автоматического добавления IP-записей) и отсутствие
+других trust sources/fallback. Fingerprint сам по себе не позволяет восстановить
+публичный ключ. Если проверенного key material нет, остановиться, не получать его
+через `keyscan`, `accept-new` или непроверенный fallback и не обновлять trust автоматически.
+Proxy и multiplexing запрещены: `ProxyCommand=none`, `ProxyJump=none`,
+`ControlMaster=no`, `ControlPath=none`, `ControlPersist=no`. Клиентский config исключается
+через `-F /dev/null`; `GlobalKnownHostsFile=/dev/null`, `UserKnownHostsFile` указывает
+только на проверенный pin. Hookah identity/credentials и полномочия остаются отдельно
+от Clubs; общий сервер и Docker lock не дают права использовать чужой client key.
+
+Ниже `$HOOKAH_PINNED_KNOWN_HOSTS` и `$HOOKAH_IDENTITY_FILE` — уже проверенные оператором
+абсолютные пути Hookah, `$SSH_TARGET` — отдельно разрешённый principal этого endpoint.
+Это пример для будущего отдельно разрешённого действия, не разрешение создать/изменить
+SSH config, known_hosts, ключи или подключиться:
+
+```bash
+HOOKAH_SSH_OPTIONS=(
+  -F /dev/null -o HostName=178.20.209.5 -o Port=22
+  -o HostKeyAlias=afraid-amber.ptr.network -o HostKeyAlgorithms=ssh-ed25519
+  -o StrictHostKeyChecking=yes -o UpdateHostKeys=no -o VerifyHostKeyDNS=no -o CheckHostIP=no
+  -o "UserKnownHostsFile=$HOOKAH_PINNED_KNOWN_HOSTS" -o GlobalKnownHostsFile=/dev/null
+  -o ProxyCommand=none -o ProxyJump=none
+  -o ControlMaster=no -o ControlPath=none -o ControlPersist=no
+  -o IdentitiesOnly=yes -o "IdentityFile=$HOOKAH_IDENTITY_FILE" -o BatchMode=yes
+)
+```
+
+Те же параметры обязательны для обеих команд. Shared Docker lock остаётся
+`/run/lock/shared-staging-docker.lock` с контрактом выше. Исторический ControlMaster
+workaround из `STAGING_DEPLOYMENT.md` к текущему HT70-профилю не применяется.
+
 ### Первый запуск на чистом AEZA
 
 Все пути `/opt/hookah-bot` ниже — **новый предлагаемый каталог**, который оператор
@@ -163,9 +207,9 @@ python3 --version
 доверенный оператор отдельно, без выдачи deploy-пользователю произвольного sudo:
 
 ```bash
-scp -o StrictHostKeyChecking=yes scripts/simple_staging.py \
+scp "${HOOKAH_SSH_OPTIONS[@]}" scripts/simple_staging.py \
   "$ARTIFACT_DIR/candidate.json" "$SSH_TARGET:/opt/hookah-bot/"
-ssh -o StrictHostKeyChecking=yes "$SSH_TARGET"
+ssh "${HOOKAH_SSH_OPTIONS[@]}" "$SSH_TARGET"
 ```
 
 `POSTGRES_DIGEST_REF` — независимо выбранный immutable `postgres@sha256:…`

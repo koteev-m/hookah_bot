@@ -242,8 +242,11 @@ async function copyText(value: string) {
   textarea.style.opacity = '0'
   document.body.appendChild(textarea)
   textarea.select()
-  document.execCommand('copy')
-  document.body.removeChild(textarea)
+  try {
+    if (!document.execCommand('copy')) throw new Error('Copy unavailable')
+  } finally {
+    document.body.removeChild(textarea)
+  }
 }
 
 function commandFromGeneratedCode(payload: StaffChatLinkCodeResponse) {
@@ -267,6 +270,9 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
   let isTesting = false
   let isUnlinking = false
   let isRegenerating = false
+  let statusReady = false
+  let codeUncertain = false
+  let expiryTimer: ReturnType<typeof setTimeout> | null = null
 
   const canLink = access.permissions.includes('STAFF_CHAT_LINK')
   const canUnlink = access.role === 'OWNER'
@@ -295,6 +301,8 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
   }
 
   const renderStatus = () => {
+    if (expiryTimer) clearTimeout(expiryTimer)
+    expiryTimer = null
     const status = currentStatus
     const linked = Boolean(status?.isLinked)
     const hasGeneratedCode = Boolean(currentFullCode && currentLinkCommand)
@@ -307,12 +315,14 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
     refs.unlinkButton.hidden = !linked || !canUnlink
     refs.generateButton.hidden = linked || !canLink || hasUsableCode || generatedCodeExpired
     refs.refreshButton.hidden = false
-    refs.generateButton.disabled = isGenerating || !canLink
-    refs.testButton.disabled = isTesting
-    refs.unlinkButton.disabled = isUnlinking
+    const busy = isGenerating || isTesting || isUnlinking || isRegenerating
+    refs.generateButton.disabled = busy || !canLink || !statusReady
+    refs.testButton.disabled = busy || !statusReady
+    refs.unlinkButton.disabled = busy || !statusReady
+    refs.refreshButton.disabled = busy || Boolean(loadAbort)
     refs.confirmUnlinkButton.disabled = isUnlinking
     refs.regenerateConfirmButton.disabled = isGenerating || isRegenerating
-    refs.regenerateButton.disabled = isGenerating || isRegenerating
+    refs.regenerateButton.disabled = busy || !statusReady
 
     if (!canLink) {
       refs.statusTitle.textContent = 'Нет доступа к управлению чатом персонала'
@@ -323,6 +333,23 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
       refs.regenerateOverlay.hidden = true
       return
     }
+
+    if (!statusReady) {
+      refs.statusTitle.textContent = loadAbort ? 'Проверяем подключение чата' : 'Подключение не проверено'
+      refs.statusDescription.textContent = 'Обновите состояние, чтобы безопасно управлять подключением.'
+      refs.chatMeta.textContent = ''
+      refs.instructionsCard.hidden = true
+      refs.codeSection.hidden = true
+      refs.generateButton.hidden = true
+      refs.testButton.hidden = true
+      refs.unlinkButton.hidden = true
+      refs.refreshButton.hidden = false
+      return
+    }
+
+    const expiresAt = currentExpiresAt ?? status?.activeCodeExpiresAt
+    const remaining = expiresAt ? new Date(expiresAt).getTime() - Date.now() : 0
+    if (remaining > 0) expiryTimer = setTimeout(() => { if (!disposed) renderStatus() }, Math.min(remaining, 2_000_000_000))
 
     if (linked) {
       refs.statusTitle.textContent = 'Чат персонала подключён'
@@ -338,7 +365,9 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
 
     refs.statusTitle.textContent = 'Чат персонала не подключён'
     refs.statusDescription.textContent =
-      'Подключите Telegram-группу, чтобы получать уведомления о заказах, бронях, вызовах и продлениях.'
+      codeUncertain
+        ? 'Результат создания кода не подтверждён. Прежний код мог перестать работать. Полный код недоступен; при необходимости явно создайте новый.'
+        : 'Подключите Telegram-группу, чтобы получать уведомления о заказах, бронях, вызовах и продлениях.'
     refs.chatMeta.textContent = ''
     refs.refreshButton.hidden = !hasUsableCode && !generatedCodeExpired
 
@@ -383,14 +412,17 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
   }
 
   const loadStatus = async () => {
+    if (disposed || isGenerating || isTesting || isUnlinking) return
     hideError()
     if (loadAbort) {
       loadAbort.abort()
     }
     const controller = new AbortController()
     loadAbort = controller
+    statusReady = false
     const seq = ++loadSeq
     refs.status.textContent = 'Проверяем подключение…'
+    renderStatus()
     const result = await venueGetStaffChatStatus(backendUrl, venueId, deps, controller.signal)
     if (disposed || loadSeq !== seq) return
     loadAbort = null
@@ -398,20 +430,26 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
     if (!result.ok) {
       refs.status.textContent = ''
       showError(result.error)
+      renderStatus()
       return
     }
     currentStatus = result.data
+    statusReady = true
     refs.status.textContent = ''
     renderStatus()
   }
 
   const generateCode = async () => {
+    if (disposed || !statusReady || isGenerating || isTesting || isUnlinking) return
     if (!canLink) {
       showToast('Недостаточно прав')
       return
     }
     hideError()
     isGenerating = true
+    currentFullCode = null
+    currentLinkCommand = null
+    currentExpiresAt = null
     refs.status.textContent = 'Создаём код…'
     renderStatus()
     const result = await venueCreateStaffChatLinkCode(backendUrl, venueId, deps)
@@ -420,10 +458,13 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
     if (!result.ok) {
       refs.status.textContent = ''
       showError(result.error)
+      codeUncertain = true
       renderStatus()
+      void loadStatus()
       return
     }
     currentFullCode = result.data.code
+    codeUncertain = false
     currentLinkCommand = commandFromGeneratedCode(result.data)
     currentExpiresAt = result.data.expiresAt
     currentStatus = {
@@ -438,6 +479,7 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
   }
 
   const sendTestMessage = async () => {
+    if (disposed || !statusReady || !currentStatus?.isLinked || isGenerating || isTesting || isUnlinking) return
     hideError()
     isTesting = true
     refs.status.textContent = 'Отправляем тестовое сообщение…'
@@ -481,6 +523,7 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
   }
 
   const regenerateCode = async () => {
+    if (disposed || !statusReady || isGenerating || isRegenerating || isTesting || isUnlinking) return
     isRegenerating = true
     renderStatus()
     refs.regenerateOverlay.hidden = true
@@ -490,6 +533,7 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
   }
 
   const unlinkChat = async () => {
+    if (disposed || !statusReady || !currentStatus?.isLinked || isGenerating || isTesting || isUnlinking) return
     if (!canUnlink) {
       showToast('Недостаточно прав')
       return
@@ -526,15 +570,25 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
   }
 
   const copyCommand = async () => {
+    if (disposed) return
+    if (isExpired(currentExpiresAt)) {
+      renderStatus()
+      showToast('Срок действия кода истёк. Создайте новый код.')
+      return
+    }
     if (!currentLinkCommand) {
       showToast('Сначала сгенерируйте код')
       return
     }
     try {
       await copyText(currentLinkCommand)
+      if (disposed) return
       showToast('Команда скопирована')
     } catch (_error) {
-      showToast('Не удалось скопировать команду')
+      if (disposed) return
+      refs.commandValue.focus()
+      refs.commandValue.select()
+      showToast('Не удалось скопировать автоматически. Команда выделена для копирования.')
     }
   }
 
@@ -555,6 +609,7 @@ export function renderVenueChatLinkScreen(options: VenueChatLinkOptions) {
 
   return () => {
     disposed = true
+    if (expiryTimer) clearTimeout(expiryTimer)
     loadAbort?.abort()
     disposables.forEach((dispose) => dispose())
   }

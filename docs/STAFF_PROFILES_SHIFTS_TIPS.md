@@ -273,6 +273,17 @@ Rules:
   indexes. New binaries must be deployed before revoke UI is enabled; old runtime instances must
   be drained, then staging-smoked, because they do not understand revoked invites.
 
+### UX05 local card editing
+
+Card editors remain collapsed by default. Raw drafts are screen-local and scoped to profile id
+or create-from-member target: **Свернуть**, switching cards and read-only refresh retain values;
+**Отмена** explicitly discards that editor's draft. Successful save clears only that profile's
+draft. Venue/account changes dispose the screen and drafts; no persistence in local storage.
+Create/save/publish/hide actions have pending guards. Publication is labelled **Карточка
+опубликована**, which is eligibility, not a claim that Guest currently sees the person. Guest
+visibility still requires the current master/guest toggles and exact MANUAL or SCHEDULE resolver.
+No new delete flow, profile role, photo upload, schedule lifecycle or API is introduced by UX05.
+
 ## SHIFT_TODAY Model
 
 Target fields:

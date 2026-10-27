@@ -189,6 +189,17 @@ Test:
 - UI copy must say queued/accepted by outbox, not guaranteed delivered, unless delivery is confirmed.
 - Last delivery state/history is future unless implemented.
 
+UX05 local diagnostics behavior:
+- Before a successful status GET, show unknown/loading state and permit only read-only refresh.
+- Opening/reloading the screen never creates a code, sends a test or unlinks automatically.
+- Locally generated codes expire on the open screen; copy checks expiry again at action time.
+- An unconfirmed generation response stops advertising the previous full code, explains that it
+  may have been replaced, and refreshes status with GET only. Creating another code is explicit.
+- Code/test/unlink requests cannot compete while pending. Clipboard failure selects the visible
+  command without claiming copy success. Queued test copy remains distinct from delivered.
+- Venue disposal discards late responses and clears the local expiry timer.
+These are local UX05 changes, pending their separately authorized staging/Telegram smoke.
+
 Privacy mode:
 - Bot should not need to read all group messages.
 - Commands should use `/link@BotUsername` for reliability in groups.

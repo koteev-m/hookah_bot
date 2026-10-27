@@ -28,6 +28,7 @@ Current practice:
 - Staging is a one-VPS Docker Compose deployment documented in `docs/STAGING_DEPLOYMENT.md`.
 - The Mini App production bundle is built into the backend image for staging.
 - Current staging URL is `https://staging.hookahtootah.club`.
+- Current HT70 SSH/SCP follows the [strict pinned Hookah profile](STAGING_ORDINARY_RELEASE.md#текущий-строгий-sshscp-профиль-hookah-ht70); historical ControlMaster examples are not its transport policy.
 - Ordinary V125 releases use [the staging release controller](STAGING_ORDINARY_RELEASE.md) only after the separately approved [protocol transition](STAGING_PROTOCOL_TRANSITION.md); the ControlMaster name forwards to the same entrypoint.
 - Production deploy automation, exact rollback commands and complete log command coverage remain **needs verification** unless a future task confirms them.
 
