@@ -264,9 +264,13 @@ Rules:
 - Owner lists/revokes pending `STAFF` and `MANAGER`; Manager lists/revokes pending `STAFF` only.
 - Pending DTOs contain only opaque handle, role, status and timestamps. Secret code/hash/deep link
   remains confined to the existing one-time create response.
-- Pending UI shows only target role, status, created/expires timestamps and the authorized revoke
-  action; no recipient name or Telegram identity is invented. After accept the pending row leaves
-  the list and the active member projection is rebuilt from current `users` identity/linkage state.
+- UX06 adds the already existing opaque handle to the one-time create response and uses it to
+  merge that result with the exact pending row. One card retains each session-only link through
+  collapse/refresh/next creation. Pending DTO fields stay unchanged. No metadata correlation,
+  persisted links, hash recovery or invented recipient/Telegram identity. Confirmed revoke and
+  expiry disable copy/share; missing pending handle is an unknown-cause absence, not proof of
+  acceptance. Current membership identity/linkage is refreshed independently. Older no-handle
+  create responses retain copies with a warning and no guessed management association.
 - Accept/decline and revoke use competing conditional claims, so exactly one terminal mutation can
   win and membership creation rolls back if accept loses.
 - PostgreSQL `V120` and H2 `V121` add only `revoked_at` and `revoked_by_user_id` plus pending-query
@@ -283,6 +287,26 @@ Create/save/publish/hide actions have pending guards. Publication is labelled **
 опубликована**, which is eligibility, not a claim that Guest currently sees the person. Guest
 visibility still requires the current master/guest toggles and exact MANUAL or SCHEDULE resolver.
 No new delete flow, profile role, photo upload, schedule lifecycle or API is introduced by UX05.
+
+### UX06 local visibility and linkage
+
+The primary card status is current Guest visibility with one reason: hidden card, team display
+switched off, venue unpublished, manual Today switched off, or no active schedule presence.
+The existing authorized Guest Preview supplies the visible IDs and current public/private mode
+for both sources. MANUAL keeps the saved exact-date Today publication predicate; absence of
+planned hours is not a blocker and no absent-schedule warning is displayed. SCHEDULE includes
+overnight presence rather than inferring it from the profile DTO's exact-date shift. A failed
+preview stays explicitly unverified; refresh is read-only. Profile/settings reads and profile
+mutations invalidate/abort the previous snapshot; stale responses cannot reassert visibility.
+Preview completion updates labels without rebuilding an open editor. Visibility is a snapshot at refresh, not live polling. Publication and shift
+controls keep their existing business rules. Long guidance and schedule detail can be expanded.
+An accepted current member becomes eligible in existing-card linkage after directory refresh;
+an already linked member opens that card. Existing protected/foreign/duplicate restrictions,
+pending guards and per-editor drafts remain unchanged. No membership/card auto-create or merge.
+Photo copy says **Загрузка фото пока недоступна.**; there is no working picker or storage claim.
+Targeted invitation and staff-photo proposals remain unimplemented in
+[UX06 design](HT_VENUE_STAFF_INVITES_UX06_DESIGN.md).
+
 
 ## SHIFT_TODAY Model
 

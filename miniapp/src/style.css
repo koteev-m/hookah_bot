@@ -3595,3 +3595,96 @@ input[type="number"] {
 .venue-table-numbers label { min-width: 0; }
 .venue-table-numbers input { box-sizing: border-box; width: 100%; min-height: 44px; }
 .venue-table-validation { grid-column: 1 / -1; overflow-wrap: anywhere; }
+
+.venue-staff button,
+.venue-staff select,
+.venue-staff summary {
+  min-height: 44px;
+}
+
+.venue-staff button {
+  align-self: start;
+  line-height: 1.25;
+}
+
+.venue-staff-row {
+  align-items: start;
+}
+
+.venue-staff-info > p {
+  margin: 0;
+}
+
+.venue-staff-self {
+  font-weight: 600;
+  color: #334155;
+}
+
+.venue-profile-visibility {
+  font-weight: 600;
+  color: #334155;
+}
+
+.venue-profile-help summary,
+.venue-profile-schedule-details summary {
+  cursor: pointer;
+  padding: 0.65rem 0;
+}
+
+.venue-legacy-invite-row,
+.venue-pending-invite-row {
+  border: 1px solid #d8deee;
+  border-radius: 10px;
+  background: #f8fafc;
+  min-width: 0;
+}
+
+.venue-legacy-invite-row > summary,
+.venue-pending-invite-row > summary {
+  padding: 0.7rem;
+  box-sizing: border-box;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.venue-legacy-invite-row .venue-invite-result,
+.venue-pending-invite-row .venue-invite-result {
+  margin: 0;
+  border: 0;
+  border-radius: 0 0 10px 10px;
+}
+
+.venue-pending-invite-details {
+  padding: 0 0.7rem 0.7rem;
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}
+
+.venue-invite-state {
+  margin: 0;
+  font-weight: 600;
+}
+
+.venue-staff .venue-invite-field {
+  box-sizing: border-box;
+}
+
+@media (max-width: 540px) {
+  .venue-staff-row {
+    flex-wrap: wrap;
+  }
+
+  .venue-staff-actions {
+    justify-items: start;
+  }
+
+  .venue-staff .venue-invite-actions {
+    flex-direction: column;
+    align-items: start;
+  }
+}
+
+.venue-staff .venue-invite-result > button {
+  justify-self: start;
+}

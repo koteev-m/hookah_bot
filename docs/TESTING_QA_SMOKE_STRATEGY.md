@@ -54,6 +54,24 @@ clipboard failure, queued test result, no automatic mutation/retry, unlink confi
 venue responses. Run TypeScript, production build, targeted and full Playwright smoke. Backend
 contracts/schema remain unchanged; source review is not fresh PostgreSQL/concurrency test evidence.
 
+UX06 local regression scope (`HT-VENUE-STAFF-INVITES-UX06`): additive create-response opaque
+handle equals the same pending API row across successive STAFF/MANAGER creations and GET refresh;
+pending exact keys remain secret-free. One handle has one card and retains its own link through
+Done/reopen/GET/next creation, including identical metadata on distinct handles. Creation without
+sending, canceled share and clipboard copy never claim delivery. Expiry/confirmed revoke disable
+sharing; post-revoke expiry does not repeatedly rebuild the row or lose focus. A failed GET
+keeps links with a stale-status warning, and an absent handle never invents
+acceptance or an accepter. Older no-handle create responses degrade safely without correlation.
+Accepted members link existing cards without duplicates; own-account inert actions are removed;
+Manager/protected/foreign restrictions, drafts and venue-switch races remain in regression.
+MANUAL primary visibility has no schedule prerequisite; both sources read Guest Preview IDs and
+public/private mode, including overnight presence, failed reads and stale publish/hide responses.
+Check mobile 390px, reduced-height and desktop; screenshots use synthetic fixtures. Run TypeScript,
+production build, focused/full Playwright, VenueStaffRoutesTest, Kotlin compile and ktlint. No SQL,
+RBAC or accept/revoke logic change; H2 route tests do not claim fresh PostgreSQL concurrency proof.
+Separate authorized staging/iPhone smoke remains required; no real send/revoke/member mutation is
+authorized by local tests. Addressed invites and durable photo upload remain design proposals.
+
 The remaining broader release smoke requires separate authorization and an authorized test venue:
 open Owner menu on iPhone Telegram, expand one of ten hookahs, edit a flavor and verify retention
 and other categories; create a batch with individual free numbers and verify conflict creates none;

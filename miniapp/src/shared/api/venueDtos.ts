@@ -529,6 +529,7 @@ export type VenueStaffInviteRequest = {
 }
 
 export type VenueStaffInviteResponse = {
+  handle?: string
   inviteCode: string
   expiresAt: string
   ttlSeconds: number

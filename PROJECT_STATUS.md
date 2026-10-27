@@ -1,5 +1,89 @@
 # Project Status
 
+## HT-VENUE-STAFF-INVITES-UX06 — local READY (2026-10-27)
+
+**HT_VENUE_STAFF_INVITES_UX06_LOCAL_READY** — agreed UI and additive handle contract only.
+All required local checks passed; this is not staging/production acceptance. The earlier PARTIAL
+limitation is resolved by the user's explicit follow-up permission for additive existing opaque handle in
+StaffInviteResponse/TypeScript DTO and exact single-card correlation. No SQL migration, RBAC or
+accept/revoke logic change, permanent browser storage, commit/push/PR/merge/deploy/SSH is authorized.
+Addressed invitations and durable staff photos remain proposals, not implemented features.
+
+Identity gate PASS before preparation, after preparation and on this resumption. Expected/observed:
+`Hookah_Tootah`, primary physical root `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, Git/common
+dir and checkout-owned index in `.git`, origin `github.com/koteev-m/hookah_bot`. Root AGENTS + empty
+global, no narrower instructions, foreign authority, GIT path overrides, includes or alternates.
+Initial HEAD/base/parent constraints NOT_SUPPLIED; initial branch `codex/ht-venue-team-access-ux05`,
+HEAD `fe2b2894cb5e07c5240ab43f81541996650b5711`, status only original `?? scripts/dev/`. Authorized
+no-tags targeted fetch verified `origin/main = 446d6a6785ff43a2c9253bead77ed010712a6851`; ordinary local
+`codex/ht-venue-staff-invites-ux06` still has that exact HEAD/base. Same checkout, no new worktree.
+No parent/ancestry constraint inferred. Working changes are this task's authorized changes.
+
+Implemented:
+- Backend returns only existing `result.handle` as an additive response field; pending DTO keeps
+  exactly handle/role/status/createdAt/expiresAt and receives no code/hash/link. Repository, SQL,
+  RBAC, accept/revoke claims and Guest privacy are unchanged. Older clients keep prior fields;
+  TS optional handle permits safe explicit fallback against an older server.
+- One expandable card per exact handle merges creation and pending. Latest session-created links
+  appear first; **Готово**, next Staff/Manager creation and read-only refresh retain each link
+  in screen memory without duplicates. No role/time/list-delta correlation, hash reconstruction,
+  automatic POST or browser persistence. Section/venue/account disposal and page reload clear copies.
+  Older no-handle response retains copies with a warning and hides uncorrelatable server-only rows.
+- Copy/share do not imply delivery, recipient or acceptance; canceled share and popup null/throw
+  retain the screen/link. Explicit expiry/confirmed revoke disable share/copy. Missing handle after
+  successful GET says **Нет в действующих приглашениях**, never an invented acceptance/accepter.
+  GET error retains last data and links with warning. Sequence/abort/snapshot guards and tombstones
+  prevent stale create/revoke reads from losing or resurrecting a handle. Passed original expiry
+  is observed even after revoke, preventing repeated row rebuild/focus loss.
+- Own account **Это вы** + role without inert role/remove controls. One primary Guest visibility
+  and reason, existing Guest Preview public/private mode and IDs for both sources; MANUAL has no
+  planned-shift prerequisite, SCHEDULE includes overnight presence. Writes/reads invalidate stale
+  Preview; label-only completion preserves editor focus/drafts. Accepted members can link existing
+  cards after refresh, linked cards open, Manager/protected/foreign rules remain unchanged.
+- Photo UI says upload unavailable. [Design](docs/HT_VENUE_STAFF_INVITES_UX06_DESIGN.md): recommended
+  addressed-invite operation uses server-bound prepared request_users/trusted UsersShared and exact
+  target ID during claim, preserving old unbound invites. No target schema/model implemented.
+  Staff photo pipeline is absent: agree private S3-compatible provider/region, operator, budget,
+  validation, consent/approval, private draft, Guest delivery and replacement/delete lifecycle first.
+
+Validation on final content:
+- TypeScript --noEmit PASS; production build PASS (existing Vite >500 kB bundle warning).
+- Final focused Playwright **27/27 PASS**, including 23 UX06 regressions.
+- Final full Playwright Chromium **410/410 PASS**, 2.9m; FAIL 0, SKIP 0.
+- Offline VenueStaffRoutesTest **35/35 PASS**, failures/errors/skipped 0; compileKotlin and
+  ktlintCheck PASS. Test proves STAFF→MANAGER→STAFF handles equal pending rows across two refreshes,
+  distinct handles and unchanged secret-free exact keys. Disposable H2, not PostgreSQL/server proof.
+- Initial targeted UI review findings were addressed; new narrow handle-contract/unification
+  review found no concrete defect and recommended the passing deferred-GET regressions. No repeated
+  broad audit. Author's final revoke/expiry focus edge is fixed and tested. [Review](.tmp-checks/ht-ux06/review.md).
+- git diff --check PASS; docs UTF-8/fence/local-link sanity PASS. Backend evidence hashes unchanged.
+
+Evidence: [TypeScript](.tmp-checks/ht-ux06/handle-typescript.log),
+[build](.tmp-checks/ht-ux06/handle-build.log), [targeted](.tmp-checks/ht-ux06/handle-final-targeted.log),
+[full](.tmp-checks/ht-ux06/handle-full-playwright.log),
+[backend](.tmp-checks/ht-ux06/handle-backend-validation.log),
+[backend scope](.tmp-checks/ht-ux06/handle-backend-evidence.json),
+[preservation](.tmp-checks/ht-ux06/preservation.json), [Git status](.tmp-checks/ht-ux06/git-status.txt).
+Visually inspected synthetic screenshots: [mobile](.tmp-checks/ht-ux06/screenshots/invites-mobile.png),
+[reduced height](.tmp-checks/ht-ux06/screenshots/invites-short.png),
+[mobile revoke](.tmp-checks/ht-ux06/screenshots/invites-pending-mobile.png),
+[desktop](.tmp-checks/ht-ux06/screenshots/invites-desktop.png),
+[MANUAL](.tmp-checks/ht-ux06/screenshots/card-manual-mobile.png),
+[SCHEDULE](.tmp-checks/ht-ux06/screenshots/cards-schedule-mobile.png).
+No screenshots were supplied this session; described states were reproduced locally.
+
+Changed: VenueStaffRoutes.kt + VenueStaffRoutesTest.kt; miniapp venueStaff.ts, venueDtos.ts,
+style.css, guest-smoke.spec.ts; VENUE_OPERATIONS.md, STAFF_PROFILES_SHIFTS_TIPS.md,
+TESTING_QA_SMOKE_STRATEGY.md, new design doc and this checkpoint. Git: 10 modified tracked files,
+new design doc, original ?? scripts/dev/; index empty. Four original SQL helpers byte-identical;
+stash/archive refs unchanged, no archived WIP applied. No real invite/member/chat/message or server
+mutation. No publication/external operation. Local checks do not establish iPhone/staging readiness.
+No unfinished operation. Next: review the local diff. Future staging deploy and dedicated iPhone
+smoke require separate authorization: share cancel/copy/two roles, collapse/GET retention,
+accept→existing-card linkage, revoke/expiry, Owner/Manager protection and actual Guest visibility
+in MANUAL/SCHEDULE including overnight presence. Targeted invitation and photo decisions remain open.
+
+
 ## HT-VENUE-TEAM-ACCESS-UX05 — local READY (2026-10-27)
 
 **HT_VENUE_TEAM_ACCESS_UX05_READY** — local readiness only; no publication or UX05 staging acceptance.
