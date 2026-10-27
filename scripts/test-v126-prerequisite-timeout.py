@@ -82,6 +82,9 @@ class FixtureProgramTests(unittest.TestCase):
         return json.loads(self.pidfile.read_text()) if self.pidfile.exists() else []
 
     def tearDown(self):
+        self.kill_owned_groups()
+
+    def kill_owned_groups(self):
         # These identities came only from this test's own child program.
         for pid, pgid in self.owned_records():
             if pid > 1 and pgid > 1 and self.running(pid):
@@ -90,29 +93,52 @@ class FixtureProgramTests(unittest.TestCase):
                 except ProcessLookupError:
                     pass
 
-    def bounded(self, code, *, duration='1s', signal_to_forward=None):
+    def bounded(self, code, *, duration='1s', signal_to_forward=None, ignore_inherited_int=False,
+                timeout_program=None):
         env = {key: value for key, value in os.environ.items() if key != 'V126_PREREQ_FIXTURE_SIGNAL_DURING_WRITE'}
-        command = [sys.executable, str(self.mocks / 'timeout'), '--signal=TERM', '--kill-after=1s', duration,
+        ready = self.case / 'timeout-ready'
+        ready.unlink(missing_ok=True)
+        env['V126_PREREQ_FIXTURE_TIMEOUT_READY'] = str(ready)
+        command = [sys.executable, str(timeout_program or self.mocks / 'timeout'), '--signal=TERM', '--kill-after=1s', duration,
                    sys.executable, '-c', code, str(self.pidfile)]
+        if ignore_inherited_int:
+            command = [sys.executable, '-c',
+                       'import os,signal,sys; signal.signal(signal.SIGINT,signal.SIG_IGN); '
+                       'os.execv(sys.executable,[sys.executable,*sys.argv[1:]])', *command[1:]]
         start = time.monotonic()
         process = subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    env=env, start_new_session=True)
         try:
             if signal_to_forward is not None:
                 ready_deadline = time.monotonic() + 3
-                while not self.pidfile.exists() and time.monotonic() < ready_deadline:
+                while not (self.pidfile.exists() and ready.exists()) and time.monotonic() < ready_deadline:
+                    if process.poll() is not None:
+                        break
                     time.sleep(0.02)
                 self.assertTrue(self.pidfile.exists(), 'owned child readiness missing')
+                self.assertTrue(ready.exists(), 'timeout signal handler readiness missing')
                 os.kill(process.pid, signal_to_forward)
             stdout, stderr = process.communicate(timeout=6)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.communicate(timeout=2)
-            self.fail('fixture program exceeded the independent six-second bound')
+        except BaseException as failure:
+            # The child has a separate session. Clean this invocation before a
+            # following subtest can replace its PID record; success stays unchecked here.
+            self.kill_owned_groups()
+            try:
+                process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+            if isinstance(failure, subprocess.TimeoutExpired):
+                self.fail('fixture program exceeded the independent six-second bound')
+            raise
         finally:
             if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 process.wait(timeout=2)
+            process.stdout.close()
+            process.stderr.close()
         return process.returncode, stdout, stderr, time.monotonic() - start
 
     def assert_owned_inactive(self):
@@ -154,14 +180,67 @@ time.sleep(30)
         self.assert_owned_inactive()
 
     def test_forwarded_int_and_term_preserve_signal_status(self):
+        for ignored in (False, True):
+            self.assert_forwarded_signal_status(ignore_inherited_int=ignored)
+
+    def test_forwarded_signals_wait_for_timeout_handler_readiness(self):
+        # Force the child-ready/parent-not-ready interleaving without relying on load.
+        source = (self.mocks / 'timeout').read_text()
+        boundary = 'child = subprocess.Popen(arguments, start_new_session=True)\n'
+        self.assertEqual(source.count(boundary), 1)
+        delayed = self.case / 'delayed-timeout'
+        delayed.write_text(source.replace(boundary, boundary + 'import time; time.sleep(0.25)\n'))
+        for ignored in (False, True):
+            self.assert_forwarded_signal_status(ignore_inherited_int=ignored, timeout_program=delayed)
+
+    def test_missing_wrapper_readiness_cleans_owned_child_before_next_invocation(self):
+        source = (self.mocks / 'timeout').read_text()
+        self.assertEqual(source.count('if ready_path:\n'), 1)
+        unready = self.case / 'unready-timeout'
+        unready.write_text(source.replace('if ready_path:\n', 'if False and ready_path:\n'))
         code = '''import json,os,sys,time
-open(sys.argv[1],'w').write(json.dumps([[os.getpid(),os.getpgrp()]]))
+with open(sys.argv[1]+'.tmp','w') as ready:
+    ready.write(json.dumps([[os.getpid(),os.getpgrp()]]))
+os.replace(sys.argv[1]+'.tmp', sys.argv[1])
+time.sleep(30)
+'''
+        start = time.monotonic()
+        with self.assertRaisesRegex(AssertionError, 'timeout signal handler readiness missing'):
+            self.bounded(code, duration='30s', signal_to_forward=signal.SIGINT, timeout_program=unready)
+        self.assertLess(time.monotonic() - start, 6)
+        self.assertEqual(len(self.owned_records()), 1)
+        self.assert_owned_inactive()
+
+    def test_communication_timeout_cleans_owned_child_group(self):
+        code = '''import json,os,sys,time
+with open(sys.argv[1],'w') as ready:
+    ready.write(json.dumps([[os.getpid(),os.getpgrp()]]))
+time.sleep(30)
+'''
+        start = time.monotonic()
+        with self.assertRaisesRegex(AssertionError, 'independent six-second bound'):
+            self.bounded(code, duration='30s')
+        self.assertLess(time.monotonic() - start, 9)
+        self.assertEqual(len(self.owned_records()), 1)
+        self.assert_owned_inactive()
+
+    def assert_forwarded_signal_status(self, *, ignore_inherited_int, timeout_program=None):
+        # Python preserves inherited SIG_IGN across exec. Readiness must mean the
+        # child is ready to terminate on either signal, even under a background shell.
+        code = '''import json,os,signal,sys,time
+signal.signal(signal.SIGINT, signal.default_int_handler)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+with open(sys.argv[1]+'.tmp','w') as ready:
+    ready.write(json.dumps([[os.getpid(),os.getpgrp()]]))
+os.replace(sys.argv[1]+'.tmp', sys.argv[1])
 time.sleep(30)
 '''
         for signum in (signal.SIGINT, signal.SIGTERM):
-            with self.subTest(signal=signum):
+            with self.subTest(signal=signum, inherited_int_ignored=ignore_inherited_int):
                 self.pidfile.unlink(missing_ok=True)
-                status, _, _, elapsed = self.bounded(code, duration='5s', signal_to_forward=signum)
+                status, _, _, elapsed = self.bounded(code, duration='5s', signal_to_forward=signum,
+                                                   ignore_inherited_int=ignore_inherited_int,
+                                                   timeout_program=timeout_program)
                 self.assertEqual(status, 128 + signum)
                 self.assertLess(elapsed, 2)
                 self.assert_owned_inactive()
@@ -170,7 +249,9 @@ time.sleep(30)
         code = '''import json,os,signal,sys,time
 signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-open(sys.argv[1],'w').write(json.dumps([[os.getpid(),os.getpgrp()]]))
+with open(sys.argv[1]+'.tmp','w') as ready:
+    ready.write(json.dumps([[os.getpid(),os.getpgrp()]]))
+os.replace(sys.argv[1]+'.tmp', sys.argv[1])
 time.sleep(30)
 '''
         for signum in (signal.SIGINT, signal.SIGTERM):

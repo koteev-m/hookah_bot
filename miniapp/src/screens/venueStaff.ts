@@ -6,6 +6,7 @@ import {
   venueCreateStaffProfile,
   venueCreateStaffProfileFromMember,
   venueGetPendingStaffInvites,
+  venueGetGuestPreview,
   venueGetStaff,
   venueGetStaffModuleSettings,
   venueGetStaffProfiles,
@@ -55,18 +56,6 @@ type StaffRefs = {
   inviteRole: HTMLSelectElement
   inviteButton: HTMLButtonElement
   refreshButton: HTMLButtonElement
-  inviteResult: HTMLDivElement
-  inviteRoleLabel: HTMLSpanElement
-  inviteVenueName: HTMLSpanElement
-  inviteLinkField: HTMLTextAreaElement
-  inviteCopyLinkButton: HTMLButtonElement
-  inviteShareButton: HTMLButtonElement
-  inviteFallbackDetails: HTMLDetailsElement
-  inviteCommandField: HTMLTextAreaElement
-  inviteCopyCommandButton: HTMLButtonElement
-  inviteExpires: HTMLSpanElement
-  inviteHelper: HTMLParagraphElement
-  inviteCopyStatus: HTMLParagraphElement
   pendingInviteStatus: HTMLParagraphElement
   pendingInviteList: HTMLDivElement
   list: HTMLDivElement
@@ -151,77 +140,6 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   const refreshButton = el('button', { className: 'button-small button-secondary', text: 'Обновить доступы и карточки' }) as HTMLButtonElement
   append(inviteRow, inviteRole, inviteButton)
 
-  const inviteResult = el('div', { className: 'venue-invite-result' })
-  inviteResult.hidden = true
-  const inviteResultTitle = el('h3', { text: 'Приглашение создано' })
-  const inviteRoleLabel = el('span')
-  const inviteVenueName = el('span')
-  const inviteExpires = el('span')
-  const inviteMeta = el('div', { className: 'venue-invite-meta' })
-  append(
-    inviteMeta,
-    el('p', { text: 'Роль:' }),
-    inviteRoleLabel,
-    el('p', { text: 'Заведение:' }),
-    inviteVenueName,
-    el('p', { text: 'Действует до:' }),
-    inviteExpires
-  )
-
-  const inviteLinkLabel = el('label', { className: 'field-label', text: 'Ссылка для сотрудника' })
-  inviteLinkLabel.htmlFor = 'venue-staff-invite-link'
-  const inviteLinkField = document.createElement('textarea')
-  inviteLinkField.id = 'venue-staff-invite-link'
-  inviteLinkField.className = 'venue-invite-field'
-  inviteLinkField.readOnly = true
-  inviteLinkField.rows = 2
-  const inviteCopyLinkButton = el('button', {
-    className: 'button-small button-secondary',
-    text: '📋 Скопировать ссылку'
-  }) as HTMLButtonElement
-  const inviteShareButton = el('button', {
-    className: 'button-small button-secondary',
-    text: '📤 Поделиться в Telegram'
-  }) as HTMLButtonElement
-  const inviteLinkActions = el('div', { className: 'venue-invite-actions' })
-  append(inviteLinkActions, inviteCopyLinkButton, inviteShareButton)
-
-  const inviteHelper = el('p', { className: 'venue-invite-help', text: '' })
-
-  const inviteFallbackDetails = document.createElement('details')
-  inviteFallbackDetails.className = 'venue-invite-fallback'
-  const inviteFallbackSummary = document.createElement('summary')
-  inviteFallbackSummary.textContent = 'Если ссылка не открылась'
-  const inviteFallbackHelp = el('p', {
-    className: 'venue-invite-help',
-    text: 'Скопируйте команду и отправьте её сотруднику вручную.'
-  })
-
-  const inviteCommandField = document.createElement('textarea')
-  inviteCommandField.id = 'venue-staff-invite-command'
-  inviteCommandField.className = 'venue-invite-field'
-  inviteCommandField.readOnly = true
-  inviteCommandField.rows = 2
-  inviteCommandField.setAttribute('aria-label', 'Команда, если ссылка не открылась')
-  const inviteCopyCommandButton = el('button', {
-    className: 'button-small button-secondary',
-    text: '📋 Скопировать команду'
-  }) as HTMLButtonElement
-  append(inviteFallbackDetails, inviteFallbackSummary, inviteFallbackHelp, inviteCommandField, inviteCopyCommandButton)
-  const inviteCopyStatus = el('p', { className: 'venue-invite-copy-status', text: '' })
-  inviteCopyStatus.setAttribute('aria-live', 'polite')
-  append(
-    inviteResult,
-    inviteResultTitle,
-    inviteMeta,
-    inviteLinkLabel,
-    inviteLinkField,
-    inviteLinkActions,
-    inviteHelper,
-    inviteFallbackDetails,
-    inviteCopyStatus
-  )
-
   const status = el('p', { className: 'status', text: '' })
 
   const error = el('div', { className: 'error-card' })
@@ -234,7 +152,7 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
 
   const list = el('div', { className: 'venue-staff-list' })
 
-  const pendingInviteTitle = el('h3', { text: 'Ожидают принятия' })
+  const pendingInviteTitle = el('h3', { text: 'Приглашения' })
   const pendingInviteStatus = el('p', { className: 'status', text: '' }) as HTMLParagraphElement
   pendingInviteStatus.setAttribute('aria-live', 'polite')
   const pendingInviteList = el('div', { className: 'venue-staff-list venue-pending-invite-list' }) as HTMLDivElement
@@ -244,15 +162,16 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
     title,
     accessTitle,
     accessDescription,
+    ...(access.role === 'MANAGER' ? [el('p', { className: 'venue-staff-current-access', text: 'Это вы · Менеджер' })] : []),
     inviteRow,
-    el('p', { className: 'field-help', text: 'Доступ появится после принятия приглашения в Telegram. До этого приглашение не привязано к человеку.' }),
+    el('p', { className: 'field-help', text: 'Доступ выдаётся после принятия. Получатель до принятия неизвестен; Telegram не сообщает о доставке ссылки.' }),
     refreshButton,
-    inviteResult,
     pendingInviteTitle,
     pendingInviteStatus,
     pendingInviteList,
     status,
     error,
+    el('h3', { text: 'Текущие доступы' }),
     list
   )
 
@@ -283,6 +202,10 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
     text: 'Карточками владельцев и других менеджеров управляет владелец.'
   })
   protectedNote.hidden = access.role !== 'MANAGER'
+  const profileHelp = document.createElement('details')
+  profileHelp.className = 'venue-profile-help'
+  profileHelp.appendChild(el('summary', { text: 'Как работают карточки и показ гостям' }))
+  append(profileHelp, privacyNote, shiftNote, protectedNote)
   const profileAddButton = el('button', { className: 'button-small', text: 'Добавить карточку сотрудника' }) as HTMLButtonElement
   const profileForm = el('div', { className: 'venue-profile-form' })
   profileForm.hidden = true
@@ -327,7 +250,7 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   )
   const photoPlaceholder = el('div', {
     className: 'venue-profile-photo-placeholder',
-    text: 'Фото сотрудника — позже'
+    text: 'Загрузка фото пока недоступна.'
   })
   const profileCreateButton = el('button', { text: 'Создать профиль' }) as HTMLButtonElement
   const profileCancelButton = el('button', { className: 'button-secondary', text: 'Отмена' }) as HTMLButtonElement
@@ -347,16 +270,16 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
     profileFormActions
   )
   const profileStatus = el('p', { className: 'status', text: '' })
+  const visibilityFreshness = el('p', { className: 'field-help', text: 'Видимость для гостей — на момент обновления.' })
   const profileList = el('div', { className: 'venue-staff-list venue-profile-list' })
   append(
     profileEnabledContent,
     profileDescription,
-    privacyNote,
-    shiftNote,
-    protectedNote,
+    profileHelp,
     profileAddButton,
     profileForm,
     profileStatus,
+    visibilityFreshness,
     profileList
   )
   append(profileCard, profileTitle, profileDisabledPanel, profileEnabledContent)
@@ -374,18 +297,6 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
     inviteRole,
     inviteButton,
     refreshButton,
-    inviteResult,
-    inviteRoleLabel,
-    inviteVenueName,
-    inviteLinkField,
-    inviteCopyLinkButton,
-    inviteShareButton,
-    inviteFallbackDetails,
-    inviteCommandField,
-    inviteCopyCommandButton,
-    inviteExpires,
-    inviteHelper,
-    inviteCopyStatus,
     pendingInviteStatus,
     pendingInviteList,
     list,
@@ -446,10 +357,6 @@ function buildTelegramShareUrl(inviteLink: string, venueName: string, role: stri
   return `https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${encodeURIComponent(text)}`
 }
 
-function buildInviteHelperText(role: string, venueName: string, expiresAt: string): string {
-  return `Отправьте эту ссылку сотруднику. После принятия приглашения в Telegram он получит роль ${role} в заведении «${venueName}». Ссылка одноразовая и действует до ${expiresAt}.`
-}
-
 function selectVisibleField(field: HTMLTextAreaElement) {
   field.focus()
   field.select()
@@ -476,6 +383,9 @@ function renderMemberRow(
     document.createTextNode(' · '),
     el('span', { className: 'venue-staff-role-badge', text: formatStaffRole(member.role) })
   )
+  if (member.userId === currentUserId) {
+    identityMeta.appendChild(el('span', { className: 'venue-staff-self', text: 'Это вы' }))
+  }
   append(info, el('strong', { text: member.displayName }), identityMeta)
 
   const linkState = el('p', {
@@ -510,7 +420,7 @@ function renderMemberRow(
     actions.appendChild(openButton)
   }
 
-  if (canManageRoles) {
+  if (canManageRoles && member.userId !== currentUserId) {
     const roleSelect = document.createElement('select')
     roleSelect.className = 'venue-select'
     roleSelect.setAttribute('aria-label', `Роль: ${member.displayName}`)
@@ -520,15 +430,6 @@ function renderMemberRow(
     roleSelect.value = member.role
     const updateButton = el('button', { className: 'button-small', text: 'Обновить' }) as HTMLButtonElement
     const removeButton = el('button', { className: 'button-small button-secondary', text: 'Удалить доступ' }) as HTMLButtonElement
-
-    const isCurrentMember = member.userId === currentUserId
-    roleSelect.disabled = isCurrentMember
-    updateButton.disabled = isCurrentMember
-    removeButton.disabled = isCurrentMember
-    if (isCurrentMember) {
-      updateButton.title = 'Нельзя менять свою роль'
-      removeButton.title = 'Нельзя удалить себя'
-    }
 
     updateButton.addEventListener('click', () => onUpdateRole(member, roleSelect.value as VenueStaffMemberDto['role']))
     removeButton.addEventListener('click', () => onRemove(member))
@@ -620,7 +521,7 @@ function formatLinkedMemberOption(member: VenueStaffMemberDto): string {
 function formatMemberLinkState(member: VenueStaffMemberDto): string {
   switch (member.profileLinkState) {
     case 'NOT_LINKED':
-      return 'Карточка не создана'
+      return 'Нет привязанной карточки'
     case 'LINKED':
       return member.linkedStaffProfileDisplayName?.trim()
         ? `Привязан к карточке «${member.linkedStaffProfileDisplayName.trim()}»`
@@ -720,6 +621,38 @@ function formatScheduledShiftLine(profile: VenueStaffProfileDto): string {
   return `запланирован сегодня · ${shift.startsAt}-${shift.endsAt} · ${formatShiftStatus(shift.status)}`
 }
 
+type GuestVisibilitySnapshot = {
+  profileIds: Set<number>
+  venuePublished: boolean
+}
+
+function formatProfileVisibility(
+  profile: VenueStaffProfileDto,
+  moduleSettings: VenueStaffModuleSettingsDto | null,
+  guestVisibility: GuestVisibilitySnapshot | null
+): string {
+  const published = profile.isGuestVisible && Boolean(profile.publishedAt) && !profile.disabledAt
+  let visibility = 'Видимость для гостей не проверена · обновите данные'
+  if (!published) {
+    visibility = 'Не видна гостям · карточка скрыта'
+  } else if (moduleSettings?.guestTeamVisible === false) {
+    visibility = 'Не видна гостям · показ команды отключён'
+  } else if (guestVisibility !== null) {
+    if (!guestVisibility.venuePublished) {
+      visibility = 'Не видна гостям · заведение не опубликовано'
+    } else if (moduleSettings?.todayStaffSource === 'MANUAL') {
+      visibility = guestVisibility.profileIds.has(profile.id)
+        ? 'Видна гостям · включена вручную'
+        : 'Не видна гостям · показ на сегодня выключен'
+    } else if (moduleSettings?.todayStaffSource === 'SCHEDULE') {
+      visibility = guestVisibility.profileIds.has(profile.id)
+        ? 'Видна гостям · активная смена'
+        : 'Не видна гостям · нет активной смены'
+    }
+  }
+  return visibility
+}
+
 type ProfileEditorDraft = {
   name: string
   subtype: string
@@ -734,6 +667,7 @@ function renderProfileRow(
   access: VenueAccessDto,
   moduleSettings: VenueStaffModuleSettingsDto | null,
   staffMembers: VenueStaffMemberDto[],
+  guestVisibility: GuestVisibilitySnapshot | null,
   directoryReady: boolean,
   isEditing: boolean,
   todayMutationPending: boolean,
@@ -781,38 +715,24 @@ function renderProfileRow(
       text: formatProfileRole(profile)
     })
   )
-  info.appendChild(
-    el('p', {
-      className: 'venue-order-sub',
-      text: `По графику: ${formatScheduledShiftLine(profile)}`
-    })
-  )
   const manualGuestVisible =
     profile.todayShift?.isGuestVisible === true &&
     (profile.todayShift.status === 'active' || profile.todayShift.status === 'scheduled')
-  if (moduleSettings?.todayStaffSource === 'MANUAL') {
-    info.appendChild(
-      el('p', {
-        className: 'venue-order-sub',
-        text: moduleSettings.guestTeamVisible
-          ? `Для гостей: ${manualGuestVisible ? 'включено' : 'выключено'} вручную`
-          : `Для гостей: ${manualGuestVisible ? 'включено вручную, но показ команды отключён в настройках' : 'выключено вручную'}`
-      })
+  info.appendChild(el('p', { className: 'venue-profile-visibility', text: formatProfileVisibility(profile, moduleSettings, guestVisibility) }))
+  if (moduleSettings?.todayStaffSource === 'SCHEDULE') {
+    const scheduleDetails = document.createElement('details')
+    scheduleDetails.className = 'venue-profile-schedule-details'
+    append(scheduleDetails,
+      el('summary', { text: 'Смена сегодня' }),
+      el('p', { className: 'venue-order-sub', text: `По графику: ${formatScheduledShiftLine(profile)}` })
     )
+    info.appendChild(scheduleDetails)
   }
   if (profile.tags?.length) {
     info.appendChild(el('p', { className: 'venue-order-sub', text: profile.tags.join(', ') }))
   }
   if (profile.bio) {
     info.appendChild(el('p', { className: 'venue-profile-bio', text: profile.bio }))
-  }
-  const visibility =
-    profile.isGuestVisible && profile.publishedAt && !profile.disabledAt
-      ? 'Карточка опубликована'
-      : 'Скрыт — виден только в кабинете'
-  info.appendChild(el('p', { className: 'venue-order-sub', text: visibility }))
-  if (moduleSettings?.guestTeamVisible === false) {
-    info.appendChild(el('p', { className: 'field-help', text: 'Показ команды гостям отключён в настройках.' }))
   }
   if (
     access.role === 'MANAGER' &&
@@ -1018,12 +938,30 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   let profileLoadAbort: AbortController | null = null
   let pendingInviteLoadAbort: AbortController | null = null
   let moduleSettingsLoadAbort: AbortController | null = null
+  let guestVisibilityLoadAbort: AbortController | null = null
+  let guestVisibility: GuestVisibilitySnapshot | null = null
+  let profilesReadReady = false
+  let moduleSettingsReadReady = false
   let loadSeq = 0
   let profileLoadSeq = 0
   let pendingInviteLoadSeq = 0
-  let currentInvite: VenueStaffInviteResponse | null = null
+  type SavedInvite = {
+    response: VenueStaffInviteResponse
+    role: 'STAFF' | 'MANAGER'
+    expanded: boolean
+    ordinal: number
+    feedback: string
+    fallbackExpanded: boolean
+  }
+  const sessionInvites = new Map<string, SavedInvite>()
+  const legacyInvites: SavedInvite[] = []
+  const absentSessionHandles = new Set<string>()
+  const revokedInviteHandles = new Set<string>()
+  const observedExpiredOrdinals = new Set<number>()
+  let nextInviteOrdinal = 0
   let currentPendingInvites: VenueStaffPendingInviteDto[] = []
   const revokingInviteHandles = new Set<string>()
+  const expandedPendingHandles = new Set<string>()
   let staffMembers: VenueStaffMemberDto[] = []
   let directoryReady = false
   let currentProfiles: VenueStaffProfileDto[] = []
@@ -1055,7 +993,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   const linkableProfileRoles =
     access.role === 'OWNER' ? undefined : new Set<VenueStaffMemberDto['role']>(['STAFF'])
 
-  const canRevokeInvite = (invite: VenueStaffPendingInviteDto): boolean =>
+  const canRevokeInvite = (invite: Pick<VenueStaffPendingInviteDto, 'role'>): boolean =>
     invite.role === 'MANAGER'
       ? access.role === 'OWNER' || access.permissions.includes('STAFF_INVITE_REVOKE_MANAGER')
       : access.role === 'OWNER' || access.permissions.includes('STAFF_INVITE_REVOKE_STAFF')
@@ -1161,139 +1099,210 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     refs.error.hidden = false
   }
 
-  const renderInvite = () => {
-    if (!currentInvite) {
-      refs.inviteResult.hidden = true
-      return
-    }
-    const startPayload = currentInvite.startPayload ?? `staff_invite_${currentInvite.inviteCode}`
-    const fallbackCommand = currentInvite.fallbackCommand ?? `/start ${startPayload}`
-    const deepLink = currentInvite.deepLink?.trim() || null
-    const role = currentInvite.role ?? refs.inviteRole.value
-    const roleLabel = formatStaffRole(role)
-    const venueName = currentInvite.venueName ?? access.venueName ?? `Venue ${venueId}`
-    const expiresAt = formatInviteExpires(currentInvite.expiresAt)
-    refs.inviteRoleLabel.textContent = roleLabel
-    refs.inviteVenueName.textContent = venueName
-    refs.inviteCopyStatus.textContent = ''
-    refs.inviteCopyLinkButton.disabled = !deepLink
-    refs.inviteShareButton.disabled = !deepLink
-    refs.inviteFallbackDetails.open = false
-    if (deepLink) {
-      refs.inviteLinkField.value = deepLink
-      const shareUrl = buildTelegramShareUrl(deepLink, venueName, roleLabel)
-      refs.inviteShareButton.dataset.shareUrl = shareUrl
-    } else {
-      refs.inviteLinkField.value = 'Ссылка недоступна. Используйте запасную команду ниже.'
-      delete refs.inviteShareButton.dataset.shareUrl
-    }
-    refs.inviteCommandField.value = fallbackCommand
-    refs.inviteExpires.textContent = expiresAt
-    refs.inviteHelper.textContent = deepLink
-      ? buildInviteHelperText(roleLabel, venueName, expiresAt)
-      : 'Ссылка недоступна. Скопируйте команду ниже и отправьте её сотруднику вручную.'
-    refs.inviteResult.hidden = false
-  }
-
-  const copyInviteText = async (
-    text: string,
-    field: HTMLTextAreaElement,
-    successMessage: string,
-    fallbackMessage: string
-  ) => {
-    refs.inviteCopyStatus.textContent = ''
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(text)
-        if (disposed) return
-        refs.inviteCopyStatus.textContent = successMessage
-        showToast(successMessage)
-        return
-      } catch {
-        // Fall through to visible manual selection below.
-      }
-    }
-    if (disposed) return
-    selectVisibleField(field)
-    refs.inviteCopyStatus.textContent = fallbackMessage
-    showToast(fallbackMessage)
-  }
-
   const openUrl = (url: string) => {
     const telegram = getTelegramContext()
     if (telegram.webApp?.openTelegramLink) {
       try {
         telegram.webApp.openTelegramLink(url)
-        return
+        return true
       } catch {
         // Fall through to the browser fallback below.
       }
     }
-    const opened = window.open(url, '_blank', 'noopener,noreferrer')
-    if (!opened) {
-      window.location.href = url
+    try {
+      return Boolean(window.open(url, '_blank', 'noopener,noreferrer'))
+    } catch {
+      return false
     }
   }
 
-  const currentInviteDeepLink = () => currentInvite?.deepLink?.trim() || null
-
-  const currentInviteShareUrl = () => {
-    const link = currentInviteDeepLink()
-    if (!link) return null
-    const role = formatStaffRole(currentInvite?.role ?? refs.inviteRole.value)
-    const venueName = currentInvite?.venueName ?? access.venueName ?? `Venue ${venueId}`
-    return buildTelegramShareUrl(link, venueName, role)
+  const inviteState = (handle: string | null, expiresAt: string) => {
+    if (handle && revokedInviteHandles.has(handle)) return 'revoked'
+    if (Date.parse(expiresAt) <= Date.now()) return 'expired'
+    if (handle && absentSessionHandles.has(handle)) return 'unlisted'
+    return 'pending'
   }
 
   const renderPendingInvites = () => {
-    refs.pendingInviteList.replaceChildren()
-    const visibleInvites =
-      access.role === 'MANAGER'
-        ? currentPendingInvites.filter((invite) => invite.role === 'STAFF')
-        : currentPendingInvites
-    if (!visibleInvites.length) {
-      refs.pendingInviteList.appendChild(
-        el('p', { className: 'venue-empty', text: 'Ожидающих приглашений нет.' })
-      )
-      return
-    }
-    visibleInvites.forEach((invite) => {
-      const row = el('div', { className: 'venue-staff-row venue-pending-invite-row' })
-      const info = el('div', { className: 'venue-staff-info' })
-      append(
-        info,
-        el('strong', { text: formatStaffRole(invite.role) }),
-        el('p', {
-          className: 'venue-order-sub',
-          text: 'Статус: ожидает принятия'
-        }),
-        el('p', {
-          className: 'venue-order-sub',
-          text: `Создано: ${formatInviteExpires(invite.createdAt)}`
-        }),
-        el('p', {
-          className: 'venue-order-sub',
-          text: `Действует до: ${formatInviteExpires(invite.expiresAt)}`
-        })
-      )
-      row.appendChild(info)
-      if (canRevokeInvite(invite)) {
-        const revokeButton = el('button', {
-          className: 'button-small button-secondary',
-          text: 'Отозвать приглашение'
-        }) as HTMLButtonElement
-        revokeButton.disabled = revokingInviteHandles.has(invite.handle)
-        revokeButton.addEventListener('click', () => void revokePendingInvite(invite))
-        row.appendChild(revokeButton)
+    const activeField = document.activeElement instanceof HTMLTextAreaElement && refs.pendingInviteList.contains(document.activeElement)
+      ? { id: document.activeElement.id, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
+      : null
+    refs.pendingInviteList.querySelectorAll<HTMLDetailsElement>('[data-invite-key]').forEach((row) => {
+      const saved = row.dataset.inviteHandle
+        ? sessionInvites.get(row.dataset.inviteHandle)
+        : legacyInvites.find((invite) => String(invite.ordinal) === row.dataset.inviteKey)
+      if (saved && row.dataset.inviteKey === String(saved.ordinal)) {
+        saved.expanded = row.open
+        saved.fallbackExpanded = row.querySelector<HTMLDetailsElement>('.venue-invite-fallback')?.open ?? false
+      } else if (!saved && row.dataset.inviteHandle) {
+        if (row.open) expandedPendingHandles.add(row.dataset.inviteHandle)
+        else expandedPendingHandles.delete(row.dataset.inviteHandle)
       }
-      refs.pendingInviteList.appendChild(row)
     })
+    refs.pendingInviteList.replaceChildren()
+    if (legacyInvites.length) {
+      refs.pendingInviteList.appendChild(el('p', {
+        className: 'field-help',
+        text: 'Не удалось связать созданную ссылку со списком. Ссылки этой сессии сохранены; отзыв недоступен до обновления сервера и перезагрузки раздела.'
+      }))
+    }
+    const rows = new Map<string, { pending?: VenueStaffPendingInviteDto; saved?: SavedInvite }>()
+    Array.from(sessionInvites.entries()).reverse().forEach(([handle, saved]) => {
+      if (access.role !== 'MANAGER' || saved.role === 'STAFF') rows.set(handle, { saved })
+    })
+    if (!legacyInvites.length) currentPendingInvites.forEach((invite) => {
+      if (Date.parse(invite.expiresAt) > Date.now() && !revokedInviteHandles.has(invite.handle) && (access.role !== 'MANAGER' || invite.role === 'STAFF')) {
+        rows.set(invite.handle, { ...rows.get(invite.handle), pending: invite })
+      }
+    })
+    if (!rows.size && !legacyInvites.length) {
+      refs.pendingInviteList.appendChild(el('p', { className: 'venue-empty', text: 'Действующих приглашений нет.' }))
+    }
+    const renderRow = (handle: string | null, pending: VenueStaffPendingInviteDto | undefined, saved: SavedInvite | undefined) => {
+      const role = pending?.role ?? saved!.role
+      const expiresAt = pending?.expiresAt ?? saved!.response.expiresAt
+      const state = inviteState(handle, expiresAt)
+      const stateText = state === 'revoked' ? 'Приглашение отозвано'
+        : state === 'expired' ? 'Срок действия истёк'
+          : state === 'unlisted' ? 'Нет в действующих приглашениях' : 'Ссылка создана'
+      if (saved && Date.parse(expiresAt) <= Date.now()) observedExpiredOrdinals.add(saved.ordinal)
+      const row = document.createElement('details')
+      row.className = handle ? 'venue-pending-invite-row' : 'venue-legacy-invite-row'
+      row.dataset.inviteKey = saved ? String(saved.ordinal) : handle!
+      row.dataset.inviteState = state
+      if (handle) row.dataset.inviteHandle = handle
+      row.open = saved?.expanded ?? expandedPendingHandles.has(handle!)
+      const summary = el('summary', { text: `${stateText} · ${formatStaffRole(role)} · до ${formatInviteExpires(expiresAt)}` })
+      const body = el('div', { className: saved ? 'venue-invite-result' : 'venue-pending-invite-details' })
+      body.appendChild(el('p', { className: 'venue-invite-state', text: stateText }))
+      if (pending) body.appendChild(el('p', { className: 'venue-order-sub', text: `Создано: ${formatInviteExpires(pending.createdAt)}` }))
+      const stateHelp = state === 'revoked' ? 'Ссылка больше не выдаёт доступ. Уже выданные доступы не изменены.'
+        : state === 'expired' ? 'Создайте новое приглашение, если доступ ещё нужен.'
+          : state === 'unlisted' ? 'Причина не сообщается: ссылка могла быть принята, отозвана или стать недоступной. Проверьте текущие доступы.'
+            : 'Получатель до принятия неизвестен. Доступ выдаётся только после принятия в Telegram.'
+      if (saved) {
+        const invite = saved.response
+        const venueName = invite.venueName ?? access.venueName ?? `Заведение ${venueId}`
+        body.appendChild(el('p', { className: 'venue-invite-help', text: `${formatStaffRole(role)} · ${venueName} · срок до ${formatInviteExpires(expiresAt)}` }))
+        const deepLink = invite.deepLink?.trim() || null
+        const command = invite.fallbackCommand ?? `/start ${invite.startPayload ?? `staff_invite_${invite.inviteCode}`}`
+        const field = document.createElement('textarea')
+        field.id = saved.ordinal === 0 ? 'venue-staff-invite-link' : `venue-staff-invite-link-${saved.ordinal}`
+        field.className = 'venue-invite-field'
+        field.readOnly = true
+        field.rows = 2
+        field.value = deepLink ?? 'Ссылка недоступна. Используйте команду ниже.'
+        const label = el('label', { className: 'field-label', text: 'Ссылка для сотрудника' }) as HTMLLabelElement
+        label.htmlFor = field.id
+        const feedback = el('p', { className: 'venue-invite-copy-status', text: saved.feedback })
+        feedback.id = `venue-invite-feedback-${saved.ordinal}`
+        feedback.setAttribute('aria-live', 'polite')
+        const setFeedback = (text: string) => {
+          saved.feedback = text
+          const current = document.getElementById(feedback.id)
+          if (current && refs.pendingInviteList.contains(current)) current.textContent = text
+        }
+        const usable = () => {
+          if (disposed) return false
+          const current = inviteState(handle, expiresAt)
+          if (current === 'pending') return true
+          renderPendingInvites()
+          showToast(current === 'expired' ? 'Срок действия ссылки истёк' : 'Ссылка недоступна')
+          return false
+        }
+        const copy = async (text: string, controlId: string, success: string, failure: string) => {
+          if (!usable()) return
+          setFeedback('')
+          try {
+            if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
+            await navigator.clipboard.writeText(text)
+            if (disposed) return
+            setFeedback(success)
+            showToast(success)
+          } catch {
+            if (disposed) return
+            const control = document.getElementById(controlId)
+            if (control instanceof HTMLTextAreaElement && refs.pendingInviteList.contains(control)) selectVisibleField(control)
+            setFeedback(failure)
+          }
+        }
+        const copyButton = el('button', { className: 'button-small button-secondary', text: '📋 Скопировать ссылку' }) as HTMLButtonElement
+        const shareButton = el('button', { className: 'button-small button-secondary', text: '📤 Поделиться в Telegram' }) as HTMLButtonElement
+        copyButton.disabled = state !== 'pending' || !deepLink
+        shareButton.disabled = state !== 'pending' || !deepLink
+        if (deepLink) shareButton.dataset.shareUrl = buildTelegramShareUrl(deepLink, venueName, formatStaffRole(role))
+        copyButton.addEventListener('click', () => { if (deepLink) void copy(deepLink, field.id, 'Ссылка скопирована', 'Не удалось скопировать автоматически. Ссылка выделена ниже.') })
+        shareButton.addEventListener('click', () => {
+          if (!deepLink || !usable()) return
+          const opened = openUrl(buildTelegramShareUrl(deepLink, venueName, formatStaffRole(role)))
+          setFeedback(opened
+            ? 'Открыто окно Telegram. Отправка и получатель здесь не подтверждаются.'
+            : 'Если окно Telegram не появилось, скопируйте ссылку. Отправка и получатель здесь не подтверждаются.')
+        })
+        const actions = el('div', { className: 'venue-invite-actions' })
+        append(actions, copyButton, shareButton)
+        const fallback = document.createElement('details')
+        fallback.className = 'venue-invite-fallback'
+        fallback.open = saved.fallbackExpanded
+        const commandField = document.createElement('textarea')
+        commandField.id = `venue-staff-invite-command-${saved.ordinal}`
+        commandField.className = 'venue-invite-field'
+        commandField.readOnly = true
+        commandField.rows = 2
+        commandField.value = command
+        commandField.setAttribute('aria-label', 'Команда, если ссылка не открылась')
+        const commandButton = el('button', { className: 'button-small button-secondary', text: '📋 Скопировать команду' }) as HTMLButtonElement
+        commandButton.disabled = state !== 'pending'
+        commandButton.addEventListener('click', () => void copy(command, commandField.id, 'Команда скопирована', 'Не удалось скопировать автоматически. Команда выделена ниже.'))
+        append(fallback,
+          el('summary', { text: 'Если ссылка не открылась' }),
+          el('p', { className: 'venue-invite-help', text: 'Скопируйте команду и отправьте её сотруднику вручную.' }),
+          commandField, commandButton
+        )
+        const done = el('button', { className: 'button-small button-secondary', text: 'Готово' }) as HTMLButtonElement
+        done.addEventListener('click', () => { row.open = false; saved.expanded = false; summary.focus() })
+        append(body, label, field, actions,
+          el('p', { className: 'venue-invite-help', text: stateHelp }),
+          el('p', { className: 'field-help', text: 'Ссылка доступна здесь до выхода из раздела или перезагрузки.' }),
+          fallback, feedback, done
+        )
+      } else {
+        append(body, el('p', { className: 'venue-invite-help', text: stateHelp }),
+          el('p', { className: 'field-help', text: 'Ссылка показывается только при создании. После перезагрузки повторно получить её нельзя.' })
+        )
+      }
+      if (handle && state === 'pending' && canRevokeInvite({ role })) {
+        const revokeButton = el('button', { className: 'button-small button-secondary', text: 'Отозвать приглашение' }) as HTMLButtonElement
+        revokeButton.disabled = revokingInviteHandles.has(handle)
+        revokeButton.addEventListener('click', () => void revokePendingInvite({ handle, role }))
+        body.appendChild(revokeButton)
+      }
+      row.addEventListener('toggle', () => {
+        if (!row.isConnected) return
+        if (saved) saved.expanded = row.open
+        else if (handle) {
+          if (row.open) expandedPendingHandles.add(handle)
+          else expandedPendingHandles.delete(handle)
+        }
+      })
+      append(row, summary, body)
+      refs.pendingInviteList.appendChild(row)
+    }
+    rows.forEach(({ pending, saved }, handle) => renderRow(handle, pending, saved))
+    legacyInvites.forEach((saved) => renderRow(null, undefined, saved))
+    if (activeField) {
+      const field = document.getElementById(activeField.id)
+      if (field instanceof HTMLTextAreaElement && refs.pendingInviteList.contains(field)) {
+        field.focus({ preventScroll: true })
+        field.setSelectionRange(activeField.start, activeField.end)
+      }
+    }
   }
 
   const renderStaff = (members: VenueStaffMemberDto[], currentUserId: number) => {
     refs.list.replaceChildren()
     staffMembers = members.filter(
-      (member) => member.active && (access.role === 'OWNER' || member.role === 'STAFF')
+      (member) => member.active && (access.role === 'OWNER' || member.role === 'STAFF' || member.userId === currentUserId)
     )
     syncCreateFormVisibility()
     populateLinkedUserSelect(
@@ -1369,6 +1378,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
           access,
           moduleSettings,
           staffMembers,
+          guestVisibility,
           directoryReady,
           editingProfileId === profile.id,
           todayMutationProfileIds.has(profile.id),
@@ -1506,7 +1516,46 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     setStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
   }
 
+  const updateGuestVisibilityLabels = () => {
+    currentProfiles.forEach((profile) => {
+      const label = refs.profileList.querySelector<HTMLElement>(`[data-staff-profile-id="${profile.id}"] .venue-profile-visibility`)
+      if (label) label.textContent = formatProfileVisibility(profile, moduleSettings, guestVisibility)
+    })
+  }
+
+  const invalidateGuestVisibility = () => {
+    guestVisibilityLoadAbort?.abort()
+    guestVisibilityLoadAbort = null
+    guestVisibility = null
+    updateGuestVisibilityLabels()
+  }
+
+  const loadGuestVisibility = async () => {
+    invalidateGuestVisibility()
+    if (!profilesReadReady || !moduleSettingsReadReady || !moduleSettings || mutatingProfiles.size || todayMutationProfileIds.size) return
+    const controller = new AbortController()
+    guestVisibilityLoadAbort = controller
+    updateGuestVisibilityLabels()
+    const result = await venueGetGuestPreview(backendUrl, venueId, deps, controller.signal)
+    if (disposed || guestVisibilityLoadAbort !== controller) return
+    guestVisibilityLoadAbort = null
+    if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) return
+    if (!result.ok) {
+      updateGuestVisibilityLabels()
+      showError(result.error)
+      return
+    }
+    guestVisibility = {
+      venuePublished: result.data.mode === 'PUBLISHED_PUBLIC',
+      profileIds: new Set((result.data.venue.todayStaff ?? []).map((person) => person.id))
+    }
+    updateGuestVisibilityLabels()
+  }
+
   const loadProfiles = async () => {
+    profilesReadReady = false
+    invalidateGuestVisibility()
+    renderProfiles(currentProfiles)
     if (!moduleEnabled) {
       currentProfiles = []
       refs.profileList.replaceChildren()
@@ -1531,11 +1580,16 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       return
     }
     currentProfiles = result.data.profiles
+    profilesReadReady = true
+    void loadGuestVisibility()
     renderProfiles(result.data.profiles)
     setProfileStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
   }
 
   const loadModuleSettings = async () => {
+    moduleSettingsReadReady = false
+    invalidateGuestVisibility()
+    renderProfiles(currentProfiles)
     if (!moduleEnabled || !access.permissions.includes('STAFF_MODULE_SETTINGS_MANAGE')) {
       moduleSettings = null
       return
@@ -1559,6 +1613,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       return
     }
     moduleSettings = result.data
+    moduleSettingsReadReady = true
+    void loadGuestVisibility()
     renderProfiles(currentProfiles)
   }
 
@@ -1573,6 +1629,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     const controller = new AbortController()
     pendingInviteLoadAbort = controller
     const seq = ++pendingInviteLoadSeq
+    const knownSessionHandles = new Set(sessionInvites.keys())
     refs.pendingInviteStatus.textContent = 'Загрузка приглашений...'
     const result = await venueGetPendingStaffInvites(
       backendUrl,
@@ -1584,11 +1641,15 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     pendingInviteLoadAbort = null
     if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) return
     if (!result.ok) {
-      refs.pendingInviteStatus.textContent = ''
+      refs.pendingInviteStatus.textContent = 'Не удалось обновить статусы. Показаны последние данные.'
       showError(result.error)
       return
     }
-    currentPendingInvites = result.data.invites
+    currentPendingInvites = result.data.invites.filter((invite) => !revokedInviteHandles.has(invite.handle))
+    knownSessionHandles.forEach((handle) => {
+      if (currentPendingInvites.some((invite) => invite.handle === handle)) absentSessionHandles.delete(handle)
+      else absentSessionHandles.add(handle)
+    })
     renderPendingInvites()
     refs.pendingInviteStatus.textContent = ''
   }
@@ -1629,8 +1690,9 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     )
   }
 
-  const revokePendingInvite = async (invite: VenueStaffPendingInviteDto) => {
-    if (!canRevokeInvite(invite) || revokingInviteHandles.has(invite.handle)) {
+  const revokePendingInvite = async (invite: Pick<VenueStaffPendingInviteDto, 'handle' | 'role'>) => {
+    const expiresAt = sessionInvites.get(invite.handle)?.response.expiresAt ?? currentPendingInvites.find((current) => current.handle === invite.handle)?.expiresAt
+    if (!canRevokeInvite(invite) || revokingInviteHandles.has(invite.handle) || !expiresAt || inviteState(invite.handle, expiresAt) !== 'pending') {
       showToast('Недостаточно прав')
       return
     }
@@ -1651,6 +1713,10 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       return
     }
     showToast('Приглашение отозвано')
+    pendingInviteLoadAbort?.abort()
+    pendingInviteLoadSeq += 1
+    revokedInviteHandles.add(invite.handle)
+    absentSessionHandles.delete(invite.handle)
     currentPendingInvites = currentPendingInvites.filter((current) => current.handle !== invite.handle)
     renderPendingInvites()
     void loadPendingInvites()
@@ -1686,9 +1752,15 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       showError(result.error)
       return
     }
-    currentInvite = result.data
-    renderInvite()
-    showToast('Приглашение создано')
+    refs.pendingInviteList.querySelectorAll<HTMLDetailsElement>('[data-invite-key]').forEach((row) => { row.open = false })
+    sessionInvites.forEach((saved) => { saved.expanded = false })
+    legacyInvites.forEach((saved) => { saved.expanded = false })
+    const saved: SavedInvite = { response: result.data, role, expanded: true, ordinal: nextInviteOrdinal++, feedback: '', fallbackExpanded: false }
+    const handle = result.data.handle?.trim()
+    if (handle) sessionInvites.set(handle, saved)
+    else legacyInvites.push(saved)
+    renderPendingInvites()
+    showToast('Ссылка создана')
     void loadPendingInvites()
   }
 
@@ -1855,7 +1927,9 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       tags: draft.tags ?? undefined
     }
     mutatingProfiles.add(profile.id)
-    syncProfilePending()
+    profilesReadReady = false
+    invalidateGuestVisibility()
+    renderProfiles(currentProfiles)
     hideError()
     const result = await venueUpdateStaffProfile(
       backendUrl,
@@ -1900,7 +1974,9 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       return
     }
     mutatingProfiles.add(profile.id)
-    syncProfilePending()
+    profilesReadReady = false
+    invalidateGuestVisibility()
+    renderProfiles(currentProfiles)
     hideError()
     const result = await venuePublishStaffProfile(backendUrl, { venueId, profileId: profile.id }, deps)
     if (disposed) return
@@ -1923,7 +1999,9 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   const hideProfile = async (profile: VenueStaffProfileDto) => {
     if (disposed || !directoryReady || mutatingProfiles.has(profile.id) || todayMutationProfileIds.has(profile.id)) return
     mutatingProfiles.add(profile.id)
-    syncProfilePending()
+    profilesReadReady = false
+    invalidateGuestVisibility()
+    renderProfiles(currentProfiles)
     hideError()
     const result = await venueHideStaffProfile(backendUrl, { venueId, profileId: profile.id }, deps)
     if (disposed) return
@@ -1950,6 +2028,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     }
     if (todayMutationProfileIds.has(profile.id) || mutatingProfiles.has(profile.id)) return
     todayMutationProfileIds.add(profile.id)
+    profilesReadReady = false
+    invalidateGuestVisibility()
     renderProfiles(currentProfiles)
     const result = await venueUpsertTodayStaffShift(
       backendUrl,
@@ -2027,43 +2107,17 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       refs.profileSubtype.value as VenueStaffProfileSubtype
     )
   ))
-  disposables.push(
-    on(refs.inviteCopyLinkButton, 'click', () => {
-      const link = currentInviteDeepLink()
-      if (!link) {
-        showToast('Ссылка недоступна')
-        return
-      }
-      void copyInviteText(
-        link,
-        refs.inviteLinkField,
-        'Ссылка скопирована',
-        'Не удалось скопировать автоматически. Ссылка выделена ниже.'
-      )
-    })
-  )
-  disposables.push(
-    on(refs.inviteShareButton, 'click', () => {
-      const shareUrl = currentInviteShareUrl()
-      if (!shareUrl) {
-        showToast('Ссылка недоступна')
-        return
-      }
-      openUrl(shareUrl)
-    })
-  )
-  disposables.push(
-    on(refs.inviteCopyCommandButton, 'click', () => {
-      if (!currentInvite) return
-      const startPayload = currentInvite.startPayload ?? `staff_invite_${currentInvite.inviteCode}`
-      void copyInviteText(
-        currentInvite.fallbackCommand ?? `/start ${startPayload}`,
-        refs.inviteCommandField,
-        'Команда скопирована',
-        'Не удалось скопировать автоматически. Команда выделена ниже.'
-      )
-    })
-  )
+  const expiryTimer = window.setInterval(() => {
+    const savedInvites = [...sessionInvites.values(), ...legacyInvites]
+    const expiredSaved = savedInvites.some((saved) =>
+      Date.parse(saved.response.expiresAt) <= Date.now() && !observedExpiredOrdinals.has(saved.ordinal)
+    )
+    if (expiredSaved || currentPendingInvites.some((invite) => Date.parse(invite.expiresAt) <= Date.now())) {
+      currentPendingInvites = currentPendingInvites.filter((invite) => Date.parse(invite.expiresAt) > Date.now())
+      renderPendingInvites()
+    }
+  }, 1000)
+  disposables.push(() => window.clearInterval(expiryTimer))
 
   refs.inviteButton.disabled = !canInvite
   refs.inviteButton.title = canInvite ? '' : 'Недостаточно прав'
@@ -2089,6 +2143,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   return () => {
     disposed = true
+    sessionInvites.clear()
+    legacyInvites.length = 0
     directoryReady = false
     staffMembers = []
     currentProfiles = []
@@ -2099,6 +2155,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     profileLoadAbort?.abort()
     pendingInviteLoadAbort?.abort()
     moduleSettingsLoadAbort?.abort()
+    guestVisibilityLoadAbort?.abort()
     disposables.forEach((dispose) => dispose())
   }
 }

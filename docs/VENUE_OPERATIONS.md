@@ -417,13 +417,29 @@ limiter is not distributed or durable across restarts; persistent exactly-once d
 
 ## Staff / Roles / Invites
 
-UX05 local behavior: **Создать приглашение** creates a one-time link; access starts only after
-explicit acceptance in Telegram. Creation is blocked while pending and retains the last result
-and chosen role on error. **Обновить доступы и карточки** performs reads only, including after an
-invite is accepted outside this screen. Confirmed revocation removes its handle locally before
-refresh, so failed GET cannot relabel it as pending. The create response has no pending handle;
-never infer a recipient or match a secret to a revoked handle from role/timestamps. Server pending
-projection remains authoritative; expired/used/revoked rows are not new UI statuses.
+UX06 local behavior: **Создать приглашение** creates a one-time link and returns its existing
+opaque `handle` in the additive create response. That exact handle identifies the same pending
+API row, so the result and list are one expandable card. Pending DTO fields remain unchanged:
+no raw code/hash/deep link. Handle is an identifier for authorized management, not acceptance
+or access authority; current server RBAC and conditional accept/revoke claims are unchanged.
+
+Creation, clipboard copy and opening Telegram share never claim delivery, recipient or acceptance;
+canceled share leaves the link available. **Готово**, a second Staff/Manager creation and
+**Обновить доступы и карточки** retain each exact handle's link in screen memory without duplicate
+cards or new POSTs. Leaving the section, switching venue/account or reloading clears the copies;
+old links cannot be recovered from the list or a hash. No local/session storage persistence.
+Expired saved cards are labelled expired and confirmed revoked saved cards revoked; copy/share
+are disabled. An absent handle after a successful GET says **Нет в действующих приглашениях**:
+it is not proof of acceptance, revocation or an accepter's identity. Failed GET retains last data
+and links with a visible stale-status warning. Confirmed revokes are tombstoned against stale GET.
+Remote-only terminal records leave the pending list. Browser popup null/throw keeps the screen.
+
+Older clients may ignore the additive field. The new UI tolerates an older create response without
+handle: keeps session links with an explicit linkage/management warning, hides server-only rows
+that cannot be safely deduplicated and never guesses by role, timestamps or list delta. Normal
+unified management requires the new response. Own account shows **Это вы** and role without inert
+role/removal controls; backend permissions and last-owner protections are unchanged.
+
 Membership role/removal requests are guarded per person. Removal confirmation explains that the
 card, shifts and history remain and access must later be invited again. No membership/card data
 is deleted by refreshing or disabling the optional module.

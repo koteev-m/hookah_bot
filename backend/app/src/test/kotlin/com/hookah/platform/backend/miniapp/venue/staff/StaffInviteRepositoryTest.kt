@@ -36,6 +36,34 @@ import kotlin.test.assertTrue
 
 class StaffInviteRepositoryTest {
     @Test
+    fun `pending timestamps round to database microseconds without changing opaque handles`() =
+        withFixture {
+            val samples =
+                listOf(
+                    "2030-01-01T10:00:00.123456499Z" to "2030-01-01T10:00:00.123456Z",
+                    "2030-01-01T10:00:01.123456500Z" to "2030-01-01T10:00:01.123457Z",
+                    "2030-01-01T10:00:02.999999999Z" to "2030-01-01T10:00:03Z",
+                )
+            val handles = mutableListOf<String>()
+            samples.forEach { (original, persisted) ->
+                val createdAt = Instant.parse(original)
+                nowRef.set(createdAt)
+                val created = createInvite(role = "STAFF", audit = true)
+                handles += created.handle
+                assertEquals(createdAt.plusSeconds(300), created.expiresAt)
+                repeat(2) {
+                    val pending = assertNotNull(repository.listPendingInvites(venueId, setOf("STAFF")))
+                    assertEquals(handles.reversed(), pending.map { it.handle })
+                    val row = pending.single { it.handle == created.handle }
+                    assertEquals(Instant.parse(persisted), row.createdAt)
+                    assertEquals(Instant.parse(persisted).plusSeconds(300), row.expiresAt)
+                    assertNotEquals(created.code, row.handle)
+                }
+            }
+            assertEquals(3, handles.toSet().size)
+        }
+
+    @Test
     fun `pending list is role scoped and create audit contains only safe opaque identity`() =
         withFixture {
             val staff = createInvite(role = "STAFF", audit = true)

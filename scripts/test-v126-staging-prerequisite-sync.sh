@@ -390,6 +390,12 @@ def forward(signum, _frame):
 
 signal.signal(signal.SIGINT, forward)
 signal.signal(signal.SIGTERM, forward)
+# Optional handshake for the standalone signal regression harness. Child PID
+# publication alone does not prove that this wrapper has installed its handlers.
+ready_path = os.environ.get('V126_PREREQ_FIXTURE_TIMEOUT_READY')
+if ready_path:
+    with open(ready_path, 'w') as ready:
+        ready.write('ready\n')
 try:
     returncode = child.wait(timeout=duration)
 except subprocess.TimeoutExpired:

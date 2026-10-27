@@ -36,6 +36,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.h2.jdbcx.JdbcDataSource
@@ -46,6 +47,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -1123,6 +1125,64 @@ class VenueStaffRoutesTest {
             assertEquals(HttpStatusCode.OK, allowedResponse.status)
             val payload = json.decodeFromString(StaffInviteResponse.serializer(), allowedResponse.bodyAsText())
             assertTrue(payload.inviteCode.isNotBlank())
+        }
+
+    @Test
+    fun `created invite handles match pending rows across sequential roles and refresh`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-invite-create-handle")
+            val config = buildConfig(jdbcUrl, botUsername = "HookahInviteBot")
+
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+
+            val ownerId = 3091L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            val ownerToken = issueToken(config, ownerId)
+            val createdInvites = mutableListOf<StaffInviteResponse>()
+
+            for (role in listOf("STAFF", "MANAGER", "STAFF")) {
+                val createResponse =
+                    client.post("/api/venue/$venueId/staff/invites") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                        contentType(ContentType.Application.Json)
+                        setBody(json.encodeToString(StaffInviteRequest.serializer(), StaffInviteRequest(role = role)))
+                    }
+                assertEquals(HttpStatusCode.OK, createResponse.status)
+                val created = json.decodeFromString(StaffInviteResponse.serializer(), createResponse.bodyAsText())
+                assertTrue(created.handle.startsWith("sih_"))
+                assertNotEquals(created.inviteCode, created.handle)
+                assertTrue(createdInvites.none { it.handle == created.handle })
+                createdInvites += created
+
+                repeat(2) {
+                    val pendingResponse =
+                        client.get("/api/venue/$venueId/staff/invites") {
+                            headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                        }
+                    assertEquals(HttpStatusCode.OK, pendingResponse.status)
+                    val pendingText = pendingResponse.bodyAsText()
+                    assertPendingInviteProjectionIsIdentityFree(pendingText)
+                    val pending = json.decodeFromString(PendingInvitesResponse.serializer(), pendingText).invites
+                    assertEquals(createdInvites.size, pending.size)
+                    assertEquals(createdInvites.map { it.handle }.toSet(), pending.map { it.handle }.toSet())
+                    val creationTimes = pending.map { Instant.parse(it.createdAt) }
+                    assertEquals(creationTimes.sortedDescending(), creationTimes)
+                    createdInvites.forEach { invite ->
+                        val row = pending.single { it.handle == invite.handle }
+                        assertEquals(invite.role, row.role)
+                        // H2 TIMESTAMP(6) rounds the persisted Instant; create retains JVM precision.
+                        val persistedExpiry =
+                            Instant.parse(invite.expiresAt).plusNanos(500).truncatedTo(ChronoUnit.MICROS)
+                        assertEquals(persistedExpiry, Instant.parse(row.expiresAt))
+                        assertEquals("PENDING", row.status)
+                        assertTrue(invite.inviteCode !in pendingText)
+                        assertTrue(invite.deepLink!! !in pendingText)
+                    }
+                }
+            }
         }
 
     @Test
@@ -2329,6 +2389,12 @@ class VenueStaffRoutesTest {
         assertTrue("lastName" !in responseText)
         assertTrue("phone" !in responseText.lowercase())
         assertTrue("inviteCode" !in responseText)
+        json.parseToJsonElement(responseText).jsonObject.getValue("invites").jsonArray.forEach { invite ->
+            assertEquals(
+                setOf("handle", "role", "status", "createdAt", "expiresAt"),
+                invite.jsonObject.keys,
+            )
+        }
     }
 
     private fun seedUserIdentity(
@@ -2725,6 +2791,7 @@ class VenueStaffRoutesTest {
         val deepLink: String? = null,
         val fallbackCommand: String? = null,
         val copyText: String? = null,
+        val handle: String,
     )
 
     @Serializable

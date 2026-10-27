@@ -89,6 +89,7 @@ data class StaffInviteResponse(
     val deepLink: String? = null,
     val fallbackCommand: String,
     val copyText: String,
+    val handle: String,
 )
 
 @Serializable
@@ -331,6 +332,7 @@ internal fun Route.venueStaffRoutes(
                     deepLink = deepLink,
                     fallbackCommand = fallbackCommand,
                     copyText = copyText,
+                    handle = result.handle,
                 ),
             )
         }

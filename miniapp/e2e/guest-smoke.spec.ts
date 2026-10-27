@@ -4969,6 +4969,8 @@ async function mockVenueStaffChatApi(
     permissions?: string[]
     linked?: boolean
     generatedExpiresAt?: string
+    inviteExpiresAt?: string
+    omitInviteHandle?: boolean
     pendingInvites?: Array<{
       handle: string
       role: 'MANAGER' | 'STAFF'
@@ -4981,6 +4983,8 @@ async function mockVenueStaffChatApi(
     holdFirstStaffDirectory?: boolean
     staffDirectoryFailuresBeforeSuccess?: number
     staffModuleSettings?: VenueStaffModuleSettingsFixture
+    guestPreviewStaffIds?: number[]
+    guestPreviewMode?: 'PUBLISHED_PUBLIC' | 'PRIVATE_DRAFT'
   } = {}
 ) {
   let accessUserId = 123456789
@@ -5200,6 +5204,7 @@ async function mockVenueStaffChatApi(
   let shouldHoldStaffDirectory = options.holdFirstStaffDirectory === true
   let staffDirectoryFailuresRemaining = options.staffDirectoryFailuresBeforeSuccess ?? 0
   const deferredProfileLoads: Array<{ promise: Promise<void>; release: () => void }> = []
+  const deferredInviteCreateResponses: Array<Promise<void>> = []
   let releaseStaffDirectoryGate: (() => void) | null = null
   const staffDirectoryGate = new Promise<void>((resolve) => {
     releaseStaffDirectoryGate = resolve
@@ -5313,6 +5318,31 @@ async function mockVenueStaffChatApi(
 
   await page.route('**/api/venue/1/staff-module-settings', async (route) => {
     await route.fulfill(jsonResponse(staffModuleSettings))
+  })
+
+  await page.route('**/api/venue/1/guest-preview', async (route) => {
+    const publishedProfiles = staffProfiles.filter((profile) =>
+      profile.isGuestVisible && profile.publishedAt && !profile.disabledAt
+    )
+    const visibleProfiles = !staffModuleSettings.teamScheduleModuleEnabled || !staffModuleSettings.guestTeamVisible
+      ? []
+      : publishedProfiles.filter((profile) => staffModuleSettings.todayStaffSource === 'SCHEDULE'
+        ? options.guestPreviewStaffIds?.includes(profile.id)
+        : profile.todayShift?.isGuestVisible === true &&
+          ['active', 'scheduled'].includes(String(profile.todayShift.status)))
+    await route.fulfill(jsonResponse(buildVenueGuestPreviewFixture(1, {
+      mode: options.guestPreviewMode ?? 'PUBLISHED_PUBLIC',
+      venue: {
+        todayStaff: visibleProfiles.map((profile) => ({
+          id: profile.id, displayName: profile.displayName, roleLabel: profile.roleLabel,
+          subtype: profile.subtype, photoRef: null, bio: profile.bio, tags: profile.tags,
+          shiftDate: String(profile.todayShift?.shiftDate ?? '2030-01-10'),
+          startsAt: typeof profile.todayShift?.startsAt === 'string' ? profile.todayShift.startsAt : null,
+          endsAt: typeof profile.todayShift?.endsAt === 'string' ? profile.todayShift.endsAt : null,
+          shiftStatus: String(profile.todayShift?.status ?? 'active')
+        }))
+      }
+    })))
   })
 
   await page.route('**/api/venue/1/staff/profiles**', async (route) => {
@@ -5561,22 +5591,25 @@ async function mockVenueStaffChatApi(
     }
     const body = (await request.postDataJSON()) as { role?: string }
     staffInviteRequests.push(body)
-    const inviteCode = 'ABC234'
+    const inviteCode = staffInviteRequests.length === 1 ? 'ABC234' : `SYNTHETIC${staffInviteRequests.length}`
+    const inviteHandle = `pending-${staffInviteRequests.length}`
     const startPayload = `staff_invite_${inviteCode}`
     const deepLink = `https://t.me/TestHookahBot?start=${startPayload}`
     const fallbackCommand = `/start ${startPayload}`
     const pendingRole = body.role === 'MANAGER' ? 'MANAGER' : 'STAFF'
     pendingInvites.push({
-      handle: `pending-${staffInviteRequests.length}`,
+      handle: inviteHandle,
       role: pendingRole,
       status: 'PENDING',
       createdAt: '2030-01-10T18:00:00Z',
-      expiresAt: '2030-01-17T18:00:00Z'
+      expiresAt: options.inviteExpiresAt ?? '2030-01-17T18:00:00Z'
     })
+    await deferredInviteCreateResponses.shift()
     await route.fulfill(
       jsonResponse({
+        ...(options.omitInviteHandle ? {} : { handle: inviteHandle }),
         inviteCode,
-        expiresAt: '2030-01-17T18:00:00Z',
+        expiresAt: options.inviteExpiresAt ?? '2030-01-17T18:00:00Z',
         ttlSeconds: 604800,
         role: body.role ?? 'STAFF',
         venueName: 'Микс',
@@ -5651,6 +5684,11 @@ async function mockVenueStaffChatApi(
     getGeneratedCalls: () => generated,
     getStaffInvites: () => staffInviteRequests.length,
     getStaffInviteRequests: () => [...staffInviteRequests],
+    deferNextInviteCreateResponse: () => {
+      let release = () => undefined
+      deferredInviteCreateResponses.push(new Promise<void>((resolve) => { release = resolve }))
+      return release
+    },
     getPendingInvites: () => pendingInvites.map((invite) => ({ ...invite })),
     getRevokedInviteHandles: () => [...revokedInviteHandles],
     getProfileCreateRequests: () => profileCreateRequests,
@@ -5658,6 +5696,10 @@ async function mockVenueStaffChatApi(
     getProfileUpdateRequests: () => profileUpdateRequests,
     getProfileGetCalls: () => profileGetCalls,
     getStaffMembers: () => staffMembers.map((member) => ({ ...member })),
+    addStaffMember: (member: VenueStaffMemberFixture) => {
+      staffMembers.push({ ...member })
+      syncStaffMemberLinkState(member.userId)
+    },
     addStaffProfile: (profile: StaffProfileFixture) => {
       staffProfiles.push({
         ...profile,
@@ -13987,7 +14029,7 @@ test('venue owner creates manager staff invite with copyable deep link', async (
 
   await expect(page.locator('.venue-invite-result')).toContainText('Менеджер')
   await expect(page.locator('.venue-invite-result')).toContainText('Микс')
-  await expect(page.locator('.venue-invite-result')).toContainText('Приглашение создано')
+  await expect(page.locator('.venue-invite-result')).toContainText('Ссылка создана')
   await expect(page.getByText('Ссылка для сотрудника')).toBeVisible()
   await expect(page.getByLabel('Ссылка для сотрудника')).toHaveValue(deepLink)
   await expect(page.getByLabel('Ссылка для сотрудника')).toBeVisible()
@@ -13999,7 +14041,7 @@ test('venue owner creates manager staff invite with copyable deep link', async (
   await expect(page.getByText('Код:')).toHaveCount(0)
   await expect(page.getByText('Передайте сотруднику приглашение.')).toHaveCount(0)
   await expect(page.locator('.venue-invite-result')).toContainText(
-    'Отправьте эту ссылку сотруднику. После принятия приглашения в Telegram он получит роль Менеджер в заведении «Микс».'
+    'Получатель до принятия неизвестен. Доступ выдаётся только после принятия в Telegram.'
   )
   await expect(page.getByText('Если ссылка не открылась')).toBeVisible()
   await expect(page.getByText('Скопируйте команду и отправьте её сотруднику вручную.')).not.toBeVisible()
@@ -14087,9 +14129,10 @@ test('venue manager creates and revokes only staff invites', async ({ page }) =>
   const pending = accessCard.locator('.venue-pending-invite-list')
   await expect(pending.locator('.venue-pending-invite-row')).toHaveCount(1)
   await expect(pending).toContainText('Сотрудник')
-  await expect(pending).toContainText('Статус: ожидает принятия')
+  await expect(pending).toContainText('Ссылка создана')
+  await pending.locator('.venue-pending-invite-row > summary').click()
   await expect(pending).toContainText('Создано:')
-  await expect(pending).toContainText('Действует до:')
+  await expect(pending).toContainText('Получатель до принятия неизвестен. Доступ выдаётся только после принятия в Telegram.')
   await expect(pending).not.toContainText('Менеджер')
   await expect(pending).not.toContainText('username')
   await expect(pending).not.toContainText('User ')
@@ -14098,10 +14141,11 @@ test('venue manager creates and revokes only staff invites', async ({ page }) =>
   await expect.poll(() => api.getStaffInviteRequests()).toEqual([{ role: 'STAFF' }])
   await expect(accessCard.locator('.venue-invite-result')).toContainText('Сотрудник')
   await expect(pending.locator('.venue-pending-invite-row')).toHaveCount(2)
-
-  await pending.getByRole('button', { name: 'Отозвать приглашение' }).last().click()
+  const created = pending.locator('[data-invite-handle="pending-1"]')
+  await created.getByRole('button', { name: 'Отозвать приглашение' }).click()
   await expect.poll(() => api.getRevokedInviteHandles()).toEqual(['pending-1'])
-  await expect(pending.locator('.venue-pending-invite-row')).toHaveCount(1)
+  await expect(created).toContainText('Приглашение отозвано')
+  await expect(pending.locator('.venue-pending-invite-row')).toHaveCount(2)
   expect(api.getPendingInvites().some((invite) => invite.handle === 'hidden-manager')).toBe(true)
 })
 
@@ -14122,7 +14166,7 @@ test('venue manager manages staff and display cards while protected cards stay r
   await expect(svetlanaMember).toContainText('Привязан к карточке «Светлана»')
   await expect(svetlanaMember.getByRole('button', { name: 'Открыть карточку' })).toBeVisible()
   await expect(maximMember).toContainText('@max_kataev')
-  await expect(maximMember).toContainText('Карточка не создана')
+  await expect(maximMember).toContainText('Нет привязанной карточки')
   await expect(maximMember.getByRole('button', { name: 'Создать карточку' })).toBeVisible()
   await expect(annaMember).toContainText('Без username · ID …5555')
   await expect(safeUsernameMember).toContainText('@safe_<script>&"')
@@ -14192,7 +14236,7 @@ test('venue manager manages staff and display cards while protected cards stay r
   expect(api.getProfileCreateRequests()).toHaveLength(1)
   const createdDraft = cards.locator('.venue-profile-row').filter({ hasText: 'Максим Катаев' })
   await expect(createdDraft).toBeFocused()
-  await expect(createdDraft).toContainText('Скрыт — виден только в кабинете')
+  await expect(createdDraft).toContainText('Не видна гостям · карточка скрыта')
   await expect(createdDraft.getByLabel('Имя на карточке')).toHaveValue('Максим Катаев')
 
   await svetlanaMember.getByRole('button', { name: 'Открыть карточку' }).click()
@@ -14208,9 +14252,9 @@ test('venue manager manages staff and display cards while protected cards stay r
   await expect.poll(() => api.getProfileUpdateRequests()).toHaveLength(1)
   staffCard = cards.locator('.venue-profile-row').filter({ hasText: 'Светлана Новая' })
   await staffCard.getByRole('button', { name: 'Опубликовать' }).click()
-  await expect(staffCard).toContainText('Карточка опубликована')
+  await expect(staffCard.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · показ на сегодня выключен')
   await staffCard.getByRole('button', { name: 'Скрыть' }).click()
-  await expect(staffCard).toContainText('Скрыт — виден только в кабинете')
+  await expect(staffCard).toContainText('Не видна гостям · карточка скрыта')
 })
 
 test('staff profile controls fail closed while the current directory loads or errors', async ({ page }) => {
@@ -14537,10 +14581,8 @@ test('owner repairs one concrete duplicate staff card with safe unlink only', as
   await expect(wrongProfile).toHaveAttribute('data-staff-profile-id', '506')
   await expect(primaryProfile).toContainText('Светлана')
   await expect(wrongProfile).toContainText('Светлана дубль')
-  await expect(primaryProfile).toContainText('По графику: запланирован сегодня · 18:00-23:00 · Сегодня на смене')
-  await expect(primaryProfile).toContainText('Для гостей: выключено вручную')
-  await expect(wrongProfile).toContainText('По графику: запланирован сегодня · 19:00-01:00 · Не на смене сегодня')
-  await expect(wrongProfile).toContainText('Для гостей: выключено вручную')
+  await expect(primaryProfile.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · карточка скрыта')
+  await expect(wrongProfile.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · карточка скрыта')
 
   await primaryProfile.getByRole('button', { name: 'Редактировать', exact: true }).click()
   await expect(primaryProfile.getByLabel('Привязать к сотруднику')).toHaveValue('222222222')
@@ -14610,10 +14652,8 @@ test('owner repairs one concrete duplicate staff card with safe unlink only', as
   expect(reloadedWrongCard).toMatchObject({ linkageClass: 'DISPLAY_ONLY', disabledAt: null })
   await expect(primaryProfile).toBeVisible()
   await expect(wrongProfile).toBeVisible()
-  await expect(primaryProfile).toContainText('По графику: запланирован сегодня · 18:00-23:00 · Сегодня на смене')
-  await expect(primaryProfile).toContainText('Для гостей: выключено вручную')
-  await expect(wrongProfile).toContainText('По графику: запланирован сегодня · 19:00-01:00 · Не на смене сегодня')
-  await expect(wrongProfile).toContainText('Для гостей: выключено вручную')
+  await expect(primaryProfile.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · карточка скрыта')
+  await expect(wrongProfile.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · карточка скрыта')
   expect(profileMutations).toHaveLength(1)
 })
 
@@ -14738,7 +14778,7 @@ test('venue switch clears staff invite and profile drafts', async ({ page }) => 
   await expect(staff.getByRole('heading', { name: 'Доступ сотрудников' })).toBeVisible()
   await expect(staff.locator('.venue-invite-result')).toBeHidden()
   await expect(staff.locator('.venue-profile-form')).toBeHidden()
-  await expect(staff.locator('.venue-pending-invite-list')).toContainText('Ожидающих приглашений нет.')
+  await expect(staff.locator('.venue-pending-invite-list')).toContainText('Действующих приглашений нет.')
   await expect(staff).toContainText('Мария Вторая')
   await expect(staff).toContainText('Без username · ID …6666')
   await expect(staff).not.toContainText('Максим Катаев')
@@ -14819,7 +14859,7 @@ test('staff module off keeps access and invites available and explains profile a
   const accessCard = page.locator('.venue-staff > .card').first()
   await expect(accessCard.getByRole('heading', { name: 'Доступ сотрудников' })).toBeVisible()
   await expect(accessCard).toContainText('Светлана Орлова')
-  await expect(accessCard).toContainText('Статус: ожидает принятия')
+  await expect(accessCard).toContainText('Ссылка создана')
   await accessCard.getByRole('button', { name: 'Создать приглашение' }).click()
   await expect.poll(() => api.getStaffInvites()).toBe(1)
 
@@ -14878,10 +14918,10 @@ test('manual Today publication is persisted and schedule source removes the manu
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
   let profileRow = page.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
-  await expect(profileRow).toContainText('По графику: не запланирован сегодня')
-  await expect(profileRow).toContainText('Для гостей: выключено вручную')
+  await expect(profileRow.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · карточка скрыта')
+  await expect(profileRow.getByText('По графику: не запланирован сегодня')).toHaveCount(0)
   await profileRow.getByRole('button', { name: 'Опубликовать' }).click()
-  await expect(profileRow).toContainText('Карточка опубликована')
+  await expect(profileRow.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · показ на сегодня выключен')
   const manualSwitch = profileRow.getByRole('switch', { name: 'Выключено' })
   await expect(manualSwitch).toHaveAttribute('aria-checked', 'false')
   const releaseProfileRefresh = api.deferNextProfileLoad()
@@ -14944,9 +14984,7 @@ test('manual Today success copy does not claim public visibility when guest team
   await expect(page.getByRole('status')).not.toContainText(
     'Сотрудник отображается в блоке «Сегодня работают».'
   )
-  await expect(profileRow).toContainText(
-    'Для гостей: включено вручную, но показ команды отключён в настройках'
-  )
+  await expect(profileRow.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · карточка скрыта')
 })
 
 test('venue owner staff cards use human profile labels and hide raw technical fields', async ({ page }) => {
@@ -14972,7 +15010,7 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
 
   const existingRow = staffCards.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
   await expect(existingRow).toContainText('Кальянный мастер')
-  await expect(existingRow).toContainText('Скрыт — виден только в кабинете')
+  await expect(existingRow).toContainText('Не видна гостям · карточка скрыта')
   await expect(existingRow.getByLabel('Имя на карточке')).toHaveCount(0)
   await expect(existingRow.getByLabel('Тип сотрудника')).toHaveCount(0)
 
@@ -14985,7 +15023,7 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
   await expect(createForm).not.toContainText('123456789')
   await expect(createForm).toContainText('Так это имя увидят гости.')
   await expect(createForm).toContainText('Можно указать через запятую.')
-  await expect(createForm).toContainText('Фото сотрудника — позже')
+  await expect(createForm).toContainText('Загрузка фото пока недоступна.')
   await expect(createForm.getByPlaceholder('User ID')).toHaveCount(0)
   await expect(createForm.getByPlaceholder('Фото ref')).toHaveCount(0)
   await expect(createForm.getByPlaceholder('Photo ref')).toHaveCount(0)
@@ -15009,7 +15047,7 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
 
   await expect(staffCards).toContainText('Максим')
   await expect(staffCards).toContainText('Мастер миксов')
-  await expect(staffCards).toContainText('Скрыт — виден только в кабинете')
+  await expect(staffCards).toContainText('Не видна гостям · карточка скрыта')
   await expect.poll(() => api.getProfileCreateRequests().length).toBe(1)
   const createRequest = api.getProfileCreateRequests()[0]
   expect(createRequest).toMatchObject({
@@ -15048,7 +15086,7 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
   expect(updateRequest).not.toHaveProperty('photoRef')
 
   await profileRow.getByRole('button', { name: 'Опубликовать' }).click()
-  await expect(profileRow).toContainText('Карточка опубликована')
+  await expect(profileRow.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · показ на сегодня выключен')
   await profileRow.getByRole('switch', { name: 'Выключено' }).click()
   await expect.poll(() => api.getShiftRequests().length).toBe(1)
   await profileRow.getByRole('switch', { name: 'Включено' }).click()
@@ -24050,6 +24088,7 @@ test('UX05 revoked invitation stays absent after refresh fails and accepted invi
     if (route.request().method() !== 'GET') return route.fallback()
     await route.fulfill(jsonResponse({ error: { code: 'INVALID_INPUT', message: 'Refresh failed' } }, 503))
   })
+  await pending.locator('.venue-pending-invite-row > summary').click()
   await pending.getByRole('button', { name: 'Отозвать приглашение' }).click()
   await expect(page.locator('.venue-staff .error-card')).toBeVisible()
   await expect(pending.locator('.venue-pending-invite-row')).toHaveCount(0)
@@ -24060,7 +24099,7 @@ test('UX05 revoked invitation stays absent after refresh fails and accepted invi
   ] })))
   await page.getByRole('button', { name: 'Обновить доступы и карточки' }).click()
   await expect(page.locator('.venue-staff')).toContainText('Принял приглашение')
-  await expect(pending).toContainText('Ожидающих приглашений нет.')
+  await expect(pending).toContainText('Действующих приглашений нет.')
   await expect(pending).not.toContainText(/Принял приглашение|987|отозвано|истёк/)
 })
 
@@ -24310,4 +24349,695 @@ test('UX05 delayed profile link conflict preserves an independent create form an
   await expect(form).toBeVisible()
   await row.getByRole('button', { name: 'Редактировать' }).click()
   await expect(row.getByLabel('Коротко о сотруднике')).toHaveValue('  Исходный черновик  ')
+})
+
+test('UX06 OWNER self account shows identity and role without unavailable role actions', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  const own = page.locator('[data-member-id="123456789"]')
+  await expect(own).toContainText('Это вы')
+  await expect(own.locator('.venue-staff-role-badge')).toHaveText('Владелец')
+  await expect(own.getByRole('combobox')).toHaveCount(0)
+  await expect(own.getByRole('button', { name: 'Обновить', exact: true })).toHaveCount(0)
+  await expect(own.getByRole('button', { name: 'Удалить доступ', exact: true })).toHaveCount(0)
+  await expect(own.locator('button:disabled')).toHaveCount(0)
+  expect(api.getProfileCreateRequests()).toHaveLength(0)
+  expect(api.getProfileUpdateRequests()).toHaveLength(0)
+})
+
+for (const role of ['OWNER', 'MANAGER'] as const) {
+  test(`UX06 ${role} refreshed accepted member links an existing card without a duplicate`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const api = await mockVenueStaffChatApi(page, { role })
+    await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    await openVenueSection(page, 'Персонал')
+    if (role === 'MANAGER') {
+      await expect(page.locator('.venue-staff-current-access')).toHaveText('Это вы · Менеджер')
+    }
+    const existingCard = page.locator('[data-staff-profile-id="503"]')
+    await existingCard.getByRole('button', { name: 'Редактировать' }).click()
+    const linkedUser = existingCard.getByLabel('Привязать к сотруднику')
+    await expect(linkedUser.locator('option[value="777777777"]')).toHaveCount(0)
+    await existingCard.getByRole('button', { name: 'Свернуть' }).click()
+    api.addStaffMember({
+      userId: 777777777, displayName: 'Новый сотрудник после принятия', username: 'accepted_staff',
+      role: 'STAFF', active: true, profileLinkState: 'NOT_LINKED',
+      linkedStaffProfileId: null, linkedStaffProfileDisplayName: null
+    })
+    await page.getByRole('button', { name: 'Обновить доступы и карточки' }).click()
+    await expect(page.locator('[data-member-id="777777777"]')).toContainText('Новый сотрудник после принятия')
+    await existingCard.getByRole('button', { name: 'Редактировать' }).click()
+    await expect(linkedUser.locator('option[value="777777777"]')).toBeEnabled()
+    await linkedUser.selectOption('777777777')
+    await existingCard.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await expect.poll(() => api.getProfileUpdateRequests()).toEqual([
+      expect.objectContaining({ linkedUserId: 777777777 })
+    ])
+    const member = page.locator('[data-member-id="777777777"]')
+    await expect(member.getByRole('button', { name: 'Открыть карточку', exact: true })).toBeVisible()
+    await expect(member.getByRole('button', { name: 'Создать карточку', exact: true })).toHaveCount(0)
+    await member.getByRole('button', { name: 'Открыть карточку', exact: true }).click()
+    await expect(existingCard.getByLabel('Имя на карточке')).toHaveValue('Карточка без доступа')
+    await expect(page.locator('[data-staff-profile-id="503"]')).toHaveCount(1)
+    expect(api.getProfileCreateRequests()).toHaveLength(0)
+    expect(api.getProfileCreateFromMemberRequests()).toHaveLength(0)
+    if (role === 'MANAGER') {
+      await expect(linkedUser.locator('option[value="111111111"], option[value="333333333"]')).toHaveCount(0)
+      await expect(page.locator('[data-staff-profile-id="504"]').getByRole('button')).toHaveCount(0)
+      await expect(page.locator('[data-staff-profile-id="505"]').getByRole('button')).toHaveCount(0)
+    }
+  })
+}
+
+test('UX06 MANUAL primary visibility follows saved guest projection without a schedule prerequisite', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 760 })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'OWNER',
+    staffProfiles: [{
+      id: 501, linkedUserId: 123456789, displayName: 'Ручной показ без графика', subtype: 'hookah_master',
+      tags: [], isGuestVisible: true, publishedAt: '2030-01-10T18:00:00Z', disabledAt: null,
+      createdAt: '2030-01-10T18:00:00Z', updatedAt: '2030-01-10T18:00:00Z',
+      todayShift: { status: 'active', isGuestVisible: true, startsAt: null, endsAt: null }
+    }]
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  const row = page.locator('[data-staff-profile-id="501"]')
+  await expect(row.locator('.venue-profile-visibility')).toHaveText('Видна гостям · включена вручную')
+  await expect(row.getByText(/не запланирован сегодня/)).not.toBeVisible()
+  await expect(row.locator('.venue-profile-visibility')).toHaveCount(1)
+  await row.getByRole('button', { name: 'Редактировать' }).click()
+  await expect(row.getByLabel('Коротко о сотруднике')).toBeVisible()
+  await row.getByRole('button', { name: 'Свернуть' }).click()
+  await expect(row.locator('.venue-profile-visibility')).toHaveText('Видна гостям · включена вручную')
+  expect(api.getShiftRequests()).toHaveLength(0)
+  await row.scrollIntoViewIfNeeded()
+  await expect(page.locator('.toast[data-visible="true"]')).toHaveCount(0)
+  await page.screenshot({ path: '../.tmp-checks/ht-ux06/screenshots/card-manual-mobile.png' })
+})
+
+test('UX06 SCHEDULE visibility uses authoritative active guest projection including overnight presence', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 720 })
+  await installTelegramWebApp(page, 123456789)
+  const profiles = [501, 502].map((id) => ({
+    id, linkedUserId: null, displayName: id === 501 ? 'Активная ночная смена' : 'Будущая смена', subtype: 'waiter',
+    tags: [], isGuestVisible: true, publishedAt: '2030-01-10T18:00:00Z', disabledAt: null,
+    createdAt: '2030-01-10T18:00:00Z', updatedAt: '2030-01-10T18:00:00Z',
+    // The profile DTO may omit a previous service date's overnight shift.
+    todayShift: id === 501 ? null : { status: 'scheduled', isGuestVisible: true, startsAt: '21:00', endsAt: '23:00' }
+  }))
+  await mockVenueStaffChatApi(page, {
+    role: 'OWNER', staffProfiles: profiles, guestPreviewStaffIds: [501],
+    staffModuleSettings: {
+      teamScheduleModuleEnabled: true, guestTeamVisible: true, todayStaffSource: 'SCHEDULE',
+      updatedAt: '2030-01-10T18:00:00.000001Z'
+    }
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await expect(page.locator('[data-staff-profile-id="501"] .venue-profile-visibility')).toHaveText('Видна гостям · активная смена')
+  await expect(page.locator('[data-staff-profile-id="502"] .venue-profile-visibility')).toHaveText('Не видна гостям · нет активной смены')
+  await expect(page.locator('.venue-public-staff').getByRole('switch')).toHaveCount(0)
+  await page.locator('.venue-public-staff').scrollIntoViewIfNeeded()
+  await expect(page.locator('.toast[data-visible="true"]')).toHaveCount(0)
+  await page.screenshot({ path: '../.tmp-checks/ht-ux06/screenshots/cards-schedule-mobile.png' })
+})
+
+test('UX06 guest visibility failure stays unknown and read-only refresh restores the actual state', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER', staffModuleSettings: {
+    teamScheduleModuleEnabled: true, guestTeamVisible: true, todayStaffSource: 'SCHEDULE',
+    updatedAt: '2030-01-10T18:00:00.000001Z'
+  } })
+  let failPreview = true
+  await page.route('**/api/venue/1/guest-preview', async (route) => {
+    if (failPreview) return route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE' } }, 503))
+    await route.fallback()
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  const published = page.locator('[data-staff-profile-id="504"] .venue-profile-visibility')
+  await expect(published).toHaveText('Видимость для гостей не проверена · обновите данные')
+  failPreview = false
+  await page.getByRole('button', { name: 'Обновить доступы и карточки' }).click()
+  await expect(published).toHaveText('Не видна гостям · нет активной смены')
+  expect(api.getShiftRequests()).toHaveLength(0)
+  expect(api.getProfileUpdateRequests()).toHaveLength(0)
+})
+
+test('UX06 hidden guest team is the primary reason and photo upload is accurately unavailable', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStaffChatApi(page, {
+    role: 'OWNER', staffModuleSettings: {
+      teamScheduleModuleEnabled: true, guestTeamVisible: false, todayStaffSource: 'MANUAL',
+      updatedAt: '2030-01-10T18:00:00.000001Z'
+    }
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await expect(page.locator('[data-staff-profile-id="504"] .venue-profile-visibility')).toHaveText('Не видна гостям · показ команды отключён')
+  await page.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
+  await expect(page.locator('.venue-profile-photo-placeholder')).toHaveText('Загрузка фото пока недоступна.')
+  await expect(page.locator('.venue-staff input[type="file"]')).toHaveCount(0)
+  await expect(page.locator('.venue-staff').getByRole('button', { name: /Загрузить фото|Добавить фото/ })).toHaveCount(0)
+})
+
+test('UX06 create copy and canceled Telegram share never claim delivery or change invitation acceptance', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async (value: string) => { (window as Window & { __ux06Copied?: string }).__ux06Copied = value } }
+    })
+  })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  const mutations: string[] = []
+  page.on('request', (request) => {
+    if (request.method() !== 'GET' && new URL(request.url()).pathname.includes('/staff/')) mutations.push(request.method())
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  const saved = page.locator('[data-invite-handle="pending-1"]')
+  await expect(saved.locator('.venue-invite-state')).toHaveText('Ссылка создана')
+  await expect(saved).toContainText('Получатель до принятия неизвестен.')
+  await expect(page.locator('.venue-pending-invite-list')).toBeVisible()
+  await expect(page.locator('.venue-pending-invite-row')).toHaveCount(1)
+  expect(api.getPendingInvites()).toHaveLength(1)
+  expect(api.getStaffInvites()).toBe(1)
+  await saved.getByRole('button', { name: /Скопировать ссылку/ }).click()
+  await expect(saved.locator('.venue-invite-copy-status')).toHaveText('Ссылка скопирована')
+  const link = await saved.getByLabel('Ссылка для сотрудника').inputValue()
+  expect(await page.evaluate(() => (window as Window & { __ux06Copied?: string }).__ux06Copied)).toBe(link)
+  await saved.getByRole('button', { name: /Поделиться в Telegram/ }).click()
+  await expect(saved.locator('.venue-invite-copy-status')).toHaveText('Открыто окно Telegram. Отправка и получатель здесь не подтверждаются.')
+  // share/url has no recipient or completion callback; returning/canceling leaves the same link.
+  await expect(saved.getByLabel('Ссылка для сотрудника')).toHaveValue(link)
+  await expect(saved.locator('.venue-invite-state')).toHaveText('Ссылка создана')
+  expect(await page.evaluate(() => (window as Window & { __e2eTelegramOpenedLinks?: string[] }).__e2eTelegramOpenedLinks?.length)).toBe(1)
+  expect(api.getPendingInvites()[0].status).toBe('PENDING')
+  expect(mutations).toEqual(['POST'])
+  await expect(saved).not.toContainText(/Отправлено|Получено|Прочитано|Доступ выдан/)
+  const stored = await page.evaluate(() => [...Object.values(localStorage), ...Object.values(sessionStorage)].join('\n'))
+  expect(stored).not.toContain('staff_invite_ABC234')
+  expect(stored).not.toContain(link)
+})
+
+test('UX06 two role invitations merge by their own handles and retain links through Done refresh and reload boundaries', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 720 })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  const create = page.getByRole('button', { name: 'Создать приглашение', exact: true })
+  const list = page.locator('.venue-pending-invite-list')
+  await create.click()
+  const first = list.locator('[data-invite-handle="pending-1"]')
+  await expect(first).toHaveCount(1)
+  const firstLink = await first.getByLabel('Ссылка для сотрудника').inputValue()
+  await first.getByRole('button', { name: 'Готово', exact: true }).click()
+  await expect(first).not.toHaveAttribute('open', '')
+  await page.getByLabel('Роль приглашения').selectOption('MANAGER')
+  await create.click()
+  const second = list.locator('[data-invite-handle="pending-2"]')
+  await expect(second).toHaveCount(1)
+  await expect(second).toHaveAttribute('open', '')
+  await expect(first).not.toHaveAttribute('open', '')
+  const secondLink = await second.getByLabel('Ссылка для сотрудника').inputValue()
+  expect(firstLink).not.toBe(secondLink)
+  await expect(first.locator(':scope > summary')).toContainText('Сотрудник')
+  await expect(second.locator(':scope > summary')).toContainText('Менеджер')
+  await expect(list.locator('.venue-pending-invite-row')).toHaveCount(2)
+  await expect(page.locator('.venue-invite-result:visible')).toHaveCount(1)
+  await expect(page.locator('.venue-session-invite-list')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /Ссылки этой сессии|Действующие приглашения/ })).toHaveCount(0)
+  await second.scrollIntoViewIfNeeded()
+  await expect(page.locator('.toast[data-visible="true"]')).toHaveCount(0)
+  await page.screenshot({ path: '../.tmp-checks/ht-ux06/screenshots/invites-mobile.png' })
+  await second.getByRole('button', { name: 'Готово', exact: true }).click()
+  await page.locator('.venue-staff').getByRole('heading', { name: 'Персонал', exact: true }).scrollIntoViewIfNeeded()
+  await page.screenshot({ path: '../.tmp-checks/ht-ux06/screenshots/invites-collapsed-mobile.png' })
+  const refreshed = page.waitForResponse((response) => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/venue/1/staff/invites')
+  await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
+  const pendingDto = await (await refreshed).json()
+  expect(pendingDto.invites.map((invite: { handle: string }) => invite.handle)).toEqual(['pending-1', 'pending-2'])
+  expect(JSON.stringify(pendingDto)).not.toMatch(/inviteCode|deepLink|staff_invite_|fallbackCommand/)
+  await expect(first).toHaveCount(1)
+  await expect(second).toHaveCount(1)
+  await first.locator(':scope > summary').click()
+  await expect(first.getByLabel('Ссылка для сотрудника')).toHaveValue(firstLink)
+  await first.getByRole('button', { name: 'Готово', exact: true }).click()
+  await second.locator(':scope > summary').click()
+  await expect(second.getByLabel('Ссылка для сотрудника')).toHaveValue(secondLink)
+  await page.setViewportSize({ width: 390, height: 390 })
+  await second.getByLabel('Ссылка для сотрудника').focus()
+  await second.getByRole('button', { name: 'Готово', exact: true }).scrollIntoViewIfNeeded()
+  await expect(second.getByRole('button', { name: 'Готово', exact: true })).toBeInViewport()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: '../.tmp-checks/ht-ux06/screenshots/invites-short.png' })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await second.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: '../.tmp-checks/ht-ux06/screenshots/invites-desktop.png' })
+  const revoke = second.getByRole('button', { name: 'Отозвать приглашение' })
+  await page.setViewportSize({ width: 390, height: 720 })
+  await revoke.scrollIntoViewIfNeeded()
+  const dimensions = await revoke.boundingBox()
+  expect(dimensions?.height).toBeGreaterThanOrEqual(44)
+  expect(dimensions?.height).toBeLessThanOrEqual(60)
+  await page.screenshot({ path: '../.tmp-checks/ht-ux06/screenshots/invites-pending-mobile.png' })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await second.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: '../.tmp-checks/ht-ux06/screenshots/invites-pending-desktop.png' })
+  expect(api.getStaffInviteRequests()).toEqual([{ role: 'STAFF' }, { role: 'MANAGER' }])
+  await page.reload()
+  await expect(list.locator('.venue-pending-invite-row')).toHaveCount(2)
+  await second.locator(':scope > summary').click()
+  await expect(second.getByLabel('Ссылка для сотрудника')).toHaveCount(0)
+  await expect(second.getByRole('button', { name: /Скопировать ссылку|Поделиться в Telegram/ })).toHaveCount(0)
+  expect(api.getStaffInvites()).toBe(2)
+})
+
+test('UX06 an open session link expires without revocation or another creation', async ({ page }) => {
+  await page.clock.install({ time: new Date('2030-01-10T18:00:00Z') })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'OWNER', inviteExpiresAt: '2030-01-10T18:00:05Z'
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  const saved = page.locator('[data-invite-handle="pending-1"]')
+  await expect(saved.getByRole('button', { name: /Скопировать ссылку/ })).toBeEnabled()
+  await page.clock.fastForward(6000)
+  await expect(saved.locator(':scope > summary')).toContainText(/истёк/)
+  await expect(saved.getByRole('button', { name: /Скопировать ссылку/ })).toBeDisabled()
+  await expect(saved.getByRole('button', { name: /Поделиться в Telegram/ })).toBeDisabled()
+  await expect(page.locator('.venue-pending-invite-row')).toHaveCount(1)
+  await expect(saved).toContainText('Срок действия истёк')
+  expect(api.getStaffInvites()).toBe(1)
+  expect(api.getRevokedInviteHandles()).toHaveLength(0)
+})
+
+test('UX06 blocked or detached browser popup never navigates away or destroys session links', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  const row = page.locator('[data-invite-handle="pending-1"]')
+  const link = await row.getByLabel('Ссылка для сотрудника').inputValue()
+  const locationBefore = page.url()
+  await page.evaluate(() => {
+    const target = window as TestTelegramWindow
+    if (target.Telegram?.WebApp) target.Telegram.WebApp.openTelegramLink = undefined
+    window.open = () => null
+  })
+  await row.getByRole('button', { name: /Поделиться в Telegram/ }).click()
+  await expect(row.locator('.venue-invite-copy-status')).toHaveText('Если окно Telegram не появилось, скопируйте ссылку. Отправка и получатель здесь не подтверждаются.')
+  expect(page.url()).toBe(locationBefore)
+  await expect(row.getByLabel('Ссылка для сотрудника')).toHaveValue(link)
+  await page.evaluate(() => { window.open = () => { throw new Error('popup blocked') } })
+  await row.getByRole('button', { name: /Поделиться в Telegram/ }).click()
+  await expect(row.getByLabel('Ссылка для сотрудника')).toHaveValue(link)
+  expect(page.url()).toBe(locationBefore)
+  expect(api.getStaffInvites()).toBe(1)
+})
+
+test('UX06 fresh PRIVATE_DRAFT preview overrides stale published access metadata', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStaffChatApi(page, {
+    role: 'OWNER', guestPreviewMode: 'PRIVATE_DRAFT', guestPreviewStaffIds: [501],
+    staffModuleSettings: {
+      teamScheduleModuleEnabled: true, guestTeamVisible: true, todayStaffSource: 'SCHEDULE',
+      updatedAt: '2030-01-10T18:00:00.000001Z'
+    },
+    staffProfiles: [{
+      id: 501, linkedUserId: 123456789, displayName: 'Опубликованная карточка в черновике заведения', subtype: 'waiter',
+      tags: [], isGuestVisible: true, publishedAt: '2030-01-10T18:00:00Z', disabledAt: null,
+      createdAt: '2030-01-10T18:00:00Z', updatedAt: '2030-01-10T18:00:00Z',
+      todayShift: { status: 'active', isGuestVisible: true, startsAt: '18:00', endsAt: '23:00' }
+    }]
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await expect(page.locator('[data-staff-profile-id="501"] .venue-profile-visibility')).toHaveText('Не видна гостям · заведение не опубликовано')
+})
+
+for (const mutation of ['publish', 'hide'] as const) {
+  test(`UX06 deferred preview before ${mutation} cannot restore visibility through pending or failed fresh reads`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const guestIds = mutation === 'hide' ? [501, 502] : []
+    await mockVenueStaffChatApi(page, {
+      role: 'OWNER', guestPreviewStaffIds: guestIds,
+      staffModuleSettings: {
+        teamScheduleModuleEnabled: true, guestTeamVisible: true, todayStaffSource: 'SCHEDULE',
+        updatedAt: '2030-01-10T18:00:00.000001Z'
+      },
+      staffProfiles: [501, 502].map((id) => ({
+        id, linkedUserId: null, displayName: id === 501 ? 'Изменяемая карточка' : 'Карточка со снимком видимости',
+        subtype: 'waiter', tags: [], isGuestVisible: id === 502 || mutation === 'hide',
+        publishedAt: id === 502 || mutation === 'hide' ? '2030-01-10T18:00:00Z' : null, disabledAt: null,
+        createdAt: '2030-01-10T18:00:00Z', updatedAt: '2030-01-10T18:00:00Z',
+        todayShift: { status: 'active', isGuestVisible: true, startsAt: '18:00', endsAt: '23:00' }
+      }))
+    })
+    let releaseOldPreview!: () => void
+    const oldPreviewGate = new Promise<void>((resolve) => { releaseOldPreview = resolve })
+    let previewCalls = 0
+    let oldPreviewStarted = false
+    let oldPreviewSettled = false
+    const oldPreview = buildVenueGuestPreviewFixture(1, { venue: { todayStaff: mutation === 'hide' ? [{
+      id: 502, displayName: 'Карточка со снимком видимости', subtype: 'waiter',
+      shiftDate: '2030-01-10', shiftStatus: 'active'
+    }] : [] } })
+    await page.route('**/api/venue/1/guest-preview', async (route) => {
+      if (++previewCalls !== 2) return route.fallback()
+      oldPreviewStarted = true
+      await oldPreviewGate
+      try { await route.fulfill(jsonResponse(oldPreview)) } catch { /* invalidated request may be aborted */ }
+      oldPreviewSettled = true
+    })
+    let mutationStarted = false
+    let failPostMutationReads = true
+    let profileReadStarted = false
+    let settingsReadStarted = false
+    let releaseReads!: () => void
+    const postMutationReadsGate = new Promise<void>((resolve) => { releaseReads = resolve })
+    await page.route(`**/api/venue/1/staff/profiles/501/${mutation}`, async (route) => {
+      mutationStarted = true
+      guestIds.splice(0, guestIds.length, ...(mutation === 'publish' ? [501, 502] : []))
+      await route.fallback()
+    })
+    await page.route('**/api/venue/1/staff/profiles', async (route) => {
+      if (!mutationStarted || !failPostMutationReads) return route.fallback()
+      profileReadStarted = true
+      await postMutationReadsGate
+      await route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE' } }, 503))
+    })
+    await page.route('**/api/venue/1/staff-module-settings', async (route) => {
+      if (!mutationStarted || !failPostMutationReads) return route.fallback()
+      settingsReadStarted = true
+      await postMutationReadsGate
+      await route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE' } }, 503))
+    })
+    await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    await openVenueSection(page, 'Персонал')
+    const witness = page.locator('[data-staff-profile-id="502"] .venue-profile-visibility')
+    await expect(witness).toHaveText(mutation === 'hide' ? 'Видна гостям · активная смена' : 'Не видна гостям · нет активной смены')
+    await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
+    await expect.poll(() => oldPreviewStarted).toBe(true)
+    const target = page.locator('[data-staff-profile-id="501"]')
+    await target.getByRole('button', { name: mutation === 'publish' ? 'Опубликовать' : 'Скрыть', exact: true }).click()
+    await expect.poll(() => profileReadStarted && settingsReadStarted).toBe(true)
+    releaseOldPreview()
+    await expect.poll(() => oldPreviewSettled).toBe(true)
+    await expect(witness).toHaveText('Видимость для гостей не проверена · обновите данные')
+    releaseReads()
+    await expect(page.locator('.venue-staff .error-card')).toBeVisible()
+    await expect(witness).toHaveText('Видимость для гостей не проверена · обновите данные')
+    failPostMutationReads = false
+    await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
+    await expect(witness).toHaveText(mutation === 'publish' ? 'Видна гостям · активная смена' : 'Не видна гостям · нет активной смены')
+  })
+}
+
+test('UX06 equal invitation metadata never moves a new link onto another opaque handle', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'OWNER', pendingInvites: [{
+      handle: 'existing-same-metadata', role: 'STAFF', status: 'PENDING',
+      createdAt: '2030-01-10T18:00:00Z', expiresAt: '2030-01-17T18:00:00Z'
+    }]
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  const existing = page.locator('[data-invite-handle="existing-same-metadata"]')
+  const created = page.locator('[data-invite-handle="pending-1"]')
+  await expect(existing).toHaveCount(1)
+  await expect(created).toHaveCount(1)
+  await expect(created.getByLabel('Ссылка для сотрудника')).toHaveValue('https://t.me/TestHookahBot?start=staff_invite_ABC234')
+  await existing.locator(':scope > summary').click()
+  await expect(existing.getByLabel('Ссылка для сотрудника')).toHaveCount(0)
+  expect(api.getStaffInvites()).toBe(1)
+})
+
+test('UX06 failed invitation refresh preserves one mapped card and its session link without another POST', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  const row = page.locator('[data-invite-handle="pending-1"]')
+  const link = await row.getByLabel('Ссылка для сотрудника').inputValue()
+  await page.route('**/api/venue/1/staff/invites', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    await route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE' } }, 503))
+  })
+  await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
+  await expect(page.locator('.venue-staff')).toContainText('Не удалось обновить статусы. Показаны последние данные.')
+  await expect(row).toHaveCount(1)
+  await expect(row.getByLabel('Ссылка для сотрудника')).toHaveValue(link)
+  await expect(row.getByRole('button', { name: /Скопировать ссылку/ })).toBeEnabled()
+  await expect(page.locator('.venue-pending-invite-row')).toHaveCount(1)
+  expect(api.getStaffInvites()).toBe(1)
+})
+
+test('UX06 confirmed revoke keeps the exact saved card terminal when the following GET fails', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  const row = page.locator('[data-invite-handle="pending-1"]')
+  await page.route('**/api/venue/1/staff/invites', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    await route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE' } }, 503))
+  })
+  await row.getByRole('button', { name: 'Отозвать приглашение', exact: true }).click()
+  await expect(row.locator('.venue-invite-state')).toHaveText('Приглашение отозвано')
+  await expect(page.locator('.venue-staff')).toContainText('Не удалось обновить статусы. Показаны последние данные.')
+  await expect(row.getByRole('button', { name: /Скопировать ссылку/ })).toBeDisabled()
+  await expect(row.getByRole('button', { name: /Поделиться в Telegram/ })).toBeDisabled()
+  await expect(row).toHaveCount(1)
+  expect(api.getRevokedInviteHandles()).toEqual(['pending-1'])
+  expect(api.getStaffInvites()).toBe(1)
+})
+
+test('UX06 a saved handle absent from fresh pending data does not invent an accepter', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  api.addStaffMember({
+    userId: 777777777, displayName: 'Новый доступ без связи с приглашением', username: null,
+    role: 'STAFF', active: true, linkedStaffProfileId: null, linkedStaffProfileDisplayName: null,
+    profileLinkState: 'NOT_LINKED'
+  })
+  await page.route('**/api/venue/1/staff/invites', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    await route.fulfill(jsonResponse({ invites: [] }))
+  })
+  await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
+  const row = page.locator('[data-invite-handle="pending-1"]')
+  await expect(row.locator('.venue-invite-state')).toHaveText('Нет в действующих приглашениях')
+  await expect(row).not.toContainText('Новый доступ без связи с приглашением')
+  await expect(row).not.toContainText(/Приглашение принято|Принял:|Получатель:|Приглашение отозвано/)
+  await expect(row.getByRole('button', { name: /Скопировать ссылку/ })).toBeDisabled()
+  await expect(row.getByRole('button', { name: /Поделиться в Telegram/ })).toBeDisabled()
+  await expect(page.locator('[data-member-id="777777777"]')).toContainText('Новый доступ без связи с приглашением')
+  expect(api.getStaffInvites()).toBe(1)
+})
+
+test('UX06 legacy create without a handle keeps the link without guessing a matching pending invitation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'OWNER', omitInviteHandle: true, pendingInvites: [{
+      handle: 'same-metadata-legacy-neighbor', role: 'STAFF', status: 'PENDING',
+      createdAt: '2030-01-10T18:00:00Z', expiresAt: '2030-01-17T18:00:00Z'
+    }]
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  const row = page.locator('.venue-legacy-invite-row')
+  await expect(row).toHaveCount(1)
+  await expect(row.getByLabel('Ссылка для сотрудника')).toHaveValue('https://t.me/TestHookahBot?start=staff_invite_ABC234')
+  await expect(page.locator('.venue-staff')).toContainText('Не удалось связать созданную ссылку со списком. Ссылки этой сессии сохранены; отзыв недоступен до обновления сервера и перезагрузки раздела.')
+  await expect(page.locator('[data-invite-handle="same-metadata-legacy-neighbor"]')).toHaveCount(0)
+  await expect(page.locator('[data-invite-handle="pending-1"]')).toHaveCount(0)
+  await expect(row.getByRole('button', { name: 'Отозвать приглашение', exact: true })).toHaveCount(0)
+  await row.getByRole('button', { name: 'Готово', exact: true }).click()
+  await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
+  await row.locator(':scope > summary').click()
+  await expect(row.getByLabel('Ссылка для сотрудника')).toHaveValue('https://t.me/TestHookahBot?start=staff_invite_ABC234')
+  expect(api.getStaffInvites()).toBe(1)
+})
+
+test('UX06 pending GET before the create response merges into one expanded card with its original link', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  const releaseCreate = api.deferNextInviteCreateResponse()
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  await expect.poll(() => api.getStaffInvites()).toBe(1)
+  const refreshed = page.waitForResponse((response) =>
+    response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/venue/1/staff/invites'
+  )
+  await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
+  await refreshed
+  const row = page.locator('[data-invite-handle="pending-1"]')
+  try {
+    await expect(row).toHaveCount(1)
+    await expect(row).not.toHaveAttribute('open', '')
+    await expect(row.getByLabel('Ссылка для сотрудника')).toHaveCount(0)
+  } finally {
+    releaseCreate()
+  }
+  await expect(row).toHaveCount(1)
+  await expect(row).toHaveAttribute('open', '')
+  await expect(row.getByLabel('Ссылка для сотрудника')).toHaveValue('https://t.me/TestHookahBot?start=staff_invite_ABC234')
+  await expect(page.locator('.venue-pending-invite-row')).toHaveCount(1)
+  await expect(page.locator('.venue-invite-result')).toHaveCount(1)
+  expect(api.getStaffInvites()).toBe(1)
+})
+
+test('UX06 stale pending GET cannot resurrect a confirmed revoked saved invite after the new GET fails', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await expect(page.locator('.venue-pending-invite-list')).toContainText('Действующих приглашений нет.')
+  const createdRefresh = page.waitForResponse((response) =>
+    response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/venue/1/staff/invites'
+  )
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  await createdRefresh
+  const row = page.locator('[data-invite-handle="pending-1"]')
+  const oldSnapshot = { invites: api.getPendingInvites() }
+  let releaseOldGet!: () => void
+  const oldGetGate = new Promise<void>((resolve) => { releaseOldGet = resolve })
+  let getCalls = 0
+  let oldGetStarted = false
+  let oldGetSettled = false
+  await page.route('**/api/venue/1/staff/invites', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    if (++getCalls !== 1) return route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE' } }, 503))
+    oldGetStarted = true
+    await oldGetGate
+    try { await route.fulfill(jsonResponse(oldSnapshot)) } catch { /* revoked request may be aborted */ }
+    oldGetSettled = true
+  })
+  await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
+  await expect.poll(() => oldGetStarted).toBe(true)
+  try {
+    await row.getByRole('button', { name: 'Отозвать приглашение', exact: true }).click()
+    await expect(row.locator('.venue-invite-state')).toHaveText('Приглашение отозвано')
+    await expect(page.locator('.venue-staff')).toContainText('Не удалось обновить статусы. Показаны последние данные.')
+  } finally {
+    releaseOldGet()
+  }
+  await expect.poll(() => oldGetSettled).toBe(true)
+  await expect(row.locator('.venue-invite-state')).toHaveText('Приглашение отозвано')
+  await expect(row.getByRole('button', { name: /Скопировать ссылку/ })).toBeDisabled()
+  await expect(row.getByRole('button', { name: /Поделиться в Telegram/ })).toBeDisabled()
+  await expect(page.locator('[data-invite-handle="pending-1"]')).toHaveCount(1)
+  expect(api.getRevokedInviteHandles()).toEqual(['pending-1'])
+  expect(api.getStaffInvites()).toBe(1)
+})
+
+test('UX06 empty GET started before creation cannot mark the newly returned handle absent', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await expect(page.locator('.venue-pending-invite-list')).toContainText('Действующих приглашений нет.')
+  let releaseOldGet!: () => void
+  let releaseFreshGet!: () => void
+  const oldGetGate = new Promise<void>((resolve) => { releaseOldGet = resolve })
+  const freshGetGate = new Promise<void>((resolve) => { releaseFreshGet = resolve })
+  let getCalls = 0
+  let oldGetStarted = false
+  let oldGetSettled = false
+  let freshGetStarted = false
+  let freshGetSettled = false
+  await page.route('**/api/venue/1/staff/invites', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    if (++getCalls === 1) {
+      oldGetStarted = true
+      await oldGetGate
+      try { await route.fulfill(jsonResponse({ invites: [] })) } catch { /* creation may abort the older GET */ }
+      oldGetSettled = true
+      return
+    }
+    freshGetStarted = true
+    await freshGetGate
+    await route.fallback()
+    freshGetSettled = true
+  })
+  await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
+  await expect.poll(() => oldGetStarted).toBe(true)
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  const row = page.locator('[data-invite-handle="pending-1"]')
+  try {
+    await expect(row.getByLabel('Ссылка для сотрудника')).toHaveValue('https://t.me/TestHookahBot?start=staff_invite_ABC234')
+    await expect.poll(() => freshGetStarted).toBe(true)
+    releaseOldGet()
+    await expect.poll(() => oldGetSettled).toBe(true)
+    await expect(row.locator('.venue-invite-state')).toHaveText('Ссылка создана')
+    await expect(row.getByRole('button', { name: /Скопировать ссылку/ })).toBeEnabled()
+  } finally {
+    releaseOldGet()
+    releaseFreshGet()
+  }
+  await expect.poll(() => freshGetSettled).toBe(true)
+  await expect(row.locator('.venue-invite-state')).toHaveText('Ссылка создана')
+  await expect(row).toHaveCount(1)
+  expect(api.getStaffInvites()).toBe(1)
+})
+
+test('UX06 revoked invitation keeps summary focus after its original expiry without polling or another mutation', async ({ page }) => {
+  await page.clock.install({ time: new Date('2030-01-10T18:00:00Z') })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, {
+    role: 'OWNER', inviteExpiresAt: '2030-01-10T18:00:05Z'
+  })
+  const inviteRequests: string[] = []
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (path.startsWith('/api/venue/1/staff/invites')) inviteRequests.push(`${request.method()} ${path}`)
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await expect(page.locator('.venue-pending-invite-list')).toContainText('Действующих приглашений нет.')
+  const createdRefresh = page.waitForResponse((response) =>
+    response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/venue/1/staff/invites'
+  )
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  await createdRefresh
+  const row = page.locator('[data-invite-handle="pending-1"]')
+  const revokedRefresh = page.waitForResponse((response) =>
+    response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/venue/1/staff/invites'
+  )
+  await row.getByRole('button', { name: 'Отозвать приглашение', exact: true }).click()
+  await revokedRefresh
+  await expect(row.locator('.venue-invite-state')).toHaveText('Приглашение отозвано')
+  const requestsAfterRevoke = [...inviteRequests]
+  await page.clock.fastForward(6000)
+  const summary = row.locator(':scope > summary')
+  await summary.focus()
+  await expect(summary).toBeFocused()
+  await page.clock.fastForward(5000)
+  await expect(summary).toBeFocused()
+  await expect(row.locator('.venue-invite-state')).toHaveText('Приглашение отозвано')
+  await expect(row.getByRole('button', { name: /Скопировать ссылку/ })).toBeDisabled()
+  await expect(row.getByRole('button', { name: /Поделиться в Telegram/ })).toBeDisabled()
+  expect(inviteRequests).toEqual(requestsAfterRevoke)
+  expect(api.getStaffInvites()).toBe(1)
+  expect(api.getRevokedInviteHandles()).toEqual(['pending-1'])
 })
