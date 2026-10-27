@@ -382,16 +382,32 @@ API (authenticated, `venueId` remains required):
   No automatic send retry or retry shortcut is shown for this warning. Definite authorization,
   validation, private-chat and rate/policy rejections retain their ordinary handling.
 
-On iPhone inside Telegram, the primary action is **Отправить в Telegram** (PDF), with a PNG
-send action per table. A missing/blocked private chat asks the user to open/start/unblock the bot.
-On desktop, **Все QR в PDF**, **QR этого стола** and secondary **ZIP для компьютера** use the
+`HT-VENUE-QR-TELEGRAM-DOWNLOAD-UX04-FIX-P1` uses `getTelegramContext().hasTelegramLaunchData`,
+derived from non-empty raw `initData` through the existing SDK / hash `tgWebAppData` resolution.
+SDK presence (`isTelegram`), platform, SDK functions and start/query parameters alone do not select
+Telegram QR delivery. Loading the SDK in an ordinary browser keeps PDF/PNG/ZIP downloads available.
+This is a UX signal, not authentication: server validation of the data, user and permissions remains
+required. The legacy `isTelegram`, SDK capabilities, user and start/table context are unchanged.
+[Telegram documents](https://core.telegram.org/bots/webapps#webappinitdata) keyboard-button and
+inline-mode launches with empty init data; these retain SDK capabilities but do not establish this
+product's authenticated Venue launch. The auth gate is unchanged. For launches with data,
+**Отправить все QR в Telegram** sends the bulk
+PDF and **Отправить QR в Telegram** sends that table's PNG through the protected delivery API.
+Each scope has one QR action: direct download, ZIP and manual Blob links are absent. Success,
+definite rejection and unconfirmed delivery keep the user on **Столы и QR**, without automatic
+retry or a download fallback. A missing/blocked private chat asks the user to open/start/unblock
+the bot; delivery failure never opens a PDF/PNG in the WebView. Current permission, venue scope,
+Telegram identity and token contracts are unchanged.
+In an ordinary browser, **Все QR в PDF**, **QR этого стола** and secondary **ZIP для компьютера** use the
 authenticated binary response. Object URLs live for five minutes for asynchronous reads and a
-visible manual fallback, then expire. The UI reports preparation/initiated saving, never that a
+visible manual fallback, then expire. Existing explicit Telegram send actions also remain available
+in the browser. The UI reports preparation/initiated saving, never that a
 file was downloaded. No public URL, bearer-in-URL or `WebApp.downloadFile` is introduced.
 Reissuing one/all QR remains a separate action with explicit old-QR invalidation confirmation.
 
-Real Telegram/iPhone delivery and download behavior remain **PENDING manual smoke**. Local
-mock/browser tests do not establish deployed runtime behavior. The local process limiter is
+The user confirmed UX03 is merged/deployed to staging and the same PDF/PNG delivery to the private
+chat works. UX04's changed iPhone Mini App flow remains **PENDING manual smoke** after a separately
+authorized release. Local mock/browser tests do not establish deployed runtime behavior. The local process limiter is
 not distributed or durable across restarts; persistent exactly-once Telegram delivery is not claimed.
 
 ## Staff / Roles / Invites
