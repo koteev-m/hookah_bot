@@ -37,7 +37,24 @@ The deterministic SDK bootstrap fixture keeps CI independent of the CDN; an opti
 Empty-data keyboard-button/inline launches are not authenticated Venue launches; the legacy
 SDK-presence flag and capability handling remain unchanged.
 
-Manual release smoke is **PENDING**, requires separate authorization and an authorized test venue:
+UX04 bounded acceptance (source: user's UX05 task, 2026-10-27): PR #228 merged at release
+`0a70795d1a3b6fb0ba89f2061c10fe7c63a8bbcd`; supplied CI `40503171235`, attempt 1;
+previous Codex HT70 report operation `207c31b248114e239b1588930545fc0b` SUCCESS.
+The user confirmed real iPhone common PDF/PNG sending, retained screen and navigation. This is
+user smoke, not a new Codex device run. Desktop ZIP was not manually checked. Remaining checks
+below retain their own evidence requirements; UX04 acceptance does not cover UX05.
+
+UX05 local regression scope: invite/profile/member pending guards; previous invite result after
+failure; confirmed revoke followed by GET failure; profile raw drafts across collapse, switching
+cards, GET retry and unrelated mutations; create-from-member hidden draft and duplicate prevention;
+separate membership, publication and Today visibility; module off/on, MANUAL/SCHEDULE, overnight
+times, Staff own schedule, protected Manager cards and tenant isolation. Staff-chat mocks cover
+unknown/load-error state, explicit code lifecycle, live expiry, lost regeneration response,
+clipboard failure, queued test result, no automatic mutation/retry, unlink confirmation and late
+venue responses. Run TypeScript, production build, targeted and full Playwright smoke. Backend
+contracts/schema remain unchanged; source review is not fresh PostgreSQL/concurrency test evidence.
+
+The remaining broader release smoke requires separate authorization and an authorized test venue:
 open Owner menu on iPhone Telegram, expand one of ten hookahs, edit a flavor and verify retention
 and other categories; create a batch with individual free numbers and verify conflict creates none;
 request one PNG through **Отправить QR в Telegram** and all PDF through **Отправить все QR в Telegram**,

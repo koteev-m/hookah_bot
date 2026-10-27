@@ -487,9 +487,12 @@ keeps a stable preupload identity for the expected-ID gate.
 
 The backend Dockerfile uses BuildKit cache mounts for Gradle wrapper and dependency caches. If Docker build fails while downloading the Gradle distribution or Maven dependencies with a transient `SocketTimeoutException`, rerun the same deploy command after confirming it is a network timeout, not a Kotlin compile/test failure. The wrapper network timeout is intentionally higher than the default, and a successful retry should reuse the warmed Docker/Gradle cache.
 
-### Opt-In Persistent SSH Deploy
+### Historical Opt-In Persistent SSH Deploy (prior target)
 
-Direct deployment remains supported. Use the ControlMaster helper when repeated new SSH connection establishment is unreliable during deploy; both paths require the same exact image identity.
+The following ControlMaster workaround is historical evidence for the prior target, not the
+current HT70 transport contract. Current Hookah SSH/SCP uses the [strict pinned profile](STAGING_ORDINARY_RELEASE.md#текущий-строгий-sshscp-профиль-hookah-ht70),
+with proxy and multiplexing disabled. The historical helper remains preserved; no executor or
+server change is implied. The earlier banner-timeout cause remains unknown.
 
 Resilient command:
 
@@ -499,7 +502,7 @@ EXPECTED_BACKEND_IMAGE_ID='sha256:<reviewed-image-id>' \
 ./scripts/deploy-staging-controlmaster.sh '<ssh-alias>'
 ```
 
-Current staging alias example with optional overrides:
+Historical staging alias example with optional overrides:
 
 ```bash
 STAGING_PATH=/opt/hookah-bot \
