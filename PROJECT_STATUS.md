@@ -1,5 +1,168 @@
 # Project Status
 
+## HT-UX08-LINUX-RUNTIME-CI-REPAIR-01 — runtime fixtures prepared for CI (2026-10-28)
+
+Identity PASS at primary Hookah checkout/common/index; branch
+`codex/ht-venue-team-schedule-roles-ux08`, starting HEAD `151411cafd218642b44336ef85fb3c077a3424ca`,
+parent `0728bde338b13d0c30dabbbad28afcda426b455e`, base `919abbb813cbbb724d628bdabeef8e905e6a1c42`.
+PR232 remains Draft. CI635/636 runtime failures reached READY with a V127-containing current
+backend, then failed exact V126 schema checks. Historical runtime now builds pinned unmodified
+V126-compatible source; current JVM forward migration is a separate mandatory scenario. Historical
+production guards/authority, SQL, workflows and product code remain unchanged.
+
+Guest snapshot isolation now disables unrelated billing startup writes. Its missing subscription
+for synthetic venue102 can be inserted between snapshots; deterministic H2 writer probe reproduced
+1->2 subscription rows without any route request. Original CI expected/actual was not retained
+in logs/artifacts, so attribution of that exact intermittent assertion remains an inference.
+
+Available checks PASS: runtime17, ordinary23, backend67 (32 real PostgreSQL; zero failures/skips),
+Guest repeat54, compileKotlin/ktlint, historical identity/drift negatives, syntax/diff.
+Actual native JVM + Docker PostgreSQL17: V125->V126->V127 PASS; historical checksum1701638026,
+photo checksum881920632,126 rows unchanged, Flyway validate PASS; V126 guard accepts126/rejects127.
+Full hosted Linux runtime/ordinary Caddy/systemd/libpq18 gates remain UNVERIFIED on macOS and
+must pass for the new SHA before merge. No frontend repeat: product/UI bytes unchanged.
+
+Evidence: `.tmp-checks/ht-ux08-runtime-ci-repair/validation.md`, XML and local JVM result.
+Four SQL helpers and stash/archive refs preserved. User authorizes one focused commit and one
+non-force push after available checks/review; this is CI validation, not release acceptance.
+After exact remote SHA verification STOP; user/ChatGPT checks new CI. No deploy, SSH, external
+provider writes, real Telegram actions, migration of live databases or rollback-safety claim.
+
+## HT-UX08-MIGRATION-CI-FIX-01 — local fixes; Linux validation blocked (2026-10-28)
+
+**HT_UX08_MIGRATION_CI_FIX_BLOCKED**. Three CI regression assumptions repaired locally; no commit,
+push, merge, deploy, Cloudflare/server/Telegram mutation. Both original UX08 commits preserved.
+Identity PASS: Hookah_Tootah primary checkout/common dir/index, expected branch
+`codex/ht-venue-team-schedule-roles-ux08`, HEAD `0728bde338b13d0c30dabbbad28afcda426b455e`,
+parent `1acdd0afb61702f8ca39b8492b3835bf83b1c012`, base `919abbb813cbbb724d628bdabeef8e905e6a1c42`.
+Read-only origin feature/main matched HEAD/base. CI633/634 independently confirmed terminal red
+on this exact HEAD; job logs verified the cursor pending-tail, manifest127vs126 and historical-tree
+assertion failures. Missing Caddy/pg_dump/systemd-tool failures followed skipped prerequisite install.
+
+Changed tests retain historical cursor heads and rollback/index contracts, assert exact reviewed
+pending tail and apply full PG127/H2128. Real bootstrap126/current127 manifests exercise existing
+fresh-install/review/backup/rollback refusal policies. Cutover harness checks the pinned historical
+snapshot independently from the reviewed append-only working tree, with byte/inventory/executable
+mode/tail negatives and unchanged production guard rejection of the current release tree.
+Historical trees/blob/SHA/Flyway fingerprints, all SQL, production guards/controller, workflow,
+Mini App and product runtime bytes are unchanged. Four SQL helpers and stash/archive refs preserved.
+
+Executed: cursor10/10; full migration-sanity plus photo persistence165/165 (83 real PostgreSQL,
+16 suites, zero failed/errored/skipped); compileKotlin/ktlintCheck PASS. Simple staging55/55;
+focused lineage/production guard positives+negatives PASS; actual psql17/libpq17/PostgreSQL17
+11/11 PASS. Read-only independent release-safety source review PASS; executable-mode P2 closed.
+Full cutover harness attempted and FAILED at Linux-specific `/usr/lib/postgresql/17/bin/psql`
+in database-evidence fixtures; Caddy/systemd hosted-Linux guards also refuse macOS. These are
+validation-environment failures, not PASS/skips. Hosted libpq18, complete cutover and required
+Compose Linux Caddy/systemd/connected-runtime gates remain unverified; conditional commit withheld.
+
+Evidence: `.tmp-checks/ht-ux08-migration-ci-fix/validation.md`, saved XML/JSON and logs. Index empty;
+seven tracked test/docs/checkpoint edits remain for continuation, plus original `?? scripts/dev/`.
+No frontend rerun: its committed bytes remain unchanged and prior exact UX08 evidence applies.
+Next: validate these exact changes on an explicitly authorized disposable Linux runner with all real
+prerequisites; only after full PASS create the one authorized local fix commit. Publishing it remains
+separately authorized. No workflow dispatch/rerun is authorized by this local task.
+
+## HT-UX08-STAFF-PHOTOS-R2-IMPLEMENT-01 — R2 photos local ready (2026-10-28)
+
+**HT_UX08_R2_PHOTOS_LOCAL_READY**. UX08 E is implemented and validated locally; this supersedes
+its earlier storage-decision blocker. Existing A–D commit is preserved. No live R2, real iPhone
+Telegram, staging or production acceptance is claimed. No push/PR/SSH/deploy/provider writes.
+
+Identity PASS initially, after resumption and before commit: Hookah_Tootah; primary root
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, matching common dir/index and registered checkout,
+origin `github.com/koteev-m/hookah_bot`, no foreign instructions/redirects. Branch
+`codex/ht-venue-team-schedule-roles-ux08`; exact starting HEAD/required child parent
+`1acdd0afb61702f8ca39b8492b3835bf83b1c012` (parent `919abbb813cbbb724d628bdabeef8e905e6a1c42`,
+tree `b5e56ba08e45f89fb1786de08db26075e549bd29`). One additional local allowlist commit authorized
+with message `feat(venue): add secure staff photo upload with R2`; exact commit identity in task evidence.
+
+Implemented private R2 Standard adapter (AWS SDK Java v2 2.57.5), JPEG/PNG validation/orientation/
+metadata stripping, PostgreSQL V127 / H2 V128 durable reservation/consent/current/candidate/cleanup,
+revision/idempotency and safe partial-failure recovery. Existing profile RBAC and authoritative Guest
+visibility remain enforced; employee self-consent/revoke is separate from Owner/Manager publication.
+Identity/role/removal invalidation uses venue-first locking. Integrated Mini App photo panels,
+Staff own card, Guest guarded blobs, truthful pending/error states and scoped Back retention.
+Configuration is disabled by default and accepts only the existing staging bucket
+`hookah-tootah-media-staging-eu`; production is explicitly disabled pending separate admission.
+
+Validation: **236 backend tests PASS** (47 photo +189 latest-per-suite regressions), zero skips/errors;
+**29 PostgreSQL cases executed**. Two existing deterministic lock tests were adapted to venue-first
+serialization without weakening winner/last-Owner/RBAC/audit assertions. compileKotlin/ktlintCheck,
+TypeScript and production build PASS (existing Vite bundle warning). Focused Playwright **28/28**,
+full smoke **444/444**.27 synthetic screenshots cover9 states×3 viewports. Migration parity,
+docs/diff/secret-pattern sanity and helpers/stash/archive preservation PASS. Independent read-only
+backend/storage/security and privacy/Guest/UI reviews PASS, no open P0/P1/P2.
+
+Evidence: `.tmp-checks/ht-ux08-photos/validation.md`, photo/regression result JSON and saved XML,
+`playwright-full-final.log`, `screenshots/`, `precommit-identity.json`, `preservation.json`,
+`review-files.json` and postcommit `commit.json`. No tests prove Cloudflare connectivity.
+Four untracked SQL helpers and stash/archive refs remain unchanged; `scripts/dev/` untouched.
+
+Next step: separately authorize staging configuration verification and bounded synthetic live R2
+smoke. Owner must verify private access, Standard class, actual jurisdiction/endpoint and bucket-only
+credentials through a protected server channel. Production still requires an approved bucket,
+privacy/legal acceptance, operator/rotation/usage controls and deletion-safe backup/restore evidence.
+Detailed configuration/acceptance checklist is in `docs/MEDIA_STORAGE_UPLOAD.md`.
+
+## HT-VENUE-TEAM-SCHEDULE-ROLE-UX08 — UI local ready; photo decision required (2026-10-28)
+
+**HT_UX08_UI_LOCAL_READY_PHOTO_DECISION_REQUIRED**. A–D implementation and required local
+validation PASS; independent focused review closed all P0/P1/P2. E is
+**BLOCKED_BY_STORAGE_DECISION**, with a concrete proposal in the existing media spec. One explicit
+allowlist local commit is authorized; exact SHA/parent/tree is in the task result. No push, PR,
+merge, SSH, deploy, external credentials or Cloudflare writes. No staging/production acceptance.
+
+Identity PASS initially, after preparation and before commit: `Hookah_Tootah`, primary physical
+root `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, checkout-owned `.git`/common dir/index,
+origin `github.com/koteev-m/hookah_bot`; verified instruction origins, no redirects/foreign authority.
+Initial constraints NOT_SUPPLIED; initial branch `codex/ht-staff-reissue-schedule-ux07`, HEAD
+`58cb4a995630881eed8983bf1bb3771a10f73a30`, only four untracked SQL helpers. After initial PASS,
+remote main verified at `919abbb813cbbb724d628bdabeef8e905e6a1c42`; targeted fetch obtained that
+object. Ordinary branch `codex/ht-venue-team-schedule-roles-ux08` starts at that exact base.
+No worktree, local-main rewrite, stash or archive mutation. Remote observation is preparation-time
+evidence, not a claim about later remote state.
+
+Implemented:
+- A: editable, optional normalized `displayName` in create-from-member, compatible legacy default,
+  single atomic hidden draft and exact Telegram link; no user/membership/publication change.
+  Existing protected-target RBAC, race/link conflict and audit rollback remain enforced. No migration.
+- B: collapsed daily schedule, separate computed-status counts, per-date add, stable toggles/focus,
+  same-week expansion retention and week/venue reset. Existing shift/batch/CAS/time/restore contracts.
+- C: nested confirmation/form/week history through one Telegram handler, screen and browser controls;
+  raw in-memory draft retention, explicit discard, guarded writes and stale/foreign editor rejection.
+  Close/save traverses only proven live panel entries; unknown history/state is preserved.
+- D: common role shell, Manager operational Home/compact Settings/More and Staff Home/My shifts/More,
+  existing permission-filtered routes and safe Back parents. No server permission widening.
+- E: no proven Hookah application R2/photo pipeline. Separate AP-00 S3 backup transport is not it.
+  Proposal: private dedicated Hookah R2, guarded delivery, consent/moderation, validation, atomic
+  lifecycle/cleanup and deletion-safe backup. Operator/budget/retention/backup approvals remain open.
+  Corrected stale Draft Preview media documentation against existing authenticated private routes.
+
+Validation on final implementation/test bytes:
+- Kotlin compile/ktlint and selected API/repository/RBAC/Guest/Preview suites: **175/175**, 16 suites,
+  no failures/errors/skips; real PostgreSQL link and staff mutation concurrency **4/4** executed.
+- TypeScript and production build PASS; existing Vite >500 kB bundle warning remains.
+- Focused Playwright **37/37**, full Chromium smoke **432/432**, no skips. Existing UX02/UX05–07
+  history, role, async and privacy regressions retained; obsolete menu/form locators updated.
+- Two read-only reviewers: A–D/API/navigation and E/media proposal PASS; all P2 corrected with
+  relevant regression checks. Final `git diff --check`, UTF-8/fences/local links and bounded added
+  content credential scan PASS. Implementation hashes recorded for test applicability.
+- 27 synthetic screenshots: role homes, week, 6/10 expanded shifts, form/confirmation, profile name
+  at 390x844, 390x568 and 1280x900. Browser evidence does not prove real Telegram keyboard/WebView,
+  safe-area or native BackButton acceptance. Historical UX07 iPhone 19/19 is not UX08 acceptance.
+
+Evidence: [validation and exact paths](.tmp-checks/ht-ux08/validation.md),
+[backend results](.tmp-checks/ht-ux08/backend-results.json),
+[full smoke](.tmp-checks/ht-ux08/playwright-full-final.log),
+[focused smoke](.tmp-checks/ht-ux08/playwright-focused-final.log),
+[review](.tmp-checks/ht-ux08/review.md), [preservation](.tmp-checks/ht-ux08/preservation.json),
+[screenshots](.tmp-checks/ht-ux08/screenshots/).
+Evidence is ignored/local. Four SQL helpers remain byte-identical; stash/archive refs unchanged.
+No unfinished external operation. Runtime A–D requires separately authorized publication/exact-SHA
+CI, staging and real iPhone acceptance. Next: user approval of the concrete photo storage decision
+and/or a separate publication task; stop at this local result.
+
 ## HT-STAFF-INVITE-REISSUE-SCHEDULE-UX07 — local validated; staging pending (2026-10-28)
 
 UX07 local implementation and required validation complete; focused independent review PASS,

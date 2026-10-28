@@ -351,6 +351,7 @@ export type VenueStaffProfileCreateRequest = {
 
 export type VenueStaffProfileCreateFromMemberRequest = {
   userId: number
+  displayName?: string
   subtype: VenueStaffProfileSubtype
   roleLabel?: string
 }

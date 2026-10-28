@@ -74,6 +74,7 @@ data class GuestTodayStaffDto(
     val roleLabel: String? = null,
     val subtype: String,
     val photoRef: String? = null,
+    val photoUrl: String? = null,
     val bio: String? = null,
     val tags: List<String> = emptyList(),
     val shiftDate: String,

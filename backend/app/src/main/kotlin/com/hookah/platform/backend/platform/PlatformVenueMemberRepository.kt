@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.platform
 
+import com.hookah.platform.backend.miniapp.venue.staff.invalidateStaffPhotosForMember
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -123,6 +124,13 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                     val initialAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
+                        if (!venueExists(
+                                connection,
+                                venueId,
+                            )
+                        ) {
+                            return@use rollbackAndReturn(connection) { PlatformOwnerRevokeResult.NotFound }
+                        }
                         val members = loadMembersForOwnerRevoke(connection, venueId, userId)
                         val currentMember =
                             members.firstOrNull { it.userId == userId }
@@ -150,6 +158,7 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
                                 }
                             }
                         }
+                        invalidateStaffPhotosForMember(connection, venueId, userId)
                         connection.commit()
                         PlatformOwnerRevokeResult.Success(
                             revokedMember = currentMember,
@@ -181,7 +190,7 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
         connection: Connection,
         venueId: Long,
     ): Boolean {
-        return connection.prepareStatement("SELECT 1 FROM venues WHERE id = ?").use { statement ->
+        return connection.prepareStatement("SELECT 1 FROM venues WHERE id = ? FOR UPDATE").use { statement ->
             statement.setLong(1, venueId)
             statement.executeQuery().use { rs -> rs.next() }
         }
@@ -280,6 +289,7 @@ class PlatformVenueMemberRepository(private val dataSource: DataSource?) {
             statement.setLong(2, venueId)
             statement.setLong(3, userId)
             statement.executeUpdate()
+            invalidateStaffPhotosForMember(connection, venueId, userId)
         }
     }
 

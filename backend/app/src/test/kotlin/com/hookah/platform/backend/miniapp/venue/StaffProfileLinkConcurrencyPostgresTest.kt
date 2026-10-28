@@ -68,7 +68,9 @@ class StaffProfileLinkConcurrencyPostgresTest {
                                 headers { append(HttpHeaders.Authorization, "Bearer $firstToken") }
                                 contentType(ContentType.Application.Json)
                                 setBody(
-                                    """{"userId":${fixture.staffUserId},"subtype":"waiter"}""",
+                                    """
+                                    {"userId":${fixture.staffUserId},"subtype":"waiter","displayName":"  Максим 李 🌿  "}
+                                    """.trimIndent(),
                                 )
                             }
                         HttpSnapshot(response.status, response.bodyAsText())
@@ -79,7 +81,9 @@ class StaffProfileLinkConcurrencyPostgresTest {
                                 headers { append(HttpHeaders.Authorization, "Bearer $secondToken") }
                                 contentType(ContentType.Application.Json)
                                 setBody(
-                                    """{"userId":${fixture.staffUserId},"subtype":"waiter"}""",
+                                    """
+                                    {"userId":${fixture.staffUserId},"subtype":"waiter","displayName":"  Максим 李 🌿  "}
+                                    """.trimIndent(),
                                 )
                             }
                         HttpSnapshot(response.status, response.bodyAsText())
@@ -88,6 +92,10 @@ class StaffProfileLinkConcurrencyPostgresTest {
 
             val success = responses.single { it.status == HttpStatusCode.OK }
             val conflict = responses.single { it.status == HttpStatusCode.Conflict }
+            assertEquals(
+                "Максим 李 🌿",
+                json.parseToJsonElement(success.body).jsonObject["displayName"]?.jsonPrimitive?.content,
+            )
             val winnerProfileId = success.profileId()
             assertLinkConflict(conflict, winnerProfileId)
 

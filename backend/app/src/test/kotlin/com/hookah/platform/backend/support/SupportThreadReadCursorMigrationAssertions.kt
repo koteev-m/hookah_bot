@@ -26,6 +26,7 @@ internal class SupportThreadReadCursorMigrationAssertions(
     private val previousVersion: String,
     private val expectedVersion: String,
     private val ddlFailureContract: MigrationDdlFailureContract,
+    private val expectedFollowingMigrations: Map<String, String>,
     private val close: () -> Unit = {},
 ) {
     fun assertLegacyMarkerRemainsUnbackfilled() =
@@ -86,8 +87,41 @@ internal class SupportThreadReadCursorMigrationAssertions(
 
             val flyway = Flyway.configure().dataSource(dataSource).locations(location).load()
             assertEquals(expectedVersion, flyway.info().current().version.version)
-            assertTrue(flyway.info().pending().isEmpty(), "$expectedVersion must be the actual migration head")
+            assertEquals(
+                expectedFollowingMigrations,
+                flyway.info().pending().associate { it.version.version to it.script },
+                "later migrations must be explicitly reviewed without changing the historical cursor head",
+            )
             assertEquals(listOf(true), targetHistory(connection))
+        }
+
+    fun assertForwardMigrationReachesCurrentHead() =
+        scenario { connection, fixture ->
+            migrate(expectedVersion)
+            val marker = readMarker(connection, fixture.threadId, fixture.readerUserId)
+            val cursor = column(connection, SUPPORT_THREAD_READS, LAST_READ_MESSAGE_ID)
+            val messageIndexes = indexes(connection, SUPPORT_MESSAGES)
+            val flyway = Flyway.configure().dataSource(dataSource).locations(location).load()
+            assertEquals(
+                expectedFollowingMigrations,
+                flyway.info().pending().associate { it.version.version to it.script },
+            )
+            assertEquals(expectedFollowingMigrations.size, flyway.migrate().migrationsExecuted)
+            assertEquals(expectedFollowingMigrations.keys.last(), flyway.info().current().version.version)
+            assertTrue(flyway.info().pending().isEmpty())
+            flyway.validate()
+            assertEquals(marker, readMarker(connection, fixture.threadId, fixture.readerUserId))
+            assertEquals(cursor, column(connection, SUPPORT_THREAD_READS, LAST_READ_MESSAGE_ID))
+            assertEquals(messageIndexes, indexes(connection, SUPPORT_MESSAGES))
+            assertTrue(
+                columnNames(connection, "staff_profile_photos").containsAll(setOf("object_key", "state", "consent_at")),
+            )
+            assertTrue(
+                columnNames(
+                    connection,
+                    "staff_profile_photo_state",
+                ).containsAll(setOf("revision", "current_id", "candidate_id")),
+            )
         }
 
     fun assertIncompatibleCursorColumnFailsClosed() =

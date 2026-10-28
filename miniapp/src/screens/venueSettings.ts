@@ -1074,7 +1074,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const { root, backendUrl, isDebug, venueId, access } = options
   if (!root) return () => undefined
 
-  const refs = buildDom(root, access.role === 'OWNER')
+  const refs = buildDom(root, true)
   refs.publicCardPreviewButton.hidden = !options.onOpenPreview
   refs.publicCardPreviewButton.disabled = true
   const deps = buildApiDeps(isDebug)
@@ -1086,7 +1086,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const canManageBookingSettings = inSection('booking') && access.permissions.includes('BOOKING_MANAGE')
   const canManageShiftExtension = inSection('extension') && access.permissions.includes('SHIFT_EXTENSION_SETTINGS')
   const canManageStaffModuleSettings = inSection('team') && access.permissions.includes('STAFF_MODULE_SETTINGS_MANAGE')
-  if (access.role === 'OWNER') refs.backButton.remove()
+  refs.backButton.remove()
   if (section) {
     const titles = { card: 'Карточка заведения', hours: 'Часы работы', team: 'Команда и доступ', booking: 'Бронирование', extension: 'Продление времени' }
     root.querySelector('h2')!.textContent = titles[section]
@@ -1946,7 +1946,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const scheduleCallbacks: ScheduleCallbacks = {
-    compact: access.role === 'OWNER',
+    compact: true,
     onSaveDay: (weekday, isClosed, opensAt, closesAt) =>
       void saveScheduleDay(weekday, isClosed, opensAt, closesAt),
     onDayDirtyChange: (weekday, isDirty) => {

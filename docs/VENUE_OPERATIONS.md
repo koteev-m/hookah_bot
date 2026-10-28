@@ -120,12 +120,35 @@ state is displayed. This supersedes the UX01 DRAFT setup home and grouped More n
   Saved Guest Preview returns to its exact subsection; legacy `#/guest-preview?from=settings`
   and direct routes remain supported. See the local validation report for browser evidence.
 - More contains only `Мои заведения`, `Статистика`, `Отзывы`, `Подписка`, `Поддержка`, filtered by
-  access. Portfolio/application history remains unchanged. MANAGER/STAFF keep their existing
-  navigation and settings layout; server RBAC remains authoritative.
+  access. Portfolio/application history remains unchanged. UX08 extends the visual shell to
+  MANAGER/STAFF as described below; server RBAC remains authoritative.
 
 Validation is local and fixture-backed. Real iPhone Telegram safe-area/native keyboard behavior
 and staging smoke remain release checks after separate publication/deployment authorization.
 See `docs/HT_VENUE_OWNER_UX02_LOCAL_VALIDATION.md` for exact scope and local evidence.
+
+### UX08 Shared Role Shell (Local Implementation)
+
+OWNER, MANAGER and STAFF now share the compact venue/city/status/role header, safe-area layout,
+focus behavior and permission-aware primary navigation. Manager uses Home/Orders/Settings/More;
+Staff uses Home/Orders/My shifts/More, omitting unavailable entries. Home prioritizes the existing
+allowed operational actions; Staff uses “Моя работа” and “Мои смены”. Existing shared screen
+components and backend permissions remain authoritative; no role-specific copy of business screens
+or extra permissions was introduced. Staff receives no team management, publication or billing.
+
+Manager Settings reuses the compact section catalog and existing guarded editors (card/hours/team/
+booking/extension); only permitted catalog links render. More preserves remaining allowed routes,
+including Staff tables when permitted and Manager Guest Preview, personnel and chat. Staff direct
+routes never return to inaccessible Owner settings, and the active primary tab matches the role.
+Unread and polling logic keeps existing endpoints/intervals and permission gating. Loading, denied,
+empty, error and venue-status states remain explicit; hidden controls do not replace backend RBAC.
+
+Staff profile name, collapsed daily schedule and nested form/confirmation navigation follow the
+[staff canonical contract](STAFF_PROFILES_SHIFTS_TIPS.md#ux08-local-profile-schedule-and-navigation-contract).
+The previous UX07 iPhone 19/19 PASS is user-supplied history, not UX08 device or HT70 deployment
+evidence. UX08 browser screenshots at 390px/390×568/desktop and local tests do not establish staging
+or real Telegram acceptance. Photos are decision-only; see the bounded UX08 R2 proposal in
+[MEDIA_STORAGE_UPLOAD.md](MEDIA_STORAGE_UPLOAD.md).
 
 ## Orders Queue
 

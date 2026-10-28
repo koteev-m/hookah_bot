@@ -1,15 +1,139 @@
 # Venue Media Storage And Upload
 
-Дата актуализации: 2026-07-29.
+Дата актуализации: 2026-10-28 (bounded UX08 staff-photo implementation).
 
-Статус: **CANONICAL SPEC / STORAGE DECISION REQUIRED / RUNTIME MISSING**.
+Статус: **CANONICAL SPEC / STAFF PHOTOS LOCAL IMPLEMENTATION / OTHER UPLOAD RUNTIME FUTURE**.
 
-Verdict: **STOP_FOR_MEDIA_STORAGE_DECISION**.
+Live R2/staging and production storage admission remain unverified.
 
 This document is the canonical source of truth for venue-owned media storage, upload, delivery,
 lifecycle and Bot/Mini App compatibility. It covers the foundation needed by public-card
 info-section media and the flat Photo/PDF menu. Structured menu-item media and staff profile photos
-remain separate future product slices.
+remain separate product slices; staff-photo local implementation is specified below.
+
+## UX08 Staff Photos — Local R2 Implementation (2026-10-28)
+
+Task `HT-UX08-STAFF-PHOTOS-R2-IMPLEMENT-01` authorizes the bounded staff-photo runtime below.
+It supersedes the previous UX08 E storage-decision blocker. Venue info-section/menu upload remains
+future work; this does not approve a shared-media rewrite or production storage admission.
+
+Existing staging bucket: **`hookah-tootah-media-staging-eu`**. User testimony reports an empty
+bucket on 2026-10-28; the account/bucket was not inspected by this implementation. Actual default
+class, jurisdiction, public access, credentials and backup remain unverified. The `-eu` name does
+not establish jurisdiction. No production bucket is approved. No Cloudflare writes were performed.
+
+### Implemented contract
+
+- AWS SDK for Java v2 **2.57.5**, synchronous S3 client with URLConnection transport, explicit static
+  credentials, `auto` region, path-style requests, disabled chunked encoding and required-only SDK
+  checksums. No default AWS credential chain, custom signing, public URLs, CORS or filesystem fallback.
+  Every PUT explicitly requests **STANDARD**. Connect/socket/attempt/whole-call limits: 3/10/15/20s;
+  bounded GET reads occur inside the SDK response transformer. PUT/GET/HEAD/DELETE errors are safe.
+- Backend-mediated authenticated JPEG/PNG upload: input ≤5 MiB, ≤4096 px per side, ≤16 MP; two global
+  decode/upload slots and a 30s absolute body deadline. Validate signature/MIME/CRC/actual decoding,
+  reject corruption/animation, normalize EXIF orientation, strip metadata/GPS and re-encode RGB JPEG
+  ≤1024 px/side and ≤2 MiB. `metadata-extractor` **2.22.0** reads bounded EXIF only. HEIC/HEIF/WebP
+  are rejected with instructions to export JPEG. Real iPhone picker conversion remains unverified.
+- PostgreSQL **V127** / H2 **V128** add `staff_profile_photos` durable ledger and
+  `staff_profile_photo_state` revision/current/candidate pointers. Existing migrations are unchanged.
+  State reads initialize an empty revision row under the profile lock so later identity changes
+  invalidate an already selected file even before the first upload. `photo_ref` remains legacy;
+  Guest always gets `photoRef=null` and a guarded `photoUrl`, never storage keys or Telegram identity.
+- Reserve metadata and a random immutable object key before PUT. Unique actor/profile/request UUID
+  plus input digest and expected revision prevent duplicate PUT after a lost response. Reservation
+  increments revision; finalization rechecks live RBAC, identity, row state and revision. It locks the
+  photo record against cleanup. A failed replacement leaves the current approved photo intact.
+- New candidates are private. Linked employees explicitly consent to each exact image themselves;
+  OWNER cannot substitute consent. For display-only cards, OWNER attests to obtained offline consent.
+  Policy `staff-photo-v1`, actor, timestamp and opaque image/audit identity record the attestation;
+  no consent documents, identity documents or extra personal data are collected. This is not an
+  independent consent verification or a legal production-readiness assertion.
+- OWNER and allowed MANAGER perform separate human approval/publication. Manager is limited to
+  display-only and STAFF-linked manageable profiles; protected OWNER/MANAGER cards remain denied.
+  STAFF has only own-image preview/consent/revoke through “Моя карточка”; no upload/publication or
+  administration rights. Self-revoke works with the team module disabled. Deleted venues are denied.
+- Guest bytes require current consent, approved exact photo ID and the existing authoritative venue,
+  subscription, profile and MANUAL/SCHEDULE visibility resolver, checked before and after storage
+  reads. Delivery is authenticated, `image/jpeg`, `nosniff`, `no-store, private`; no permanent bearer URL.
+- Replacement is a separate candidate until approved. Publication swaps the current pointer and
+  tombstones its predecessor. Hide retains private bytes. Delete/revoke immediately clear delivery
+  pointers/consent and queue cleanup. Link changes, membership removal and role transitions invalidate
+  all affected photos. Ledger ownership survives hard profile/venue deletion for eventual cleanup.
+- Cleanup is a small bounded batch (10/minute), gated by the existing autonomous-write maintenance
+  policy. Expired 10-minute upload leases and DELETE_PENDING rows are retried. Only acknowledged
+  DELETE becomes DELETED; a failed delete remains pending. Tombstones are retained and reconciled
+  daily to catch an exceptionally late PUT. Cleanup success means provider acknowledgement, not backup
+  erasure. No recovery window is promised: deleted bytes require a fresh upload and fresh consent.
+- Upload quota: global 120/10min, actor+venue 30/10min. Privacy revoke/hide/delete use a separate
+  actor 60/minute quota; reads global 1200/minute, actor 240/minute and 16 concurrent storage reads.
+  No automatic UI retries. Selection/pending state survives noncancelable same-document Back only
+  in memory, scoped to user/venue/role/permissions. Refresh never silently rebases a selected image.
+
+### API and configuration
+
+Authenticated routes under `/api`:
+
+| Method/path | Meaning |
+| --- | --- |
+| GET `/venue/{v}/staff/photos/me` | Own linked profiles and photo state, including module-disabled revoke access |
+| GET `/venue/{v}/staff/profiles/{p}/photos` | Authorized current/candidate, revision, consent and actual visibility |
+| POST same path | Raw JPEG/PNG, `Idempotency-Key` UUID and `X-Photo-Revision`; private candidate only |
+| POST same path + `/consent`, `/publish`, `/hide`, `/delete`, `/revoke` | Revision-checked action; consent also requires image ID, confirmed=true and policy version |
+| GET same path + `/{photoId}/content` | Current/candidate private preview within existing profile RBAC |
+| GET `/guest/venue/{v}/staff/{p}/photos/{photoId}` | Exact currently eligible Guest image |
+
+Server-only configuration: `STAFF_PHOTOS_R2_ENABLED` (default false),
+`STAFF_PHOTOS_R2_ENDPOINT`, `STAFF_PHOTOS_R2_BUCKET`, `STAFF_PHOTOS_R2_ACCESS_KEY`,
+`STAFF_PHOTOS_R2_SECRET_KEY`, `STAFF_PHOTOS_R2_REGION` (`auto`),
+`STAFF_PHOTOS_R2_JURISDICTION` (`default` or `eu`, explicitly verified),
+`STAFF_PHOTOS_MAX_INPUT_BYTES` (may lower but not raise 5 MiB). Invalid/incomplete configuration
+safely disables uploads while other backend functions keep working. Production configuration is
+explicitly disabled until a separate admission change. Configured bucket must equal the staging
+bucket above; endpoint must be the verified account's HTTPS R2 endpoint, without arbitrary paths.
+
+### Separate staging configuration and acceptance checklist
+
+These are prerequisites for a later authorized task, not permission for external changes now:
+
+1. Owner verifies the exact Hookah bucket, actual jurisdiction and S3 endpoint in Cloudflare;
+   confirm **Standard** default and object class, disabled r2.dev and no public custom domains.
+   EU requires `<account>.eu.r2.cloudflarestorage.com`; ordinary default uses
+   `<account>.r2.cloudflarestorage.com`. Do not infer location from the name.
+2. Owner supplies dedicated bucket-only **Object Read & Write** credentials through the approved
+   server secret channel, never chat/PR/Git/logs. Do not reuse another project's keys. Token creation,
+   rotation or changes require separate authorization; prefer time-limited scoped credentials.
+3. Existing `docker-compose.yml` loads backend `env_file: ./.env`; staging release invokes that
+   Compose configuration. A separately authorized operator writes the variables only in the
+   protected server environment and checks enabled status without printing secret values.
+   No media volume or browser credentials are needed. Confirm maintenance policy permits cleanup.
+4. Record operator and budget. Standard free allowance is 10 GB-month, 1M Class A operations/month,
+   10M Class B/month; R2 egress is free. These are account allowances, not a $0 hard cap. Inspect R2
+   dashboard storage/operations/billable usage regularly; small normalized photos and rate limits
+   reduce usage. No paid Workers/CDN/image service or billing change is part of this slice.
+5. With separate live-write permission and exact release acceptance, upload a synthetic JPEG/PNG;
+   inspect actual object Standard class, dimensions, metadata stripping, authenticated preview,
+   consent/publication, all visibility toggles, replacement and restart durability. Test real
+   iPhone Telegram picker/cancel/HEIC error/orientation, short viewport and desktop.
+6. Revoke/delete, verify immediate Guest/private denial, durable pending state under simulated
+   delete failure, then actual R2 HEAD absence after acknowledged cleanup. No secrets/object keys
+   should appear in public artifacts. Do not claim deletion before that observation.
+7. Agree backup destination, encryption, operator, retention and RPO/RTO before production. In an
+   authorized isolated restore drill, reconcile metadata/checksums and deletion tombstones before
+   enabling delivery, ensuring revoked/deleted images cannot reappear from backups. Existing AP-00
+   S3 DR scripts use different semantics and are not staff-photo backup evidence. No backup or
+   restoration capability is claimed by the local fake-storage tests.
+
+Local deterministic fake storage and loopback SDK tests validate contracts, not Cloudflare
+connectivity. PostgreSQL migration/concurrency tests and browser screenshots are local evidence;
+actual Cloudflare configuration, staging acceptance and production privacy/backup admission remain open.
+
+Official references checked 2026-10-28: [Java SDK setup](https://developers.cloudflare.com/r2/examples/aws/aws-sdk-java/),
+[API compatibility](https://developers.cloudflare.com/r2/api/s3/api/),
+[storage classes](https://developers.cloudflare.com/r2/buckets/storage-classes/),
+[jurisdiction endpoints](https://developers.cloudflare.com/r2/reference/data-location/),
+[private/public access](https://developers.cloudflare.com/r2/buckets/public-buckets/),
+[bucket-only credentials](https://developers.cloudflare.com/r2/api/tokens/),
+[pricing](https://developers.cloudflare.com/r2/pricing/).
 
 ## Core Rule
 
@@ -23,8 +147,8 @@ credentials and provider payloads are private. Public and Guest DTOs expose only
 identifier and a guarded platform URL.
 
 Do not store durable uploads in the backend container filesystem. Do not start the runtime slice
-until the storage decision in this document is recorded together with backup, deletion and
-production-operations ownership.
+for broader media or production until storage, backup, deletion and operations ownership are approved.
+The explicitly authorized local staff-photo slice above remains disabled without valid configuration.
 
 ## Scope And Product Boundaries
 
@@ -90,8 +214,8 @@ first implementation prompt.
   separate Telegram-`file_id` promotion banner model. Promotion media is adjacent evidence, not
   part of the first slice.
 - `backend/app/src/main/resources/db/migration/postgresql/V117__staff_profiles_today_shifts.sql`
-  contains nullable untyped `staff_profiles.photo_ref`. There is no safe upload/storage flow; this
-  remains a separate consent-bound scope.
+  contains nullable untyped `staff_profiles.photo_ref`, which is not delivery authority. The separate
+  consent-bound staff-photo ledger and R2 runtime are described in the UX08 E section above.
 
 ### Telegram Upload And Storage
 
@@ -142,9 +266,10 @@ file links are valid for at least one hour, and original filename/MIME may not s
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueGuestPreviewRoutes.kt`
   reuses the exact Guest read model. Published Preview therefore uses the same platform media URLs
   and Guest availability rules.
-- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueDraftPreviewReadService.kt`
-  returns text-only visible sections plus `mediaAvailableAfterPublication`. It returns no media
-  rows, routes or raw refs. `miniapp/src/screens/guestVenue.ts` shows one safe post-publication hint.
+- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueGuestPreviewRoutes.kt`
+  serves saved private-preview media through authenticated `/api/venue/{venueId}/guest-preview/`
+  routes. Owner/Manager access, venue/section/media ownership and child visibility are rechecked;
+  responses use no-store. No raw refs or public Guest access to unpublished media are granted.
 
 ### Infrastructure, Configuration And Operations
 
@@ -157,15 +282,13 @@ file links are valid for at least one hour, and original filename/MIME may not s
   arbitrary backend filesystem bytes.
 - `docs/DEPLOYMENT_RUNBOOK.md` says exact production backup/restore and rollback commands still need
   verification.
-- `backend/app/src/main/resources/application.conf`, `.env.example`,
-  `docs/env/staging.env.example`, `docker-compose.yml` and the Gradle dependency catalog contain no
-  media storage config, object-storage credentials, bucket config, filesystem path or technical
-  Telegram storage-chat id.
-- `backend/app/build.gradle.kts` has no S3-compatible/object-storage SDK or abstraction.
-- There is no inbound Ktor multipart/upload route. The only multipart code is an outbound Telegram
-  photo request inside `TelegramApiClient`.
-- There is no media orphan/failed-upload/physical-deletion job, antivirus/PDF scanner, checksum
-  service or content-sniffing library.
+- Staff-photo configuration now exists in `application.conf` with server-only environment variables;
+  the SDK dependencies are declared in the Gradle catalog. Existing Compose env_file forwards them.
+  General info-section/menu storage configuration remains future; no credentials are committed.
+- Staff photos have a raw bounded upload route and guarded byte retrieval. General info-section
+  HTTP upload remains absent; Telegram multipart is outbound Bot transport.
+- Staff photos have checksum/content validation and durable cleanup. These do not implement general
+  media cleanup, antivirus/PDF scanning or backup recovery for other media domains.
 - The generic `audit_log` and `AuditLogRepository` exist, but current info-section upload,
   section-visibility and attachment deletion do not append media audit events.
 
@@ -180,7 +303,7 @@ OWNER/MANAGER Telegram message
              -> Telegram getFile + temporary bot-token URL
                 -> backend response bytes
        -> Guest Bot sendPhoto/sendDocument(file_id)
-       -> Draft Preview: count-derived safe hint only, no ref/route
+       -> Draft Preview: authenticated private media proxy, no raw ref/public Guest URL
 ```
 
 ### Current Source Of Truth By Surface
@@ -190,25 +313,25 @@ OWNER/MANAGER Telegram message
 | Public-card info-section image/PDF | `venue_info_sections` + `venue_info_section_media` | Telegram bytes addressed by `telegram_file_id`; Guest proxy downloads on demand | `PARTIAL / BOT-FIRST` |
 | Flat Photo/PDF menu | Same info-section tables with `section_type=menu` | Same Telegram/proxy path; Guest view-only | `PARTIAL / BOT-FIRST` |
 | Published Preview | Exact Guest info-section DTO; no separate rows | Same guarded Guest proxy | `DONE / MVP / STAGING-SMOKE-PASSED`, read-only |
-| Draft Preview | Visible text sections plus media counts only | No byte delivery and no media ref/route | `DONE / MVP / STAGING-SMOKE-PASSED`, safe hint |
+| Draft Preview | Saved visible sections and safe private media URLs | Authenticated Owner/Manager proxy; no raw refs/public Guest URL | Existing runtime; UX08 adds no deployment evidence |
 | Structured menu item | `menu_items` has legacy description column, but active read/write DTOs omit description/photo/thumbnail | No runtime byte source or delivery | `MISSING / FUTURE` |
 | Legacy category image seed | `menu_category_images.image_url` for named test venues | External placeholder URL when seeded; no active Guest/Venue consumer | Test/seed-oriented, not item media |
 | Promotion banner | Separate `venue_promotion_media` row | Telegram `file_id`, Bot-oriented | Adjacent existing model; out of first slice |
-| Staff profile photo | Nullable untyped `staff_profiles.photo_ref` | No safe upload/storage contract; current Guest UI uses placeholder | `FUTURE / consent-bound` |
+| Staff profile photo | Photo ledger + revision/current/candidate state; legacy photo_ref is not authority | Private R2 adapter + guarded backend bytes | Local implementation; live R2 unverified |
 
 ## Current Architecture Answers
 
 | Question | Evidence-backed answer |
 | --- | --- |
-| 1. Source of truth by surface | Public info-section image/PDF and flat Photo/PDF menu: `venue_info_sections` + `venue_info_section_media` are platform metadata/link truth; Telegram addressed by `telegram_file_id` is byte truth. Structured menu item media: no runtime source exists. Staff photo: nullable untyped `staff_profiles.photo_ref`, but no safe upload/manage source. Promotion banner: separate `venue_promotion_media`, outside this slice. |
-| 2. Does the platform store bytes? | No. Current venue info media stores only Telegram `file_id`; delivery downloads bytes on demand into process memory. |
+| 1. Source of truth by surface | Public info-section image/PDF and flat Photo/PDF menu: `venue_info_sections` + `venue_info_section_media` are platform metadata/link truth; Telegram addressed by `telegram_file_id` is byte truth. Structured menu item media: no runtime source exists. Staff photo: dedicated ledger/pointers and private R2 contract above. Promotion banner: separate `venue_promotion_media`, outside this slice. |
+| 2. Does the platform store bytes? | Staff photo runtime targets private R2. Current venue info media stores only Telegram `file_id`; delivery downloads bytes on demand into process memory. |
 | 3. Can backend obtain bytes after upload? | Yes, while the same bot token can resolve the bot-specific `file_id` and Telegram accepts `getFile`. `TelegramApiClient.downloadFile` already does this. The hosted Bot API currently documents a 20 MB download limit. |
 | 4. What if the Telegram message/file is deleted? | Platform code stores no `chat_id`/`message_id`, never calls Telegram message deletion for attachment removal and cannot correlate the original message afterward. Deleting a chat message does not mutate the DB row. Telegram documents `file_id` as persistent, so message deletion is not a platform deletion mechanism; nevertheless the platform cannot provide its own byte-level durability/restore guarantee and remains bound to that bot token and Telegram service. |
 | 5. Persistent filesystem volume? | Staging Compose has persistent `pgdata` only. There is no backend/media volume. Production filesystem persistence is not evidenced in the repo/runbook. |
 | 6. Backup for such a volume? | No media-volume backup exists. Only a manual PostgreSQL dump/restore procedure is documented for staging; its off-host storage/retention is still open. |
-| 7. Object-storage abstraction/dependency? | None. No SDK, client, config, bucket, endpoint or object-key model exists. |
-| 8. Public delivery URLs? | Current Guest/Published path is `/api/guest/venue/{venueId}/info-sections/{sectionId}/media/{mediaId}` on the backend origin. Guest Bot uses Telegram send methods with `file_id`; no Telegram raw URL is given to Guest. Draft Preview has no media URL. |
-| 9. Identifiers that can leak | Public DTOs expose numeric venue/section/media database ids and an enumerable route, though availability/ownership/visibility guards constrain delivery. Raw `telegram_file_id`, Telegram temporary path and bot token stay server-side in this flow. Separate risks outside the slice are untyped `staff_profiles.photo_ref` in staff/Guest DTOs and legacy `menu_category_images.image_url`; neither should be reused as this foundation. |
+| 7. Object-storage abstraction/dependency? | StaffPhotoStorage uses AWS SDK v2 for the bounded staff-photo slice. The separate Python AP-00 DR S3 transport is not a media adapter or evidence of deployed R2. |
+| 8. Public delivery URLs? | Current Guest/Published path is `/api/guest/venue/{venueId}/info-sections/{sectionId}/media/{mediaId}` on the backend origin. Guest Bot uses Telegram send methods with `file_id`; no Telegram raw URL is given to Guest. Draft Preview uses authenticated `/api/venue/{venueId}/guest-preview/info-sections/{sectionId}/media/{mediaId}` URLs. |
+| 9. Identifiers that can leak | Public DTOs expose numeric venue/section/media database ids and an enumerable route, though availability/ownership/visibility guards constrain delivery. Raw `telegram_file_id`, Telegram temporary path and bot token stay server-side in this flow. The private staff DTO retains legacy untyped `photo_ref`, but `GuestTodayStaffResolver` explicitly returns `photoRef=null` and Guest uses guarded photoUrl or initials. Neither this legacy field nor `menu_category_images.image_url` should be reused as a public storage reference. |
 | 10. Real deletion semantics | Attachment delete hard-deletes only the DB row. Section/venue cascade can also remove rows. No Telegram bytes are physically deleted, no tombstone/retention/audit exists and no orphan cleanup runs. Section visibility is reversible; attachment visibility is not. |
 
 ## Storage Options Comparison
@@ -227,6 +350,9 @@ OWNER/MANAGER Telegram message
 | One Bot/Mini App truth | Yes only if both write the same asset row and technical chat is never the list. | Yes through one asset row and adapter. | Yes through one asset row and adapter. | Yes by design: one ledger, private source adapters and one DTO. |
 
 ## Recommendation And Required Decision
+
+This section applies only to future info-section/menu uploads. The authorized staff-photo R2
+slice above is excluded from this provider decision gate.
 
 Recommended architecture, pending approval:
 
@@ -521,8 +647,8 @@ Add a block under `Настройки -> Публичная карточка`:
 - no section text/custom-section authoring, drag reorder or bulk upload;
 - STAFF has no entry and direct API is forbidden.
 
-Upload may be allowed for saved Draft under existing settings lifecycle policy, but Draft Preview
-stays text-only and shows only the existing media-after-publication hint.
+Upload may be allowed for saved Draft under existing settings lifecycle policy. Preserve current
+authenticated private Preview delivery; do not grant public Guest access to unpublished media.
 
 ### API And Delivery
 
@@ -538,7 +664,7 @@ Required acceptance:
 
 - Guest pre-QR/card shows only visible `READY` assets through safe URLs;
 - Published Preview remains exact Guest parity with no bypass;
-- Draft returns no asset DTO/route/source ref and keeps the safe hint;
+- Draft keeps authenticated private media delivery, without raw source refs or public Guest URLs;
 - Guest Bot displays legacy and new-source media;
 - Bot and Mini App mutate one ordered ledger;
 - Staff, foreign venue and unsupported lifecycle direct requests are denied;
@@ -557,9 +683,7 @@ Backend/schema:
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/guest/GuestVenueReadService.kt`;
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/guest/api/GuestVenueDtos.kt`;
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueGuestPreviewRoutes.kt`
-  only if wiring requires it; Published still reuses Guest;
-- `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueDraftPreviewReadService.kt`
-  only for safe-count compatibility, never refs/routes;
+  only if wiring requires it; Published reuses Guest and private Preview keeps authenticated delivery;
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/telegram/TelegramBotRouter.kt`;
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/telegram/TelegramApiClient.kt`;
 - existing `AuditLogRepository` usage, not a second audit store;
@@ -595,7 +719,7 @@ This is a plan, not authorization to implement before the storage decision.
 - Delete hides immediately, respects retention and protects referenced sources.
 - Legacy Telegram and selected-target delivery; unavailable source fails safely.
 - Guest lifecycle/subscription, section/attachment visibility and mismatch guards.
-- Published exact Guest parity; Draft no media DTO/route/ref.
+- Published exact Guest parity; Draft authenticated private media and no raw refs/public Guest URL.
 - Bot handles Telegram and selected-target assets from one ledger.
 - Audit safe fields; cleanup retry/orphan age guards and ref-free metrics.
 
@@ -614,7 +738,7 @@ Likely focused classes include new Venue media route/service/storage tests plus 
 - delete confirms and removes only after server success.
 - venue switch aborts stale upload/list requests and cannot cross venues.
 - Guest/Published parity after upload/hide/replace/delete.
-- Draft has no media URL/ref and retains safe hint.
+- Draft media requires authenticated private access and exposes no source ref/public Guest URL.
 - no raw `file_id`, object key/path or provider error in DOM, URL or fixtures.
 
 ## Staging Smoke And Operations Gate
@@ -625,7 +749,7 @@ The future runtime slice requires green Actions, then:
 2. OWNER image upload; MANAGER PDF upload; STAFF/foreign direct denial;
 3. Guest image and explicit PDF open;
 4. Published exact Guest parity;
-5. Draft hint with no route/ref;
+5. Draft authenticated private delivery and Staff/foreign/public Guest denials;
 6. Bot display of one legacy Telegram and one new-source asset;
 7. replace without visible gap;
 8. attachment/section hide/show;
@@ -643,7 +767,8 @@ Operations requirements:
 - Object storage: private and separated local/staging/production config, least-privilege credentials,
   rotation, TLS, versioning/retention, lifecycle, cost alerts, RPO/RTO and restore drill.
 
-Current task is docs-only and requires no staging deploy.
+UX08 E and A–D runtime changes require separately authorized staging and real Telegram acceptance;
+local tests do not provide that acceptance. Staff-photo prerequisites are listed above.
 
 ## Outcome-First Handoff After Decision
 
@@ -651,6 +776,6 @@ Current task is docs-only and requires no staging deploy.
 > `docs/MEDIA_STORAGE_UPLOAD.md`. Evolve `venue_info_section_media` as the single asset ledger,
 > preserve legacy Telegram rows, use the approved private adapter for new uploads, enforce
 > OWNER/MANAGER own-venue RBAC and strict JPEG/PNG/PDF lifecycle/audit rules, keep Guest and
-> Published Preview on one safe delivery path, keep Draft ref-free and preserve Bot compatibility.
+> Published Preview on one safe delivery path, keep Draft source-ref-free with authenticated private delivery and preserve Bot compatibility.
 > Do not add structured menu media, staff photos, video, bulk upload, CDN optimization or a second
 > media source of truth.

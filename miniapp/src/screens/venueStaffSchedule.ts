@@ -29,6 +29,14 @@ import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPrese
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { showToast } from '../shared/ui/toast'
 
+export type ScheduleNavigation = {
+  applyRoute: () => void
+  back: () => boolean
+  guard: (url?: string) => boolean
+  hasUnsavedChanges: () => boolean
+  isSaving: () => boolean
+}
+
 export type VenueStaffScheduleOptions = {
   root: HTMLDivElement | null
   backendUrl: string
@@ -36,6 +44,9 @@ export type VenueStaffScheduleOptions = {
   venueId: number
   access: VenueAccessDto
   onOpenStaffModuleSettings?: () => void
+  setNavigation?: (controller: ScheduleNavigation) => void
+  navigatePanel?: (hash: string, replace?: boolean) => void
+  onDraftChange?: () => void
 }
 
 type AdminFormRefs = {
@@ -71,6 +82,7 @@ type ScheduleRefs = {
   previousButton: HTMLButtonElement
   currentButton: HTMLButtonElement
   nextButton: HTMLButtonElement
+  refreshButton: HTMLButtonElement
   timezoneCopy: HTMLParagraphElement
   status: HTMLParagraphElement
   error: HTMLDivElement
@@ -290,6 +302,8 @@ function buildScheduleDom(root: HTMLDivElement, canManage: boolean): ScheduleRef
   currentButton.classList.add('venue-schedule-current-week')
   currentButton.hidden = true
   append(weekNavigation, previousButton, weekLabel, nextButton, currentButton)
+  const refreshButton = el('button', { className: 'button-tertiary button-small venue-schedule-refresh', text: 'Обновить' }) as HTMLButtonElement
+  weekNavigation.appendChild(refreshButton)
 
   const timezoneCopy = el('p', {
     className: 'venue-order-sub venue-schedule-timezone',
@@ -319,6 +333,7 @@ function buildScheduleDom(root: HTMLDivElement, canManage: boolean): ScheduleRef
     previousButton,
     currentButton,
     nextButton,
+    refreshButton,
     timezoneCopy,
     status,
     error,
@@ -576,6 +591,15 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   let editorVersion = 0
   let previewPending = false
   const individualDrafts = new Map<number, { startsAt: string; endsAt: string }>()
+  const expandedDates = new Set<string>()
+  let editorId: string | null = null
+  let editorDirty = false
+  let panel: 'week' | 'form' | 'confirm' = 'week'
+  const resumeDraft = el('button', { className: 'button-secondary', text: 'Продолжить черновик смены' })
+  resumeDraft.hidden = true
+  const draftHint = el('p', { className: 'venue-order-sub', text: 'Черновик сохранён только в памяти этого экрана. При закрытии или перезагрузке окна он потеряется.' })
+  draftHint.hidden = true
+  refs.list.before(resumeDraft, draftHint)
   const bulkAssignments = new Map<number, BulkAssignmentDraft>()
   const effectiveHoursByDate = new Map<string, VenueStaffScheduleEffectiveHoursDto>()
   const effectiveHoursLookupStates = new Map<string, EffectiveHoursLookupState>()
@@ -616,6 +640,15 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
 
   const resetEditor = () => {
     editorVersion += 1
+    editorId = null
+    editorDirty = false
+    panel = 'week'
+    refs.list.hidden = false
+    refs.previousButton.parentElement!.hidden = false
+    if (refs.admin) refs.admin.addButton.hidden = false
+    resumeDraft.hidden = true
+    draftHint.hidden = true
+    options.onDraftChange?.()
     previewPending = false
     individualTimes = false
     individualDrafts.clear()
@@ -648,8 +681,72 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     renderProfileOptions()
   }
 
+  const panelHash = (next: 'form' | 'confirm') => `#/shifts?panel=${next}&editor=${editorId}`
+  const syncPanel = () => {
+    const admin = refs.admin
+    if (!admin) return
+    refs.list.hidden = panel !== 'week'
+    refs.previousButton.parentElement!.hidden = panel !== 'week'
+    admin.addButton.hidden = panel !== 'week'
+    admin.formCard.hidden = panel !== 'form'
+    admin.confirmationCard.hidden = panel !== 'confirm'
+    resumeDraft.hidden = panel !== 'week' || !editorId
+    draftHint.hidden = resumeDraft.hidden
+    options.onDraftChange?.()
+  }
+  const showPanel = (next: 'form' | 'confirm') => {
+    if (refs.admin && next === 'confirm') refs.admin.confirmButton.disabled = false
+    if (!editorId) editorId = crypto.randomUUID()
+    panel = next
+    syncPanel()
+    options.navigatePanel?.(panelHash(next))
+  }
+  const applyRoute = () => {
+    const query = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+    const requested = query.get('panel')
+    panel = editorId && query.get('editor') === editorId && (requested === 'form' || requested === 'confirm')
+      ? requested === 'confirm' && !pendingConfirmation ? 'form' : requested
+      : 'week'
+    if (panel === 'week' && pendingConfirmation?.kind === 'cancel') resetEditor()
+    if (requested && panel === 'week') options.navigatePanel?.('#/shifts', true)
+    if (panel === 'form' && requested === 'confirm') options.navigatePanel?.(panelHash('form'), true)
+    if (panel === 'form') hideError()
+    if (panel !== 'confirm') {
+      editorVersion += 1
+      previewPending = false
+      if (refs.admin) refs.admin.previewButton.disabled = false
+    }
+    syncPanel()
+    if (panel !== 'week' && refs.admin) focusPanel(panel === 'form' ? refs.admin.formTitle : refs.admin.confirmationTitle)
+  }
+  const hasUnsavedChanges = () => Boolean(editorId && editorDirty)
+  const discardEditor = () => {
+    if (mutationPending) { showToast('Дождитесь результата сохранения смены'); return false }
+    if (hasUnsavedChanges() && !window.confirm('Отменить изменения смены? Несохранённый черновик будет потерян.')) return false
+    resetEditor()
+    return true
+  }
+  const guard = (url?: string) => {
+    if (mutationPending) { showToast('Дождитесь результата сохранения смены'); return false }
+    if (url) {
+      const next = new URL(url, window.location.href)
+      if (next.search === window.location.search && /^#\/shifts(?:\?|$)/.test(next.hash)) return true
+    }
+    return discardEditor()
+  }
+  const back = () => {
+    if (panel === 'week') return false
+    if (mutationPending) { showToast('Дождитесь результата сохранения смены'); return true }
+    // Every live panel was pushed from this screen. Native and on-screen Back use
+    // the same history entries as browser Back; the draft stays in this instance.
+    window.history.back()
+    return true
+  }
+  options.setNavigation?.({ applyRoute, back, guard, hasUnsavedChanges, isSaving: () => mutationPending })
+
   const showStaleError = (error: ApiErrorInfo) => {
     resetEditor()
+    options.navigatePanel?.('#/shifts', true)
     refs.error.dataset.severity = 'warn'
     refs.errorTitle.textContent = 'График изменился'
     refs.errorMessage.textContent = STALE_COPY
@@ -1155,6 +1252,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     for (let index = 0; index < 7; index += 1) {
       const date = addIsoDays(weekStart, index)
       const day = el('section', { className: 'card venue-schedule-day' })
+      day.dataset.date = date
       const dayTitle = el('h3', {
         text: formatDate(date, true)
       })
@@ -1174,14 +1272,34 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       if (!shifts.length) {
         const outside = venueToday && (date < addIsoDays(venueToday, -30) || date > addIsoDays(venueToday, 90))
         day.appendChild(el('p', { className: 'venue-empty', text: outside ? 'За пределами доступного периода.' : 'Смен нет.' }))
-      } else if (isStaffView) {
-        ;(shifts as VenueStaffScheduleOwnShiftDto[]).forEach((shift) =>
-          day.appendChild(renderOwnShift(shift))
-        )
       } else {
-        ;(shifts as VenueStaffScheduleAdminShiftDto[]).forEach((shift) =>
-          day.appendChild(renderAdminShift(shift))
-        )
+        const buckets = new Map<string, number>()
+        shifts.forEach((shift) => {
+          const status = shift.computedStatus?.toLowerCase() ?? 'unknown'
+          buckets.set(status, (buckets.get(status) ?? 0) + 1)
+        })
+        const labels: Record<string, string> = { scheduled: 'Запланировано', active: 'Сейчас идут', completed: 'Завершено', canceled: 'Отменено' }
+        const summary = [...buckets].map(([status, count]) => `${labels[status] ?? 'Статус недоступен'}: ${count}`).join(' · ')
+        day.appendChild(el('p', { className: 'venue-schedule-day-summary', text: `Смены — ${summary}` }))
+        const toggle = el('button', { className: 'button-tertiary button-small', text: 'Развернуть' })
+        const body = el('div', { className: 'venue-schedule-day-body' })
+        body.id = `schedule-${venueId}-${date}`
+        toggle.setAttribute('aria-controls', body.id)
+        const update = () => {
+          const expanded = expandedDates.has(date)
+          toggle.textContent = expanded ? 'Свернуть' : 'Развернуть'
+          toggle.setAttribute('aria-expanded', String(expanded))
+          body.hidden = !expanded
+        }
+        toggle.addEventListener('click', () => {
+          if (expandedDates.has(date)) expandedDates.delete(date)
+          else expandedDates.add(date)
+          update()
+        })
+        if (isStaffView) (shifts as VenueStaffScheduleOwnShiftDto[]).forEach((shift) => body.appendChild(renderOwnShift(shift)))
+        else (shifts as VenueStaffScheduleAdminShiftDto[]).forEach((shift) => body.appendChild(renderAdminShift(shift)))
+        update()
+        append(day, toggle, body)
       }
       refs.list.appendChild(day)
     }
@@ -1341,6 +1459,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   }
 
   const setLoading = () => {
+    if (refs.admin) refs.admin.addButton.disabled = true
     hideError()
     setStatus('Загрузка графика…')
     refs.list.replaceChildren(
@@ -1443,11 +1562,14 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       : 'Часовой пояс заведения не загружен.'
     updateWeekControls()
     renderWeek()
+    if (refs.admin) refs.admin.addButton.disabled = false
     setStatus('График обновлён.')
   }
 
   const setWeek = (nextStart: string, explicit: boolean) => {
-    if (mutationPending) return
+    if (!discardEditor()) return
+    if (weekStart !== nextStart) expandedDates.clear()
+    options.navigatePanel?.('#/shifts', true)
     weekStart = nextStart
     weekExplicitlyChanged = explicit
     updateWeekControls()
@@ -1465,6 +1587,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   const openCreateForm = (selectedDate?: string) => {
     const admin = refs.admin
     if (!admin || !canManage || mutationPending) return
+    if (!discardEditor()) return
     hideError()
     resetEditor()
     admin.formTitle.textContent = 'Добавить смены'
@@ -1490,12 +1613,14 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       syncEffectiveHoursForForm(true)
       reconcileBulkAssignments(true)
     }
+    showPanel('form')
     focusPanel(admin.formTitle)
   }
 
   function openEditForm(shift: VenueStaffScheduleAdminShiftDto) {
     const admin = refs.admin
     if (!admin || !canManage || mutationPending) return
+    if (!discardEditor()) return
     hideError()
     resetEditor()
     editingShift = shift
@@ -1521,12 +1646,14 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     } else {
       syncEffectiveHoursForForm(false)
     }
+    showPanel('form')
     focusPanel(admin.formTitle)
   }
 
   function openRestoreForm(shift: VenueStaffScheduleAdminShiftDto) {
     const admin = refs.admin
     if (!admin || !canManage || mutationPending || !canRestoreShift(shift)) return
+    if (!discardEditor()) return
     hideError()
     resetEditor()
     restoringShift = shift
@@ -1553,6 +1680,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     } else {
       syncEffectiveHoursForForm(false)
     }
+    showPanel('form')
     focusPanel(admin.formTitle)
   }
 
@@ -1748,6 +1876,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       admin.confirmButton.className = ''
       admin.formCard.hidden = true
       admin.confirmationCard.hidden = false
+      showPanel('confirm')
       focusPanel(admin.confirmationTitle)
       return
     }
@@ -1757,6 +1886,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     if (editingShift && sameDraft(editingShift, draft)) {
       showToast('Изменений нет')
       resetEditor()
+      options.navigatePanel?.('#/shifts', true)
       return
     }
     const targetShift = editingShift ?? restoringShift
@@ -1796,6 +1926,8 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.confirmButton.className = ''
     admin.formCard.hidden = true
     admin.confirmationCard.hidden = false
+    showPanel('confirm')
+    focusPanel(admin.confirmationTitle)
   }
 
   function openCancelConfirmation(shift: VenueStaffScheduleAdminShiftDto) {
@@ -1803,6 +1935,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     if (!admin || !canManage || mutationPending) return
     const state = confirmationStateFor(shift)
     if (!state) return
+    if (!discardEditor()) return
     hideError()
     resetEditor()
     pendingConfirmation = { kind: 'cancel', shift }
@@ -1837,14 +1970,14 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.confirmButton.textContent = 'Отменить смену'
     admin.confirmButton.className = 'button-danger'
     admin.confirmationCard.hidden = false
+    showPanel('confirm')
+    focusPanel(admin.confirmationTitle)
   }
 
   const showBatchMutationError = (error: ApiErrorInfo) => {
     const admin = refs.admin
     if (!admin) return
-    pendingConfirmation = null
-    admin.confirmationCard.hidden = true
-    admin.formCard.hidden = false
+    admin.confirmButton.disabled = true
     refs.error.dataset.severity = 'warn'
     const stale =
       error.code === ApiErrorCodes.STAFF_SHIFT_STALE ||
@@ -1857,9 +1990,9 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
         : 'Пакет отклонён целиком. Проверьте сотрудников и интервалы ещё раз.')
     renderErrorActions(refs.errorActions, [
       {
-        label: 'Проверить смены',
+        label: 'Вернуться к форме',
         kind: 'primary',
-        onClick: () => void openDraftConfirmation()
+        onClick: back
       }
     ])
     renderErrorDetails(refs.errorDetails, error, { isDebug })
@@ -1954,6 +2087,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       if (result.error.code !== REQUEST_ABORTED_CODE) {
         if (result.error.status === 0 || result.error.status >= 500) {
           resetEditor()
+          options.navigatePanel?.('#/shifts', true)
           refs.errorTitle.textContent = 'Результат операции не подтверждён'
           refs.errorMessage.textContent = 'Ответ не получен. Смены могли сохраниться. Обновите график перед новым назначением; запрос не повторён.'
           renderErrorActions(refs.errorActions, [{ label: 'Обновить график', kind: 'primary', onClick: () => void load() }])
@@ -1973,13 +2107,19 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
           : confirmation.kind === 'restore'
             ? 'Смена восстановлена'
             : 'Смена отменена'
+    const affectedDates = confirmation.kind === 'batch' ? confirmation.assignments.map((item) => item.shiftDate)
+      : confirmation.kind === 'cancel' ? [confirmation.shift.shiftDate] : [confirmation.draft.shiftDate]
+    affectedDates.forEach((date) => expandedDates.add(date))
     resetEditor()
+    options.navigatePanel?.('#/shifts', true)
     showToast(success)
     await load()
   }
 
   const disposables: Array<() => void> = []
   disposables.push(
+    on(refs.refreshButton, 'click', () => { if (discardEditor()) { options.navigatePanel?.('#/shifts', true); void load() } }),
+    on(resumeDraft, 'click', () => { if (editorId) showPanel('form') }),
     on(refs.previousButton, 'click', () => setWeek(addIsoDays(weekStart, -7), true)),
     on(refs.nextButton, 'click', () => setWeek(addIsoDays(weekStart, 7), true)),
     on(refs.currentButton, 'click', () => {
@@ -1989,6 +2129,8 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   if (refs.admin) {
     const admin = refs.admin
     const invalidatePreview = () => {
+      editorDirty = true
+      options.onDraftChange?.()
       editorVersion += 1
       previewPending = false
       admin.previewButton.disabled = false
@@ -1999,7 +2141,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       on(admin.formCard, 'change', invalidatePreview),
       on(admin.formCard, 'click', (event) => { if (event.target !== admin.previewButton) invalidatePreview() }),
       on(admin.addButton, 'click', () => openCreateForm()),
-      on(admin.closeFormButton, 'click', resetEditor),
+      on(admin.closeFormButton, 'click', () => { if (discardEditor()) options.navigatePanel?.('#/shifts', true) }),
       on(admin.previewButton, 'click', () => void openDraftConfirmation()),
       on(admin.dateInput, 'input', handleDateChange),
       on(admin.startInput, 'input', markTimesManual),
@@ -2008,15 +2150,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       on(admin.applyHoursButton, 'click', applyVenueHours),
       on(admin.individualTimeButton, 'click', toggleIndividualTimes),
       on(admin.applyCommonTimeButton, 'click', applyCommonTimeToAll),
-      on(admin.closeConfirmationButton, 'click', () => {
-        if (pendingConfirmation?.kind === 'cancel') {
-          resetEditor()
-          return
-        }
-        admin.confirmationCard.hidden = true
-        admin.formCard.hidden = false
-        pendingConfirmation = null
-      }),
+      on(admin.closeConfirmationButton, 'click', back),
       on(admin.confirmButton, 'click', () => void submitConfirmation())
     )
   }

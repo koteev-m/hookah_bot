@@ -133,7 +133,7 @@ function isInWorkStaffCallStatus(status: string) {
   return normalized === 'ACK' || normalized === 'ACKNOWLEDGED' || normalized === 'ACCEPTED'
 }
 
-function buildOwnerHome(options: VenueDashboardOptions): HTMLElement {
+function buildVenueHome(options: VenueDashboardOptions): HTMLElement {
   const { access, canAccessRoute } = options
   const status = access.venueStatus?.trim().toUpperCase()
   const operational = status === 'DRAFT' || status === 'PUBLISHED'
@@ -146,7 +146,7 @@ function buildOwnerHome(options: VenueDashboardOptions): HTMLElement {
     ARCHIVED: 'Заведение в архиве. Доступность восстановления определяется действующими правилами.',
     DELETED: 'Заведение удалено. Доступные действия определяются текущими ограничениями.'
   }
-  append(card, el('h2', { text: 'Работа заведения' }))
+  append(card, el('h2', { text: access.role === 'STAFF' ? 'Моя работа' : 'Работа заведения' }))
   if (status !== 'PUBLISHED') {
     append(card, el('p', { className: 'venue-owner-context', text: messages[status ?? ''] ?? 'Статус публикации не подтверждён. Доступность операций уточните в поддержке.' }))
   }
@@ -163,7 +163,7 @@ function buildOwnerHome(options: VenueDashboardOptions): HTMLElement {
         { route: 'calls', title: 'Вызовы гостей' },
         { route: 'messages', title: 'Переписки' },
         { route: 'extensions', title: 'Запросы продления' },
-        { route: 'shifts', title: 'График смен' },
+        { route: 'shifts', title: access.role === 'STAFF' ? 'Мои смены' : 'График смен' },
         { route: 'menu', title: 'Стоп-лист и меню' }
       ]
     : []
@@ -183,19 +183,16 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
   const { root, backendUrl, isDebug, venueId, access } = options
   if (!root) return () => undefined
 
-  const owner = access.role === 'OWNER'
   const operational = ['DRAFT', 'PUBLISHED'].includes(access.venueStatus?.trim().toUpperCase() ?? '')
-  if (owner && !operational) {
-    root.replaceChildren(buildOwnerHome(options))
+  if (!operational) {
+    root.replaceChildren(buildVenueHome(options))
     return () => undefined
   }
   const showStaffChatStatus = access.role !== 'STAFF'
   const refs = buildDashboardDom(root, { showStaffChatStatus })
   refs.title.textContent = access.venueName?.trim() || `Заведение #${venueId}`
   refs.subtitle.textContent = `Роль: ${venueRoleLabel(access.role)}`
-  if (owner) {
-    refs.title.parentElement?.replaceWith(buildOwnerHome(options))
-  }
+  refs.title.parentElement?.replaceWith(buildVenueHome(options))
   const deps = buildApiDeps(isDebug)
 
   let disposed = false
@@ -244,7 +241,7 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
     const controller = new AbortController()
     loadAbort = controller
     const seq = ++loadSeq
-    const staffCallsPromise = !owner || access.permissions.includes('ORDER_QUEUE_VIEW')
+    const staffCallsPromise = access.permissions.includes('ORDER_QUEUE_VIEW')
       ? venueGetStaffCalls(backendUrl, { venueId, limit: 100 }, deps, controller.signal)
       : Promise.resolve(null)
     const chatPromise = canViewStaffChat

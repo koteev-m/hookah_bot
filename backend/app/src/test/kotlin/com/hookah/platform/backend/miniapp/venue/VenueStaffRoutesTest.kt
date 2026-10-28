@@ -149,7 +149,7 @@ class VenueStaffRoutesTest {
         }
 
     @Test
-    fun `create from member rereads identity ignores forged authority and creates hidden active draft`() =
+    fun `UX08 create from member keeps custom name separate from identity and ignores forged authority`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("staff-create-from-member-authority")
             val config = buildConfig(jdbcUrl)
@@ -189,7 +189,7 @@ class VenueStaffRoutesTest {
                         {
                           "userId": $staffId,
                           "subtype": "waiter",
-                          "displayName": "FORGED_NAME",
+                          "displayName": "  Максим 李 🌿  ",
                           "username": "forged_username",
                           "isGuestVisible": true,
                           "publishedAt": "2020-01-01T00:00:00Z",
@@ -203,19 +203,36 @@ class VenueStaffRoutesTest {
 
             assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
             val responseText = response.bodyAsText()
-            assertFalse(responseText.contains("FORGED_NAME"))
+            assertTrue(responseText.contains("Максим 李 🌿"))
             assertFalse(responseText.contains("forged_username"))
             val created = json.decodeFromString(StaffProfileDto.serializer(), responseText)
             assertEquals(staffId, created.linkedUserId)
             assertEquals("STAFF_LINKED", created.linkageClass)
             assertTrue(created.canManage)
             assertFalse(created.isSelf)
-            assertEquals("Новое Имя", created.displayName)
+            assertEquals("Максим 李 🌿", created.displayName)
             assertEquals(false, created.isGuestVisible)
             assertEquals(null, created.publishedAt)
             assertEquals(null, created.disabledAt)
             assertEquals(1, countActiveLinkedProfiles(jdbcUrl, venueId, staffId))
 
+            assertEquals("Новое Имя", loadStaffMember(client, venueId, ownerToken, staffId).displayName)
+            seedUserIdentity(jdbcUrl, staffId, "later_username", "Позднее", "Имя")
+            val refreshed =
+                client.get("/api/venue/$venueId/staff/profiles") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                }
+            assertEquals(HttpStatusCode.OK, refreshed.status)
+            assertTrue(refreshed.bodyAsText().contains("Максим 李 🌿"))
+            assertFalse(refreshed.bodyAsText().contains("Позднее Имя"))
+            val duplicate =
+                client.post("/api/venue/$venueId/staff/profiles/from-member") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"userId":$staffId,"subtype":"waiter","displayName":"Другое имя"}""")
+                }
+            assertEquals(HttpStatusCode.Conflict, duplicate.status)
+            assertEquals(1, countActiveLinkedProfiles(jdbcUrl, venueId, staffId))
             val auditPayload = loadSingleStaffProfileAuditPayload(jdbcUrl, venueId)
             assertTrue(auditPayload.contains("\"newLinkageClass\":\"STAFF_LINKED\""))
             assertTrue(auditPayload.contains("\"targetRole\":\"STAFF\""))
@@ -223,11 +240,40 @@ class VenueStaffRoutesTest {
                 staffId.toString(),
                 "new_username",
                 "Новое Имя",
-                "FORGED_NAME",
+                "Максим 李 🌿",
                 "forged_username",
                 "isGuestVisible",
                 "publishedAt",
             ).forEach { sensitive -> assertFalse(auditPayload.contains(sensitive)) }
+        }
+
+    @Test
+    fun `UX08 optional name defaults to member identity and accepts maximum Unicode length`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("ux08-profile-name-boundaries")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val ownerId = 1181L
+            val venueId = seedVenueMembership(jdbcUrl, ownerId, "OWNER")
+            for ((offset, customName) in listOf(null, "Я".repeat(120)).withIndex()) {
+                val staffId = 1182L + offset
+                seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+                seedUserIdentity(jdbcUrl, staffId, "nickname", "Имя", "Участника")
+                val nameField = customName?.let { ",\"displayName\":\"$it\"" } ?: ""
+                val response =
+                    client.post("/api/venue/$venueId/staff/profiles/from-member") {
+                        headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, ownerId)}") }
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"userId":$staffId,"subtype":"waiter"$nameField}""")
+                    }
+                assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+                val created = json.decodeFromString(StaffProfileDto.serializer(), response.bodyAsText())
+                assertEquals(customName ?: "Имя Участника", created.displayName)
+                assertEquals(staffId, created.linkedUserId)
+                assertFalse(created.isGuestVisible)
+            }
         }
 
     @Test
@@ -250,6 +296,9 @@ class VenueStaffRoutesTest {
             val invalidBodies =
                 listOf(
                     """{"userId":$staffId}""",
+                    """{"userId":$staffId,"subtype":"waiter","displayName":""}""",
+                    """{"userId":$staffId,"subtype":"waiter","displayName":"   "}""",
+                    """{"userId":$staffId,"subtype":"waiter","displayName":"${"Я".repeat(121)}"}""",
                     """{"userId":$staffId,"subtype":"other"}""",
                     """{"userId":$staffId,"subtype":"other","roleLabel":"   "}""",
                     """{"userId":$staffId,"subtype":"waiter","roleLabel":"Лишняя роль"}""",

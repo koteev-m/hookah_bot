@@ -4,6 +4,26 @@
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
+UX08 local regression scope (`HT-VENUE-TEAM-SCHEDULE-ROLE-UX08`): optional normalized card
+`displayName` in from-member creation, legacy default, Unicode/length/blank boundaries, GET and
+nickname independence, exact linkage, hidden draft, protected/foreign/Staff denials, PostgreSQL
+one-winner concurrency and transactional audit rollback. No migration. Run Kotlin compile/ktlint,
+VenueStaff/StaffInvite/RBAC/Guest/Preview tests and the real PostgreSQL link concurrency suite;
+skips are not PostgreSQL PASS.
+
+Frontend: collapsed 0/1/2/6/10-shift days, distinct computed-status counts, stable toggle/refresh
+focus, no expansion fetch, week/venue reset, date-specific add and existing common/individual/
+restore/CAS scenarios. Cover confirmation→form→week via Telegram, screen and Browser Back/Forward,
+raw draft retention, explicit discard, direct/stale panel links, pending and stale async responses,
+noncancelable exits and offscreen completion, cancel-only confirmation, typed mutation rejection,
+role/venue changes and Owner history parity. Exercise separate Owner/Manager/Staff fixtures, allowed
+routes and direct denials, compact settings, notification/unread and empty/loading/error states.
+Run TypeScript, production build, focused and full Playwright smoke. Inspect synthetic screenshots
+for each role home, collapsed week, 6/10 expanded shifts, form/confirmation and name editing at
+390px, 390×568 and desktop. Real Telegram iPhone keyboard/WebView and staging acceptance remain
+separate, authorized release checks. E is implemented locally by the subsequent
+`HT-UX08-STAFF-PHOTOS-R2-IMPLEMENT-01` task; its test and live-admission boundary is below.
+
 UX03 local regression scope (`HT-VENUE-MENU-TABLES-QR-UX03`): native collapsed hookah flavors,
 90-flavor fixture, keyboard/mobile layout, mutation/retry draft retention and venue isolation;
 sequential/individual table numbers, strict validation, late conflict and audit rollback, table/token
@@ -4441,6 +4461,31 @@ Read-only review, diagnosis, analysis, BLOCKED, FAIL, NOT_PROVABLE and local-fix
 return their actual next step and do not manufacture publication or deploy commands.
 
 
+### Historical V126 runtime and current forward migration
+
+The connected runtime fixture builds the complete unmodified V126-compatible source
+`919abbb813cbbb724d628bdabeef8e905e6a1c42` from a local Git archive. Its full migration tree must
+remain `765956602de896b4498a956753272a6bc2d2971e`; it must be an ancestor of the candidate. This
+is a pinned **test input**, not replacement release authority or a deployable approved image.
+Both connected runtime and ordinary-deploy integration use that actual historical JVM for
+V125 -> V126. Image migration resources must match the archived source exactly. Production
+V126 identities, checksum, schema guard, and all existing positive/negative consumers remain intact.
+
+After historical scenarios, the connected fixture separately builds the current unmodified
+backend and starts it against the same owned V126 PostgreSQL database. It requires exactly
+V127, all 126 historical Flyway rows unchanged, the reviewed photo migration, real current
+Flyway validation with no pending migrations, and both photo tables. The unchanged historical
+schema guard must still reject V127 with exit3. A later migration requires explicit review and
+updated forward expectations; accepting arbitrary higher heads is prohibited. No previous-image
+rollback safety or staging compatibility admission is inferred from this test.
+
+Portable runtime self-tests validate pinned source selection and historical/tail drift refusal.
+Native macOS JVM plus disposable PostgreSQL can supplement this with actual migration evidence;
+it does not replace the mandatory GitHub-hosted Docker/Caddy/systemd/ordinary-deploy gates.
+Guest resolve snapshot tests disable the unrelated subscription billing startup job in their
+fixture (as well as session cleanup); all no-related-writes assertions and both database variants
+remain required. Billing behavior is validated separately.
+
 The HT-RELEASE-REPAIR-01 feature candidate uses the same12 GitHub-hosted Ubuntu jobs.
 The compose job runs the full Linux-required harness plus real owned Caddy and connected
 PG17/Docker/JVM tests; no self-hosted/VPS endpoint is permitted. Endpoint wrappers reject
@@ -4511,3 +4556,52 @@ For the [prospective isolated domain contract](V126_PROSPECTIVE_AUTHORITY_EPOCH.
 Retain the applicable existing legacy/genesis/Policy B/DR/reconciliation suites and negative
 controls, exact source/embedded parity, preservation and independent security review.
 Synthetic consumer PASS is not operational producer evidence or deployment permission.
+
+
+## UX08 E staff-photo validation
+
+`StaffPhotoLifecycleH2Test` and `StaffPhotoLifecyclePostgresTest` share the lifecycle/RBAC/failure
+contract. PostgreSQL must execute without skips. `StaffPhotoConcurrencyPostgresTest` observes a
+real lock waiter at finalization commit; cleanup must recheck its predicate and preserve the new
+candidate. `StaffPhotoRoutesPostgresTest` exercises authenticated routes, authoritative visibility,
+module-disabled revoke and privacy limits independent of upload exhaustion. Image tests use only
+synthetic pixels/EXIF; SDK tests use a loopback S3 server with synthetic credentials, not R2.
+
+Run photo suites plus affected Staff/Invite/Platform membership/Guest/RBAC regression suites,
+compileKotlin and ktlintCheck. Mini App: TypeScript, production build, focused `R2 photos` and UX08,
+then full Playwright smoke. Photo screenshots cover Owner, Manager allowed/protected, Staff own,
+selected preview, completed upload, Guest visible, hidden and deleted at 390×844, 390×568, 1280×900.
+Verify lost-response idempotency, no automatic retry, stale GET suppression, retained Back/pending
+session, role/linkage changes, non-photo drafts and error placeholders. Browser results cannot
+establish real iPhone Telegram photo-picker conversion or Cloudflare connectivity.
+
+Separate staging smoke/configuration and production backup/privacy blockers are in
+`MEDIA_STORAGE_UPLOAD.md`; no live R2 PUT/DELETE or staging migration is authorized by local checks.
+
+
+### UX08 migration head and historical V126 regression boundary
+
+Cursor migration tests retain PostgreSQL V126/H2 V127 as exact historical targets, including
+schema/index/history and dialect-specific DDL failure/rollback assertions. They separately assert
+the reviewed pending tail (PostgreSQL V127/H2 V128 staff photos), execute it, validate the full current
+head and retain existing cursor data/metadata. A future append requires an explicit expected-tail
+update and forward-migration validation; it must not silently turn a historical target into latest.
+
+`test_simple_staging.py` checks the real immutable V1–V126 bootstrap manifest independently from the
+current contiguous V1–V127 manifest. It exercises exact prefix preservation, refusal of fresh V127
+installation, digest-bound forward compatibility review, backup before forward update and schema
+rollback refusal. Its synthetic review is test input, never staging compatibility approval.
+
+`test-v126-cutover.sh` checks its original immutable release snapshot with the original complete,
+PostgreSQL and H2 tree identities, cursor SQL blob/SHA-256/Flyway checksum. Current SQL must preserve
+all historical names, non-executable regular-file modes and bytes; only the explicitly reviewed
+photo migrations may follow. Negative controls cover early SQL edits, executable modes, removal,
+unreviewed tail and reviewed-tail drift. The unchanged production migration guard accepts the
+historical snapshot and rejects the current forward-release tree. This does not authorize using
+the V126 cutover executor for V127, or automatically approve rollback after a schema change.
+
+Run the full backend migration-sanity selectors plus photo persistence, `test_simple_staging.py`,
+the full `test-v126-cutover.sh` and the applicable Compose Linux gates. Actual hosted Linux,
+Caddy/systemd, PostgreSQL17 and the CI libpq18 prerequisites remain mandatory where required.
+Missing tools, platform refusal, skipped tests and portable fixture success do not establish a
+Linux gate PASS. No workflow gate is disabled and no historical production fingerprint is replaced.

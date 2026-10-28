@@ -183,7 +183,8 @@ class VenueStaffMutationConcurrencyPostgresTest {
                         assertEquals(
                             2,
                             observation.waiterPids.size,
-                            "Both production mutations must wait on the deterministic owner lock. " +
+                            "Both production mutations must reach the owner lock, " +
+                                "directly or through the venue lock. " +
                                 observation.diagnostic,
                         )
                         beforeRelease()
@@ -234,7 +235,7 @@ class VenueStaffMutationConcurrencyPostgresTest {
                 WHERE datname = current_database()
                   AND pid <> pg_backend_pid()
                   AND wait_event_type = 'Lock'
-                  AND lower(query) LIKE '%from venue_members%'
+                  AND (lower(query) LIKE '%from venue_members%' OR lower(query) LIKE '%from venues%')
                   AND lower(query) LIKE '%for update%'
             ),
             lock_chain(root_pid, pid, path) AS (
@@ -268,7 +269,7 @@ class VenueStaffMutationConcurrencyPostgresTest {
                 FROM pg_stat_activity
                 WHERE datname = current_database()
                   AND pid <> pg_backend_pid()
-                  AND lower(query) LIKE '%venue_members%'
+                  AND (lower(query) LIKE '%venue_members%' OR lower(query) LIKE '%from venues%')
                 ORDER BY pid
                 """.trimIndent(),
             ).use { resultSet ->

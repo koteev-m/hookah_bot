@@ -68,6 +68,7 @@ export type GuestTodayStaffDto = {
   roleLabel?: string | null
   subtype: 'hookah_master' | 'waiter' | 'admin' | 'other' | string
   photoRef?: string | null
+  photoUrl?: string | null
   bio?: string | null
   tags?: string[]
   shiftDate: string

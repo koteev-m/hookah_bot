@@ -8231,16 +8231,53 @@ EOF
   pass 'recovery tokens, live Flyway refusals, V125 refusal, and terminal behavior verify'
 }
 
+verify_current_migration_lineage() {
+  python3 - "${REPO_ROOT}" "$1" "${EXPECTED_COMPLETE_MIGRATION_TREE}" <<'PYLINEAGE'
+import hashlib
+from pathlib import Path
+import stat
+import subprocess
+import sys
+
+repo, candidate, historical_tree = sys.argv[1:]
+root = Path(candidate)
+entries = subprocess.check_output(['git', '--no-optional-locks', '-C', repo, 'ls-tree', '-rz', historical_tree])
+historical = {}
+for entry in entries.split(b'\0'):
+    if entry:
+        meta, name = entry.split(b'\t', 1)
+        mode, kind, oid = meta.decode().split()
+        if mode != '100644' or kind != 'blob':
+            raise SystemExit('unexpected historical migration object')
+        historical[name.decode()] = oid
+extra = {'postgresql/V127__staff_profile_photos.sql', 'h2/V128__staff_profile_photos.sql'}
+paths = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if not p.is_dir() or p.is_symlink()}
+if set(paths) != set(historical) | extra:
+    raise SystemExit('migration inventory drift')
+for name, path in paths.items():
+    if not stat.S_ISREG(path.lstat().st_mode) or path.is_symlink() or path.lstat().st_mode & 0o111:
+        raise SystemExit('migration object type drift')
+    raw = path.read_bytes()
+    if name in historical:
+        oid = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
+        if oid != historical[name]:
+            raise SystemExit('historical migration drift')
+    elif hashlib.sha256(raw).hexdigest() != '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846':
+        raise SystemExit('staff photo migration drift')
+PYLINEAGE
+}
+
 test_migration_identity() {
   local migration_root='backend/app/src/main/resources/db/migration'
   local postgresql_path="${migration_root}/postgresql/V126__support_thread_read_message_cursor.sql"
   local h2_path="${migration_root}/h2/V127__support_thread_read_message_cursor.sql"
+  # Historical release identity is immutable; current releases may append reviewed migrations.
   local actual
-  actual="$(git -C "${REPO_ROOT}" rev-parse "HEAD:${migration_root}")"
+  actual="$(git -C "${REPO_ROOT}" rev-parse "${RELEASE_SHA}:${migration_root}")"
   [[ "${actual}" == "${EXPECTED_COMPLETE_MIGRATION_TREE}" ]] || fail 'complete migration tree changed'
-  actual="$(git -C "${REPO_ROOT}" rev-parse "HEAD:${migration_root}/postgresql")"
+  actual="$(git -C "${REPO_ROOT}" rev-parse "${RELEASE_SHA}:${migration_root}/postgresql")"
   [[ "${actual}" == "${EXPECTED_POSTGRESQL_MIGRATION_TREE}" ]] || fail 'PostgreSQL migration tree changed'
-  actual="$(git -C "${REPO_ROOT}" rev-parse "HEAD:${migration_root}/h2")"
+  actual="$(git -C "${REPO_ROOT}" rev-parse "${RELEASE_SHA}:${migration_root}/h2")"
   [[ "${actual}" == "${EXPECTED_H2_MIGRATION_TREE}" ]] || fail 'H2 migration tree changed'
   [[ "$(git -C "${REPO_ROOT}" hash-object "${REPO_ROOT}/${postgresql_path}")" == "${EXPECTED_MIGRATION_BLOB}" ]] ||
     fail 'PostgreSQL V126 blob changed'
@@ -8267,7 +8304,50 @@ print(checksum)
 PY
 )"
   [[ "${actual}" == "${EXPECTED_FLYWAY_CHECKSUM}" ]] || fail 'Flyway V126 checksum changed'
-  pass 'migration tree/blob/SHA-256/Flyway identities are exact'
+  verify_current_migration_lineage "${REPO_ROOT}/${migration_root}"
+  local fixture="${TEST_ROOT}/migration-lineage"
+  mkdir -p "${fixture}"
+  cp -R "${REPO_ROOT}/${migration_root}/." "${fixture}/"
+  local early="${fixture}/postgresql/V1__init.sql"
+  # Select the immutable V1 name without assuming its description.
+  early="$(find "${fixture}/postgresql" -name 'V1__*.sql' -print)"
+  printf '\n-- forbidden historical drift\n' >> "${early}"
+  expect_failure 'changed early SQL rejects current lineage' 'historical migration drift' \
+    verify_current_migration_lineage "${fixture}"
+  cp "${REPO_ROOT}/${migration_root}/postgresql/$(basename "${early}")" "${early}"
+  chmod +x "${early}"
+  expect_failure 'executable historical SQL rejects current lineage' 'migration object type drift' \
+    verify_current_migration_lineage "${fixture}"
+  chmod -x "${early}"
+  rm "${early}"
+  expect_failure 'missing early SQL rejects current lineage' 'migration inventory drift' \
+    verify_current_migration_lineage "${fixture}"
+  cp "${REPO_ROOT}/${migration_root}/postgresql/$(basename "${early}")" "${early}"
+  printf 'SELECT 1;\n' > "${fixture}/postgresql/V128__unreviewed.sql"
+  expect_failure 'unreviewed future SQL rejects current lineage' 'migration inventory drift' \
+    verify_current_migration_lineage "${fixture}"
+  rm "${fixture}/postgresql/V128__unreviewed.sql"
+  printf '\n-- forbidden tail drift\n' >> "${fixture}/postgresql/V127__staff_profile_photos.sql"
+  expect_failure 'changed reviewed tail SQL rejects current lineage' 'staff photo migration drift' \
+    verify_current_migration_lineage "${fixture}"
+
+  # Execute the unmodified production migration guard block with real Git objects,
+  # without the surrounding network/Actions/image checks or any deploy side effects.
+  local guard="${TEST_ROOT}/historical-migration-guard.sh"
+  python3 - "${CUTOVER_SCRIPT}" "${guard}" <<'PYGUARD'
+import sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text()
+body = text.split('verify_release_baseline_local() {\n', 1)[1]
+start = body.index("  local migration_root=")
+end = body.index('  [[ "$(docker image inspect', start)
+Path(sys.argv[2]).write_text('source "$1"\nRELEASE_WORKTREE="$2"\nRELEASE_SHA="$3"\ncheck() {\n' + body[start:end] + '\n}\ncheck\n')
+PYGUARD
+  expect_success 'production guard accepts immutable V126 snapshot' \
+    bash "${guard}" "${CUTOVER_SCRIPT}" "${REPO_ROOT}" "${RELEASE_SHA}"
+  expect_failure 'production V126 guard rejects current forward-migration release' 'complete migration tree mismatch' \
+    bash "${guard}" "${CUTOVER_SCRIPT}" "${REPO_ROOT}" "$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  pass 'historical tree/blob/SHA-256/Flyway identities and reviewed append-only lineage are exact'
 }
 
 test_existing_guards() {

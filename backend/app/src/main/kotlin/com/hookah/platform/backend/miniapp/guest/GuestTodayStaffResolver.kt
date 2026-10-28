@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.miniapp.guest.api.GuestTodayStaffDto
 import com.hookah.platform.backend.miniapp.venue.staff.PublicVenueStaffToday
+import com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoRepository
 import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleIntervalState
 import com.hookah.platform.backend.miniapp.venue.staff.StaffScheduleLifecycle
 import com.hookah.platform.backend.miniapp.venue.staff.TodayStaffSource
@@ -17,6 +18,7 @@ import java.util.Locale
 
 class GuestTodayStaffResolver(
     private val venueStaffProfileRepository: VenueStaffProfileRepository,
+    private val staffPhotos: StaffPhotoRepository? = null,
 ) {
     suspend fun resolve(
         venueId: Long,
@@ -65,6 +67,9 @@ class GuestTodayStaffResolver(
                             shiftStatus = "active",
                         )
                     }
+        }.map { person ->
+            val photo = staffPhotos?.publicPhoto(venueId, person.id)
+            person.copy(photoUrl = photo?.let { "/api/guest/venue/$venueId/staff/${person.id}/photos/${it.id}" })
         }
     }
 }

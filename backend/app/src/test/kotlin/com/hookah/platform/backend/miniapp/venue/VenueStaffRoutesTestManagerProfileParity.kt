@@ -283,6 +283,7 @@ class VenueStaffRoutesTestManagerProfileParity {
                             StaffProfileCreateFromMemberRequest(
                                 userId = protectedTargetUserId,
                                 subtype = "admin",
+                                displayName = "Публичное имя",
                             ),
                     )
                 assertEquals(HttpStatusCode.Forbidden, response.status)
@@ -890,7 +891,7 @@ class VenueStaffRoutesTestManagerProfileParity {
         }
 
     @Test
-    fun `manager Today mutation rechecks protected membership after deterministic profile lock race`() =
+    fun `manager Today mutation waits for role promotion through deterministic venue lock chain`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("today-linkage-race")
             val config = buildConfig(jdbcUrl)
@@ -915,34 +916,28 @@ class VenueStaffRoutesTestManagerProfileParity {
 
             DriverManager.getConnection(jdbcUrl, "sa", "").use { barrierConnection ->
                 barrierConnection.autoCommit = false
-                val blockerSessionId = lockProfileAndReadSessionId(barrierConnection, venueId, profileId)
+                val blockerSessionId = lockMembershipAndReadSessionId(barrierConnection, venueId, targetStaffId)
                 try {
                     coroutineScope {
+                        val pendingRole =
+                            async(Dispatchers.IO) {
+                                patchMemberRole(client, venueId, targetStaffId, issueToken(config, ownerId), "MANAGER")
+                            }
+                        val roleSessionId = waitForBlockedSession(jdbcUrl, blockerSessionId)
                         val pendingMutation =
                             async(Dispatchers.IO) {
-                                mutateTodayShift(
-                                    client,
-                                    venueId,
-                                    profileId,
-                                    issueToken(config, managerId),
-                                )
+                                mutateTodayShift(client, venueId, profileId, issueToken(config, managerId))
                             }
                         try {
-                            waitForBlockedSession(jdbcUrl, blockerSessionId)
-
-                            val roleResponse =
-                                patchMemberRole(
-                                    client = client,
-                                    venueId = venueId,
-                                    targetUserId = targetStaffId,
-                                    token = issueToken(config, ownerId),
-                                    role = "MANAGER",
-                                )
-                            assertEquals(HttpStatusCode.OK, roleResponse.status, roleResponse.bodyAsText())
-                            assertEquals("MANAGER", readMembershipRole(jdbcUrl, venueId, targetStaffId))
+                            waitForBlockedSession(jdbcUrl, roleSessionId)
+                            assertFalse(pendingRole.isCompleted)
+                            assertFalse(pendingMutation.isCompleted)
                         } finally {
                             barrierConnection.commit()
                         }
+                        val roleResponse = pendingRole.await()
+                        assertEquals(HttpStatusCode.OK, roleResponse.status, roleResponse.bodyAsText())
+                        assertEquals("MANAGER", readMembershipRole(jdbcUrl, venueId, targetStaffId))
                         val mutationResponse = pendingMutation.await()
                         assertEquals(
                             HttpStatusCode.Forbidden,
@@ -999,6 +994,19 @@ class VenueStaffRoutesTestManagerProfileParity {
 
             assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertEquals(0, countProfiles(jdbcUrl, venueId))
+            assertTrue(fetchProfileAuditRows(jdbcUrl).isEmpty())
+            val staffId = 74_003L
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val linkedResponse =
+                postProfileFromMember(
+                    client,
+                    venueId,
+                    managerToken,
+                    StaffProfileCreateFromMemberRequest(userId = staffId, subtype = "waiter", displayName = "Максим"),
+                )
+            assertEquals(HttpStatusCode.ServiceUnavailable, linkedResponse.status)
+            assertApiErrorEnvelope(linkedResponse, ApiErrorCodes.DATABASE_UNAVAILABLE)
             assertEquals(0, countProfiles(jdbcUrl, venueId))
             assertTrue(fetchProfileAuditRows(jdbcUrl).isEmpty())
         }
@@ -1382,16 +1390,16 @@ class VenueStaffRoutesTestManagerProfileParity {
         }
     }
 
-    private fun lockProfileAndReadSessionId(
+    private fun lockMembershipAndReadSessionId(
         connection: java.sql.Connection,
         venueId: Long,
-        profileId: Long,
+        userId: Long,
     ): Int {
         connection.prepareStatement(
-            "SELECT id FROM staff_profiles WHERE venue_id = ? AND id = ? FOR UPDATE",
+            "SELECT user_id FROM venue_members WHERE venue_id = ? AND user_id = ? FOR UPDATE",
         ).use { statement ->
             statement.setLong(1, venueId)
-            statement.setLong(2, profileId)
+            statement.setLong(2, userId)
             statement.executeQuery().use { rs -> assertTrue(rs.next()) }
         }
         return connection.createStatement().use { statement ->
@@ -1405,30 +1413,31 @@ class VenueStaffRoutesTestManagerProfileParity {
     private suspend fun waitForBlockedSession(
         jdbcUrl: String,
         blockerSessionId: Int,
-    ) {
+    ): Int =
         withTimeout(10_000) {
             DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
                 connection.prepareStatement(
                     """
-                    SELECT COUNT(*)
+                    SELECT SESSION_ID
                     FROM INFORMATION_SCHEMA.SESSIONS
                     WHERE BLOCKER_ID = ? AND SESSION_STATE = 'BLOCKED'
                     """.trimIndent(),
                 ).use { statement ->
                     while (true) {
                         statement.setInt(1, blockerSessionId)
-                        val blocked =
-                            statement.executeQuery().use { rs ->
-                                assertTrue(rs.next())
-                                rs.getInt(1) > 0
+                        val blockedSession =
+                            statement.executeQuery().use {
+                                    rs ->
+                                if (rs.next()) rs.getInt(1) else null
                             }
-                        if (blocked) return@withTimeout
+                        if (blockedSession != null) return@withTimeout blockedSession
                         yield()
                     }
+                    @Suppress("UNREACHABLE_CODE")
+                    error("unreachable")
                 }
             }
         }
-    }
 
     private fun readMembershipRole(
         jdbcUrl: String,
@@ -1542,6 +1551,7 @@ class VenueStaffRoutesTestManagerProfileParity {
     @Serializable
     private data class StaffProfileCreateFromMemberRequest(
         val userId: Long,
+        val displayName: String? = null,
         val subtype: String,
         val roleLabel: String? = null,
     )
