@@ -4461,6 +4461,31 @@ Read-only review, diagnosis, analysis, BLOCKED, FAIL, NOT_PROVABLE and local-fix
 return their actual next step and do not manufacture publication or deploy commands.
 
 
+### Historical V126 runtime and current forward migration
+
+The connected runtime fixture builds the complete unmodified V126-compatible source
+`919abbb813cbbb724d628bdabeef8e905e6a1c42` from a local Git archive. Its full migration tree must
+remain `765956602de896b4498a956753272a6bc2d2971e`; it must be an ancestor of the candidate. This
+is a pinned **test input**, not replacement release authority or a deployable approved image.
+Both connected runtime and ordinary-deploy integration use that actual historical JVM for
+V125 -> V126. Image migration resources must match the archived source exactly. Production
+V126 identities, checksum, schema guard, and all existing positive/negative consumers remain intact.
+
+After historical scenarios, the connected fixture separately builds the current unmodified
+backend and starts it against the same owned V126 PostgreSQL database. It requires exactly
+V127, all 126 historical Flyway rows unchanged, the reviewed photo migration, real current
+Flyway validation with no pending migrations, and both photo tables. The unchanged historical
+schema guard must still reject V127 with exit3. A later migration requires explicit review and
+updated forward expectations; accepting arbitrary higher heads is prohibited. No previous-image
+rollback safety or staging compatibility admission is inferred from this test.
+
+Portable runtime self-tests validate pinned source selection and historical/tail drift refusal.
+Native macOS JVM plus disposable PostgreSQL can supplement this with actual migration evidence;
+it does not replace the mandatory GitHub-hosted Docker/Caddy/systemd/ordinary-deploy gates.
+Guest resolve snapshot tests disable the unrelated subscription billing startup job in their
+fixture (as well as session cleanup); all no-related-writes assertions and both database variants
+remain required. Billing behavior is validated separately.
+
 The HT-RELEASE-REPAIR-01 feature candidate uses the same12 GitHub-hosted Ubuntu jobs.
 The compose job runs the full Linux-required harness plus real owned Caddy and connected
 PG17/Docker/JVM tests; no self-hosted/VPS endpoint is permitted. Endpoint wrappers reject

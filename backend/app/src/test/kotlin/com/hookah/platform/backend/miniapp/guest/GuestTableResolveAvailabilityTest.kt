@@ -193,6 +193,9 @@ open class GuestTableResolveAvailabilityTest {
                 "db.password" to password,
                 "db.maxPoolSize" to "3",
                 "telegram.enabled" to "false",
+                // The billing startup tick can create venue 102's missing subscription
+                // between snapshots, independently of the resolve request under test.
+                "billing.subscription.intervalSeconds" to "0",
             )
         environment { this.config = config }
         application { moduleWithOverrides(ModuleOverrides(tableSessionCleanupEnabled = false)) }

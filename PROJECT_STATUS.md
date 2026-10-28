@@ -1,5 +1,33 @@
 # Project Status
 
+## HT-UX08-LINUX-RUNTIME-CI-REPAIR-01 — runtime fixtures prepared for CI (2026-10-28)
+
+Identity PASS at primary Hookah checkout/common/index; branch
+`codex/ht-venue-team-schedule-roles-ux08`, starting HEAD `151411cafd218642b44336ef85fb3c077a3424ca`,
+parent `0728bde338b13d0c30dabbbad28afcda426b455e`, base `919abbb813cbbb724d628bdabeef8e905e6a1c42`.
+PR232 remains Draft. CI635/636 runtime failures reached READY with a V127-containing current
+backend, then failed exact V126 schema checks. Historical runtime now builds pinned unmodified
+V126-compatible source; current JVM forward migration is a separate mandatory scenario. Historical
+production guards/authority, SQL, workflows and product code remain unchanged.
+
+Guest snapshot isolation now disables unrelated billing startup writes. Its missing subscription
+for synthetic venue102 can be inserted between snapshots; deterministic H2 writer probe reproduced
+1->2 subscription rows without any route request. Original CI expected/actual was not retained
+in logs/artifacts, so attribution of that exact intermittent assertion remains an inference.
+
+Available checks PASS: runtime17, ordinary23, backend67 (32 real PostgreSQL; zero failures/skips),
+Guest repeat54, compileKotlin/ktlint, historical identity/drift negatives, syntax/diff.
+Actual native JVM + Docker PostgreSQL17: V125->V126->V127 PASS; historical checksum1701638026,
+photo checksum881920632,126 rows unchanged, Flyway validate PASS; V126 guard accepts126/rejects127.
+Full hosted Linux runtime/ordinary Caddy/systemd/libpq18 gates remain UNVERIFIED on macOS and
+must pass for the new SHA before merge. No frontend repeat: product/UI bytes unchanged.
+
+Evidence: `.tmp-checks/ht-ux08-runtime-ci-repair/validation.md`, XML and local JVM result.
+Four SQL helpers and stash/archive refs preserved. User authorizes one focused commit and one
+non-force push after available checks/review; this is CI validation, not release acceptance.
+After exact remote SHA verification STOP; user/ChatGPT checks new CI. No deploy, SSH, external
+provider writes, real Telegram actions, migration of live databases or rollback-safety claim.
+
 ## HT-UX08-MIGRATION-CI-FIX-01 — local fixes; Linux validation blocked (2026-10-28)
 
 **HT_UX08_MIGRATION_CI_FIX_BLOCKED**. Three CI regression assumptions repaired locally; no commit,

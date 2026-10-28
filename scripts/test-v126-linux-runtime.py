@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Actual Linux/Docker/JVM/PG17 integration on a disposable GitHub-hosted runner.
 
-Builds a local test image from backend/Dockerfile; never saves/pushes a release image.
+Builds unmodified historical and current backend/Dockerfile test images; never
+saves/pushes a release image. The historical source is a test input, not release authority.
 All containers/networks/volumes have an unguessable ownership label. An internal network
 and private synthetic Telegram TLS endpoint prevent real Telegram requests. Production
 readiness, database equality, schema and extracted preflight consumers run unchanged.
@@ -43,6 +44,12 @@ FIXTURES = ROOT / 'scripts/fixtures/v126-linux-runtime'
 SOURCE = ROOT / 'scripts/v126-cutover.sh'
 LABEL = 'com.hookah.v126.runtime-fixture'
 TRUSTSTORE_PASSWORD = 'synthetic-fixture'
+# Last pre-UX08 source: real compatible backend, not current code with SQL removed.
+V126_RUNTIME_SOURCE = '919abbb813cbbb724d628bdabeef8e905e6a1c42'
+V126_MIGRATION_TREE = '765956602de896b4498a956753272a6bc2d2971e'
+MIGRATION_PATH = 'backend/app/src/main/resources/db/migration'
+V127_SCRIPT = 'V127__staff_profile_photos.sql'
+V127_SHA256 = '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846'
 sys.dont_write_bytecode = True
 SPEC = importlib.util.spec_from_file_location('database_evidence', ROOT / 'scripts/v126-database-evidence.py')
 HELPER = importlib.util.module_from_spec(SPEC)
@@ -56,6 +63,18 @@ class FixtureAssertionError(AssertionError):
 def require(condition, message):
     if not condition:
         raise FixtureAssertionError(message)
+
+
+def verify_historical_history(rows):
+    require(len(rows) == 126 and [row['version'] for row in rows] == [str(v) for v in range(1, 127)]
+            and all(row['success'] for row in rows), 'forward input is not exact successful V1-V126')
+
+
+def verify_forward_history(before, after):
+    verify_historical_history(before)
+    require(len(after) == 127 and after[:126] == before, 'forward migration changed historical Flyway rows')
+    require(after[-1]['version'] == '127' and after[-1]['script'] == V127_SCRIPT
+            and after[-1]['success'] and after[-1]['type'] == 'SQL', 'unexpected forward migration')
 
 
 def hosted_only():
@@ -272,6 +291,7 @@ class Integration:
         self.project = 'ht-v126-runtime-' + self.token
         self.image = 'ht-v126-runtime-fixture:' + self.token
         self.image_id = None
+        self.images = []
         self.copy_container = None
         self.events = []
         self.starts = {}
@@ -279,8 +299,9 @@ class Integration:
         self.backend_relay_cid = None
         self.source_hash = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
         self.diagnostics = Diagnostics(self.evidence, self.source_hash, lambda: getattr(self, 'values', {}))
-        self.release = self.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT).stdout.decode().strip()
-        require(re.fullmatch('[0-9a-f]{40}', self.release), 'invalid source commit')
+        self.current_release = self.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT).stdout.decode().strip()
+        require(re.fullmatch('[0-9a-f]{40}', self.current_release), 'invalid source commit')
+        self.release = V126_RUNTIME_SOURCE
         self.password = 'synthetic_' + self.token
         self.telegram_token = '81001:synthetic_' + self.token
         self.values = {
@@ -493,6 +514,42 @@ class Integration:
         finally:
             connection.close()
 
+    def historical_source(self):
+        self.run(['git', 'merge-base', '--is-ancestor', V126_RUNTIME_SOURCE, self.current_release], cwd=ROOT)
+        tree = self.run(['git', 'rev-parse', V126_RUNTIME_SOURCE + ':' + MIGRATION_PATH], cwd=ROOT).stdout.decode().strip()
+        require(tree == V126_MIGRATION_TREE, 'historical runtime migration identity changed')
+        source = self.root / 'historical-source'
+        source.mkdir()
+        archive = self.run(['git', 'archive', '--format=tar', V126_RUNTIME_SOURCE], cwd=ROOT).stdout
+        self.run(['tar', '-xf', '-', '-C', source], input=archive)
+        return source
+
+    def build_image(self, source, library):
+        self.images.append(self.image)  # Retain ownership even if build/inspection fails.
+        self.run(['docker', 'build', '--label', LABEL + '=' + self.token, '--tag', self.image,
+                  '--file', 'backend/Dockerfile', '.'], cwd=source, timeout=900, diagnostic_category='build')
+        self.image_id = self.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', self.image]).stdout.decode().strip()
+        require(re.fullmatch('sha256:[0-9a-f]{64}', self.image_id), 'test image identity unavailable')
+        self.copy_container = self.run(['docker', 'create', '--label', LABEL + '=' + self.token,
+                                        self.image, '/bin/true']).stdout.decode().strip()
+        self.run(['docker', 'cp', self.copy_container + ':/app/app/lib', str(library)])
+        migrations = {str(path.relative_to(source / 'backend/app/src/main/resources')): path.read_bytes()
+                      for path in (source / MIGRATION_PATH / 'postgresql').glob('*.sql')}
+        embedded = {}
+        for jar in library.glob('*.jar'):
+            with zipfile.ZipFile(jar) as archive:
+                for name in archive.namelist():
+                    if name.startswith('db/migration/postgresql/') and name.endswith('.sql'):
+                        require(name not in embedded, 'duplicate migration resource in actual runtime classpath')
+                        embedded[name] = archive.read(name)
+        require(embedded == migrations, 'actual runtime image migration bytes differ from unchanged source')
+        self.events.append({'checkpoint': 'IMAGE_MIGRATION_BYTES_EXACT', 'source_commit': self.release,
+                            'image_id': self.image_id, 'files': len(migrations),
+                            'v126_sha256': hashlib.sha256(next(value for key, value in embedded.items()
+                                                             if '/V126__' in key)).hexdigest()})
+        self.run(['docker', 'rm', self.copy_container])
+        self.copy_container = None
+
     def prepare(self):
         self.started_at = str(int(time.time()) - 1)
         for command in (['docker', 'version', '--format', '{{.Server.Version}}'], ['docker', 'compose', 'version'],
@@ -500,28 +557,7 @@ class Integration:
             version = self.run(command)
             self.events.append({'version': (version.stdout + version.stderr).decode().strip()})
         require(b' 17.' in self.run(['pg_dump', '--version']).stdout, 'host pg_dump17 is required')
-        self.run(['docker', 'build', '--label', LABEL + '=' + self.token, '--tag', self.image,
-                  '--file', 'backend/Dockerfile', '.'], cwd=ROOT, timeout=900, diagnostic_category='build')
-        self.image_id = self.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', self.image]).stdout.decode().strip()
-        require(re.fullmatch('sha256:[0-9a-f]{64}', self.image_id), 'test image identity unavailable')
-        self.copy_container = self.run(['docker', 'create', '--label', LABEL + '=' + self.token,
-                                        self.image, '/bin/true']).stdout.decode().strip()
-        self.run(['docker', 'cp', self.copy_container + ':/app/app/lib', str(self.root / 'lib')])
-        migrations = {str(path.relative_to(ROOT / 'backend/app/src/main/resources')): path.read_bytes()
-                      for path in (ROOT / 'backend/app/src/main/resources/db/migration/postgresql').glob('*.sql')}
-        embedded = {}
-        for jar in (self.root / 'lib').glob('*.jar'):
-            with zipfile.ZipFile(jar) as archive:
-                for name in archive.namelist():
-                    if name.startswith('db/migration/postgresql/') and name.endswith('.sql'):
-                        require(name not in embedded, 'duplicate migration resource in actual runtime classpath')
-                        embedded[name] = archive.read(name)
-        require(embedded == migrations, 'actual runtime image migration bytes differ from unchanged source')
-        self.events.append({'checkpoint': 'IMAGE_MIGRATION_BYTES_EXACT', 'files': len(migrations),
-                            'v126_sha256': hashlib.sha256(next(value for key, value in embedded.items()
-                                                             if '/V126__' in key)).hexdigest()})
-        self.run(['docker', 'rm', self.copy_container])
-        self.copy_container = None
+        self.build_image(self.historical_source(), self.root / 'lib')
         for name in ('V126RuntimeFixture.java', 'telegram-provider.py'):
             shutil.copyfile(FIXTURES / name, self.fixture / name)
             (self.fixture / name).chmod(0o644)
@@ -676,6 +712,48 @@ class Integration:
             self.events.append({'checkpoint': name, 'exit': code, 'seconds': round(elapsed, 3), 'backend_start_count': 1})
             self.compose('rm', '--stop', '--force', 'backend')
         require(self.stats()['unexpected'] == 0, 'synthetic provider observed unexpected operation')
+        self.values = original
+        self.write_inputs()
+
+    def history(self):
+        # Flyway metadata only; no credentials or domain rows are emitted.
+        return [json.loads(row) for row in self.sql(
+            'SELECT row_to_json(h) FROM flyway_schema_history h ORDER BY installed_rank;').splitlines()]
+
+    def forward_sequence(self):
+        before = self.history()
+        verify_historical_history(before)
+        photo = ROOT / MIGRATION_PATH / 'postgresql' / V127_SCRIPT
+        require(hashlib.sha256(photo.read_bytes()).hexdigest() == V127_SHA256, 'unreviewed current migration bytes')
+        self.release = self.current_release
+        self.image = 'ht-v127-runtime-fixture:' + self.token
+        self.build_image(ROOT, self.root / 'current-lib')
+        self.values.update(APP_VERSION=self.release, BACKEND_IMAGE=self.image)
+        self.write_inputs()
+        self.compose('create', '--no-build', 'backend')
+        cid = self.cid('backend')
+        self.start_once(cid)
+        result, output, _ = self.observe(cid)
+        require(result.returncode == 0 and b'READINESS=READY' in output, 'current JVM did not become ready after V127')
+        self.check_starts(cid)
+        after = self.history()
+        verify_forward_history(before, after)
+        # The current image's real Flyway validates every checksum and absence of pending SQL.
+        self.run(['docker', 'exec', cid, 'java', '-cp', '/app/app/lib/*:/fixture',
+                  'V126RuntimeFixture', 'validate127'], timeout=60)
+        require(self.sql("SELECT count(*) FROM information_schema.tables WHERE table_schema='public' "
+                         "AND table_name IN ('staff_profile_photos','staff_profile_photo_state');") == b'2\n',
+                'photo schema missing after current JVM migration')
+        rejected = self.shell('remote_compose() { command docker compose --env-file .env --file docker-compose.yml "$@"; }\n'
+                              'remote_assert_schema_v126\n', env={'BACKEND_IMAGE': self.image}, check=False)
+        require(rejected.returncode == 3, 'historical V126 schema guard accepted forward schema')
+        self.events.append({'checkpoint': 'ACTUAL_CURRENT_JVM_V126_TO_V127', 'source_commit': self.release,
+                            'image_id': self.image_id, 'historical_rows_unchanged': 126,
+                            'history_sha256': hashlib.sha256(json.dumps(after, sort_keys=True).encode()).hexdigest(),
+                            'forward_version': after[-1]['version'], 'forward_checksum': after[-1]['checksum'],
+                            'historical_schema_guard_exit': rejected.returncode,
+                            'rollback_safety': 'NOT_CLAIMED'})
+        self.compose('rm', '--stop', '--force', 'backend')
 
     def cleanup(self):
         try:
@@ -700,13 +778,14 @@ class Integration:
         if (self.root / 'docker-compose.yml').exists():
             if self.compose('down', '--volumes', '--remove-orphans', '--timeout', '5', check=False, timeout=90).returncode:
                 failed.append('owned Compose resources')
-        image = self.run(['docker', 'image', 'inspect', self.image], check=False)
-        if image.returncode == 0:
-            rows = json.loads(image.stdout)
-            require(len(rows) == 1 and rows[0]['Config']['Labels'].get(LABEL) == self.token,
-                    'refuse cleanup of an image with different ownership')
-            if self.run(['docker', 'image', 'rm', '--no-prune', self.image], check=False).returncode:
-                failed.append('owned test image')
+        for name in self.images:
+            image = self.run(['docker', 'image', 'inspect', name], check=False)
+            if image.returncode == 0:
+                rows = json.loads(image.stdout)
+                require(len(rows) == 1 and rows[0]['Config']['Labels'].get(LABEL) == self.token,
+                        'refuse cleanup of an image with different ownership')
+                if self.run(['docker', 'image', 'rm', '--no-prune', name], check=False).returncode:
+                    failed.append('owned test image')
         for kind, args in [('container', ['ps', '-aq']), ('volume', ['volume', 'ls', '-q']), ('network', ['network', 'ls', '-q'])]:
             result = self.run(['docker', *args, '--filter', 'label=' + LABEL + '=' + self.token], check=False)
             if result.returncode or result.stdout.strip():
@@ -721,6 +800,7 @@ def execute_fixture(fixture):
         fixture.prepare()
         fixture.positive_sequence()
         fixture.negative_sequence()
+        fixture.forward_sequence()
         require(hashlib.sha256(SOURCE.read_bytes()).hexdigest() == fixture.source_hash, 'sequencer source changed during runtime test')
         status = 'PASSED'
     except BaseException as error:
@@ -855,6 +935,9 @@ class DiagnosticsTest(unittest.TestCase):
             def negative_sequence(inner):
                 pass
 
+            def forward_sequence(inner):
+                pass
+
             def cleanup(inner):
                 if cleanup_error:
                     raise cleanup_error
@@ -902,6 +985,46 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertEqual(record['locations'][-1]['function'], 'test_unknown_failure_keeps_only_safe_own_traceback_locations')
         self.assertEqual(record['locations'][-1]['file'], 'scripts/test-v126-linux-runtime.py')
         self.assertGreater(record['locations'][-1]['line'], 0)
+
+
+class MigrationRuntimeTest(unittest.TestCase):
+    def test_historical_context_is_complete_pinned_source_with_original_migration_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Integration(Path(directory) / 'evidence')
+            try:
+                source = fixture.historical_source()
+                self.assertEqual(fixture.release, V126_RUNTIME_SOURCE)
+                self.assertEqual(fixture.values['APP_VERSION'], V126_RUNTIME_SOURCE)
+                for name in ('backend/Dockerfile', 'backend/app/src/main/kotlin/com/hookah/platform/backend/Application.kt'):
+                    expected = fixture.run(['git', 'show', V126_RUNTIME_SOURCE + ':' + name], cwd=ROOT).stdout
+                    self.assertEqual((source / name).read_bytes(), expected)
+                self.assertEqual(len(list((source / MIGRATION_PATH / 'postgresql').glob('*.sql'))), 126)
+                self.assertFalse((source / MIGRATION_PATH / 'postgresql' / V127_SCRIPT).exists())
+                # Missing/wrong pinned identity must fail before extracting/building.
+                with patch(__name__ + '.V126_MIGRATION_TREE', '0' * 40), self.assertRaises(FixtureAssertionError):
+                    fixture.historical_source()
+            finally:
+                fixture.temp.cleanup()
+
+    def test_forward_requires_exact_history_and_only_reviewed_tail(self):
+        before = [dict(version=str(v), script='V' + str(v) + '__fixture.sql', checksum=v,
+                       success=True, type='SQL', installed_rank=v) for v in range(1, 127)]
+        tail = dict(version='127', script=V127_SCRIPT, checksum=127, success=True, type='SQL', installed_rank=127)
+        after = before + [tail]
+        verify_forward_history(before, after)
+        for key, value in (('checksum', -1), ('script', 'changed.sql'), ('success', False), ('installed_rank', 999)):
+            changed = [dict(row) for row in after]
+            changed[0][key] = value
+            with self.subTest(historical=key), self.assertRaises(FixtureAssertionError):
+                verify_forward_history(before, changed)
+        for key, value in (('version', '128'), ('script', 'unknown.sql'), ('success', False), ('type', 'BASELINE')):
+            with self.subTest(tail=key), self.assertRaises(FixtureAssertionError):
+                verify_forward_history(before, before + [dict(tail, **{key: value})])
+        for changed in (before, after + [tail], after[1:]):
+            with self.assertRaises(FixtureAssertionError):
+                verify_forward_history(before, changed)
+        with self.assertRaises(FixtureAssertionError):
+            verify_historical_history(before[:-1])
 
 
 class TransportTest(unittest.TestCase):
@@ -1112,7 +1235,7 @@ def main():
     args = parser.parse_args()
     if args.diagnostics_self_test:
         suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
-                                  for case in (DiagnosticsTest, TransportTest, ComposeParserTest))
+                                  for case in (DiagnosticsTest, MigrationRuntimeTest, TransportTest, ComposeParserTest))
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         return 0 if result.wasSuccessful() else 1
     hosted_only()
