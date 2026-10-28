@@ -25,6 +25,11 @@ class SupportThreadReadCursorMigrationH2Test {
         assertions().assertConflictingUnreadIndexFollowsFailureContract()
     }
 
+    @Test
+    fun `reviewed photo migration reaches current head without changing cursor contract`() {
+        assertions().assertForwardMigrationReachesCurrentHead()
+    }
+
     private fun assertions(): SupportThreadReadCursorMigrationAssertions =
         SupportThreadReadCursorMigrationAssertions(
             dataSource =
@@ -39,6 +44,7 @@ class SupportThreadReadCursorMigrationH2Test {
             location = "classpath:db/migration/h2",
             previousVersion = "126",
             expectedVersion = "127",
+            expectedFollowingMigrations = mapOf("128" to "V128__staff_profile_photos.sql"),
             ddlFailureContract = MigrationDdlFailureContract.NON_TRANSACTIONAL,
         )
 }

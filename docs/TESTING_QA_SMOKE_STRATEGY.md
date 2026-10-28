@@ -4552,3 +4552,31 @@ establish real iPhone Telegram photo-picker conversion or Cloudflare connectivit
 
 Separate staging smoke/configuration and production backup/privacy blockers are in
 `MEDIA_STORAGE_UPLOAD.md`; no live R2 PUT/DELETE or staging migration is authorized by local checks.
+
+
+### UX08 migration head and historical V126 regression boundary
+
+Cursor migration tests retain PostgreSQL V126/H2 V127 as exact historical targets, including
+schema/index/history and dialect-specific DDL failure/rollback assertions. They separately assert
+the reviewed pending tail (PostgreSQL V127/H2 V128 staff photos), execute it, validate the full current
+head and retain existing cursor data/metadata. A future append requires an explicit expected-tail
+update and forward-migration validation; it must not silently turn a historical target into latest.
+
+`test_simple_staging.py` checks the real immutable V1–V126 bootstrap manifest independently from the
+current contiguous V1–V127 manifest. It exercises exact prefix preservation, refusal of fresh V127
+installation, digest-bound forward compatibility review, backup before forward update and schema
+rollback refusal. Its synthetic review is test input, never staging compatibility approval.
+
+`test-v126-cutover.sh` checks its original immutable release snapshot with the original complete,
+PostgreSQL and H2 tree identities, cursor SQL blob/SHA-256/Flyway checksum. Current SQL must preserve
+all historical names, non-executable regular-file modes and bytes; only the explicitly reviewed
+photo migrations may follow. Negative controls cover early SQL edits, executable modes, removal,
+unreviewed tail and reviewed-tail drift. The unchanged production migration guard accepts the
+historical snapshot and rejects the current forward-release tree. This does not authorize using
+the V126 cutover executor for V127, or automatically approve rollback after a schema change.
+
+Run the full backend migration-sanity selectors plus photo persistence, `test_simple_staging.py`,
+the full `test-v126-cutover.sh` and the applicable Compose Linux gates. Actual hosted Linux,
+Caddy/systemd, PostgreSQL17 and the CI libpq18 prerequisites remain mandatory where required.
+Missing tools, platform refusal, skipped tests and portable fixture success do not establish a
+Linux gate PASS. No workflow gate is disabled and no historical production fingerprint is replaced.

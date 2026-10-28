@@ -37,6 +37,25 @@ def image(letter='a', count=126):
             'ci': {'id': 1}}
 
 
+def real_manifest(historical=False):
+    root = Path(__file__).resolve().parents[1]
+    location = 'backend/app/src/main/resources/db/migration/postgresql'
+    raw = io.BytesIO()
+    if historical:
+        revision = 'ecb09601975678a41d89e5c824cc7812c7876481'
+        names = subprocess.check_output(['git', '--no-optional-locks', '-C', str(root),
+                                         'ls-tree', '--name-only', revision + ':' + location], text=True).splitlines()
+    else:
+        names = [p.name for p in (root / location).glob('*.sql')]
+    with zipfile.ZipFile(raw, 'w') as out:
+        for name in names:
+            data = (subprocess.check_output(['git', '--no-optional-locks', '-C', str(root),
+                                            'show', revision + ':' + location + '/' + name])
+                    if historical else (root / location / name).read_bytes())
+            out.writestr('db/migration/postgresql/' + name, data)
+    return s.manifest(raw.getvalue())
+
+
 def record(img):
     return {k: img[k] for k in ('image', 'revision', 'ci_run')}
 
@@ -224,12 +243,39 @@ class ContractTests(unittest.TestCase):
         c = config(); c['runtime']['DB_JDBC_URL'] = 'foreign'
         with self.assertRaises(s.Refused): s.validate_config(c)
     def test_real_migration_manifest_v1_to_v126(self):
-        raw = io.BytesIO()
-        root = Path(__file__).resolve().parents[1] / 'backend/app/src/main/resources/db/migration/postgresql'
-        with zipfile.ZipFile(raw, 'w') as out:
-            for p in root.glob('*.sql'): out.writestr('db/migration/postgresql/' + p.name, p.read_bytes())
-        rows = s.manifest(raw.getvalue()); self.assertEqual(len(rows), 126)
-        self.assertEqual(rows[-1]['version'], 126)
+        rows = real_manifest(historical=True)
+        self.assertEqual([r['version'] for r in rows], list(range(1, 127)))
+        self.assertEqual(rows[-1]['script'], 'V126__support_thread_read_message_cursor.sql')
+
+    def test_current_manifest_is_exact_append_only_v127(self):
+        historical, current = real_manifest(True), real_manifest()
+        self.assertEqual(current[:126], historical)
+        self.assertEqual([r['version'] for r in current], list(range(1, 128)))
+        self.assertEqual(current[-1]['script'], 'V127__staff_profile_photos.sql')
+        self.assertEqual(current[-1]['sha256'], '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846')
+        review = dict(from_manifest=s.digest(historical), to_manifest=s.digest(current),
+                      backward_compatible=True, reason='Synthetic test review of additive staff photo tables; not staging approval.')
+        with self.assertRaisesRegex(s.Refused, 'EXACT_COMPATIBILITY_REVIEW'): s.compatibility(historical, current)
+        s.compatibility(historical, current, review)
+        for field in ('sha256', 'checksum', 'script'):
+            drift = copy.deepcopy(current); drift[0][field] = 'changed'
+            with self.subTest(field=field), self.assertRaisesRegex(s.Refused, 'APPEND_ONLY'):
+                s.compatibility(historical, drift, review)
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = MemoryStaging(Path(tmp).resolve())
+            bootstrap, target = image(), image('b', 127)
+            bootstrap['manifest'], target['manifest'] = historical, current
+            runtime.images.update({bootstrap['image']: bootstrap, target['image']: target})
+            with self.assertRaisesRegex(s.Refused, 'EXACT_V126'): runtime.apply('install', record(target))
+            self.assertEqual(runtime.calls, [])
+            self.assertEqual(runtime.apply('install', record(bootstrap))['schema'], 126)
+            with self.assertRaisesRegex(s.Refused, 'REVIEW'): runtime.apply('deploy', record(target))
+            self.assertEqual(runtime.history(), s.history_for(historical))
+            self.assertEqual(runtime.apply('deploy', record(target), review)['schema'], 127)
+            self.assertEqual(runtime.history(), s.history_for(current))
+            self.assertEqual(len(runtime.backups), 1)
+            with self.assertRaisesRegex(s.Refused, 'SCHEMA_ROLLBACK'): runtime.apply('rollback')
+
     def test_bad_image_rejected_before_docker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve(); s.atomic(root / 'config.json', config())

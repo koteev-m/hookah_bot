@@ -1,5 +1,40 @@
 # Project Status
 
+## HT-UX08-MIGRATION-CI-FIX-01 — local fixes; Linux validation blocked (2026-10-28)
+
+**HT_UX08_MIGRATION_CI_FIX_BLOCKED**. Three CI regression assumptions repaired locally; no commit,
+push, merge, deploy, Cloudflare/server/Telegram mutation. Both original UX08 commits preserved.
+Identity PASS: Hookah_Tootah primary checkout/common dir/index, expected branch
+`codex/ht-venue-team-schedule-roles-ux08`, HEAD `0728bde338b13d0c30dabbbad28afcda426b455e`,
+parent `1acdd0afb61702f8ca39b8492b3835bf83b1c012`, base `919abbb813cbbb724d628bdabeef8e905e6a1c42`.
+Read-only origin feature/main matched HEAD/base. CI633/634 independently confirmed terminal red
+on this exact HEAD; job logs verified the cursor pending-tail, manifest127vs126 and historical-tree
+assertion failures. Missing Caddy/pg_dump/systemd-tool failures followed skipped prerequisite install.
+
+Changed tests retain historical cursor heads and rollback/index contracts, assert exact reviewed
+pending tail and apply full PG127/H2128. Real bootstrap126/current127 manifests exercise existing
+fresh-install/review/backup/rollback refusal policies. Cutover harness checks the pinned historical
+snapshot independently from the reviewed append-only working tree, with byte/inventory/executable
+mode/tail negatives and unchanged production guard rejection of the current release tree.
+Historical trees/blob/SHA/Flyway fingerprints, all SQL, production guards/controller, workflow,
+Mini App and product runtime bytes are unchanged. Four SQL helpers and stash/archive refs preserved.
+
+Executed: cursor10/10; full migration-sanity plus photo persistence165/165 (83 real PostgreSQL,
+16 suites, zero failed/errored/skipped); compileKotlin/ktlintCheck PASS. Simple staging55/55;
+focused lineage/production guard positives+negatives PASS; actual psql17/libpq17/PostgreSQL17
+11/11 PASS. Read-only independent release-safety source review PASS; executable-mode P2 closed.
+Full cutover harness attempted and FAILED at Linux-specific `/usr/lib/postgresql/17/bin/psql`
+in database-evidence fixtures; Caddy/systemd hosted-Linux guards also refuse macOS. These are
+validation-environment failures, not PASS/skips. Hosted libpq18, complete cutover and required
+Compose Linux Caddy/systemd/connected-runtime gates remain unverified; conditional commit withheld.
+
+Evidence: `.tmp-checks/ht-ux08-migration-ci-fix/validation.md`, saved XML/JSON and logs. Index empty;
+seven tracked test/docs/checkpoint edits remain for continuation, plus original `?? scripts/dev/`.
+No frontend rerun: its committed bytes remain unchanged and prior exact UX08 evidence applies.
+Next: validate these exact changes on an explicitly authorized disposable Linux runner with all real
+prerequisites; only after full PASS create the one authorized local fix commit. Publishing it remains
+separately authorized. No workflow dispatch/rerun is authorized by this local task.
+
 ## HT-UX08-STAFF-PHOTOS-R2-IMPLEMENT-01 — R2 photos local ready (2026-10-28)
 
 **HT_UX08_R2_PHOTOS_LOCAL_READY**. UX08 E is implemented and validated locally; this supersedes
