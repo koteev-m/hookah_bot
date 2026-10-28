@@ -5022,6 +5022,9 @@ async function mockVenueStaffChatApi(
   let generated = 0
   const staffInviteRequests: Array<{ role?: string }> = []
   let pendingInvites = (options.pendingInvites ?? []).map((invite) => ({ ...invite }))
+  const reissueRequests: string[] = []
+  const deferredReissueResponses: Array<Promise<void>> = []
+  let loseReissueResponse = false
   const revokedInviteHandles: string[] = []
   let testMessages = 0
   let unlinks = 0
@@ -5572,6 +5575,33 @@ async function mockVenueStaffChatApi(
       await route.fulfill(jsonResponse({ invites: pendingInvites }))
       return
     }
+    const reissueMatch = path.match(/^\/api\/venue\/1\/staff\/invites\/([^/]+)\/reissue$/)
+    if (request.method() === 'POST' && reissueMatch) {
+      const handle = decodeURIComponent(reissueMatch[1])
+      reissueRequests.push(handle)
+      const existing = pendingInvites.find((invite) => invite.handle === handle)
+      if (!existing || (role === 'MANAGER' && existing.role !== 'STAFF')) {
+        await route.fulfill(jsonResponse({ error: { code: 'INVALID_INPUT', message: 'Invite unavailable' } }, 400))
+        return
+      }
+      const freshHandle = `reissued-${reissueRequests.length}`
+      const code = `SYNTHETIC_REISSUE_${reissueRequests.length}`
+      pendingInvites = pendingInvites.filter((invite) => invite.handle !== handle)
+      pendingInvites.push({ ...existing, handle: freshHandle })
+      await deferredReissueResponses.shift()
+      if (loseReissueResponse) {
+        loseReissueResponse = false
+        await route.abort('failed')
+        return
+      }
+      await route.fulfill(jsonResponse({
+        handle: freshHandle, inviteCode: code, role: existing.role, expiresAt: existing.expiresAt,
+        ttlSeconds: 604800, venueName: 'Микс', startPayload: `staff_invite_${code}`,
+        deepLink: `https://t.me/TestHookahBot?start=staff_invite_${code}`,
+        fallbackCommand: `/start staff_invite_${code}`
+      }))
+      return
+    }
     const revokeMatch = path.match(/^\/api\/venue\/1\/staff\/invites\/([^/]+)\/revoke$/)
     if (request.method() === 'POST' && revokeMatch) {
       const handle = decodeURIComponent(revokeMatch[1])
@@ -5690,6 +5720,13 @@ async function mockVenueStaffChatApi(
       return release
     },
     getPendingInvites: () => pendingInvites.map((invite) => ({ ...invite })),
+    getReissueRequests: () => [...reissueRequests],
+    loseNextReissueResponse: () => { loseReissueResponse = true },
+    deferNextReissueResponse: () => {
+      let release = () => undefined
+      deferredReissueResponses.push(new Promise<void>((resolve) => { release = resolve }))
+      return release
+    },
     getRevokedInviteHandles: () => [...revokedInviteHandles],
     getProfileCreateRequests: () => profileCreateRequests,
     getProfileCreateFromMemberRequests: () => profileCreateFromMemberRequests,
@@ -6016,6 +6053,7 @@ async function mockVenueStaffScheduleApi(
   const listRequests: Array<{ venueId: number; path: string; from: string | null; to: string | null }> = []
   const mutationErrors: Array<{ status: number; code: string; message: string }> = []
   const deferredLoads = new Map<number, Array<{ promise: Promise<void>; release: () => void }>>()
+  let loseBatchResponse = false
 
   const deferNextList = (venueId: number) => {
     let release = () => undefined
@@ -6249,6 +6287,7 @@ async function mockVenueStaffScheduleApi(
       }
 
       adminShifts.set(venueId, working)
+      if (loseBatchResponse) { loseBatchResponse = false; await route.abort('failed'); return }
       await route.fulfill(jsonResponse({ shifts: responseShifts }))
       return
     }
@@ -6325,6 +6364,7 @@ async function mockVenueStaffScheduleApi(
 
   return {
     getMutations: () => [...mutations],
+    loseNextBatchResponse: () => { loseBatchResponse = true },
     getBatchRequests: () => mutations.filter((mutation) => mutation.path.endsWith('/batch')),
     getRestoreRequests: () => mutations.filter((mutation) => mutation.path.endsWith('/restore')),
     getAdminShifts: (venueId: number) =>
@@ -15108,7 +15148,7 @@ test('staff shift form uses effective venue hours without overwriting manual or 
 
   const schedule = page.locator('.venue-staff-schedule')
   await expect(schedule).toContainText('Asia/Yekaterinburg')
-  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
   const form = schedule.locator('.venue-schedule-form')
   const date = form.getByLabel('Дата начала')
   const start = form.getByLabel('Начало')
@@ -15192,7 +15232,7 @@ test('staff shift AUTO clears stale hours on load error and retries an aborted d
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
-  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
   const form = schedule.locator('.venue-schedule-form')
   const date = form.getByLabel('Дата начала')
   const start = form.getByLabel('Начало')
@@ -15232,23 +15272,22 @@ test('staff bulk draft refreshes AUTO hours and does not leak canceled saved tim
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
-  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
   const form = schedule.locator('.venue-schedule-form')
   const date = form.getByLabel('Дата начала')
 
   await form.getByLabel('Выбрать Анна').check()
-  await expect(form.getByLabel('Начало — Анна')).toHaveValue('19:00')
-  await expect(form.getByLabel('Окончание — Анна')).toHaveValue('01:00')
+  await expect(form).toContainText('Ранее отменена. Прежнее время: 19:00–01:00, следующий день.')
+  await expect(form.locator('input[type=time]:visible')).toHaveCount(2)
 
   await date.fill('2030-01-08')
-  await expect(form.getByLabel('Начало — Анна')).toHaveValue('20:00')
-  await expect(form.getByLabel('Окончание — Анна')).toHaveValue('04:00')
-  await form.getByLabel('Убрать Анна').click()
+  await expect(form.locator('.venue-schedule-draft-summary')).toContainText('Анна · 20:00–04:00, следующий день')
+  await form.getByLabel('Выбрать Анна').uncheck()
 
   await date.fill('2030-01-07')
   await form.getByLabel('Выбрать Светлана').check()
-  await expect(form.getByLabel('Начало — Светлана')).toHaveValue('18:00')
-  await expect(form.getByLabel('Окончание — Светлана')).toHaveValue('02:00')
+  await expect(form.locator('.venue-schedule-draft-summary')).toContainText('Светлана · 18:00–02:00, следующий день')
+  await expect(form.locator('input[type=time]:visible')).toHaveCount(2)
 
   api.setEffectiveHours(1, {
     serviceDate: '2030-01-07',
@@ -15279,7 +15318,7 @@ test('venue owner assigns multiple staff with common and individual hours and ex
   await expect(canceledRow).toContainText('19:00–01:00, следующий день')
   await expect(canceledRow.getByRole('button', { name: 'Восстановить' })).toBeVisible()
 
-  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
   const form = schedule.locator('.venue-schedule-form')
   await expect(form.getByLabel('Начало')).toHaveValue('18:00')
   await expect(form.getByLabel('Окончание')).toHaveValue('02:00')
@@ -15289,9 +15328,12 @@ test('venue owner assigns multiple staff with common and individual hours and ex
   await form.getByLabel('Выбрать Максим').check()
   await form.getByLabel('Выбрать Анна').check()
   await form.getByLabel('Выбрать Алексей').check()
+  await expect(form.locator('input[type=time]:visible')).toHaveCount(2)
+  await form.getByRole('button', { name: 'Настроить время отдельно' }).click()
 
   await form.getByLabel('Начало — Максим').fill('20:00')
   await form.getByLabel('Окончание — Максим').fill('00:00')
+  page.once('dialog', (dialog) => dialog.accept())
   await form.getByRole('button', { name: 'Применить общее время всем' }).click()
   await expect(form.getByLabel('Начало — Максим')).toHaveValue('18:00')
   await expect(form.getByLabel('Окончание — Максим')).toHaveValue('02:00')
@@ -15300,7 +15342,7 @@ test('venue owner assigns multiple staff with common and individual hours and ex
 
   await form.getByLabel('Убрать Алексей').click()
   await expect(form.getByLabel('Выбрать Алексей')).not.toBeChecked()
-  await expect(form).toContainText('Смена на эту дату была отменена.')
+  await expect(form).toContainText('Ранее отменена.')
 
   const checkButton = form.getByRole('button', { name: 'Проверить смены' })
   await checkButton.click()
@@ -15416,7 +15458,7 @@ test('scheduled staff conflict blocks the whole bulk confirmation', async ({ pag
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
-  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
   const form = schedule.locator('.venue-schedule-form')
   await form.getByLabel('Дата начала').fill('2030-01-08')
   await form.getByLabel('Выбрать Алексей').check()
@@ -15444,7 +15486,7 @@ test('atomic staff batch error keeps every schedule row unchanged and draft retr
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
-  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
   const form = schedule.locator('.venue-schedule-form')
   await form.getByLabel('Выбрать Светлана').check()
   await form.getByLabel('Выбрать Максим').check()
@@ -15480,7 +15522,7 @@ test('venue owner manages a weekly staff schedule with local overnight copy', as
   await expect(schedule).toContainText('22:00–06:00, следующий день')
   await expect(schedule).toContainText('Запланирована')
 
-  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
   const form = schedule.locator('.venue-schedule-form')
   await form.getByLabel('Дата начала').fill('2030-01-10')
   await expect(form).toContainText('Часы работы заведения на этот день не настроены.')
@@ -15572,13 +15614,13 @@ test('venue manager has the same staff schedule editor controls', async ({ page 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'График смен')
   const schedule = page.locator('.venue-staff-schedule')
-  await expect(schedule.getByRole('button', { name: 'Добавить смену' })).toBeVisible()
+  await expect(schedule.getByRole('button', { name: 'Добавить смену', exact: true })).toBeVisible()
   const row = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Алексей' })
   await expect(row.getByRole('button', { name: 'Редактировать' })).toBeVisible()
   await expect(row.getByRole('button', { name: 'Отменить' })).toBeVisible()
   const canceledRow = schedule.locator('.venue-schedule-shift').filter({ hasText: 'Анна' })
   await expect(canceledRow.getByRole('button', { name: 'Восстановить' })).toBeVisible()
-  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
   await expect(schedule.getByLabel('Выбрать Светлана')).toBeVisible()
   await expect(schedule.getByRole('button', { name: 'Проверить смены' })).toBeVisible()
 })
@@ -15609,7 +15651,7 @@ test('venue staff sees only own shifts and safe overlapping colleagues', async (
   await expect(schedule).toContainText('Коллеги в этой смене')
   await expect(schedule).toContainText('Светлана · Бармен · 01:00–05:00 · Запланирована')
   await expect(schedule).not.toContainText('linkedUserId')
-  await expect(schedule.getByRole('button', { name: 'Добавить смену' })).toHaveCount(0)
+  await expect(schedule.getByRole('button', { name: 'Добавить смену', exact: true })).toHaveCount(0)
   await expect(schedule.getByRole('button', { name: 'Редактировать' })).toHaveCount(0)
   await expect(schedule.getByRole('button', { name: 'Отменить' })).toHaveCount(0)
   await expect(schedule.getByRole('button', { name: 'Восстановить' })).toHaveCount(0)
@@ -15697,7 +15739,7 @@ test('staff schedule venue switch clears draft ignores late response and restore
   await openVenueSection(page, 'График смен')
   let schedule = page.locator('.venue-staff-schedule')
   await expect(schedule).toContainText('Алексей')
-  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
   let form = schedule.locator('.venue-schedule-form')
   await form.getByLabel('Выбрать Светлана').check()
   await expect(form.getByLabel('Выбрать Светлана')).toBeChecked()
@@ -15713,7 +15755,7 @@ test('staff schedule venue switch clears draft ignores late response and restore
   await expect(schedule).not.toContainText('Алексей')
   await expect.poll(() => new URL(page.url()).searchParams.get('venueId')).toBe('2')
 
-  await schedule.getByRole('button', { name: 'Добавить смену' }).click()
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
   form = schedule.locator('.venue-schedule-form')
   await expect(form.locator('.venue-schedule-profile-option input:checked')).toHaveCount(0)
   await expect(form).not.toContainText('Светлана')
@@ -25040,4 +25082,255 @@ test('UX06 revoked invitation keeps summary focus after its original expiry with
   expect(inviteRequests).toEqual(requestsAfterRevoke)
   expect(api.getStaffInvites()).toBe(1)
   expect(api.getRevokedInviteHandles()).toEqual(['pending-1'])
+})
+
+test.describe('UX07', () => {
+  test.use({ locale: 'ru-RU' })
+
+for (const [actor, inviteRole] of [['OWNER', 'STAFF'], ['OWNER', 'MANAGER'], ['MANAGER', 'STAFF']] as const) {
+  test(`UX07 ${actor} reissues ${inviteRole} with confirmation one POST and one fresh card`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    const api = await mockVenueStaffChatApi(page, { role: actor, pendingInvites: [
+      { handle: 'old-handle', role: inviteRole, status: 'PENDING', createdAt: '2030-01-01T00:00:00Z', expiresAt: '2030-02-01T00:00:00Z' }
+    ] })
+    await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    await openVenueSection(page, 'Персонал')
+    const old = page.locator('[data-invite-handle="old-handle"]')
+    await old.locator('summary').click()
+    page.once('dialog', (dialog) => dialog.dismiss())
+    await old.getByRole('button', { name: 'Перевыпустить ссылку' }).click()
+    expect(api.getReissueRequests()).toEqual([])
+    const release = api.deferNextReissueResponse()
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain('Предыдущая ссылка станет недействительной')
+      expect(dialog.message()).toContain('Права человеку пока не выдаются')
+      await dialog.accept()
+    })
+    await old.getByRole('button', { name: 'Перевыпустить ссылку' }).click()
+    await expect.poll(() => api.getReissueRequests()).toEqual(['old-handle'])
+    await expect(old.getByRole('button', { name: 'Перевыпустить ссылку' })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Обновить доступы и карточки' }).click()
+    await expect(page.locator('.venue-pending-invite-list button:enabled').filter({ hasText: 'Перевыпустить ссылку' })).toHaveCount(0)
+    expect(api.getReissueRequests()).toEqual(['old-handle'])
+    release()
+    const fresh = page.locator('[data-invite-handle="reissued-1"]')
+    await expect(old).toHaveCount(0)
+    await expect(fresh.locator('textarea').first()).toHaveValue(/SYNTHETIC_REISSUE_1/)
+    await expect(page.locator('.venue-pending-invite-row')).toHaveCount(1)
+    expect(api.getStaffInvites()).toBe(0)
+    expect(api.getReissueRequests()).toEqual(['old-handle'])
+    await expect(fresh.getByRole('button', { name: '📋 Скопировать ссылку' })).toBeEnabled()
+    expect(await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]))).not.toContain('SYNTHETIC_REISSUE')
+    if (actor === 'OWNER' && inviteRole === 'STAFF') {
+      await fresh.scrollIntoViewIfNeeded()
+      await page.screenshot({ path: '../.tmp-checks/ht-ux07/screenshots/invite-mobile.png' })
+    }
+  })
+}
+
+test('UX07 lost reissue response recovers only by GET without claiming old link is valid', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Персонал')
+  await page.getByRole('button', { name: 'Создать приглашение', exact: true }).click()
+  const old = page.locator('[data-invite-handle="pending-1"]')
+  await expect(old.locator('textarea').first()).toHaveValue(/ABC234/)
+  api.loseNextReissueResponse()
+  let rejectReads = true
+  await page.route('**/api/venue/1/staff/invites', async (route) => {
+    if (route.request().method() === 'GET' && rejectReads) {
+      await route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE' } }, 503)); return
+    }
+    await route.fallback()
+  })
+  page.once('dialog', (dialog) => dialog.accept())
+  await old.getByRole('button', { name: 'Перевыпустить ссылку' }).click()
+  await expect(old).toContainText('Результат перевыпуска не подтверждён')
+  await expect(old.getByRole('button', { name: '📋 Скопировать ссылку' })).toBeDisabled()
+  await expect(old.getByRole('button', { name: 'Отозвать приглашение' })).toHaveCount(0)
+  expect(api.getReissueRequests()).toEqual(['pending-1'])
+  rejectReads = false
+  await page.getByRole('button', { name: 'Обновить доступы и карточки' }).click()
+  await expect(old).toContainText('Нет в действующих приглашениях')
+  const fresh = page.locator('[data-invite-handle="reissued-1"]')
+  await fresh.locator('summary').click()
+  await expect(fresh.getByRole('button', { name: 'Перевыпустить ссылку' })).toBeVisible()
+  await expect(old.getByRole('button', { name: '📋 Скопировать ссылку' })).toBeDisabled()
+  expect(api.getReissueRequests()).toEqual(['pending-1'])
+  expect(api.getStaffInvites()).toBe(1)
+})
+
+test('UX07 schedule common individual drafts and two to one retain the intended interval', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffScheduleApi(page)
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'График смен')
+  const schedule = page.locator('.venue-staff-schedule')
+  await schedule.getByRole('button', { name: 'Добавить смену на 09.01.2030' }).click()
+  const form = schedule.locator('.venue-schedule-form')
+  await expect(form.getByLabel('Дата начала')).toHaveValue('2030-01-09')
+  await expect(form.locator('h3')).toBeFocused()
+  await form.getByLabel('Начало', { exact: true }).fill('14:00')
+  await form.getByLabel('Окончание', { exact: true }).fill('00:00')
+  await form.getByLabel('Выбрать Светлана').check()
+  await expect(form.locator('input[type=time]:visible')).toHaveCount(2)
+  await expect(form.getByRole('button', { name: 'Применить общее время всем' })).toBeHidden()
+  await expect(form.getByRole('button', { name: 'Настроить время отдельно' })).toBeHidden()
+  await form.getByLabel('Выбрать Максим').check()
+  await expect(form.locator('input[type=time]:visible')).toHaveCount(2)
+  await form.getByRole('button', { name: 'Настроить время отдельно' }).click()
+  await form.getByLabel('Начало — Светлана').fill('16:00')
+  await form.getByLabel('Окончание — Светлана').fill('22:00')
+  await form.getByRole('button', { name: 'Вернуться к общему времени' }).click()
+  await expect(form.getByLabel('Начало', { exact: true })).toHaveValue('14:00')
+  await form.getByLabel('Начало', { exact: true }).fill('15:00')
+  await form.getByRole('button', { name: 'Настроить время отдельно' }).click()
+  await expect(form.getByLabel('Начало — Светлана')).toHaveValue('16:00')
+  await expect(form.getByLabel('Начало — Максим')).toHaveValue('15:00')
+  await form.getByLabel('Выбрать Максим').uncheck()
+  await expect(form.locator('input[type=time]:visible')).toHaveCount(2)
+  await expect(form.getByLabel('Начало', { exact: true })).toHaveValue('16:00')
+  await expect(form.getByLabel('Окончание', { exact: true })).toHaveValue('22:00')
+  await form.getByRole('button', { name: 'Проверить смены' }).click()
+  await expect(schedule.locator('.venue-schedule-confirmation')).toContainText('Светлана · создание · 16:00–22:00')
+  await schedule.getByRole('button', { name: 'Создать смены', exact: true }).click()
+  await expect.poll(() => api.getBatchRequests()).toHaveLength(1)
+  expect(api.getBatchRequests()[0].body.assignments[0]).toMatchObject({ startsAt: '16:00', endsAt: '22:00', operation: 'CREATE' })
+})
+
+test('UX07 stale schedule preview cannot reopen after date roundtrip or editor close', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffScheduleApi(page)
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'График смен')
+  const schedule = page.locator('.venue-staff-schedule')
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
+  const form = schedule.locator('.venue-schedule-form')
+  await form.getByLabel('Выбрать Светлана').check()
+  const release = api.deferNextList(1)
+  await form.getByRole('button', { name: 'Проверить смены' }).click()
+  await expect(form.getByRole('button', { name: 'Проверить смены' })).toBeDisabled()
+  await form.getByLabel('Дата начала').fill('2030-01-08')
+  await form.getByLabel('Дата начала').fill('2030-01-07')
+  release()
+  await expect(form.getByRole('button', { name: 'Проверить смены' })).toBeEnabled()
+  await expect(schedule.locator('.venue-schedule-confirmation')).toBeHidden()
+  const releaseClosed = api.deferNextList(1)
+  await form.getByRole('button', { name: 'Проверить смены' }).click()
+  await form.getByRole('button', { name: 'Закрыть', exact: true }).click()
+  releaseClosed()
+  await expect(form).toBeHidden()
+  await expect(schedule.locator('.venue-schedule-confirmation')).toBeHidden()
+  expect(api.getBatchRequests()).toHaveLength(0)
+})
+
+test('UX07 mobile short and desktop schedule compact layout and explicit canceled restore', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueStaffScheduleApi(page)
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'График смен')
+  const schedule = page.locator('.venue-staff-schedule')
+  await expect(schedule.getByRole('button', { name: 'Текущая неделя' })).toBeHidden()
+  await page.screenshot({ path: '../.tmp-checks/ht-ux07/screenshots/week-mobile.png' })
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
+  const form = schedule.locator('.venue-schedule-form')
+  await form.getByLabel('Выбрать Светлана').check()
+  await form.locator('h3').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: '../.tmp-checks/ht-ux07/screenshots/common-mobile.png' })
+  await form.getByLabel('Выбрать Светлана').uncheck()
+  await form.getByLabel('Выбрать Анна').check()
+  await expect(form).toContainText('Ранее отменена. Прежнее время: 19:00–01:00')
+  await expect(form.locator('input[type=time]:visible')).toHaveCount(2)
+  await form.getByRole('button', { name: 'Проверить смены' }).click()
+  await expect(schedule.locator('.venue-schedule-confirmation')).toBeHidden()
+  await form.getByLabel('Восстановить Анна').click()
+  await form.getByRole('button', { name: 'Использовать общее время' }).click()
+  await form.getByLabel('Начало', { exact: true }).fill('14:00')
+  await form.getByLabel('Окончание', { exact: true }).fill('00:00')
+  await expect(page.locator('.toast[data-visible=true]')).toHaveCount(0)
+  await form.locator('h3').focus()
+  await form.locator('h3').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: '../.tmp-checks/ht-ux07/screenshots/form-mobile.png' })
+  await page.setViewportSize({ width: 390, height: 568 })
+  await page.screenshot({ path: '../.tmp-checks/ht-ux07/screenshots/form-short.png' })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.screenshot({ path: '../.tmp-checks/ht-ux07/screenshots/form-desktop.png' })
+  await form.getByRole('button', { name: 'Проверить смены' }).click()
+  await expect(schedule.locator('.venue-schedule-confirmation')).toContainText('Анна · восстановление · 14:00–00:00, следующий день')
+  await expect(schedule.locator('.venue-schedule-confirmation')).toContainText('Будет восстановлено: 1')
+})
+
+
+test('UX07 week boundaries include legal partial weeks and Telegram Back clears the editor', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 568 })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffScheduleApi(page, { adminShifts: { 1: [] } })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'График смен')
+  const schedule = page.locator('.venue-staff-schedule')
+  await expect(schedule.locator('.venue-schedule-day-empty')).toHaveCount(7)
+  const empty = await schedule.locator('.venue-schedule-day-empty').first().boundingBox()
+  expect(empty!.height).toBeLessThan(90)
+  await page.screenshot({ path: '../.tmp-checks/ht-ux07/screenshots/empty-short.png' })
+  for (let i = 0; i < 5; i += 1) {
+    await schedule.getByRole('button', { name: 'Предыдущая неделя' }).click()
+    await expect(schedule.locator('.venue-schedule-status')).toHaveText('График обновлён.')
+  }
+  await expect(schedule.getByRole('button', { name: 'Предыдущая неделя' })).toBeDisabled()
+  expect(api.getListRequests().at(-1)).toMatchObject({ from: '2029-12-08', to: '2029-12-09' })
+  await expect(schedule).toContainText('За пределами доступного периода.')
+  await schedule.getByRole('button', { name: 'Текущая неделя' }).click()
+  await expect(schedule.getByRole('button', { name: 'Текущая неделя' })).toBeHidden()
+  for (let i = 0; i < 12; i += 1) {
+    await schedule.getByRole('button', { name: 'Следующая неделя' }).click()
+    await expect(schedule.locator('.venue-schedule-status')).toHaveText('График обновлён.')
+  }
+  await expect(schedule.getByRole('button', { name: 'Следующая неделя' })).toBeDisabled()
+  expect(api.getListRequests().at(-1)).toMatchObject({ from: '2030-04-01', to: '2030-04-07' })
+  await schedule.getByRole('button', { name: 'Добавить смену на 07.04.2030' }).click()
+  await expect(schedule.getByLabel('Дата начала')).toHaveValue('2030-04-07')
+  await expect(schedule.getByLabel('Дата начала')).toHaveAttribute('max', '2030-04-07')
+  await expect(schedule.locator('.venue-schedule-form h3')).toBeFocused()
+  const before = page.url()
+  await clickTelegramBackButton(page)
+  await expect(schedule).toHaveCount(0)
+  expect(page.url().split('#')[0]).toBe(before.split('#')[0])
+  await openVenueSection(page, 'График смен')
+  await expect(page.locator('.venue-schedule-form')).toBeHidden()
+})
+
+test('UX07 same common hours commit as one batch and a lost response recovers by reading', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueStaffScheduleApi(page)
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'График смен')
+  const schedule = page.locator('.venue-staff-schedule')
+  await schedule.getByRole('button', { name: 'Добавить смену', exact: true }).click()
+  const form = schedule.locator('.venue-schedule-form')
+  await form.getByLabel('Начало', { exact: true }).fill('14:00')
+  await form.getByLabel('Окончание', { exact: true }).fill('00:00')
+  await form.getByLabel('Выбрать Светлана').check()
+  await form.getByLabel('Выбрать Максим').check()
+  await expect(form.locator('input[type=time]:visible')).toHaveCount(2)
+  await form.getByRole('button', { name: 'Проверить смены' }).click()
+  await expect(schedule.locator('.venue-schedule-confirmation')).toContainText('Будет создано: 2')
+  api.loseNextBatchResponse()
+  await schedule.getByRole('button', { name: 'Создать смены', exact: true }).dblclick()
+  await expect(schedule.locator('.venue-schedule-error')).toContainText('Результат операции не подтверждён')
+  await expect(schedule.locator('.venue-schedule-error')).not.toContainText('Смены не созданы')
+  expect(api.getBatchRequests()).toHaveLength(1)
+  expect(api.getBatchRequests()[0].body.assignments).toEqual([
+    { staffProfileId: 102, shiftDate: '2030-01-07', startsAt: '14:00', endsAt: '00:00', operation: 'CREATE' },
+    { staffProfileId: 103, shiftDate: '2030-01-07', startsAt: '14:00', endsAt: '00:00', operation: 'CREATE' }
+  ])
+  await schedule.getByRole('button', { name: 'Обновить график' }).click()
+  await expect(schedule.locator('.venue-schedule-shift').filter({ hasText: 'Светлана' })).toContainText('14:00–00:00, следующий день')
+  expect(api.getBatchRequests()).toHaveLength(1)
+})
+
 })

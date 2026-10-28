@@ -958,6 +958,52 @@ class VenueStaffRoutesTest {
         }
 
     @Test
+    fun `create and repeated reissue share the create rate limit without bypassing pending cap`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-reissue-rate")
+            val config = buildConfig(jdbcUrl)
+            val protection =
+                MiniAppAbuseProtection(
+                    config =
+                        MiniAppAbuseConfig(
+                            inviteCreateGlobal = MiniAppRateLimitPolicy(100, Duration.ofMinutes(1)),
+                            inviteCreateActorVenue = MiniAppRateLimitPolicy(2, Duration.ofMinutes(1)),
+                            maxActivePendingInvitesPerVenueRole = 1,
+                        ),
+                    digestKey = ByteArray(32) { 9 },
+                )
+            environment { this.config = config }
+            application { moduleWithOverrides(ModuleOverrides(miniAppAbuseProtection = protection)) }
+            client.get("/health")
+            val actor = 9401L
+            val venue = seedVenueMembership(jdbcUrl, actor, "OWNER")
+            val token = issueToken(config, actor)
+            val created =
+                client.post("/api/venue/$venue/staff/invites") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("{\"role\":\"STAFF\"}")
+                }
+            assertEquals(HttpStatusCode.OK, created.status)
+            val old = json.decodeFromString(StaffInviteResponse.serializer(), created.bodyAsText())
+            val reissued =
+                client.post("/api/venue/$venue/staff/invites/${old.handle}/reissue") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, reissued.status)
+            val fresh = json.decodeFromString(StaffInviteResponse.serializer(), reissued.bodyAsText())
+            val limited =
+                client.post("/api/venue/$venue/staff/invites/${fresh.handle}/reissue") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.TooManyRequests, limited.status)
+            assertApiErrorEnvelope(limited, ApiErrorCodes.RATE_LIMITED)
+            assertTrue(limited.headers[HttpHeaders.RetryAfter]!!.toLong() > 0)
+            assertEquals(1, countPendingStaffInvites(jdbcUrl, venue, "STAFF"))
+            assertEquals(3, loadInviteAuditRows(jdbcUrl).size)
+        }
+
+    @Test
     fun `used staff invite is rejected on repeat accept`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("staff-invite-used")
@@ -1072,6 +1118,72 @@ class VenueStaffRoutesTest {
 
             assertEquals(HttpStatusCode.BadRequest, acceptResponse.status)
             assertApiErrorEnvelope(acceptResponse, ApiErrorCodes.INVALID_INPUT)
+        }
+
+    @Test
+    fun `reissue route binds exact handle role venue and returns only one time secret`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("staff-reissue-route")
+            val config = buildConfig(jdbcUrl, botUsername = "synthetic_bot")
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val owner = 9301L
+            val manager = 9302L
+            val staff = 9303L
+            val venue = seedVenueMembership(jdbcUrl, owner, "OWNER")
+            seedVenueMembership(jdbcUrl, manager, "MANAGER", venue)
+            seedVenueMembership(jdbcUrl, staff, "STAFF", venue)
+            val foreign = seedVenueMembership(jdbcUrl, owner, "OWNER")
+
+            suspend fun create(role: String): StaffInviteResponse {
+                val response =
+                    client.post("/api/venue/$venue/staff/invites") {
+                        headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, owner)}") }
+                        contentType(ContentType.Application.Json)
+                        setBody("{\"role\":\"$role\"}")
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return json.decodeFromString(StaffInviteResponse.serializer(), response.bodyAsText())
+            }
+
+            suspend fun reissue(
+                actor: Long,
+                handle: String,
+                venueId: Long = venue,
+            ) = client.post("/api/venue/$venueId/staff/invites/$handle/reissue") {
+                headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, actor)}") }
+                contentType(ContentType.Application.Json)
+                setBody("{\"role\":\"OWNER\",\"expiresIn\":99999999}")
+            }
+            val staffInvite = create("STAFF")
+            val managerInvite = create("MANAGER")
+            assertEquals(HttpStatusCode.Forbidden, reissue(staff, staffInvite.handle).status)
+            assertEquals(HttpStatusCode.Forbidden, reissue(manager, managerInvite.handle).status)
+            assertEquals(HttpStatusCode.Forbidden, reissue(manager, staffInvite.handle, foreign).status)
+            assertEquals(HttpStatusCode.BadRequest, reissue(owner, staffInvite.handle, foreign).status)
+            for ((actor, old) in listOf(manager to staffInvite, owner to managerInvite)) {
+                val response = reissue(actor, old.handle)
+                assertEquals(HttpStatusCode.OK, response.status)
+                val fresh = json.decodeFromString(StaffInviteResponse.serializer(), response.bodyAsText())
+                assertEquals(old.role, fresh.role)
+                assertEquals(604800, fresh.ttlSeconds)
+                assertNotEquals(old.inviteCode, fresh.inviteCode)
+                assertNotEquals(old.handle, fresh.handle)
+                assertTrue(fresh.deepLink!!.contains(fresh.inviteCode))
+                assertEquals(HttpStatusCode.BadRequest, reissue(actor, old.handle).status)
+                val pending =
+                    client.get("/api/venue/$venue/staff/invites") {
+                        headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, owner)}") }
+                    }
+                assertPendingInviteProjectionIsIdentityFree(pending.bodyAsText())
+                val rows = json.decodeFromString(PendingInvitesResponse.serializer(), pending.bodyAsText()).invites
+                assertEquals(2, rows.size)
+                assertEquals(1, rows.count { it.handle == fresh.handle })
+                assertFalse(rows.any { it.handle == old.handle })
+                assertFalse(pending.bodyAsText().contains(fresh.inviteCode))
+            }
+            assertEquals(6, loadInviteAuditRows(jdbcUrl).size)
         }
 
     @Test

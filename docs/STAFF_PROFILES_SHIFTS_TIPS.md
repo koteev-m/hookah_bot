@@ -263,7 +263,7 @@ Rules:
 - Pending means `used_at IS NULL AND revoked_at IS NULL AND expires_at > now`.
 - Owner lists/revokes pending `STAFF` and `MANAGER`; Manager lists/revokes pending `STAFF` only.
 - Pending DTOs contain only opaque handle, role, status and timestamps. Secret code/hash/deep link
-  remains confined to the existing one-time create response.
+  remains confined to one-time create/reissue responses.
 - UX06 adds the already existing opaque handle to the one-time create response and uses it to
   merge that result with the exact pending row. One card retains each session-only link through
   collapse/refresh/next creation. Pending DTO fields stay unchanged. No metadata correlation,
@@ -276,6 +276,35 @@ Rules:
 - PostgreSQL `V120` and H2 `V121` add only `revoked_at` and `revoked_by_user_id` plus pending-query
   indexes. New binaries must be deployed before revoke UI is enabled; old runtime instances must
   be drained, then staging-smoked, because they do not understand revoked invites.
+
+### UX07 local invite reissue (staging acceptance pending)
+
+`POST /api/venue/{venueId}/staff/invites/{handle}/reissue` takes no request fields and returns
+HTTP 200 with the existing `StaffInviteResponse`: new opaque handle, role, one-time code/link,
+expiry and TTL. Role is copied from the exact pending source, never from client input. TTL is the
+current server default (normally seven days), validated by the existing TTL policy.
+
+Owner may reissue STAFF/MANAGER; Manager only STAFF. Staff, foreign membership and OWNER sources
+are denied. The route applies the same global and actor/venue create limiter. The repository locks
+only the exact source invite, then the venue create/quota row, then the current actor membership;
+it checks both create and revoke permissions again under that lock. This order preserves accept's
+invite-before-membership/FK order. Expiry is checked again after lock waits. A conditional source
+revoke, replacement insert, `STAFF_INVITE_REVOKED` and `STAFF_INVITE_CREATED` audits commit together.
+Quota counts the remaining pending rows under the shared venue lock, allowing replacement at the
+cap but no extra slot. Failure (including the second audit) rolls back everything. No migration.
+Invalid/nonpending/out-of-scope handle returns 400 `INVALID_INPUT`; permission denial returns 403;
+create limit/quota returns 429 `RATE_LIMITED` with Retry-After; database failure returns 503.
+Pending DTO remains exactly handle/role/status/createdAt/expiresAt; no new Telegram send occurs.
+
+**Перевыпустить ссылку** confirms that the previous link will stop working, the role stays the
+same and no access is granted yet. Confirmed success removes the old card, retains the new link
+in screen memory and refreshes the pending list. Concurrent invite-management clicks are blocked.
+An error/lost response is unconfirmed, not evidence of success or of the old link remaining valid.
+No automatic POST retry: GET refresh establishes current pending handles; a replacement whose
+response was lost can be explicitly reissued again. Until a successful read, the old link's copy,
+share and management actions stay blocked. A GET started during POST cannot clear this uncertainty.
+No code/hash recovery or persistent browser/plaintext token storage. Addressed invites and photos
+remain unimplemented proposals; local UX07 is separate from real iPhone/staging acceptance.
 
 ### UX05 local card editing
 
@@ -875,20 +904,27 @@ not authorization: backend revalidates all state. A no-op update produces no fal
   display name/role, interval, lifecycle status and overnight marker.
 - Actions: `Добавить смену`, `Редактировать`, `Отменить` and explicit `Восстановить` according to
   lifecycle. A future canceled historical row keeps its safe old interval and `Отменена` badge.
-- `Добавить смену` is a group-assignment form: date, effective venue hours, common default interval,
-  multi-select over Staff/display-only profiles and one selected-employee row with editable start/end
-  for each profile. The user can `Применить общее время всем`, override one employee, remove an
-  employee, `Проверить смены` and then `Создать смены`.
+- UX07 local `Добавить смену`: date, one common start/end pair, employee selection, compact summary,
+  `Проверить смены`, then confirmation. One employee has no duplicate time inputs. For two or more,
+  `Настроить время отдельно` reveals per-person fields; returning to common time preserves separate
+  manual drafts. Common edits never overwrite manual intervals. Explicit apply-to-all confirms the
+  reset. Reducing an individual selection to one moves its actual interval into the single top pair.
+- Week arrows and range are compact; current-week action appears only away from the current week.
+  Read requests clip boundary weeks to the existing -30/+90-day horizon; inaccessible days are
+  labelled. Empty days are compact and retain a date-specific add action. Opening focuses the
+  heading and scrolls inside the Mini App without focusing an input or opening a keyboard.
 - Existing edit remains a one-shift form with the employee locked. Mass edit of saved scheduled
   shifts is not part of this slice.
 - When end is not after start by wall clock, preview says it ends next day. Confirmation summary
   uses copy such as `22:00–06:00, следующий день`.
 - Loading, empty, retryable error and stale-edit states are distinct. Empty copy explains that the
   optional graph is unused and does not block current operations.
-- Preflight classifies every selected profile/date. A canceled row says
-  `Смена на эту дату была отменена.` and requires explicit `Восстановить` or removal from the batch;
+- Preflight classifies every selected profile/date. A canceled row says `Ранее отменена`, shows its
+  previous time and requires explicit `Восстановить смену` or removal from the batch;
   it is never restored silently. Scheduled/active/completed conflicts identify the employee with a
-  safe reason, block confirmation and prevent a partial request. Confirmation shows exact
+  safe reason, block confirmation and prevent a partial request. Explicit restoration may keep the
+  saved interval or use the common interval; individual fields require the separate-time action.
+  Confirmation shows exact
   `Будет создано: N` / `Будет восстановлено: N` counts and submits one batch request.
 - An engaged manual Today overlay removes the time-edit action and explains that `Сегодня на смене`
   already controls this shared row; explicit cancel remains available with its impact summary.

@@ -10,8 +10,10 @@ import com.hookah.platform.backend.miniapp.security.enforceMiniAppRateLimit
 import com.hookah.platform.backend.miniapp.security.receiveBoundedJson
 import com.hookah.platform.backend.miniapp.security.throwMiniAppRateLimited
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCodeResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCreateResult
+import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteReissueResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRevokeResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffProfileMutationResult
@@ -300,41 +302,40 @@ internal fun Route.venueStaffRoutes(
                         throwMiniAppRateLimited(call, createResult.retryAfterSeconds)
                     StaffInviteCreateResult.DatabaseError -> throw DatabaseUnavailableException()
                 }
-            val startPayload = buildStaffInviteStartPayload(result.code)
-            val deepLink =
-                telegramBotUsername
-                    ?.trim()
-                    ?.removePrefix("@")
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { buildTelegramStartUrl(it, startPayload) }
-            val fallbackCommand = "/start $startPayload"
-            val copyText = deepLink ?: fallbackCommand
-            val venueName =
-                requesterMembership.venueName
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?: "Заведение #$venueId"
             call.respond(
-                StaffInviteResponse(
-                    inviteCode = result.code,
-                    expiresAt = result.expiresAt.toString(),
-                    ttlSeconds = result.ttlSeconds,
-                    instructions =
-                        buildStaffInviteInstructions(
-                            role = targetRole.name,
-                            venueName = venueName,
-                            deepLink = deepLink,
-                            fallbackCommand = fallbackCommand,
-                        ),
-                    role = targetRole.name,
-                    venueName = venueName,
-                    startPayload = startPayload,
-                    deepLink = deepLink,
-                    fallbackCommand = fallbackCommand,
-                    copyText = copyText,
-                    handle = result.handle,
-                ),
+                result.toResponse(targetRole.name, requesterMembership.venueName, venueId, telegramBotUsername),
             )
+        }
+
+        post("/{venueId}/staff/invites/{handle}/reissue") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val membership = venueAccessRepository.findVenueMembership(userId, venueId) ?: throw ForbiddenException()
+            val role = VenueRoleMapping.fromDb(membership.role) ?: throw ForbiddenException()
+            role.requireStaffPermission(VenuePermission.STAFF_INVITE_CREATE_STAFF)
+            val handle = call.parameters["handle"] ?: throw InvalidInputException("invite handle is required")
+            enforceMiniAppRateLimit(call, abuseProtection.tryInviteCreate(userId, venueId))
+            when (
+                val result =
+                    staffInviteRepository.reissuePendingInvite(
+                        venueId = venueId,
+                        handle = handle,
+                        actorUserId = userId,
+                        ttlSeconds = resolveInviteTtl(null, staffInviteConfig),
+                        maxActivePendingPerVenueRole = abuseProtection.maxActivePendingInvitesPerVenueRole,
+                        auditLogRepository = auditLogRepository,
+                    )
+            ) {
+                is StaffInviteReissueResult.Success ->
+                    call.respond(
+                        result.invite.toResponse(result.role, membership.venueName, venueId, telegramBotUsername),
+                    )
+                is StaffInviteReissueResult.RateLimited -> throwMiniAppRateLimited(call, result.retryAfterSeconds)
+                StaffInviteReissueResult.Forbidden -> throw ForbiddenException()
+                StaffInviteReissueResult.InvalidOrExpired ->
+                    throw InvalidInputException("Invite is not pending or cannot be reissued")
+                StaffInviteReissueResult.DatabaseError -> throw DatabaseUnavailableException()
+            }
         }
 
         get("/{venueId}/staff/invites") {
@@ -834,6 +835,33 @@ private fun resolveInviteTtl(
         throw InvalidInputException("expiresIn must be <= ${config.maxTtlSeconds} seconds")
     }
     return ttl
+}
+
+private fun StaffInviteCodeResult.toResponse(
+    role: String,
+    membershipVenueName: String?,
+    venueId: Long,
+    telegramBotUsername: String?,
+): StaffInviteResponse {
+    val startPayload = buildStaffInviteStartPayload(code)
+    val deepLink =
+        telegramBotUsername?.trim()?.removePrefix("@")?.takeIf { it.isNotBlank() }
+            ?.let { buildTelegramStartUrl(it, startPayload) }
+    val fallbackCommand = "/start $startPayload"
+    val venueName = membershipVenueName?.trim()?.takeIf { it.isNotBlank() } ?: "Заведение #$venueId"
+    return StaffInviteResponse(
+        inviteCode = code,
+        expiresAt = expiresAt.toString(),
+        ttlSeconds = ttlSeconds,
+        instructions = buildStaffInviteInstructions(role, venueName, deepLink, fallbackCommand),
+        role = role,
+        venueName = venueName,
+        startPayload = startPayload,
+        deepLink = deepLink,
+        fallbackCommand = fallbackCommand,
+        copyText = deepLink ?: fallbackCommand,
+        handle = handle,
+    )
 }
 
 private fun buildStaffInviteStartPayload(code: String): String = "staff_invite_$code"

@@ -1,5 +1,65 @@
 # Project Status
 
+## HT-STAFF-INVITE-REISSUE-SCHEDULE-UX07 — local validated; staging pending (2026-10-28)
+
+UX07 local implementation and required validation complete; focused independent review PASS,
+no open P0/P1/P2. One explicit-allowlist local commit is authorized; its SHA/parent/tree belongs
+in the task result. No push, PR, merge, deploy, SSH or server write. This is not staging acceptance.
+
+Identity gate PASS before preparation and after branch switch: `Hookah_Tootah`, primary physical
+root `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, checkout-owned Git/common dir and index
+under `.git`, origin `github.com/koteev-m/hookah_bot`. Initial HEAD/base/parent/branch constraints
+NOT_SUPPLIED. Initial HEAD `d33007950dba3d37c6f465e919c8fe1a3393b3ea`, UX06 branch; only the four
+original untracked SQL helpers, no tracked edits. After PASS, read-only remote main verification
+returned `990dad46a47aae4362f6c49f629bc6aa73365d9e`; targeted no-tags fetch obtained that object.
+Ordinary branch `codex/ht-staff-reissue-schedule-ux07` starts at that exact base. No worktree or
+stash/archive operation; local main was not rewritten. Root/global/session instruction origins
+verified; no narrower instructions, foreign authority or Git path redirect.
+
+Implemented:
+- Atomic `POST /api/venue/{venueId}/staff/invites/{handle}/reissue`, no body fields. Same-role
+  replacement and default TTL, exact source pending claim, current actor membership permissions,
+  shared create limiter/quota and existing revoked/created audits in one transaction. Lock order
+  source invite -> venue -> actor; no migration. Owner STAFF/MANAGER, Manager STAFF only;
+  no OWNER escalation or secret pending fields. UI confirmation, current-screen-only new link,
+  old-handle tombstone and GET recovery after an unknown response; no automatic POST or Telegram send.
+- Schedule: one common time pair, compact summary and opt-in individual drafts for multiple
+  employees; explicit reset and canceled restoration; 2->1 keeps the remaining actual interval.
+  Compact week arrows/empty days, date-specific add, clipped horizon-edge weeks, heading focus
+  without input autofocus. Stale preflight cannot reopen a changed/closed editor; unknown mutation
+  result requires reading current state. Schedule API/schema/CAS/batch/audit/shiftId/RBAC,
+  venue-local time/DST/defaults/overnight and MANUAL/SCHEDULE Guest semantics remain unchanged.
+- Canonical Staff, Venue Operations and QA docs updated. Addressed invites and photos remain future.
+
+Validation on final implementation:
+- `*StaffInvite*`, `*VenueStaff*`, VenueRbacRoutesTest, GuestVenueRoutesTest,
+  VenueGuestPreviewRoutesTest, AuditLogRepositoryTest and MiniAppAbuseProtectionTest: **181/181**,
+  18 suites, failures/errors/skipped 0. PostgreSQL reissue **4/4** executed: observed blocked backend
+  PIDs for accept/revoke/reissue, two replacements plus bounded create, demotion/removal, expiry
+  after lock wait and second-audit failure rollback. H2 covers role/TTL/one-use/secret-free projection.
+- TypeScript `--noEmit`, production build, compileKotlin and ktlintCheck PASS. Existing Vite
+  >500 kB bundle warning remains. Focused Playwright **26/26**, full Chromium **419/419**, no skips.
+- Independent review found two P2 during development (2->1 interval loss and stale preflight);
+  both fixed, regression-tested and independently closed. Final review PASS, no actionable findings.
+- Synthetic screenshots visually checked at 390px, 390x568 and desktop. Actual Telegram iPhone
+  keyboard/WebView and deployment behavior are unverified and require separate acceptance.
+- `git diff --check`, docs UTF-8/fences/link sanity and bounded added-content secret check PASS.
+  Four SQL helpers remain byte-identical; stash/archive refs untouched; index empty before staging.
+
+Evidence: [validation](.tmp-checks/ht-ux07/validation.md),
+[backend results](.tmp-checks/ht-ux07/backend-results.json),
+[backend regression](.tmp-checks/ht-ux07/backend-regression.log),
+[full Playwright](.tmp-checks/ht-ux07/playwright-full.log),
+[focused Playwright](.tmp-checks/ht-ux07/playwright-targeted.log),
+[review](.tmp-checks/ht-ux07/review.md),
+[preservation](.tmp-checks/ht-ux07/preservation.json),
+[mobile](.tmp-checks/ht-ux07/screenshots/common-mobile.png),
+[small height](.tmp-checks/ht-ux07/screenshots/form-short.png),
+[desktop](.tmp-checks/ht-ux07/screenshots/form-desktop.png).
+Test evidence is local/ignored; no real invite, member or external message was changed.
+No unfinished operation. Next: separately authorized publication/exact-SHA CI, then staging deploy
+and real iPhone acceptance (reissue/lost response, common/individual/restore, focus/BackButton).
+
 ## HT-UX06-CI-FAILURES-FIX-01 — local fixes validated (2026-10-27)
 
 **HT_UX06_CI_FIX_LOCAL_VALIDATED** — both reproduced test defects fixed; independent focused

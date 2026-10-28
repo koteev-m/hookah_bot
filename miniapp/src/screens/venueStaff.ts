@@ -14,6 +14,7 @@ import {
   venuePublishStaffProfile,
   venueRemoveStaff,
   venueRevokeStaffInvite,
+  venueReissueStaffInvite,
   venueUpdateRole,
   venueUpdateStaffProfile,
   venueUpsertTodayStaffShift
@@ -957,6 +958,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   const legacyInvites: SavedInvite[] = []
   const absentSessionHandles = new Set<string>()
   const revokedInviteHandles = new Set<string>()
+  const uncertainInviteHandles = new Set<string>()
+  let inviteRecoveryNotice = ''
   const observedExpiredOrdinals = new Set<number>()
   let nextInviteOrdinal = 0
   let currentPendingInvites: VenueStaffPendingInviteDto[] = []
@@ -1118,6 +1121,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   const inviteState = (handle: string | null, expiresAt: string) => {
     if (handle && revokedInviteHandles.has(handle)) return 'revoked'
+    if (handle && uncertainInviteHandles.has(handle)) return 'unknown'
     if (Date.parse(expiresAt) <= Date.now()) return 'expired'
     if (handle && absentSessionHandles.has(handle)) return 'unlisted'
     return 'pending'
@@ -1162,7 +1166,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       const role = pending?.role ?? saved!.role
       const expiresAt = pending?.expiresAt ?? saved!.response.expiresAt
       const state = inviteState(handle, expiresAt)
-      const stateText = state === 'revoked' ? 'Приглашение отозвано'
+      const stateText = state === 'unknown' ? 'Результат перевыпуска не подтверждён' : state === 'revoked' ? 'Приглашение отозвано'
         : state === 'expired' ? 'Срок действия истёк'
           : state === 'unlisted' ? 'Нет в действующих приглашениях' : 'Ссылка создана'
       if (saved && Date.parse(expiresAt) <= Date.now()) observedExpiredOrdinals.add(saved.ordinal)
@@ -1176,7 +1180,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       const body = el('div', { className: saved ? 'venue-invite-result' : 'venue-pending-invite-details' })
       body.appendChild(el('p', { className: 'venue-invite-state', text: stateText }))
       if (pending) body.appendChild(el('p', { className: 'venue-order-sub', text: `Создано: ${formatInviteExpires(pending.createdAt)}` }))
-      const stateHelp = state === 'revoked' ? 'Ссылка больше не выдаёт доступ. Уже выданные доступы не изменены.'
+      const stateHelp = state === 'unknown' ? 'Не отправляйте прежнюю ссылку. Обновите список приглашений, чтобы проверить состояние.' : state === 'revoked' ? 'Ссылка больше не выдаёт доступ. Уже выданные доступы не изменены.'
         : state === 'expired' ? 'Создайте новое приглашение, если доступ ещё нужен.'
           : state === 'unlisted' ? 'Причина не сообщается: ссылка могла быть принята, отозвана или стать недоступной. Проверьте текущие доступы.'
             : 'Получатель до принятия неизвестен. Доступ выдаётся только после принятия в Telegram.'
@@ -1268,14 +1272,20 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
         )
       } else {
         append(body, el('p', { className: 'venue-invite-help', text: stateHelp }),
-          el('p', { className: 'field-help', text: 'Ссылка показывается только при создании. После перезагрузки повторно получить её нельзя.' })
+          el('p', { className: 'field-help', text: 'Прежняя ссылка здесь не хранится. Можно перевыпустить её: предыдущая ссылка станет недействительной.' })
         )
       }
       if (handle && state === 'pending' && canRevokeInvite({ role })) {
         const revokeButton = el('button', { className: 'button-small button-secondary', text: 'Отозвать приглашение' }) as HTMLButtonElement
-        revokeButton.disabled = revokingInviteHandles.has(handle)
+        revokeButton.disabled = revokingInviteHandles.size > 0
         revokeButton.addEventListener('click', () => void revokePendingInvite({ handle, role }))
         body.appendChild(revokeButton)
+        if ((role === 'STAFF' && canInviteStaff) || (role === 'MANAGER' && canInviteManager)) {
+          const reissueButton = el('button', { className: 'button-small button-secondary', text: 'Перевыпустить ссылку' }) as HTMLButtonElement
+          reissueButton.disabled = revokingInviteHandles.size > 0
+          reissueButton.addEventListener('click', () => void reissuePendingInvite({ handle, role }))
+          body.appendChild(reissueButton)
+        }
       }
       row.addEventListener('toggle', () => {
         if (!row.isConnected) return
@@ -1641,17 +1651,18 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     pendingInviteLoadAbort = null
     if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) return
     if (!result.ok) {
-      refs.pendingInviteStatus.textContent = 'Не удалось обновить статусы. Показаны последние данные.'
+      refs.pendingInviteStatus.textContent = inviteRecoveryNotice || 'Не удалось обновить статусы. Показаны последние данные.'
       showError(result.error)
       return
     }
+    uncertainInviteHandles.forEach((handle) => { if (!revokingInviteHandles.has(handle)) uncertainInviteHandles.delete(handle) })
     currentPendingInvites = result.data.invites.filter((invite) => !revokedInviteHandles.has(invite.handle))
     knownSessionHandles.forEach((handle) => {
       if (currentPendingInvites.some((invite) => invite.handle === handle)) absentSessionHandles.delete(handle)
       else absentSessionHandles.add(handle)
     })
     renderPendingInvites()
-    refs.pendingInviteStatus.textContent = ''
+    refs.pendingInviteStatus.textContent = inviteRecoveryNotice
   }
 
   const reloadAll = () => {
@@ -1692,7 +1703,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   const revokePendingInvite = async (invite: Pick<VenueStaffPendingInviteDto, 'handle' | 'role'>) => {
     const expiresAt = sessionInvites.get(invite.handle)?.response.expiresAt ?? currentPendingInvites.find((current) => current.handle === invite.handle)?.expiresAt
-    if (!canRevokeInvite(invite) || revokingInviteHandles.has(invite.handle) || !expiresAt || inviteState(invite.handle, expiresAt) !== 'pending') {
+    if (!canRevokeInvite(invite) || revokingInviteHandles.size > 0 || !expiresAt || inviteState(invite.handle, expiresAt) !== 'pending') {
       showToast('Недостаточно прав')
       return
     }
@@ -1719,6 +1730,45 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     absentSessionHandles.delete(invite.handle)
     currentPendingInvites = currentPendingInvites.filter((current) => current.handle !== invite.handle)
     renderPendingInvites()
+    void loadPendingInvites()
+  }
+
+  const reissuePendingInvite = async (invite: Pick<VenueStaffPendingInviteDto, 'handle' | 'role'>) => {
+    const expiresAt = sessionInvites.get(invite.handle)?.response.expiresAt ?? currentPendingInvites.find((item) => item.handle === invite.handle)?.expiresAt
+    if (disposed || revokingInviteHandles.size > 0 || !canRevokeInvite(invite) || !expiresAt || inviteState(invite.handle, expiresAt) !== 'pending') return
+    if (invite.role === 'MANAGER' ? !canInviteManager : !canInviteStaff) return
+    if (!window.confirm(`Перевыпустить ссылку? Предыдущая ссылка станет недействительной. Будет создана новая ссылка с той же ролью: ${formatStaffRole(invite.role)}. Права человеку пока не выдаются.`)) return
+    revokingInviteHandles.add(invite.handle)
+    uncertainInviteHandles.add(invite.handle)
+    pendingInviteLoadAbort?.abort()
+    pendingInviteLoadSeq += 1
+    renderPendingInvites()
+    const result = await venueReissueStaffInvite(backendUrl, { venueId, handle: invite.handle }, deps)
+    if (disposed) return
+    revokingInviteHandles.delete(invite.handle)
+    // A GET started during POST cannot confirm the state after that POST committed.
+    pendingInviteLoadAbort?.abort()
+    pendingInviteLoadSeq += 1
+    if (!result.ok) {
+      inviteRecoveryNotice = 'Результат перевыпуска не подтверждён. Запрос не повторён. Обновите список: если появилась новая ссылка без копии, её можно перевыпустить заново.'
+      refs.pendingInviteStatus.textContent = inviteRecoveryNotice
+      renderPendingInvites()
+      showError(result.error)
+      void loadPendingInvites()
+      return
+    }
+    inviteRecoveryNotice = ''
+    uncertainInviteHandles.delete(invite.handle)
+    revokedInviteHandles.add(invite.handle)
+    absentSessionHandles.delete(invite.handle)
+    sessionInvites.delete(invite.handle)
+    currentPendingInvites = currentPendingInvites.filter((item) => item.handle !== invite.handle)
+    const saved: SavedInvite = { response: result.data, role: invite.role, expanded: true, ordinal: nextInviteOrdinal++, feedback: '', fallbackExpanded: false }
+    const handle = result.data.handle?.trim()
+    if (handle) sessionInvites.set(handle, saved)
+    else legacyInvites.push(saved)
+    renderPendingInvites()
+    showToast('Ссылка перевыпущена. Предыдущая больше не действует.')
     void loadPendingInvites()
   }
 
