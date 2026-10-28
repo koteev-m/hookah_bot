@@ -283,6 +283,7 @@ class VenueStaffRoutesTestManagerProfileParity {
                             StaffProfileCreateFromMemberRequest(
                                 userId = protectedTargetUserId,
                                 subtype = "admin",
+                                displayName = "Публичное имя",
                             ),
                     )
                 assertEquals(HttpStatusCode.Forbidden, response.status)
@@ -1001,6 +1002,19 @@ class VenueStaffRoutesTestManagerProfileParity {
             assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
             assertEquals(0, countProfiles(jdbcUrl, venueId))
             assertTrue(fetchProfileAuditRows(jdbcUrl).isEmpty())
+            val staffId = 74_003L
+            seedVenueMembership(jdbcUrl, staffId, "STAFF", venueId)
+            val linkedResponse =
+                postProfileFromMember(
+                    client,
+                    venueId,
+                    managerToken,
+                    StaffProfileCreateFromMemberRequest(userId = staffId, subtype = "waiter", displayName = "Максим"),
+                )
+            assertEquals(HttpStatusCode.ServiceUnavailable, linkedResponse.status)
+            assertApiErrorEnvelope(linkedResponse, ApiErrorCodes.DATABASE_UNAVAILABLE)
+            assertEquals(0, countProfiles(jdbcUrl, venueId))
+            assertTrue(fetchProfileAuditRows(jdbcUrl).isEmpty())
         }
 
     private suspend fun createProfile(
@@ -1542,6 +1556,7 @@ class VenueStaffRoutesTestManagerProfileParity {
     @Serializable
     private data class StaffProfileCreateFromMemberRequest(
         val userId: Long,
+        val displayName: String? = null,
         val subtype: String,
         val roleLabel: String? = null,
     )

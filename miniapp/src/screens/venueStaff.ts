@@ -214,7 +214,7 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   profileName.className = 'venue-input'
   profileName.placeholder = 'Например: Максим'
   profileName.maxLength = 120
-  const profileNameField = renderProfileField('Имя на карточке', profileName, 'Так это имя увидят гости.')
+  const profileNameField = renderProfileField('Имя на карточке', profileName, 'Так это имя увидят гости. Имя и привязка Telegram не изменятся.')
   const profileSubtype = document.createElement('select')
   profileSubtype.className = 'venue-select'
   profileSubtype.appendChild(new Option('Выберите тип сотрудника', ''))
@@ -1022,7 +1022,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     refs.profileAddButton.hidden = isCreateFormOpen || !canCreateProfiles || !moduleEnabled
     refs.profileAddButton.disabled = !formUsable
     refs.profileAddButton.title = formUsable ? '' : 'Дождитесь актуального списка сотрудников'
-    refs.profileName.readOnly = isFromMember
+    refs.profileName.readOnly = false
     refs.profileLinkedUserField.hidden = !isFromMember
     refs.profileLinkedUser.disabled = true
     refs.profilePhotoPlaceholder.hidden = isFromMember
@@ -1869,7 +1869,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     }
     const mode = createProfileMode
     const displayName = refs.profileName.value.trim()
-    if (mode.kind === 'DISPLAY_ONLY' && !displayName) {
+    if (!displayName) {
       showToast('Укажите имя')
       return
     }
@@ -1906,6 +1906,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
             venueId,
             body: {
               userId: mode.userId,
+              displayName,
               subtype,
               ...(isOtherProfileSubtype(subtype) && roleLabel ? { roleLabel } : {})
             }

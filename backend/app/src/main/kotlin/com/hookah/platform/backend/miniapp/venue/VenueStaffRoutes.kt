@@ -192,6 +192,7 @@ data class VenueStaffProfileCreateFromMemberRequest(
     val userId: Long,
     val subtype: String,
     val roleLabel: String? = null,
+    val displayName: String? = null,
 )
 
 @Serializable
@@ -507,6 +508,10 @@ internal fun Route.venueStaffRoutes(
                     targetUserId = request.userId,
                     subtype = subtype,
                     roleLabel = roleLabel,
+                    displayName =
+                        request.displayName?.let {
+                            normalizeRequiredText(it, "displayName", STAFF_PROFILE_DISPLAY_NAME_MAX_LENGTH)
+                        },
                     auditLogRepository = auditLogRepository,
                 )
             call.respond(result.requireProfileMutationSuccess().toDto())

@@ -4,6 +4,26 @@
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
+UX08 local regression scope (`HT-VENUE-TEAM-SCHEDULE-ROLE-UX08`): optional normalized card
+`displayName` in from-member creation, legacy default, Unicode/length/blank boundaries, GET and
+nickname independence, exact linkage, hidden draft, protected/foreign/Staff denials, PostgreSQL
+one-winner concurrency and transactional audit rollback. No migration. Run Kotlin compile/ktlint,
+VenueStaff/StaffInvite/RBAC/Guest/Preview tests and the real PostgreSQL link concurrency suite;
+skips are not PostgreSQL PASS.
+
+Frontend: collapsed 0/1/2/6/10-shift days, distinct computed-status counts, stable toggle/refresh
+focus, no expansion fetch, week/venue reset, date-specific add and existing common/individual/
+restore/CAS scenarios. Cover confirmation→form→week via Telegram, screen and Browser Back/Forward,
+raw draft retention, explicit discard, direct/stale panel links, pending and stale async responses,
+noncancelable exits and offscreen completion, cancel-only confirmation, typed mutation rejection,
+role/venue changes and Owner history parity. Exercise separate Owner/Manager/Staff fixtures, allowed
+routes and direct denials, compact settings, notification/unread and empty/loading/error states.
+Run TypeScript, production build, focused and full Playwright smoke. Inspect synthetic screenshots
+for each role home, collapsed week, 6/10 expanded shifts, form/confirmation and name editing at
+390px, 390×568 and desktop. Real Telegram iPhone keyboard/WebView and staging acceptance remain
+separate, authorized release checks. E is `BLOCKED_BY_STORAGE_DECISION`: review the concrete R2
+proposal against current source, without claiming photo runtime tests or R2 integration.
+
 UX03 local regression scope (`HT-VENUE-MENU-TABLES-QR-UX03`): native collapsed hookah flavors,
 90-flavor fixture, keyboard/mobile layout, mutation/retry draft retention and venue isolation;
 sequential/individual table numbers, strict validation, late conflict and audit rollback, table/token

@@ -242,6 +242,7 @@ class VenueStaffProfileRepository(
         subtype: String,
         roleLabel: String?,
         auditLogRepository: AuditLogRepository,
+        displayName: String? = null,
     ): StaffProfileMutationResult =
         inTransaction { connection ->
             lockVenueForStaffModuleGuard(connection, venueId)
@@ -262,7 +263,7 @@ class VenueStaffProfileRepository(
                 StaffProfileWrite(
                     linkedUserId = targetUserId,
                     displayName =
-                        buildSafeMemberDisplayName(
+                        displayName ?: buildSafeMemberDisplayName(
                             firstName = identity.firstName,
                             lastName = identity.lastName,
                             username = identity.username,

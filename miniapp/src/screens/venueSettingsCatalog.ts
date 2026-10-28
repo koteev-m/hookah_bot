@@ -9,15 +9,16 @@ export function renderVenueSettingsCatalog(root: HTMLElement, access: VenueAcces
   append(card, el('h2', { text: 'Настройки' }))
   const links = el('div', { className: 'venue-settings-links' })
   const can = (permission: string) => access.permissions.includes(permission)
+  const managesCard = access.role === 'OWNER' || access.role === 'MANAGER'
   const items: Array<[string, string, boolean]> = [
-    ['Карточка заведения', 'settings/card', true],
-    ['Часы работы', 'settings/hours', true],
+    ['Карточка заведения', 'settings/card', managesCard],
+    ['Часы работы', 'settings/hours', managesCard],
     ['Меню', 'menu', can('MENU_VIEW')],
     ['Столы и QR', 'tables', can('TABLE_VIEW')],
-    ['Команда и доступ', 'settings/team', true],
+    ['Команда и доступ', 'settings/team', managesCard || can('STAFF_MODULE_SETTINGS_MANAGE')],
     ['Бронирование', 'settings/booking', can('BOOKING_MANAGE')],
     ['Продление времени', 'settings/extension', can('SHIFT_EXTENSION_SETTINGS')],
-    ['Акции', 'promotions', true]
+    ['Акции', 'promotions', managesCard]
   ]
   for (const [title, route, allowed] of items) {
     if (!allowed) continue

@@ -1,5 +1,63 @@
 # Project Status
 
+## HT-VENUE-TEAM-SCHEDULE-ROLE-UX08 — UI local ready; photo decision required (2026-10-28)
+
+**HT_UX08_UI_LOCAL_READY_PHOTO_DECISION_REQUIRED**. A–D implementation and required local
+validation PASS; independent focused review closed all P0/P1/P2. E is
+**BLOCKED_BY_STORAGE_DECISION**, with a concrete proposal in the existing media spec. One explicit
+allowlist local commit is authorized; exact SHA/parent/tree is in the task result. No push, PR,
+merge, SSH, deploy, external credentials or Cloudflare writes. No staging/production acceptance.
+
+Identity PASS initially, after preparation and before commit: `Hookah_Tootah`, primary physical
+root `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, checkout-owned `.git`/common dir/index,
+origin `github.com/koteev-m/hookah_bot`; verified instruction origins, no redirects/foreign authority.
+Initial constraints NOT_SUPPLIED; initial branch `codex/ht-staff-reissue-schedule-ux07`, HEAD
+`58cb4a995630881eed8983bf1bb3771a10f73a30`, only four untracked SQL helpers. After initial PASS,
+remote main verified at `919abbb813cbbb724d628bdabeef8e905e6a1c42`; targeted fetch obtained that
+object. Ordinary branch `codex/ht-venue-team-schedule-roles-ux08` starts at that exact base.
+No worktree, local-main rewrite, stash or archive mutation. Remote observation is preparation-time
+evidence, not a claim about later remote state.
+
+Implemented:
+- A: editable, optional normalized `displayName` in create-from-member, compatible legacy default,
+  single atomic hidden draft and exact Telegram link; no user/membership/publication change.
+  Existing protected-target RBAC, race/link conflict and audit rollback remain enforced. No migration.
+- B: collapsed daily schedule, separate computed-status counts, per-date add, stable toggles/focus,
+  same-week expansion retention and week/venue reset. Existing shift/batch/CAS/time/restore contracts.
+- C: nested confirmation/form/week history through one Telegram handler, screen and browser controls;
+  raw in-memory draft retention, explicit discard, guarded writes and stale/foreign editor rejection.
+  Close/save traverses only proven live panel entries; unknown history/state is preserved.
+- D: common role shell, Manager operational Home/compact Settings/More and Staff Home/My shifts/More,
+  existing permission-filtered routes and safe Back parents. No server permission widening.
+- E: no proven Hookah application R2/photo pipeline. Separate AP-00 S3 backup transport is not it.
+  Proposal: private dedicated Hookah R2, guarded delivery, consent/moderation, validation, atomic
+  lifecycle/cleanup and deletion-safe backup. Operator/budget/retention/backup approvals remain open.
+  Corrected stale Draft Preview media documentation against existing authenticated private routes.
+
+Validation on final implementation/test bytes:
+- Kotlin compile/ktlint and selected API/repository/RBAC/Guest/Preview suites: **175/175**, 16 suites,
+  no failures/errors/skips; real PostgreSQL link and staff mutation concurrency **4/4** executed.
+- TypeScript and production build PASS; existing Vite >500 kB bundle warning remains.
+- Focused Playwright **37/37**, full Chromium smoke **432/432**, no skips. Existing UX02/UX05–07
+  history, role, async and privacy regressions retained; obsolete menu/form locators updated.
+- Two read-only reviewers: A–D/API/navigation and E/media proposal PASS; all P2 corrected with
+  relevant regression checks. Final `git diff --check`, UTF-8/fences/local links and bounded added
+  content credential scan PASS. Implementation hashes recorded for test applicability.
+- 27 synthetic screenshots: role homes, week, 6/10 expanded shifts, form/confirmation, profile name
+  at 390x844, 390x568 and 1280x900. Browser evidence does not prove real Telegram keyboard/WebView,
+  safe-area or native BackButton acceptance. Historical UX07 iPhone 19/19 is not UX08 acceptance.
+
+Evidence: [validation and exact paths](.tmp-checks/ht-ux08/validation.md),
+[backend results](.tmp-checks/ht-ux08/backend-results.json),
+[full smoke](.tmp-checks/ht-ux08/playwright-full-final.log),
+[focused smoke](.tmp-checks/ht-ux08/playwright-focused-final.log),
+[review](.tmp-checks/ht-ux08/review.md), [preservation](.tmp-checks/ht-ux08/preservation.json),
+[screenshots](.tmp-checks/ht-ux08/screenshots/).
+Evidence is ignored/local. Four SQL helpers remain byte-identical; stash/archive refs unchanged.
+No unfinished external operation. Runtime A–D requires separately authorized publication/exact-SHA
+CI, staging and real iPhone acceptance. Next: user approval of the concrete photo storage decision
+and/or a separate publication task; stop at this local result.
+
 ## HT-STAFF-INVITE-REISSUE-SCHEDULE-UX07 — local validated; staging pending (2026-10-28)
 
 UX07 local implementation and required validation complete; focused independent review PASS,

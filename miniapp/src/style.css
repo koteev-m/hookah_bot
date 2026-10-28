@@ -3695,3 +3695,12 @@ input[type="number"] {
 .venue-staff .venue-invite-result > button {
   justify-self: start;
 }
+
+/* UX08: collapsed days retain their own stable toggle and honest status summary. */
+.venue-schedule-day-summary { margin: 0; font-size: 0.85rem; color: var(--text-muted, #8a96a8); }
+.venue-schedule-day-body { display: grid; gap: 0.6rem; }
+.venue-schedule-day-body[hidden] { display: none; }
+
+.venue-schedule-refresh { grid-column: 1 / -1; justify-self: end; }
+.venue-staff-schedule .venue-schedule-day { padding: 0.65rem 0.75rem; }
+.venue-staff-schedule .venue-schedule-day-empty { padding: 0.4rem 0.75rem; }

@@ -337,6 +337,42 @@ Targeted invitation and staff-photo proposals remain unimplemented in
 [UX06 design](HT_VENUE_STAFF_INVITES_UX06_DESIGN.md).
 
 
+### UX08 Local Profile, Schedule And Navigation Contract
+
+Creating from a member prefills the current safe member name and allows the authorized actor to
+edit it before the single atomic hidden-draft creation. `displayName` is stored on STAFF_PROFILE,
+keeps the exact selected linkage, survives GET and subsequent Telegram nickname changes, and does
+not publish the card. Blank/whitespace and >120-length inputs are rejected; Unicode is accepted
+under the existing name policy. Existing Owner/Manager protected-target, Staff self-edit, foreign,
+duplicate/race and audit-rollback contracts remain authoritative. No migration is required.
+
+The week initially shows collapsed populated days and compact empty days. Summaries count **shift
+records** separately by server computed status (planned/current/completed/canceled/unknown), never
+infer attendance or label a future shift active. Date-specific add stays available while collapsed.
+Expansion makes no request, keeps toggle focus, survives same-week refresh, and resets on week or
+venue change. A completed mutation opens its affected day to show the result. Canceled rows retain
+explicit restore actions and existing CAS/shiftId/atomic batch/timezone/Guest-source contracts.
+
+Schedule form and confirmation use scoped in-memory editor identities in the existing hash router.
+The one shared Telegram handler and on-screen return traverse confirmation → form → week; browser
+Back/Forward uses the same entries and preserves date, selections and common/individual intervals.
+Returning to the week retains a resumable screen-local draft; cancellation-only confirmations leave
+no fake form draft. Explicit discard, replacing a draft, changing week/venue or leaving through an
+app action warns before losing changes and blocks pending writes. A typed batch rejection retains
+the confirmation with disabled submit until returning to the form and revalidating.
+
+Noncancelable browser navigation follows the actual URL, retaining dirty/pending schedule screens
+only for the same user/venue/role/permissions/module state. A memory-only notice provides a return
+link; clean completed offscreen saves are disposed rather than reused as stale schedules. Detached
+responses cannot navigate the app or revive editors. Stale/direct panel links without a live editor
+show the week. Unload warnings are best effort; no local/session storage persistence is introduced.
+
+UX08 is local implementation, not deployed acceptance. Browser fixtures/screenshots cannot verify
+real iOS Telegram BackButton, safe areas or keyboard. Staff photos remain
+**BLOCKED_BY_STORAGE_DECISION**; the concrete R2/consent/lifecycle proposal is in
+[MEDIA_STORAGE_UPLOAD.md](MEDIA_STORAGE_UPLOAD.md#ux08-staff-photos--decision-required-not-implemented-2026-10-28).
+No photo upload/storage/delivery/delete implementation or infrastructure operation belongs to UX08.
+
 ## SHIFT_TODAY Model
 
 Target fields:
@@ -426,9 +462,11 @@ Backend/repository/API:
    unchanged and contain no member/Telegram identity.
 4. Direct create/preselected form targets one active same-venue member, rereads membership and
    identity server-side through `POST /api/venue/{venueId}/staff/profiles/from-member`, whose body
-   contains only `userId`, required `subtype` and compatible `roleLabel`. It creates an active draft
-   hidden from Guest and never trusts actor, venue, role, Telegram name, display name or visibility
-   from the request. Generic profile create is display-only and rejects `linkedUserId`.
+   contains `userId`, required `subtype`, compatible `roleLabel` and optional `displayName` (UX08).
+   Omitted/null name keeps the server-read safe identity default; a supplied name is trimmed,
+   nonblank and at most 120 UTF-16 code units, matching existing profile editing. It creates an
+   active draft hidden from Guest and never trusts actor, venue, membership role, Telegram identity
+   or visibility from the request. The public card name changes no Telegram/user/membership data. Generic profile create is display-only and rejects `linkedUserId`.
 5. One existing active profile returns `LINKED`; a second active link is a typed conflict with the
    existing safe profile reference. PostgreSQL Testcontainers concurrency coverage drives two real
    HTTP transactions through both create-from-member and relink paths, proves the target membership
