@@ -1,5 +1,45 @@
 # Project Status
 
+## HT-UX08-CI-PLAYWRIGHT-STABILITY-01 — bounded CI race fixes (2026-10-28)
+
+Identity PASS at the primary Hookah root/common/index, origin `github.com/koteev-m/hookah_bot`.
+Existing branch `codex/ht-ux08-r2-ht70-config`, exact starting HEAD
+`76194b5da704292511a8640b3dcb14cbde9eb356`; sole immediate parent
+`3b61b1fdcaf5bb2b3900791a4123cf3794e4c120`, as explicitly clarified by the user.
+PR233 remains the existing Draft; no new branch/PR. Read-only job logs confirmed CI640
+attempts 1/2 failed different tests; CI641 passed on the same starting SHA. No CI monitoring.
+
+Controlled API barriers reproduced both original assertions on unchanged production code:
+public-card initial GET overwrites an already editable city before save (product defect);
+photo test navigates before access bootstrap pins `venueId` in the initial history entry
+(test setup defect). Back to that unscoped entry deselects the venue and hides its retained-link.
+A separate diagnostic confirmed the file and offscreen upload still survive. Hosted traces were
+unavailable; the exact hosted response interleaving is inferred from identical controlled failures.
+No shared fixture/context leak was found; CI uses two workers and page-scoped mocks.
+
+Public-card controls now stay disabled until the initial snapshot succeeds, including read failure.
+Failed-save draft, exact PUT values and explicit successful retry remain covered. Photo test waits
+for a venue-scoped initial history entry and selected preview, then checks both Back/Forward and
+pending upload retention. No timeout/retry/skip/config change or photo runtime change.
+
+Validation on macOS, Node24.14.0/npm11.9.0, Playwright1.60.0: baseline isolated6/6 and ordinary
+repeat10/10; controlled original failures2/2 reproduced; new loading checks failed on old code.
+Fixed targeted15/15 (two workers, retries0); TypeScript and production build PASS. One full
+CI/UTC smoke445/445 and the workflow's unchanged JSON validator PASS: zero failures/flaky/skips,
+runner errors or failed attempts. Review found one P2 negative-mock counter bypass; non-GET now
+falls through to the observed mutation fixture. Only that test-routing line changed after full
+smoke; final targeted6/6 validates it with both original scenarios, production bytes unchanged.
+Independent focused read-only review PASS after P2 closure; no remaining P0/P1/P2.
+Diff/docs sanity PASS. Final Git publication evidence belongs in the task report.
+Evidence logs/traces/report: `/private/tmp/HT-UX08-CI-PLAYWRIGHT-STABILITY-01/`.
+
+Hosted Linux/Node20 CI for the new SHA, real Telegram iPhone and staging/R2 acceptance remain
+UNVERIFIED. Backend/SQL/deployment bytes unchanged; no backend suite repeated. Four SQL helpers,
+stash/archive refs preserved. Authorization: one local commit and one non-force push to the
+existing branch after review/checks, then verify exact remote SHA and STOP. No SSH, providers,
+Telegram mutations, server work, merge or deploy. A later release still needs exact-SHA green CI
+and separately authorized staging acceptance. Next: publish verified fix; user tracks CI.
+
 ## HT-UX08-R2-HT70-CONFIG-FIX-01 — optional HT70 R2 configuration ready (2026-10-28)
 
 **HT_UX08_R2_HT70_CONFIG_READY** for publication, not staging acceptance.

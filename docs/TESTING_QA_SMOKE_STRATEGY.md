@@ -24,6 +24,15 @@ for each role home, collapsed week, 6/10 expanded shifts, form/confirmation and 
 separate, authorized release checks. E is implemented locally by the subsequent
 `HT-UX08-STAFF-PHOTOS-R2-IMPLEMENT-01` task; its test and live-admission boundary is below.
 
+`HT-UX08-CI-PLAYWRIGHT-STABILITY-01`: hold the first public-card GET and verify that all
+editor controls remain disabled until its snapshot is loaded; a failed initial read must leave
+them disabled. After loading, a rejected save preserves the manual city/address and an explicit
+second save sends the same draft. For noncancelable photo Back/Forward, wait for access bootstrap
+to pin `venueId` in the initial history entry before navigating to Staff. Verify selected preview,
+the retained-session link before and during upload, offscreen completion and subsequent reload.
+Use controlled API barriers, separate browser contexts and explicit bounded repetitions with zero
+retries. A green repeat alone does not establish the cause of an earlier failure.
+
 UX03 local regression scope (`HT-VENUE-MENU-TABLES-QR-UX03`): native collapsed hookah flavors,
 90-flavor fixture, keyboard/mobile layout, mutation/retry draft retention and venue isolation;
 sequential/individual table numbers, strict validation, late conflict and audit rollback, table/token

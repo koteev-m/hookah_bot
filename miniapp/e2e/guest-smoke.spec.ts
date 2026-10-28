@@ -16804,10 +16804,19 @@ test('venue staff does not see public card or staff module settings', async ({ p
 
 test('venue public card failed save preserves manual location draft', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
-  await mockVenueShiftExtensionApi(page, {
+  const api = await mockVenueShiftExtensionApi(page, {
     role: 'MANAGER',
     permissions: ['BOOKING_MANAGE'],
     failPublicCardUpdateOnce: true
+  })
+
+  let releaseCard!: () => void
+  const cardPending = new Promise<void>((resolve) => { releaseCard = resolve })
+  const updates: unknown[] = []
+  await page.route('**/api/venue/1/public-card', async (route) => {
+    if (route.request().method() === 'GET') await cardPending
+    else if (route.request().method() === 'PUT') updates.push(route.request().postDataJSON())
+    await route.fallback()
   })
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
@@ -16815,6 +16824,14 @@ test('venue public card failed save preserves manual location draft', async ({ p
   await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
 
   const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
+  // Hold the first GET: no editable draft may be overwritten by the server snapshot.
+  await expect(publicCard.locator('input, textarea, button')).toHaveCount(8)
+  for (const input of await publicCard.locator('input, textarea, button').all()) {
+    await expect(input).toBeDisabled()
+  }
+  expect(api.getUpdatePublicCardSettingsCalls()).toBe(0)
+  releaseCard()
+  await expect(publicCard.getByPlaceholder('Начните вводить город')).toHaveValue('Москва')
   await publicCard.getByPlaceholder('Начните вводить город').fill('Иннополис')
   await expect(publicCard.getByText('Ничего не найдено. Можно ввести город вручную.')).toBeVisible()
   await publicCard.getByPlaceholder('Улица, дом').fill('Баумана, 7')
@@ -16826,6 +16843,33 @@ test('venue public card failed save preserves manual location draft', async ({ p
   await expect(publicCard.getByPlaceholder('Начните вводить город')).toHaveValue('Иннополис')
   await expect(publicCard.getByPlaceholder('Улица, дом')).toHaveValue('Баумана, 7')
   await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeEnabled()
+  expect(updates).toEqual([expect.objectContaining({ city: 'Иннополис', address: 'Баумана, 7', countryCode: 'RU' })])
+  expect(api.getPublicCardSettings().city).toBe('Москва')
+
+  await publicCard.getByRole('button', { name: 'Сохранить' }).click()
+  await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeDisabled()
+  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  expect(updates).toEqual([updates[0], updates[0]])
+  expect(api.getPublicCardSettings()).toMatchObject({ city: 'Иннополис', address: 'Баумана, 7' })
+})
+
+test('venue public card initial read failure keeps unloaded fields disabled', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: ['BOOKING_MANAGE'] })
+  await page.route('**/api/venue/1/public-card', async (route) => {
+    if (route.request().method() !== 'GET') { await route.fallback(); return }
+    await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({
+      error: { code: 'INVALID_INPUT', message: 'Публичная карточка недоступна.' }
+    }) })
+  })
+  await page.goto('?mode=venue#/settings/card')
+  await expect(page.locator('p.status')).toContainText('Публичная карточка недоступна.')
+  const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
+  await expect(publicCard.locator('input, textarea, button')).toHaveCount(8)
+  for (const input of await publicCard.locator('input, textarea, button').all()) {
+    await expect(input).toBeDisabled()
+  }
+  expect(api.getUpdatePublicCardSettingsCalls()).toBe(0)
 })
 
 test('venue manager configures working hours and date exceptions', async ({ page }) => {
@@ -25898,11 +25942,21 @@ test('R2 photos noncancelable Back retains file and releases completed offscreen
   await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
   await installTelegramWebApp(page, 123456789)
   const api = await mockStaffPhotoApi(page)
+  let releaseAccess!: () => void
+  const accessPending = new Promise<void>((resolve) => { releaseAccess = resolve })
+  await page.route('**/api/venue/me', async (route) => { await accessPending; await route.fallback() })
   await page.goto('?mode=venue#/more')
+  await expect(page.getByText('Загрузка доступа...', { exact: true })).toBeVisible()
+  releaseAccess()
+  // Access bootstrap pins venueId with replaceState; establish that entry before adding history.
+  await expect(page).toHaveURL(/venueId=1#\/more$/)
+  await expect(page.getByRole('heading', { name: 'Ещё', exact: true })).toBeVisible()
   await page.evaluate(() => { window.location.hash = '#/staff' })
   const panel = photoPanel(page)
   await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await expect(panel.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
   await page.goBack()
+  await expect(page).toHaveURL(/venueId=1#\/more$/)
   await expect(page.getByRole('link', { name: 'Вернуться к фотографии сотрудника' })).toBeVisible()
   await page.goForward()
   await expect(panel.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
@@ -25910,7 +25964,8 @@ test('R2 photos noncancelable Back retains file and releases completed offscreen
   api.hold(new Promise<void>((resolve) => { release = resolve }))
   await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
   await page.goBack()
-  await expect(page).toHaveURL(/#\/more$/)
+  await expect(page).toHaveURL(/venueId=1#\/more$/)
+  await expect(page.getByRole('link', { name: 'Вернуться к фотографии сотрудника' })).toBeVisible()
   release()
   await expect.poll(() => api.completed.size).toBe(1)
   await expect(page.getByRole('link', { name: 'Вернуться к фотографии сотрудника' })).toHaveCount(0)
