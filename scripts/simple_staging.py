@@ -32,6 +32,13 @@ SOURCE = 'https://github.com/koteev-m/hookah_bot'
 REPO = 'koteev-m/hookah_bot'
 IMAGE_RE = r'ghcr\.io/koteev-m/hookah_bot/backend@sha256:[0-9a-f]{64}'
 LOCK = Path('/run/lock/shared-staging-docker.lock')
+RUNTIME_SECRETS = {'API_SESSION_JWT_SECRET', 'TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER', 'VENUE_STAFF_INVITE_SECRET_PEPPER'}
+BASE_RUNTIME_KEYS = RUNTIME_SECRETS | {'TELEGRAM_BOT_ENABLED', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_USERNAME',
+                                       'PLATFORM_OWNER_TELEGRAM_ID'}
+R2_CONNECTION_KEYS = {'STAFF_PHOTOS_R2_' + suffix for suffix in
+                      ('ENDPOINT', 'BUCKET', 'ACCESS_KEY', 'SECRET_KEY', 'REGION', 'JURISDICTION')}
+PHOTO_RUNTIME_KEYS = R2_CONNECTION_KEYS | {'STAFF_PHOTOS_R2_ENABLED', 'STAFF_PHOTOS_MAX_INPUT_BYTES'}
+RUNTIME_KEYS = BASE_RUNTIME_KEYS | PHOTO_RUNTIME_KEYS
 REQUIRED_JOBS = {'backend-ktlint', 'backend-compile', 'backend-archive-reproducibility',
                  'backend-release-critical-routes', 'backend-venue-booking-rbac',
                  'backend-telegram-lightweight', 'backend-migration-sanity', 'backend',
@@ -254,11 +261,9 @@ def validate_config(c):
     require(re.fullmatch(r'(docker\.io/library/)?postgres@sha256:[0-9a-f]{64}', c['postgres_image']), 'POSTGRES_DIGEST_REQUIRED')
     require(re.fullmatch(r'[A-Za-z0-9_-]{32,128}', c['postgres_password']), 'DB_PASSWORD_INVALID')
     e = c['runtime']
-    secrets = {'API_SESSION_JWT_SECRET', 'TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER', 'VENUE_STAFF_INVITE_SECRET_PEPPER'}
-    require(set(e) == secrets | {'TELEGRAM_BOT_ENABLED', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_USERNAME',
-                                'PLATFORM_OWNER_TELEGRAM_ID'}, 'RUNTIME_FIELDS_INVALID')
+    require(isinstance(e, dict) and BASE_RUNTIME_KEYS <= set(e) <= RUNTIME_KEYS, 'RUNTIME_FIELDS_INVALID')
     require(all(isinstance(v, str) and '\n' not in v and '\r' not in v and '$' not in v for v in e.values()), 'RUNTIME_VALUES_INVALID')
-    require(all(re.fullmatch(r'[A-Za-z0-9_-]{32,128}', e[k]) for k in secrets), 'RUNTIME_SECRET_INVALID')
+    require(all(re.fullmatch(r'[A-Za-z0-9_-]{32,128}', e[k]) for k in RUNTIME_SECRETS), 'RUNTIME_SECRET_INVALID')
     require(e['TELEGRAM_BOT_ENABLED'] in ('true', 'false'), 'TELEGRAM_FLAG_INVALID')
     if e['TELEGRAM_BOT_ENABLED'] == 'true':
         require(re.fullmatch(r'[0-9]+:[A-Za-z0-9_-]+', e['TELEGRAM_BOT_TOKEN'])
@@ -266,6 +271,24 @@ def validate_config(c):
                 and re.fullmatch(r'[A-Za-z0-9_]+', e['TELEGRAM_BOT_USERNAME']), 'TELEGRAM_CONFIG_INVALID')
     else:
         require(e['TELEGRAM_BOT_TOKEN'] == '', 'DISABLED_TELEGRAM_TOKEN_MUST_BE_EMPTY')
+    # Do not insert defaults: old runtime/Compose hashes must remain unchanged.
+    require(e.get('STAFF_PHOTOS_R2_ENABLED', 'false') in ('true', 'false'), 'R2_FLAG_INVALID')
+    if e.get('STAFF_PHOTOS_R2_ENABLED') == 'true' or R2_CONNECTION_KEYS & set(e):
+        require(R2_CONNECTION_KEYS | {'STAFF_PHOTOS_R2_ENABLED'} <= set(e), 'R2_CONFIG_INCOMPLETE')
+        require(e['STAFF_PHOTOS_R2_BUCKET'] == 'hookah-tootah-media-staging-eu', 'R2_BUCKET_INVALID')
+        require(e['STAFF_PHOTOS_R2_REGION'] == 'auto', 'R2_REGION_INVALID')
+        jurisdiction = e['STAFF_PHOTOS_R2_JURISDICTION']
+        require(jurisdiction in ('default', 'eu'), 'R2_JURISDICTION_INVALID')
+        suffix = r'eu\.' if jurisdiction == 'eu' else ''
+        require(re.fullmatch(r'https://[a-f0-9]{32}\.' + suffix + r'r2\.cloudflarestorage\.com',
+                             e['STAFF_PHOTOS_R2_ENDPOINT']), 'R2_ENDPOINT_INVALID')
+        require(re.fullmatch(r'[A-Za-z0-9_-]{16,128}', e['STAFF_PHOTOS_R2_ACCESS_KEY'])
+                and re.fullmatch(r'[A-Za-z0-9/+=_-]{32,256}', e['STAFF_PHOTOS_R2_SECRET_KEY']),
+                'R2_CREDENTIALS_INVALID')
+    if 'STAFF_PHOTOS_MAX_INPUT_BYTES' in e:
+        limit = e['STAFF_PHOTOS_MAX_INPUT_BYTES']
+        require(re.fullmatch(r'[1-9][0-9]{0,6}', limit) and 1024 <= int(limit) <= 5 * 1024 * 1024,
+                'R2_INPUT_LIMIT_INVALID')
 
 
 class Staging:
@@ -389,6 +412,9 @@ class Staging:
                 and not app['Mounts'] and set(app['NetworkSettings']['Networks']) == {self.project + '_default'}, 'BACKEND_ISOLATION_MISMATCH')
         actual = dict(x.split('=', 1) for x in app['Config']['Env'])
         require(all(actual.get(k) == v for k, v in self.document(image)['services']['backend']['environment'].items()), 'BACKEND_RUNTIME_CONFIG_MISMATCH')
+        require({k: v for k, v in actual.items() if k in PHOTO_RUNTIME_KEYS}
+                == {k: v for k, v in self.config['runtime'].items() if k in PHOTO_RUNTIME_KEYS},
+                'BACKEND_RUNTIME_CONFIG_MISMATCH')
 
     def ready(self, image):
         deadline = time.monotonic() + self.readiness_seconds
@@ -531,7 +557,13 @@ class Staging:
         # Config changes are explicit; verify the old running environment before replacing it.
         desired = self.config
         old_doc = private_json(self.compose_file)
-        self.config = dict(desired, runtime={k: old_doc['services']['backend']['environment'][k] for k in desired['runtime']})
+        require(digest(old_doc) == state['compose_hash'], 'COMPOSE_CHANGED')
+        old_env = old_doc['services']['backend']['environment']
+        old_runtime = {k: v for k, v in old_env.items() if k in RUNTIME_KEYS}
+        require(digest(old_runtime) == state['runtime_hash'], 'PREVIOUS_RUNTIME_HASH_MISMATCH')
+        previous = dict(desired, runtime=old_runtime)
+        validate_config(previous)
+        self.config = previous
         try:
             self.observe(state['target'], state['binding'])
         finally:

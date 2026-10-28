@@ -283,6 +283,72 @@ Backup и result следует скопировать в защищённое �
 политике; локальный dump не защищает от потери сервера. PostgreSQL major upgrades
 и изменение DB credentials/binding не входят в обычный app update.
 
+### UX08 Staff Photos: optional R2 runtime в HT70
+
+Старые `config.json` без `STAFF_PHOTOS_*` остаются валидными: R2 выключен backend
+по умолчанию, executor не добавляет поля и не меняет прежние runtime/Compose hashes.
+Допустимы отдельный `STAFF_PHOTOS_R2_ENABLED="false"` и необязательный
+`STAFF_PHOTOS_MAX_INPUT_BYTES` — десятичная строка от 1024 до 5242880 включительно.
+Неизвестные runtime keys запрещены. Лимит можно уменьшить, но не поднять выше 5 MiB.
+
+Для `STAFF_PHOTOS_R2_ENABLED="true"` нужны все шесть connection keys:
+
+| Runtime key | Проверяемое значение |
+| --- | --- |
+| `STAFF_PHOTOS_R2_ENDPOINT` | `https://<32 lowercase hex account id>.r2.cloudflarestorage.com` для `default` либо `https://<account>.eu.r2.cloudflarestorage.com` для `eu`; без path, trailing slash, port, userinfo, query и fragment |
+| `STAFF_PHOTOS_R2_BUCKET` | Только `hookah-tootah-media-staging-eu` |
+| `STAFF_PHOTOS_R2_REGION` | Только `auto` |
+| `STAFF_PHOTOS_R2_JURISDICTION` | Явно проверенный оператором `default` или `eu`; имя bucket не является доказательством |
+| `STAFF_PHOTOS_R2_ACCESS_KEY` | 16–128 символов `A–Z a–z 0–9 _ -` |
+| `STAFF_PHOTOS_R2_SECRET_KEY` | 32–256 символов `A–Z a–z 0–9 / + = _ -` |
+
+Если присутствует хотя бы один connection key, обязательны полный набор и явный
+`ENABLED`, даже при `false`. Полный блок можно оставить с `false` или удалить весь
+R2-блок для отключения; частичные/некорректные значения отвергаются до deployment.
+Формат credentials не доказывает их действительность или bucket-only permissions.
+Строки с `$`, CR/LF и недопустимыми символами не интерполируются и не принимаются.
+
+После отдельного разрешения оператор доставляет проверенный release tool и меняет
+только `runtime` в root-owned private `config.json` (0600, каталог 0700), используя
+согласованный server-only secret channel. Реальные credentials не передаются в
+Git, candidate, compatibility review, CI, чат, диагностический вывод или браузер.
+Новый tool совместим с прежним установленным HT70 состоянием; сохраняются
+`result.json`, история операций, DB binding и доверенные hashes. Старый tool,
+не допускающий R2 keys, использовать для этого перехода нельзя.
+
+Executor переносит допустимые поля только в backend environment своего generated
+`compose.json` (0600). HT70 не загружает legacy `.env`/`docker-compose.yml` для R2;
+ручное редактирование generated Compose запрещено. При `--apply-config` старый
+runtime извлекается по фактически сохранённым полям старого Compose, сверяется с
+его `compose_hash` и прежним `runtime_hash`, затем проверяется работающий backend
+и PostgreSQL binding. Новые значения не подставляются в эту проверку. Обычный
+`deploy` без флага отказывает при любом runtime drift. Отсутствующие R2 keys также
+не должны неожиданно появляться в environment старого backend.
+
+Для единого выпуска UX08 с существующего **HT70 V126** оператор сначала проверяет
+Cloudflare privacy/Standard/jurisdiction/endpoint, bucket-only Object Read & Write,
+точный main CI/candidate, реальные manifests, compatibility review и backup с
+проверенной копией вне VPS. Затем, только после разрешения на config/deploy/V127:
+
+```bash
+python3 -B /opt/hookah-bot/simple_staging.py deploy --directory /opt/hookah-bot \
+  --candidate /opt/hookah-bot/candidate.json \
+  --compatibility-review /opt/hookah-bot/compatibility.json --apply-config
+```
+
+Проверенный backup следует подготовить до изменения desired runtime: отдельная
+команда `backup` отказывает при runtime drift. Сам forward deploy после остановки
+backend создаёт ещё один проверенный dump перед миграцией. Он не ждёт off-VPS copy
+этого нового dump: заранее согласуйте RPO внешней копии; если нужен именно последний
+остановленный снимок вне VPS до миграции, требуется отдельное reviewed решение.
+
+V126 bootstrap, append-only V127 review, backup, UNKNOWN/APPLYING и rollback guards
+не ослаблены. После V127 rollback к V126 image/schema запрещён; recovery — отдельно
+reviewed совместимый forward fix. Технический SUCCESS не доказывает работу R2:
+нужен отдельно разрешённый real R2/iPhone smoke upload/consent/publish/revoke/delete,
+сохранность после restart и подтверждённый cleanup по
+[media acceptance](MEDIA_STORAGE_UPLOAD.md#separate-staging-configuration-and-acceptance-checklist).
+
 ### Статус, логи, backup и восстановление
 
 ```bash

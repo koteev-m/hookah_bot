@@ -22,7 +22,7 @@ import uuid
 import zipfile
 
 import simple_staging as s
-from test_simple_staging import config, record
+from test_simple_staging import config, record, r2_config
 
 BASE = 'sha256:5716515f536a7cb7733808819e70094081f95fb92ff8def3f5697e7b4a0972e3'
 REVISION = '7fc3ed0b7de556363bf2b72569b0c2dd98cfb81e'
@@ -55,13 +55,16 @@ class FixtureStaging(s.Staging):
         command(['docker', 'compose', 'version'])
 
     def transport(self, argv, **kwargs):
-        if argv[0] == 'gh':
-            if '--paginate' in argv:
-                return json.dumps([{'jobs': [{'name': name, 'conclusion': 'success'} for name in s.REQUIRED_JOBS]}]).encode()
-            return json.dumps({'head_sha': self.ci_revision, 'event': 'push', 'path': '.github/workflows/ci.yml',
-                               'repository': {'full_name': s.REPO}, 'head_repository': {'full_name': s.REPO},
-                               'status': 'completed', 'conclusion': 'success', 'html_url': 'fixture://ci'}).encode()
         return command([self.mapping.get(arg, arg) for arg in argv], **kwargs)
+
+    def candidate(self, record):
+        # CI is a transport fixture; production now uses anonymous HTTPS, not gh.
+        # Exact public API validation has its own portable regression suite.
+        def fixture_ci(revision, run_id):
+            s.require(revision == self.ci_revision, 'FIXTURE_CI_REVISION_MISMATCH')
+            return {'id': run_id, 'sha': revision, 'url': 'fixture://ci'}
+        with patch.object(s, 'verify_ci', side_effect=fixture_ci):
+            return super().candidate(record)
 
     def inspect_image(self, ref, **kwargs):
         actual = self.mapping.get(ref, ref)
@@ -203,12 +206,35 @@ class DockerTests(unittest.TestCase):
                 target = r.candidate(c)
                 review = {'from_manifest': s.digest(r.state()['target']['manifest']), 'to_manifest': s.digest(target['manifest']),
                           'backward_compatible': True, 'reason': 'Fixture: adds unrelated empty table; previous app remains compatible.'}
-                r.apply('deploy', c, review)
+                # Exercise a pre-R2 installed runtime with the new config keys and
+                # forward migration in one operation. Keep synthetic R2 disabled:
+                # this fixture proves plumbing, never provider connectivity.
+                photos = r2_config(); photos['STAFF_PHOTOS_R2_ENABLED'] = 'false'
+                r.config['runtime'].update(photos); s.validate_config(r.config)
+                s.atomic(root / 'config.json', r.config)
+                with self.assertRaisesRegex(s.Refused, 'RUNTIME_CONFIG_CHANGED_USE_APPLY_CONFIG'):
+                    r.apply('deploy', c, review)
+                r.apply('deploy', c, review, apply_config=True)
+                backend = next(i for i in r.containers() if i['Config']['Labels']['com.docker.compose.service'] == 'backend')
+                actual = dict(item.split('=', 1) for item in backend['Config']['Env'])
+                self.assertTrue(all(actual.get(k) == v for k, v in photos.items()), 'synthetic photo environment mismatch')
+                self.assertEqual(r.state()['runtime_hash'], s.digest(r.config['runtime']))
                 self.assertEqual(len(r.history()), 127); self.assertIn('backup', r.state())
                 self.assertEqual(r.binding(), initial_binding)
                 self.assertEqual(r.db('SELECT value FROM ht70_sentinel WHERE id=1'), 'retained')
                 with self.assertRaisesRegex(s.Refused, 'SCHEMA_ROLLBACK'): r.apply('rollback')
                 print('PASS real compatible V127 + backup, data retained, schema rollback refused', flush=True)
+                # Reload private config, then recreate only backend with unchanged
+                # runtime; prove durability without a new deployment mechanism.
+                r.config = s.private_json(root / 'config.json')
+                r.apply('deploy', c)
+                self.assertEqual(r.binding(), initial_binding)
+                r.config['runtime'] = config()['runtime']
+                s.atomic(root / 'config.json', r.config)
+                r.apply('deploy', c, apply_config=True)
+                backend = next(i for i in r.containers() if i['Config']['Labels']['com.docker.compose.service'] == 'backend')
+                self.assertFalse(any(item.split('=', 1)[0] in s.PHOTO_RUNTIME_KEYS for item in backend['Config']['Env']))
+                print('PASS old runtime -> synthetic R2 config, reload/recreate, removal and unchanged DB binding', flush=True)
                 peer_after = json.loads(command(['docker', 'inspect', *peer_ids]))
                 self.assertEqual(command(['docker', 'exec', peer_ids[0], 'psql', '-U', 'postgres', '-Atc',
                                           'SELECT value FROM neighbor_sentinel']).decode().strip(), 'retained-neighbor')

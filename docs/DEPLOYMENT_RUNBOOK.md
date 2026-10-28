@@ -28,6 +28,12 @@ Current practice:
 - Staging is a one-VPS Docker Compose deployment documented in `docs/STAGING_DEPLOYMENT.md`.
 - The Mini App production bundle is built into the backend image for staging.
 - Current staging URL is `https://staging.hookahtootah.club`.
+- HT70 Staff Photos R2 is an optional validated private `config.json` runtime block; existing
+  configurations stay disabled. Adding/changing/removing it requires `deploy --apply-config`
+  with the current compatible release tool and verified old runtime/Compose hashes. The
+  [HT70 R2 procedure](STAGING_ORDINARY_RELEASE.md#ux08-staff-photos-optional-r2-runtime-в-ht70)
+  covers server-only secrets, actual Cloudflare admission, combined V127 review/backup and
+  separate live acceptance; legacy `.env` is not its configuration channel. V127 forbids old-schema rollback.
 - Current HT70 SSH/SCP follows the [strict pinned Hookah profile](STAGING_ORDINARY_RELEASE.md#текущий-строгий-sshscp-профиль-hookah-ht70); historical ControlMaster examples are not its transport policy.
 - Ordinary V125 releases use [the staging release controller](STAGING_ORDINARY_RELEASE.md) only after the separately approved [protocol transition](STAGING_PROTOCOL_TRANSITION.md); the ControlMaster name forwards to the same entrypoint.
 - Production deploy automation, exact rollback commands and complete log command coverage remain **needs verification** unless a future task confirms them.

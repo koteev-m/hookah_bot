@@ -102,10 +102,19 @@ These are prerequisites for a later authorized task, not permission for external
 2. Owner supplies dedicated bucket-only **Object Read & Write** credentials through the approved
    server secret channel, never chat/PR/Git/logs. Do not reuse another project's keys. Token creation,
    rotation or changes require separate authorization; prefer time-limited scoped credentials.
-3. Existing `docker-compose.yml` loads backend `env_file: ./.env`; staging release invokes that
-   Compose configuration. A separately authorized operator writes the variables only in the
-   protected server environment and checks enabled status without printing secret values.
-   No media volume or browser credentials are needed. Confirm maintenance policy permits cleanup.
+3. Current HT70 uses private root-owned `config.json` runtime and generated `compose.json`,
+   both mode 0600, directory 0700. Existing configurations without photo keys stay valid and disabled;
+   enabling requires the complete validated R2 block and an explicit `deploy --apply-config`.
+   A separately authorized operator supplies credentials only through the approved server secret
+   channel. The executor validates old Compose/runtime hashes and the actual previous backend
+   before replacing it; it passes photo fields only to backend environment. Never edit generated
+   Compose or put secrets in candidate, Git/CI/chat/logs/browser. Legacy `docker-compose.yml` / `.env`
+   is a different deployment path and is not HT70 configuration delivery. See the exact key and
+   transition contract in [HT70](STAGING_ORDINARY_RELEASE.md#ux08-staff-photos-optional-r2-runtime-в-ht70).
+   HT70 rejects malformed/incomplete configuration before deployment; the backend independently
+   retains its safe disabled fallback. Before V126 -> V127, require an exact compatibility review,
+   verified backup and off-VPS readiness. No old-schema rollback after V127. No media volume or
+   browser credentials are needed. Confirm maintenance policy permits cleanup.
 4. Record operator and budget. Standard free allowance is 10 GB-month, 1M Class A operations/month,
    10M Class B/month; R2 egress is free. These are account allowances, not a $0 hard cap. Inspect R2
    dashboard storage/operations/billable usage regularly; small normalized photos and rate limits

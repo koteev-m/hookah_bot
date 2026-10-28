@@ -367,6 +367,10 @@ function buildDom(root: HTMLDivElement, compact = false): VenueSettingsRefs {
 
   const publicCardSaveButton = el('button', { text: 'Сохранить' }) as HTMLButtonElement
   publicCardSaveButton.disabled = true
+  // The initial GET supplies the draft baseline; it must not overwrite editable input.
+  for (const input of [countryInput, cityInput, addressInput, manualAddressButton, guestContactInput, cardDescriptionInput]) {
+    input.disabled = true
+  }
   const publicCardPreviewButton = el('button', {
     className: 'button-secondary',
     text: 'Предпросмотр для гостя'
@@ -1038,6 +1042,9 @@ function renderPublicCardSettings(refs: VenueSettingsRefs, settings: VenuePublic
   refs.addressInput.value = draft.address ?? ''
   refs.guestContactInput.value = draft.guestContact ?? ''
   refs.cardDescriptionInput.value = draft.cardDescription ?? ''
+  refs.countryInput.disabled = false
+  refs.guestContactInput.disabled = false
+  refs.cardDescriptionInput.disabled = false
   refs.cityInput.disabled = !draft.countryCode && !draft.city
   refs.addressInput.disabled = !draft.city
   refs.manualAddressButton.disabled = !draft.city
