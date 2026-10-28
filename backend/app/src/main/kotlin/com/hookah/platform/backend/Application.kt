@@ -91,6 +91,10 @@ import com.hookah.platform.backend.miniapp.venue.orders.venueOrderRoutes
 import com.hookah.platform.backend.miniapp.venue.promotions.venuePromotionRoutes
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
+import com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoRepository
+import com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoService
+import com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoStorage
+import com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoStorageConfig
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffModuleGuard
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffModuleSettingsRepository
 import com.hookah.platform.backend.miniapp.venue.staff.VenueStaffProfileRepository
@@ -103,6 +107,7 @@ import com.hookah.platform.backend.miniapp.venue.venueGuestPreviewRoutes
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffCallRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffModuleSettingsRoutes
+import com.hookah.platform.backend.miniapp.venue.venueStaffPhotoRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffScheduleRoutes
 import com.hookah.platform.backend.onboarding.VenueOnboardingService
@@ -227,6 +232,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -291,6 +298,7 @@ internal data class ModuleOverrides(
     val staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
     val venueLocationProvider: VenueLocationProvider? = null,
     val staffScheduleClock: Clock? = null,
+    val staffPhotoStorage: StaffPhotoStorage? = null,
     val afterPlatformGuestTeardown: (suspend (chatId: Long, actorUserId: Long) -> Unit)? = null,
     val guestOrderContextCheckpoint: (GuestOrderContextCheckpoint) -> Unit = {},
     val guestOrderWriteCheckpoint: (GuestOrderWriteCheckpoint) -> Unit = {},
@@ -740,7 +748,11 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val venueStaffModuleSettingsRepository =
         VenueStaffModuleSettingsRepository(dataSource, staffOperationsClock)
     val venueStaffModuleGuard = VenueStaffModuleGuard(venueStaffModuleSettingsRepository)
-    val guestTodayStaffResolver = GuestTodayStaffResolver(venueStaffProfileRepository)
+    val staffPhotoConfig = StaffPhotoStorageConfig.from(appConfig, appEnv)
+    val staffPhotoStorage = overrides.staffPhotoStorage ?: staffPhotoConfig.createStorage()
+    val staffPhotoRepository =
+        StaffPhotoRepository(dataSource, venueStaffProfileRepository, auditLogRepository, staffOperationsClock)
+    val guestTodayStaffResolver = GuestTodayStaffResolver(venueStaffProfileRepository, staffPhotoRepository)
     val guestVenueReadService =
         GuestVenueReadService(
             guestVenueRepository = guestVenueRepository,
@@ -755,6 +767,15 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             guestTodayStaffResolver = guestTodayStaffResolver,
             clock = staffOperationsClock,
         )
+    val staffPhotoService =
+        StaffPhotoService(
+            staffPhotoRepository,
+            staffPhotoStorage,
+            { venueId -> guestVenueReadService.getTodayStaff(venueId).map { it.id }.toSet() },
+            staffPhotoConfig.maxInputBytes,
+        )
+    val staffPhotoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineName("staff-photo-cleanup"))
+    var staffPhotoJob: Job? = null
     val bookingReminderWorker =
         BookingReminderWorker(
             repository = guestBookingRepository,
@@ -958,6 +979,23 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     monitor.subscribe(ApplicationStarted) {
         if (dataSource != null) {
             if (stagingMaintenancePolicy.allowsAutonomousWrites) {
+                if (staffPhotoStorage.available && appEnv != "test") {
+                    staffPhotoJob =
+                        staffPhotoScope.launch {
+                            while (isActive) {
+                                try {
+                                    staffPhotoService.cleanup()
+                                } catch (
+                                    e: CancellationException,
+                                ) {
+                                    throw e
+                                } catch (_: Exception) {
+                                    logger.warn("Staff photo cleanup deferred")
+                                }
+                                delay(60_000)
+                            }
+                        }
+                }
                 subscriptionBillingJob.start(subscriptionBillingScope)
                 if (overrides.isTableSessionCleanupEnabled(appEnv)) {
                     tableSessionCleanupJob = tableSessionCleanupWorker.start()
@@ -1001,6 +1039,9 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     }
     monitor.subscribe(ApplicationStopping) {
         logger.info("Application stopping, closing resources")
+        staffPhotoJob?.cancel()
+        staffPhotoScope.cancel()
+        staffPhotoStorage.close()
         subscriptionBillingJob.stop()
         tableSessionCleanupJob?.cancel()
         bookingExpiryJob?.cancel()
@@ -1421,6 +1462,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     settingsRepository = venueStaffModuleSettingsRepository,
                     auditLogRepository = auditLogRepository,
                 )
+                venueStaffPhotoRoutes(staffPhotoService, venueAccessRepository, miniAppAbuseProtection)
                 venueStaffRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueStaffRepository = venueStaffRepository,

@@ -15077,7 +15077,8 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
   await expect(createForm).not.toContainText('123456789')
   await expect(createForm).toContainText('Так это имя увидят гости.')
   await expect(createForm).toContainText('Можно указать через запятую.')
-  await expect(createForm).toContainText('Загрузка фото пока недоступна.')
+  await expect(createForm).toContainText('Фото можно добавить после создания карточки. Загрузка и публикация выполняются отдельно.')
+  await expect(createForm.locator('input[type=file]')).toHaveCount(0)
   await expect(createForm.getByPlaceholder('User ID')).toHaveCount(0)
   await expect(createForm.getByPlaceholder('Фото ref')).toHaveCount(0)
   await expect(createForm.getByPlaceholder('Photo ref')).toHaveCount(0)
@@ -24569,11 +24570,16 @@ test('UX06 hidden guest team is the primary reason and photo upload is accuratel
       updatedAt: '2030-01-10T18:00:00.000001Z'
     }
   })
+  await page.route(/\/api\/venue\/1\/staff\/profiles\/\d+\/photos$/, (route) => route.fulfill(jsonResponse({
+    enabled: false, revision: 0, current: null, candidate: null, canManage: true, canConsent: false,
+    isSelf: false, displayOnly: true, guestVisible: false, cleanupPending: false, uploading: false, consentPolicy: 'staff-photo-v1'
+  })))
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
   await expect(page.locator('[data-staff-profile-id="504"] .venue-profile-visibility')).toHaveText('Не видна гостям · показ команды отключён')
   await page.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
-  await expect(page.locator('.venue-profile-photo-placeholder')).toHaveText('Загрузка фото пока недоступна.')
+  await expect(page.locator('.venue-profile-photo-placeholder')).toHaveText('Фото можно добавить после создания карточки. Загрузка и публикация выполняются отдельно.')
+  await expect(page.locator('[data-staff-profile-id="503"] .staff-photo-panel')).toContainText('Загрузка фотографий временно недоступна')
   await expect(page.locator('.venue-staff input[type="file"]')).toHaveCount(0)
   await expect(page.locator('.venue-staff').getByRole('button', { name: /Загрузить фото|Добавить фото/ })).toHaveCount(0)
 })
@@ -25713,4 +25719,357 @@ test('UX08 Staff denied nested routes Back selects an allowed parent', async ({ 
     await expect(page).toHaveURL(/#\/(more|dashboard)$/)
     await expect(page.getByRole('heading', { name: 'Недостаточно прав', exact: true })).toHaveCount(0)
   }
+})
+
+const syntheticStaffPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAIAAAAErfB6AAACCklEQVR4nO3asQ3DMBAEwW/EPaoStefUsapQC4QCA1wNcPk8sSnncx6P971+j8f9jztve/DbXIHjrsBxV+C4K3DcFTjuChx3BY67AsddgeOuwHFX4LgrcNwVOO4KHHcFjrsCx12B467AcXd2PJq7PoHjrsBxV+C4K3DcFTjuChx3BY67AsddgeOuwHFX4LgrcNwVOO4KHHcFjrsCx12B467AcVfguOvTXdwVOO4KHHcFjrsCx12B467AcVfguCtw3BU47gocdwWOuwLHXYHjrsBxV+C4K3DcFTjuChx3BY67s+PR3PUJHHcFjrsCx12B467AcVfguCtw3BU47gocdwWOuwLHXYHjrsBxV+C4K3DcFTjuChx3BY67Asddn+7irsBxV+C4K3DcFTjuChx3BY67AsddgeOuwHFX4LgrcNwVOO4KHHcFjrsCx12B467AcVfguCtw3J0dj+auT+C4K3DcFTjuChx3BY67AsddgeOuwHFX4LgrcNwVOO4KHHcFjrsCx12B467AcVfguCtw3BU47vp0F3cFjrsCx12B467AcVfguCtw3BU47gocdwWOuwLHXYHjrsBxV+C4K3DcFTjuChx3BY67AsddgePu7Hg0d30Cx12B467AcVfguCtw3BU47gocdwWOuwLHXYHjrsBxV+C4K3DcFTjuChx3BY67AsddgeOuwHH3BpRrwucJK8BwAAAAAElFTkSuQmCC', 'base64')
+type PhotoFixtureState = import('../src/screens/staffPhoto').StaffPhotoState
+async function mockStaffPhotoApi(page: Page, role: 'OWNER' | 'MANAGER' | 'STAFF' = 'OWNER') {
+  const base = await mockVenueStaffChatApi(page, { role })
+  const states = new Map<number, PhotoFixtureState>()
+  const requests: Array<{ key: string; revision: string }> = []
+  let sequence = 1
+  let loseResponse = false
+  let failUpload = false
+  let previewFails = false
+  let holdUpload: Promise<void> | null = null
+  const fresh = (profile: number): PhotoFixtureState => ({
+    enabled: true, revision: 0, current: null, candidate: null, canManage: role !== 'STAFF',
+    canConsent: role === 'OWNER' && profile === 503 || role === 'STAFF' && profile === 501,
+    isSelf: role === 'STAFF' && profile === 501, displayOnly: profile === 503,
+    guestVisible: false, cleanupPending: false, uploading: false, consentPolicy: 'staff-photo-v1'
+  })
+  const state = (id: number) => { if (!states.has(id)) states.set(id, fresh(id)); return states.get(id)! }
+  const completed = new Map<string, string>()
+  await page.route('**/api/venue/1/staff/photos/me', (route) => route.fulfill(jsonResponse([{ profileId: 501, displayName: 'Алексей', photo: state(501) }])))
+  await page.route(/\/api\/venue\/1\/staff\/profiles\/\d+\/photos(?:\/.*)?$/, async (route) => {
+    const match = new URL(route.request().url()).pathname.match(/profiles\/(\d+)\/photos(?:\/(.*))?$/)!
+    const id = Number(match[1]); const action = match[2]; const current = state(id)
+    if (action?.endsWith('/content')) {
+      await route.fulfill(previewFails ? { status: 404, body: '{}' } : { status: 200, contentType: 'image/png', body: syntheticStaffPng }); return
+    }
+    if (route.request().method() === 'GET') { await route.fulfill(jsonResponse(current)); return }
+    if (!action) {
+      requests.push({ key: route.request().headers()['idempotency-key'], revision: route.request().headers()['x-photo-revision'] })
+      if (holdUpload) await holdUpload
+      if (failUpload) { await route.fulfill(jsonResponse({ error: { code: 'STAFF_PHOTO_UNAVAILABLE', message: 'Загрузка фотографий временно недоступна' } }, 503)); return }
+      const key = requests.at(-1)!.key
+      if (!completed.has(key)) {
+        const photoId = `00000000-0000-4000-8000-${String(sequence++).padStart(12, '0')}`
+        completed.set(key, photoId); current.revision += 2
+        current.candidate = { id: photoId, state: 'PENDING', consent: 'NONE', consentAt: null, previewUrl: `/api/venue/1/staff/profiles/${id}/photos/${photoId}/content`, width: 80, height: 40 }
+      }
+      if (loseResponse) { loseResponse = false; await route.abort('failed'); return }
+    } else {
+      const body = route.request().postDataJSON() as { photoId?: string; revision: number }
+      expect(body.revision).toBe(current.revision)
+      current.revision++
+      const photo = [current.candidate, current.current].find((photo) => photo?.id === body.photoId)
+      if (action === 'consent' && photo) { photo.consent = current.isSelf ? 'SELF' : 'OWNER_RECORDED'; photo.consentAt = '2030-01-10T18:00:00Z' }
+      if (action === 'publish' && photo) { photo.state = 'APPROVED'; current.current = photo; current.candidate = null; current.guestVisible = true }
+      if (action === 'hide' && photo) { photo.state = 'HIDDEN'; current.guestVisible = false }
+      if (action === 'delete' || action === 'revoke') { current.current = null; current.candidate = null; current.guestVisible = false; current.cleanupPending = true }
+    }
+    await route.fulfill(jsonResponse(current))
+  })
+  return { base, state, requests, completed, loseNextResponse: () => { loseResponse = true }, fail: (value: boolean) => { failUpload = value }, previewFail: () => { previewFails = true }, hold: (promise: Promise<void> | null) => { holdUpload = promise } }
+}
+const photoPanel = (page: Page, id = 503) => page.locator(`.venue-profile-row[data-staff-profile-id="${id}"] .staff-photo-panel`)
+const syntheticUpload = { name: 'synthetic.png', mimeType: 'image/png', buffer: syntheticStaffPng }
+async function photoScreenshots(page: Page, name: string, target: Locator) {
+  for (const [suffix, width, height] of [['mobile', 390, 844], ['short', 390, 568], ['desktop', 1280, 900]] as const) {
+    await page.setViewportSize({ width, height }); await target.scrollIntoViewIfNeeded()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    await page.screenshot({ path: `../.tmp-checks/ht-ux08-photos/screenshots/${name}-${suffix}.png` })
+  }
+}
+
+test('R2 photos owner upload consent replace hide delete and profile draft survive', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockStaffPhotoApi(page)
+  page.on('dialog', (dialog) => dialog.accept())
+  await page.goto('?mode=venue#/staff')
+  const panel = photoPanel(page)
+  await expect(panel).toContainText('Фото не добавлено')
+  await photoScreenshots(page, 'owner-card', panel)
+  const row = page.locator('.venue-profile-row[data-staff-profile-id="503"]')
+  await row.getByRole('button', { name: 'Редактировать', exact: true }).click()
+  await row.getByLabel('Имя на карточке').fill('Несохранённое имя')
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await expect(panel.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
+  await panel.locator('input[type=file]').setInputFiles([])
+  await expect(panel.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
+  await photoScreenshots(page, 'upload-preview', panel)
+  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await expect(panel).toContainText('Фото загружено приватно')
+  await expect(row.getByLabel('Имя на карточке')).toHaveValue('Несохранённое имя')
+  expect(api.state(503).guestVisible).toBe(false)
+  await photoScreenshots(page, 'upload-complete', panel)
+  await page.reload()
+  await expect(panel.getByAltText('Фото сотрудника')).toBeVisible()
+  await panel.getByRole('button', { name: 'Зафиксировать согласие' }).click()
+  await panel.getByRole('button', { name: 'Разрешить показ фото' }).click()
+  await expect(panel).toContainText('Фото видно гостям')
+  const old = api.state(503).current!.id
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await expect(panel).toContainText('Текущее фото сохраняется')
+  expect(api.state(503).current!.id).toBe(old)
+  await panel.getByRole('button', { name: 'Зафиксировать согласие' }).click()
+  await panel.getByRole('button', { name: 'Разрешить показ фото' }).click()
+  await expect.poll(() => api.state(503).current!.id).not.toBe(old)
+  await panel.getByRole('button', { name: 'Скрыть фото', exact: true }).click()
+  await expect(panel).toContainText('Фото сейчас не показывается гостям')
+  await photoScreenshots(page, 'photo-hidden', panel)
+  await panel.getByRole('button', { name: 'Удалить фото', exact: true }).click()
+  await expect(panel).toContainText('Фото не добавлено')
+  await expect(panel).toContainText('Физическое удаление из хранилища ещё не подтверждено')
+  await photoScreenshots(page, 'photo-deleted', panel)
+})
+
+test('R2 photos manager allowed protected and staff own consent boundaries', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockStaffPhotoApi(page, 'MANAGER')
+  await page.goto('?mode=venue#/staff')
+  await expect(photoPanel(page)).toContainText('Фото не добавлено')
+  await photoScreenshots(page, 'manager-allowed', photoPanel(page))
+  const protectedCard = page.locator('.venue-profile-row[data-staff-profile-id="504"]')
+  await expect(protectedCard).toContainText('Фотографией защищённой карточки управляет владелец')
+  await expect(protectedCard.locator('.staff-photo-panel')).toHaveCount(0)
+  await photoScreenshots(page, 'manager-protected', protectedCard)
+  await mockStaffPhotoApi(page, 'STAFF')
+  await page.goto('?mode=venue#/my-profile')
+  const own = page.locator('.staff-own-photos')
+  await expect(own).toContainText('Алексей')
+  await expect(own.getByRole('button', { name: 'Добавить фото' })).toHaveCount(0)
+  await expect(own).toContainText('Вы управляете только своим согласием')
+  await photoScreenshots(page, 'staff-own', own)
+})
+
+test('R2 photos lost response explicit retry keeps idempotency key and pending guards', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockStaffPhotoApi(page)
+  await page.goto('?mode=venue#/staff')
+  const panel = photoPanel(page)
+  api.loseNextResponse()
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await expect(panel.getByRole('button', { name: 'Загрузить', exact: true })).toBeDisabled()
+  expect(api.requests).toHaveLength(1)
+  await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
+  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await expect(panel).toContainText('Фото загружено приватно')
+  expect(api.requests).toHaveLength(2); expect(api.requests[0]).toEqual(api.requests[1]); expect(api.completed.size).toBe(1)
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  let release!: () => void
+  api.hold(new Promise<void>((resolve) => { release = resolve }))
+  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await expect(panel.getByRole('button', { name: 'Загрузить', exact: true })).toBeDisabled()
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/staff$/)
+  await expect(panel).toContainText('Дождитесь результата')
+  release()
+  await expect(panel).toContainText('Фото загружено приватно')
+})
+
+test('R2 photos unavailable invalid file preview failure and cancelled picker are honest', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockStaffPhotoApi(page)
+  api.state(502).enabled = false
+  await page.goto('?mode=venue#/staff')
+  await expect(photoPanel(page, 502)).toContainText('Загрузка фотографий временно недоступна')
+  await expect(photoPanel(page, 502).getByRole('button', { name: 'Добавить фото' })).toHaveCount(0)
+  const panel = photoPanel(page)
+  await panel.locator('input[type=file]').setInputFiles([])
+  await expect(panel.getByRole('button', { name: 'Загрузить', exact: true })).toHaveCount(0)
+  await panel.locator('input[type=file]').setInputFiles({ ...syntheticUpload, name: 'test.heic', mimeType: 'image/heic' })
+  await expect(panel).toContainText('HEIC/HEIF и WebP экспортируйте в JPEG')
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  api.fail(true)
+  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await expect(panel).toContainText('Загрузка фотографий временно недоступна')
+  api.fail(false); api.previewFail()
+  await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
+  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await expect(panel).toContainText('Фото недоступно. Проверьте состояние.')
+  await expect(panel.getByRole('button', { name: 'Зафиксировать согласие' })).toBeDisabled()
+})
+
+test('R2 photos noncancelable Back retains file and releases completed offscreen upload', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockStaffPhotoApi(page)
+  await page.goto('?mode=venue#/more')
+  await page.evaluate(() => { window.location.hash = '#/staff' })
+  const panel = photoPanel(page)
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await page.goBack()
+  await expect(page.getByRole('link', { name: 'Вернуться к фотографии сотрудника' })).toBeVisible()
+  await page.goForward()
+  await expect(panel.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
+  let release!: () => void
+  api.hold(new Promise<void>((resolve) => { release = resolve }))
+  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/more$/)
+  release()
+  await expect.poll(() => api.completed.size).toBe(1)
+  await expect(page.getByRole('link', { name: 'Вернуться к фотографии сотрудника' })).toHaveCount(0)
+  await page.goForward()
+  await expect(panel.getByAltText('Фото сотрудника')).toBeVisible()
+  await expect(panel.getByAltText('Предпросмотр выбранного фото')).toHaveCount(0)
+})
+
+test('R2 photos Guest authorized blob delivery and denied image keeps initials', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const id = '00000000-0000-4000-8000-000000000001'
+  await mockGuestApi(page, { todayStaff: [{ id: 501, displayName: 'Синтетический сотрудник', subtype: 'waiter', photoRef: null, photoUrl: `/api/guest/venue/1/staff/501/photos/${id}`, tags: [] }, { id: 502, displayName: 'Без фото', subtype: 'waiter', photoRef: null, photoUrl: `/api/guest/venue/1/staff/502/photos/${id}`, tags: [] }] })
+  await page.route('**/api/guest/venue/1/staff/*/photos/*', (route) => {
+    expect(route.request().headers()['authorization']).toMatch(/^Bearer /)
+    return route.fulfill(route.request().url().includes('/501/') ? { status: 200, contentType: 'image/png', body: syntheticStaffPng } : { status: 404, body: '{}' })
+  })
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  const staff = page.locator('.guest-today-staff')
+  await expect(staff.getByAltText('Синтетический сотрудник')).toHaveAttribute('src', /^blob:/)
+  await expect(staff.locator('.guest-today-staff-avatar').nth(1)).toHaveText('Б')
+  await photoScreenshots(page, 'guest-visible', staff)
+})
+
+test('R2 photos stale GET cannot replace committed upload and changed revision discards stale selection', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockStaffPhotoApi(page)
+  await page.goto('?mode=venue#/staff')
+  const panel = photoPanel(page)
+  await expect(panel).toContainText('Фото не добавлено')
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  let release!: () => void; let started = false; let held = false
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/api/venue/1/staff/profiles/503/photos', async (route) => {
+    if (route.request().method() !== 'GET' || held) { await route.fallback(); return }
+    held = true; started = true
+    const stale = structuredClone(api.state(503)); await pending
+    await route.fulfill(jsonResponse(stale)).catch(() => undefined)
+  })
+  await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
+  await expect.poll(() => started).toBe(true)
+  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await expect(panel).toContainText('Фото загружено приватно')
+  release()
+  await expect(panel.getByAltText('Фото сотрудника')).toBeVisible()
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  api.state(503).revision++ // identity invalidation while a file is selected
+  await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
+  await expect(panel).toContainText('Выберите фотографию заново')
+  await expect(panel.getByAltText('Предпросмотр выбранного фото')).toHaveCount(0)
+  expect(api.requests).toHaveLength(1)
+})
+
+test('R2 photos Staff grants and revokes exact own image without administration', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockStaffPhotoApi(page, 'STAFF')
+  const id = '00000000-0000-4000-8000-000000000099'
+  api.state(501).candidate = { id, state: 'PENDING', consent: 'NONE', consentAt: null, previewUrl: `/api/venue/1/staff/profiles/501/photos/${id}/content`, width: 160, height: 160 }
+  page.on('dialog', (dialog) => dialog.accept())
+  await page.goto('?mode=venue#/my-profile')
+  const own = page.locator('.staff-own-photos')
+  await own.getByRole('button', { name: 'Дать согласие на показ' }).click()
+  await expect(own).toContainText('Согласие подтверждено сотрудником')
+  await expect(own.getByRole('button', { name: 'Разрешить показ фото' })).toHaveCount(0)
+  await expect(own.getByRole('button', { name: 'Загрузить' })).toHaveCount(0)
+  await photoScreenshots(page, 'staff-own', own)
+  await own.getByRole('button', { name: 'Отозвать согласие и удалить фото' }).click()
+  await expect(own).toContainText('Фото не добавлено')
+  expect(api.state(501).candidate).toBeNull()
+})
+
+test('R2 photos multiple selected cards block departure without partial loss', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockStaffPhotoApi(page)
+  await page.goto('?mode=venue#/staff')
+  const one = photoPanel(page, 503); const two = photoPanel(page, 502)
+  await one.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await two.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/staff$/)
+  await expect(one.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
+  await expect(two.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
+  await one.getByRole('button', { name: 'Отменить выбор' }).click()
+  await two.getByRole('button', { name: 'Отменить выбор' }).click()
+  await clickTelegramBackButton(page)
+  await expect(page).not.toHaveURL(/#\/staff$/)
+})
+
+test('R2 photos profile hide refreshes visibility and lost Manager rights dispose selected panel', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockStaffPhotoApi(page, 'MANAGER')
+  const profile: StaffProfileFixture = {
+    id: 503, linkedUserId: null, displayName: 'Синтетическая карточка', subtype: 'waiter', roleLabel: null, photoRef: null,
+    bio: null, tags: [], isGuestVisible: true, publishedAt: '2030-01-10T18:00:00Z', disabledAt: null,
+    createdAt: '2030-01-10T18:00:00Z', updatedAt: '2030-01-10T18:00:00Z', todayShift: null
+  }
+  api.base.setAccountStaffState(123456789, api.base.getStaffMembers(), [profile])
+  const id = '00000000-0000-4000-8000-000000000077'
+  api.state(503).current = { id, state: 'APPROVED', consent: 'OWNER_RECORDED', consentAt: '2030-01-10T18:00:00Z', previewUrl: `/api/venue/1/staff/profiles/503/photos/${id}/content`, width: 160, height: 160 }
+  api.state(503).guestVisible = true
+  await page.goto('?mode=venue#/staff')
+  const panel = photoPanel(page)
+  await expect(panel).toContainText('Фото видно гостям')
+  api.state(503).guestVisible = false
+  await page.locator('.venue-profile-row').getByRole('button', { name: 'Скрыть', exact: true }).click()
+  await expect(panel).toContainText('Фото сейчас не показывается гостям')
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  api.base.setAccountStaffState(123456789, api.base.getStaffMembers(), [{ ...profile, linkedUserId: 333333333 }])
+  await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
+  await expect(panel).toHaveCount(0)
+  await expect(page.locator('.venue-profile-row')).toContainText('Фотографией защищённой карточки управляет владелец')
+  await clickTelegramBackButton(page)
+  await expect(page).not.toHaveURL(/#\/staff$/)
+})
+
+test('R2 photos retained selection is scoped to venue and rechecked when returning', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockStaffPhotoApi(page)
+  const permissions = ['STAFF_PROFILE_MANAGE_STAFF', 'STAFF_PROFILE_MANAGE_PROTECTED', 'STAFF_PROFILE_EDIT_OWN']
+  await page.route('**/api/venue/me', (route) => route.fulfill(jsonResponse({ userId: 123456789, venues: [
+    { venueId: 1, venueName: 'Первое', venueStatus: 'PUBLISHED', role: 'OWNER', permissions },
+    { venueId: 2, venueName: 'Второе', venueStatus: 'PUBLISHED', role: 'OWNER', permissions }
+  ] })))
+  await page.goto('?mode=venue&venueId=1#/staff')
+  await photoPanel(page).locator('input[type=file]').setInputFiles(syntheticUpload)
+  await page.evaluate(() => {
+    history.pushState({}, '', '?mode=venue&venueId=2#/more')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
+  await expect(page.locator('.venue-select').first()).toHaveValue('2')
+  await expect(page.getByAltText('Предпросмотр выбранного фото')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Вернуться к фотографии сотрудника' })).toHaveCount(0)
+  api.state(503).revision++
+  await page.goBack()
+  await expect(page.locator('.venue-select').first()).toHaveValue('1')
+  await expect(photoPanel(page)).toContainText('Выберите фотографию заново')
+  expect(api.requests).toHaveLength(0)
+})
+
+test('R2 photos local cancellation stays available after failed refresh or disabled storage', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockStaffPhotoApi(page)
+  await page.goto('?mode=venue#/staff')
+  const panel = photoPanel(page)
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  const failRead = async (route: Route) => route.fulfill(jsonResponse({ error: { code: 'FORBIDDEN', message: 'Недостаточно прав' } }, 403))
+  await page.route('**/api/venue/1/staff/profiles/503/photos', failRead)
+  await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
+  await expect(panel).toContainText('Действие недоступно')
+  await panel.getByRole('button', { name: 'Отменить выбор' }).click()
+  await expect(panel.getByAltText('Предпросмотр выбранного фото')).toHaveCount(0)
+  await page.unroute('**/api/venue/1/staff/profiles/503/photos', failRead)
+  await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  api.state(503).enabled = false
+  await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
+  await expect(panel).toContainText('Загрузка фотографий временно недоступна')
+  await panel.getByRole('button', { name: 'Отменить выбор' }).click()
+  await clickTelegramBackButton(page)
+  await expect(page).not.toHaveURL(/#\/staff$/)
 })

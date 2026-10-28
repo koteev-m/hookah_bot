@@ -1,5 +1,47 @@
 # Project Status
 
+## HT-UX08-STAFF-PHOTOS-R2-IMPLEMENT-01 — R2 photos local ready (2026-10-28)
+
+**HT_UX08_R2_PHOTOS_LOCAL_READY**. UX08 E is implemented and validated locally; this supersedes
+its earlier storage-decision blocker. Existing A–D commit is preserved. No live R2, real iPhone
+Telegram, staging or production acceptance is claimed. No push/PR/SSH/deploy/provider writes.
+
+Identity PASS initially, after resumption and before commit: Hookah_Tootah; primary root
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, matching common dir/index and registered checkout,
+origin `github.com/koteev-m/hookah_bot`, no foreign instructions/redirects. Branch
+`codex/ht-venue-team-schedule-roles-ux08`; exact starting HEAD/required child parent
+`1acdd0afb61702f8ca39b8492b3835bf83b1c012` (parent `919abbb813cbbb724d628bdabeef8e905e6a1c42`,
+tree `b5e56ba08e45f89fb1786de08db26075e549bd29`). One additional local allowlist commit authorized
+with message `feat(venue): add secure staff photo upload with R2`; exact commit identity in task evidence.
+
+Implemented private R2 Standard adapter (AWS SDK Java v2 2.57.5), JPEG/PNG validation/orientation/
+metadata stripping, PostgreSQL V127 / H2 V128 durable reservation/consent/current/candidate/cleanup,
+revision/idempotency and safe partial-failure recovery. Existing profile RBAC and authoritative Guest
+visibility remain enforced; employee self-consent/revoke is separate from Owner/Manager publication.
+Identity/role/removal invalidation uses venue-first locking. Integrated Mini App photo panels,
+Staff own card, Guest guarded blobs, truthful pending/error states and scoped Back retention.
+Configuration is disabled by default and accepts only the existing staging bucket
+`hookah-tootah-media-staging-eu`; production is explicitly disabled pending separate admission.
+
+Validation: **236 backend tests PASS** (47 photo +189 latest-per-suite regressions), zero skips/errors;
+**29 PostgreSQL cases executed**. Two existing deterministic lock tests were adapted to venue-first
+serialization without weakening winner/last-Owner/RBAC/audit assertions. compileKotlin/ktlintCheck,
+TypeScript and production build PASS (existing Vite bundle warning). Focused Playwright **28/28**,
+full smoke **444/444**.27 synthetic screenshots cover9 states×3 viewports. Migration parity,
+docs/diff/secret-pattern sanity and helpers/stash/archive preservation PASS. Independent read-only
+backend/storage/security and privacy/Guest/UI reviews PASS, no open P0/P1/P2.
+
+Evidence: `.tmp-checks/ht-ux08-photos/validation.md`, photo/regression result JSON and saved XML,
+`playwright-full-final.log`, `screenshots/`, `precommit-identity.json`, `preservation.json`,
+`review-files.json` and postcommit `commit.json`. No tests prove Cloudflare connectivity.
+Four untracked SQL helpers and stash/archive refs remain unchanged; `scripts/dev/` untouched.
+
+Next step: separately authorize staging configuration verification and bounded synthetic live R2
+smoke. Owner must verify private access, Standard class, actual jurisdiction/endpoint and bucket-only
+credentials through a protected server channel. Production still requires an approved bucket,
+privacy/legal acceptance, operator/rotation/usage controls and deletion-safe backup/restore evidence.
+Detailed configuration/acceptance checklist is in `docs/MEDIA_STORAGE_UPLOAD.md`.
+
 ## HT-VENUE-TEAM-SCHEDULE-ROLE-UX08 — UI local ready; photo decision required (2026-10-28)
 
 **HT_UX08_UI_LOCAL_READY_PHOTO_DECISION_REQUIRED**. A–D implementation and required local

@@ -55,6 +55,16 @@ internal class MiniAppAbuseProtection(
     digestKey: ByteArray = randomDigestKey(),
 ) {
     private sealed interface BucketKey {
+        data object StaffPhotoUploadGlobal : BucketKey
+
+        data class StaffPhotoUploadActor(val actorId: Long, val venueId: Long) : BucketKey
+
+        data object StaffPhotoReadGlobal : BucketKey
+
+        data class StaffPhotoPrivacyActor(val actorId: Long) : BucketKey
+
+        data class StaffPhotoReadActor(val actorId: Long) : BucketKey
+
         data object QrDeliveryGlobal : BucketKey
 
         data class QrDeliveryActor(val userId: Long) : BucketKey
@@ -154,6 +164,38 @@ internal class MiniAppAbuseProtection(
             ),
         )
     }
+
+    fun tryStaffPhotoUpload(
+        actorId: Long,
+        venueId: Long,
+    ): MiniAppRateLimitDecision =
+        acquire(
+            listOf(
+                Requirement(BucketKey.StaffPhotoUploadGlobal, MiniAppRateLimitPolicy(120, Duration.ofMinutes(10))),
+                Requirement(
+                    BucketKey.StaffPhotoUploadActor(actorId, venueId),
+                    MiniAppRateLimitPolicy(30, Duration.ofMinutes(10)),
+                ),
+            ),
+        )
+
+    fun tryStaffPhotoPrivacy(actorId: Long): MiniAppRateLimitDecision =
+        acquire(
+            listOf(
+                Requirement(
+                    BucketKey.StaffPhotoPrivacyActor(actorId),
+                    MiniAppRateLimitPolicy(60, Duration.ofMinutes(1)),
+                ),
+            ),
+        )
+
+    fun tryStaffPhotoRead(actorId: Long): MiniAppRateLimitDecision =
+        acquire(
+            listOf(
+                Requirement(BucketKey.StaffPhotoReadGlobal, MiniAppRateLimitPolicy(1200, Duration.ofMinutes(1))),
+                Requirement(BucketKey.StaffPhotoReadActor(actorId), MiniAppRateLimitPolicy(240, Duration.ofMinutes(1))),
+            ),
+        )
 
     fun tryQrDelivery(userId: Long): MiniAppRateLimitDecision =
         acquire(

@@ -106,6 +106,7 @@ class VenueStaffRepository(
                     val updatedMember =
                         loadMemberProjections(connection, venueId, userId = targetUserId).singleOrNull()
                             ?: throw IllegalStateException("Updated venue member disappeared")
+                    invalidateStaffPhotosForMember(connection, venueId, targetUserId)
                     auditLogWriter.appendTargetedJson(
                         connection = connection,
                         actorUserId = actorUserId,
@@ -173,6 +174,7 @@ class VenueStaffRepository(
                         WHERE venue_id = ? AND user_id = ?
                         """.trimIndent(),
                     ).use { statement ->
+                        invalidateStaffPhotosForMember(connection, venueId, targetUserId)
                         statement.setLong(1, venueId)
                         statement.setLong(2, targetUserId)
                         if (statement.executeUpdate() == 0) {
@@ -262,6 +264,7 @@ class VenueStaffRepository(
         actorUserId: Long,
         targetUserId: Long,
     ): List<LockedVenueMembership> {
+        lockVenueForStaffModuleGuard(connection, venueId)
         return connection.prepareStatement(
             """
             SELECT user_id, role

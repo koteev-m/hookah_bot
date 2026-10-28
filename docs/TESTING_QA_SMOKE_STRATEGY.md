@@ -21,8 +21,8 @@ routes and direct denials, compact settings, notification/unread and empty/loadi
 Run TypeScript, production build, focused and full Playwright smoke. Inspect synthetic screenshots
 for each role home, collapsed week, 6/10 expanded shifts, form/confirmation and name editing at
 390px, 390×568 and desktop. Real Telegram iPhone keyboard/WebView and staging acceptance remain
-separate, authorized release checks. E is `BLOCKED_BY_STORAGE_DECISION`: review the concrete R2
-proposal against current source, without claiming photo runtime tests or R2 integration.
+separate, authorized release checks. E is implemented locally by the subsequent
+`HT-UX08-STAFF-PHOTOS-R2-IMPLEMENT-01` task; its test and live-admission boundary is below.
 
 UX03 local regression scope (`HT-VENUE-MENU-TABLES-QR-UX03`): native collapsed hookah flavors,
 90-flavor fixture, keyboard/mobile layout, mutation/retry draft retention and venue isolation;
@@ -4531,3 +4531,24 @@ For the [prospective isolated domain contract](V126_PROSPECTIVE_AUTHORITY_EPOCH.
 Retain the applicable existing legacy/genesis/Policy B/DR/reconciliation suites and negative
 controls, exact source/embedded parity, preservation and independent security review.
 Synthetic consumer PASS is not operational producer evidence or deployment permission.
+
+
+## UX08 E staff-photo validation
+
+`StaffPhotoLifecycleH2Test` and `StaffPhotoLifecyclePostgresTest` share the lifecycle/RBAC/failure
+contract. PostgreSQL must execute without skips. `StaffPhotoConcurrencyPostgresTest` observes a
+real lock waiter at finalization commit; cleanup must recheck its predicate and preserve the new
+candidate. `StaffPhotoRoutesPostgresTest` exercises authenticated routes, authoritative visibility,
+module-disabled revoke and privacy limits independent of upload exhaustion. Image tests use only
+synthetic pixels/EXIF; SDK tests use a loopback S3 server with synthetic credentials, not R2.
+
+Run photo suites plus affected Staff/Invite/Platform membership/Guest/RBAC regression suites,
+compileKotlin and ktlintCheck. Mini App: TypeScript, production build, focused `R2 photos` and UX08,
+then full Playwright smoke. Photo screenshots cover Owner, Manager allowed/protected, Staff own,
+selected preview, completed upload, Guest visible, hidden and deleted at 390×844, 390×568, 1280×900.
+Verify lost-response idempotency, no automatic retry, stale GET suppression, retained Back/pending
+session, role/linkage changes, non-photo drafts and error placeholders. Browser results cannot
+establish real iPhone Telegram photo-picker conversion or Cloudflare connectivity.
+
+Separate staging smoke/configuration and production backup/privacy blockers are in
+`MEDIA_STORAGE_UPLOAD.md`; no live R2 PUT/DELETE or staging migration is authorized by local checks.

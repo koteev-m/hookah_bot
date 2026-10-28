@@ -1,3 +1,4 @@
+import { requestBinary } from '../shared/api/request'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
@@ -637,7 +638,7 @@ function formatStaffSubtype(subtype: string): string {
   }
 }
 
-function renderTodayStaff(staff: GuestTodayStaffDto[]) {
+function renderTodayStaff(staff: GuestTodayStaffDto[], loadPhoto: (person: GuestTodayStaffDto, avatar: HTMLElement) => void) {
   if (!staff.length) return null
   const section = el('section', { className: 'card guest-today-staff' })
   section.appendChild(el('h4', { text: 'Сегодня работают' }))
@@ -648,6 +649,7 @@ function renderTodayStaff(staff: GuestTodayStaffDto[]) {
       className: 'guest-today-staff-avatar',
       text: person.displayName.trim().charAt(0).toLocaleUpperCase('ru-RU') || '•'
     })
+    loadPhoto(person, avatar)
     const body = el('div', { className: 'guest-today-staff-body' })
     body.appendChild(el('strong', { text: person.displayName }))
     body.appendChild(
@@ -898,6 +900,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   let latestStaffCall: StaffCallStatusDto | null = null
   let messageTimer: number | null = null
   const previewMediaObjectUrls = new Set<string>()
+  const staffPhotoUrls = new Set<string>()
+  let staffPhotoAbort: AbortController | null = null
+  const clearStaffPhotos = () => { staffPhotoAbort?.abort(); staffPhotoUrls.forEach((url) => URL.revokeObjectURL(url)); staffPhotoUrls.clear() }
   const itemRefs = new Map<number, MenuItemRefs>()
   let itemDisposables: Array<() => void> = []
   let tableSnapshot = readOnlyPreview ? EMPTY_PREVIEW_TABLE_CONTEXT : getTableContext()
@@ -1345,7 +1350,19 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     if (promotions) {
       refs.promotionsSlot.appendChild(promotions)
     }
-    const todayStaff = renderTodayStaff(venue.todayStaff ?? [])
+    clearStaffPhotos()
+    staffPhotoAbort = new AbortController()
+    const photoSignal = staffPhotoAbort.signal
+    const todayStaff = renderTodayStaff(venue.todayStaff ?? [], (person, avatar) => {
+      const prefix = `/api/guest/venue/${venueId}/staff/${person.id}/photos/`
+      if (!person.photoUrl?.startsWith(prefix) || !/^[a-f0-9-]{36}$/.test(person.photoUrl.slice(prefix.length))) return
+      void requestBinary(backendUrl, person.photoUrl, { signal: photoSignal }, buildApiDeps(isDebug)).then((result) => {
+        if (!result.ok || disposed || photoSignal.aborted) return
+        const url = URL.createObjectURL(result.data.blob); staffPhotoUrls.add(url)
+        const image = document.createElement('img'); image.src = url; image.alt = person.displayName
+        avatar.replaceChildren(image)
+      })
+    })
     refs.todayStaffSlot.replaceChildren()
     refs.todayStaffSlot.hidden = !todayStaff
     if (todayStaff) {
@@ -2066,6 +2083,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
   return () => {
     disposed = true
+    clearStaffPhotos()
     revokePreviewMediaObjectUrls()
     latestStaffCall = null
     dispatchStaffActionState()

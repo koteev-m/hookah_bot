@@ -488,6 +488,7 @@ class StaffInviteRepository(
                         loadActiveInvite(connection, codeHash, nowTs) ?: return@use rollbackAndReturn(connection) {
                             StaffInviteAcceptResult.InvalidOrExpired
                         }
+                    lockVenueForStaffModuleGuard(connection, invite.venueId)
                     if (!prepareMember(connection, invite.venueId, invite.role, invite.createdByUserId)) {
                         return@use rollbackAndReturn(connection) { StaffInviteAcceptResult.DatabaseError }
                     }
@@ -709,7 +710,22 @@ class StaffInviteRepository(
             statement.setLong(3, member.userId)
             statement.executeUpdate()
         }
+        invalidateStaffPhotosIdentityIfRoleChanged(connection, member, role)
         return member.copy(role = role)
+    }
+
+    private fun invalidateStaffPhotosIdentityIfRoleChanged(
+        connection: Connection,
+        member: VenueStaffMember,
+        role: String,
+    ) {
+        if (!member.role.equals(
+                role,
+                ignoreCase = true,
+            )
+        ) {
+            invalidateStaffPhotosForMember(connection, member.venueId, member.userId)
+        }
     }
 
     private fun venueRoleRank(role: VenueRole): Int =

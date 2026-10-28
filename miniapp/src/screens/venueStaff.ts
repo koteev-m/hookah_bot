@@ -1,3 +1,4 @@
+import { createStaffPhotoPanel, type StaffPhotoPanel, type StaffPhotoNavigation } from './staffPhoto'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
@@ -45,6 +46,8 @@ export type VenueStaffOptions = {
   access: VenueAccessDto
   currentUserId: number
   onOpenStaffModuleSettings?: () => void
+  onPhotoChange?: () => void
+  setPhotoNavigation?: (navigation: StaffPhotoNavigation) => void
 }
 
 type StaffRefs = {
@@ -251,7 +254,7 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   )
   const photoPlaceholder = el('div', {
     className: 'venue-profile-photo-placeholder',
-    text: 'Загрузка фото пока недоступна.'
+    text: 'Фото можно добавить после создания карточки. Загрузка и публикация выполняются отдельно.'
   })
   const profileCreateButton = el('button', { text: 'Создать профиль' }) as HTMLButtonElement
   const profileCancelButton = el('button', { className: 'button-secondary', text: 'Отмена' }) as HTMLButtonElement
@@ -934,6 +937,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   const refs = buildStaffDom(root, access)
   const deps = buildApiDeps(isDebug)
 
+  const photoPanels = new Map<number, { identity: string; panel: StaffPhotoPanel }>()
+  options.setPhotoNavigation?.({ guard: () => [...photoPanels.values()].every(({ panel }) => panel.canLeave()), hasPending: () => [...photoPanels.values()].some(({ panel }) => panel.hasPending()), refresh: () => { void reloadMemberProfiles() } })
   let disposed = false
   let loadAbort: AbortController | null = null
   let profileLoadAbort: AbortController | null = null
@@ -1376,14 +1381,16 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   }
 
   const renderProfiles = (profiles: VenueStaffProfileDto[]) => {
+    for (const [id, entry] of photoPanels) {
+      if (!profiles.some((profile) => profile.id === id)) { entry.panel.dispose(); photoPanels.delete(id) }
+    }
     refs.profileList.replaceChildren()
     if (!profiles.length) {
       refs.profileList.appendChild(el('p', { className: 'venue-empty', text: 'Профили не найдены.' }))
       return
     }
     profiles.forEach((profile) => {
-      refs.profileList.appendChild(
-        renderProfileRow(
+      const row = renderProfileRow(
           profile,
           access,
           moduleSettings,
@@ -1415,7 +1422,18 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
           onShift: (target, status, isGuestVisible) => void updateTodayShift(target, status, isGuestVisible)
           }
         )
-      )
+      if (!profile.canManage && !profile.isSelf) { photoPanels.get(profile.id)?.panel.dispose(); photoPanels.delete(profile.id) }
+      if (profile.canManage || profile.isSelf) {
+        const identity = JSON.stringify([profile.linkedUserId, profile.linkageClass, profile.canManage, profile.isSelf])
+        let entry = photoPanels.get(profile.id)
+        if (entry && entry.identity !== identity) { entry.panel.dispose(); photoPanels.delete(profile.id); entry = undefined }
+        if (!entry) { entry = { identity, panel: createStaffPhotoPanel(backendUrl, isDebug, venueId, profile.id, undefined, options.onPhotoChange) }; photoPanels.set(profile.id, entry) }
+        else void entry.panel.refresh()
+        row.querySelector('.venue-staff-info')?.appendChild(entry.panel.element)
+      } else {
+        row.querySelector('.venue-staff-info')?.appendChild(el('p', { className: 'venue-order-sub', text: 'Фотографией защищённой карточки управляет владелец.' }))
+      }
+      refs.profileList.appendChild(row)
     })
     syncProfilePending()
     focusPendingProfile()
@@ -2194,6 +2212,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   return () => {
     disposed = true
+    photoPanels.forEach(({ panel }) => panel.dispose())
+    photoPanels.clear()
     sessionInvites.clear()
     legacyInvites.length = 0
     directoryReady = false

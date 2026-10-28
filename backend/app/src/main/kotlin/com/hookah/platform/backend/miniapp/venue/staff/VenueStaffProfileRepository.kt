@@ -43,6 +43,44 @@ class VenueStaffProfileRepository(
     private val dataSource: DataSource?,
     private val json: Json = Json,
 ) {
+    internal suspend fun <T> photoTransaction(
+        venueId: Long,
+        profileId: Long,
+        actorId: Long,
+        manage: Boolean,
+        requireEnabled: Boolean = false,
+        block: (Connection, VenueStaffProfile, VenueStaffProfileAccess, VenueRole) -> T,
+    ): T =
+        inTransaction { connection ->
+            connection.prepareStatement("SELECT id FROM venues WHERE id=? AND status <> 'DELETED' FOR UPDATE").use {
+                    statement ->
+                statement.setLong(1, venueId)
+                statement.executeQuery().use { if (!it.next()) throw NotFoundException() }
+            }
+            val role = lockMembershipRole(connection, venueId, actorId) ?: throw ForbiddenException()
+            val profile =
+                findProfileInConnection(connection, venueId, profileId, forUpdate = true) ?: throw NotFoundException()
+            val access = profileAccessInConnection(connection, profile, actorId, role)
+            if (manage) {
+                if (!access.canManage ||
+                    VenuePermission.STAFF_PROFILE_MANAGE_STAFF !in VenuePermissions.forRole(role)
+                ) {
+                    throw ForbiddenException()
+                }
+                if (authorizeProfileMutation(
+                        connection, venueId, actorId, role, profile, profile.linkedUserId,
+                        setOf("photoRef"), false, false,
+                    ) != StaffProfileLinkValidation.ALLOWED
+                ) {
+                    throw ForbiddenException()
+                }
+            } else if (!access.canManage && !access.isSelf) {
+                throw ForbiddenException()
+            }
+            if (requireEnabled) requireStaffModuleEnabledAfterVenueLock(connection, venueId)
+            block(connection, profile, access, role)
+        }
+
     suspend fun listProfiles(
         venueId: Long,
         today: LocalDate,
@@ -360,6 +398,7 @@ class VenueStaffProfileRepository(
                     current.isGuestVisible -> now
                     else -> current.disabledAt
                 }
+            if (current.linkedUserId != input.linkedUserId) invalidateStaffPhotoIdentity(connection, venueId, profileId)
             connection.prepareStatement(
                 """
                 UPDATE staff_profiles

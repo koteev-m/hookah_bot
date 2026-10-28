@@ -1,3 +1,4 @@
+import { renderOwnStaffPhotoScreen, type StaffPhotoNavigation } from './staffPhoto'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
@@ -51,6 +52,7 @@ type RouteName =
   | 'menu'
   | 'tables'
   | 'staff'
+  | 'my-profile'
   | 'shifts'
   | 'stats'
   | 'feedback'
@@ -131,6 +133,7 @@ function resolveRoute(): Route {
       'menu',
       'tables',
       'staff',
+      'my-profile',
       'shifts',
       'stats',
       'feedback',
@@ -209,6 +212,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     promotions: el('button', { className: 'nav-button', text: 'Акции' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
+    'my-profile': el('button', { className: 'nav-button', text: 'Моя карточка' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
     shifts: el('button', { className: 'nav-button', text: 'График смен' }) as HTMLButtonElement,
     stats: el('button', { className: 'nav-button', text: 'Статистика' }) as HTMLButtonElement,
@@ -425,6 +429,10 @@ export function mountVenueApp(options: VenueAppOptions) {
   let currentSettings: SettingsDraft | null = null
   type ScheduleSession = { key: string; venueId: number; root: HTMLDivElement; controller: ScheduleNavigation; dispose: () => void }
   const scheduleSessions = new Map<string, ScheduleSession>()
+  type PhotoSession = { key: string; venueId: number; route: 'staff' | 'my-profile'; root: HTMLElement; controller: StaffPhotoNavigation; dispose: () => void }
+  const photoSessions = new Map<string, PhotoSession>()
+  let currentPhotos: PhotoSession | null = null
+  const photoKey = (access: VenueAccessDto, route: string) => JSON.stringify([currentUserId, access.venueId, access.role, [...access.permissions].sort(), access.teamScheduleModuleEnabled, route])
   let currentSchedule: ScheduleSession | null = null
   const scheduleKey = (access: VenueAccessDto) => JSON.stringify([currentUserId, access.venueId, access.role, [...access.permissions].sort(), access.teamScheduleModuleEnabled])
   const draftNotice = el('section', { className: 'card venue-draft-notice' })
@@ -434,6 +442,9 @@ export function mountVenueApp(options: VenueAppOptions) {
   const needsRetention = (draft: SettingsDraft) => draft.state.hasUnsavedChanges() || draft.state.isSaving()
   const updateDraftNotice = () => {
     if (disposed) return
+    for (const [key, session] of photoSessions) {
+      if (!session.controller.hasPending()) { photoSessions.delete(key); session.dispose() }
+    }
     for (const [key, session] of scheduleSessions) {
       if (!session.controller.hasUnsavedChanges() && !session.controller.isSaving()) {
         scheduleSessions.delete(key)
@@ -446,9 +457,14 @@ export function mountVenueApp(options: VenueAppOptions) {
     const relevant = [...drafts.values(), ...(currentSettings ? [currentSettings] : [])]
       .filter((draft) => draft.venueId === selectedVenueId && draft.role === currentRole && draft.userId === currentUserId && needsRetention(draft))
     const retainedSchedules = [...scheduleSessions.values()].filter((draft) => draft.venueId === selectedVenueId && draft.controller.hasUnsavedChanges())
-    draftNotice.hidden = relevant.length === 0 && retainedSchedules.length === 0
+    const retainedPhotos = [...photoSessions.values()].filter((session) => session.venueId === selectedVenueId && session.controller.hasPending())
+    draftNotice.hidden = relevant.length === 0 && retainedSchedules.length === 0 && retainedPhotos.length === 0
     draftNotice.replaceChildren()
-    if (!relevant.length && !retainedSchedules.length) return
+    if (!relevant.length && !retainedSchedules.length && !retainedPhotos.length) return
+    for (const session of retainedPhotos) {
+      const link = el('a', { text: 'Вернуться к фотографии сотрудника' }); link.href = `#/${session.route}`
+      append(draftNotice, el('p', { text: 'Выбранное фото и незавершённая операция сохранены в памяти этого окна. После возврата проверьте состояние.' }), link)
+    }
     append(draftNotice, el('p', { text: 'Есть несохранённый черновик. Он хранится только в памяти этого окна. При закрытии или перезагрузке данные могут потеряться. На сервер они попадут только после нажатия «Сохранить».' }))
     for (const draft of retainedSchedules) {
       const link = el('a', { text: 'Вернуться к черновику смены' })
@@ -571,6 +587,10 @@ export function mountVenueApp(options: VenueAppOptions) {
     for (const [key, session] of scheduleSessions) {
       const access = accessList.find((item) => item.venueId === session.venueId)
       if (!access || key !== scheduleKey(access)) { scheduleSessions.delete(key); session.dispose() }
+    }
+    for (const [key, session] of photoSessions) {
+      const access = accessList.find((item) => item.venueId === session.venueId)
+      if (!access || key !== photoKey(access, session.route)) { photoSessions.delete(key); session.dispose() }
     }
     const telegramContext = getTelegramContext()
     const params = new URLSearchParams(window.location.search)
@@ -735,6 +755,8 @@ export function mountVenueApp(options: VenueAppOptions) {
         )
       case 'subscription':
         return currentRole === 'OWNER'
+      case 'my-profile':
+        return currentRole === 'STAFF' && hasPermission('STAFF_PROFILE_EDIT_OWN')
       case 'staff':
         return currentRole !== 'STAFF'
       case 'shifts':
@@ -821,7 +843,7 @@ export function mountVenueApp(options: VenueAppOptions) {
         screenRoot.classList.add('venue-owner-more')
         append(screenRoot, el('h2', { text: 'Ещё' }))
         const links = el('div', { className: 'venue-settings-links' })
-        for (const name of (currentRole === 'OWNER' ? ['ownership', 'stats', 'feedback', 'subscription', 'support'] : ['ownership', 'tables', 'guest-preview', 'staff', 'chat', 'settings', 'stats', 'feedback', 'support']) as NavRouteName[]) {
+        for (const name of (currentRole === 'OWNER' ? ['ownership', 'stats', 'feedback', 'subscription', 'support'] : ['my-profile', 'ownership', 'tables', 'guest-preview', 'staff', 'chat', 'settings', 'stats', 'feedback', 'support']) as NavRouteName[]) {
           if (!canAccessRoute(name)) continue
           const link = el('a', { className: 'venue-owner-action', text: refs.navButtons[name].textContent ?? '' })
           link.href = `#/${name}`
@@ -899,16 +921,27 @@ export function mountVenueApp(options: VenueAppOptions) {
         return renderVenuePromotionsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'tables':
         return renderVenueTablesScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
-      case 'staff':
-        return renderVenueStaffScreen({
-          root: screenRoot,
-          backendUrl,
-          isDebug,
-          venueId,
-          access,
-          currentUserId: currentUserId ?? 0,
-          onOpenStaffModuleSettings: () => navigate('#/settings/team')
-        })
+      case 'my-profile':
+      case 'staff': {
+        const key = photoKey(access, route.name)
+        const retained = photoSessions.get(key)
+        if (retained) {
+          photoSessions.delete(key); currentPhotos = retained
+          refs.content.replaceChildren(retained.root)
+          canLeaveScreen = retained.controller.guard
+          retained.controller.refresh()
+          return retained.dispose
+        }
+        let controller: StaffPhotoNavigation = { guard: () => true, hasPending: () => false, refresh: () => undefined }
+        const setPhotoNavigation = (value: StaffPhotoNavigation) => { controller = value; canLeaveScreen = value.guard }
+        const dispose = route.name === 'my-profile'
+          ? renderOwnStaffPhotoScreen(screenRoot, backendUrl, isDebug, venueId, setPhotoNavigation, updateDraftNotice)
+          : renderVenueStaffScreen({ root: screenRoot, backendUrl, isDebug, venueId, access,
+              currentUserId: currentUserId ?? 0, setPhotoNavigation, onPhotoChange: updateDraftNotice,
+              onOpenStaffModuleSettings: () => navigate('#/settings/team') })
+        currentPhotos = { key, venueId, route: route.name, root: screenRoot, controller, dispose }
+        return dispose
+      }
       case 'shifts': {
         const key = scheduleKey(access)
         const retained = scheduleSessions.get(key)
@@ -1139,7 +1172,7 @@ export function mountVenueApp(options: VenueAppOptions) {
       refs.navButtons.dashboard.setAttribute('aria-current', 'page')
       refs.navButtons.dashboard.dataset.active = 'true'
     }
-    const moreActive = ['more', 'ownership', 'stats', 'feedback', 'subscription', 'support'].includes(route.name) || (currentRole === 'STAFF' && ['tables', 'settings', 'chat'].includes(route.name))
+    const moreActive = ['more', 'ownership', 'stats', 'feedback', 'subscription', 'support'].includes(route.name) || (currentRole === 'STAFF' && ['my-profile', 'tables', 'settings', 'chat'].includes(route.name))
     refs.moreButton.dataset.active = String(moreActive)
     if (moreActive) refs.moreButton.setAttribute('aria-current', 'page')
     else refs.moreButton.removeAttribute('aria-current')
@@ -1161,6 +1194,15 @@ export function mountVenueApp(options: VenueAppOptions) {
         currentDispose = null
       }
       currentSchedule = null
+    }
+    if (currentPhotos) {
+      const session = currentPhotos
+      const access = accessList.find((item) => item.venueId === session.venueId)
+      if (access && session.key === photoKey(access, session.route) && session.controller.hasPending()) {
+        photoSessions.set(session.key, session)
+        currentDispose = null
+      }
+      currentPhotos = null
     }
     const retainedAccess = currentSettings && accessList.find((item) => item.venueId === currentSettings?.venueId)
     if (currentSettings && retainedAccess && currentSettings.key === settingsDraftKey(retainedAccess, currentSettings.section) && needsRetention(currentSettings)) {
@@ -1247,6 +1289,8 @@ export function mountVenueApp(options: VenueAppOptions) {
     drafts.clear()
     scheduleSessions.forEach((session) => session.dispose())
     scheduleSessions.clear()
+    photoSessions.forEach((session) => session.dispose())
+    photoSessions.clear()
     unbindBackButton()
     disposables.forEach((dispose) => dispose())
   }

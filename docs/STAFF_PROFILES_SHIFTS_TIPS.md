@@ -14,8 +14,8 @@ DONE / MVP / STAGING-SMOKE-PASSED`.
 STAGING-SMOKE-PASSED`.
 Green GitHub Actions, staging deploy, PostgreSQL V121 rollout and the bounded manual smoke described
 below are complete for Slice B and the previously closed Staff slices.
-`STAFF_TIP`, photo upload/media picker and staff shift sign-up/chat workflows
-remain future. Phase 2 may create staff tip intents with external staff tip links, but the platform
+`STAFF_TIP` and staff shift sign-up/chat workflows remain future. Staff photo upload/picker is
+implemented locally in the separate UX08 E task; live R2/staging acceptance remains pending. Phase 2 may create staff tip intents with external staff tip links, but the platform
 must not collect guest order payments or staff tips in MVP.
 
 ## Current Release Closure / 2026-08-04
@@ -368,10 +368,10 @@ responses cannot navigate the app or revive editors. Stale/direct panel links wi
 show the week. Unload warnings are best effort; no local/session storage persistence is introduced.
 
 UX08 is local implementation, not deployed acceptance. Browser fixtures/screenshots cannot verify
-real iOS Telegram BackButton, safe areas or keyboard. Staff photos remain
-**BLOCKED_BY_STORAGE_DECISION**; the concrete R2/consent/lifecycle proposal is in
-[MEDIA_STORAGE_UPLOAD.md](MEDIA_STORAGE_UPLOAD.md#ux08-staff-photos--decision-required-not-implemented-2026-10-28).
-No photo upload/storage/delivery/delete implementation or infrastructure operation belongs to UX08.
+real iOS Telegram BackButton, safe areas or keyboard. The subsequent task
+`HT-UX08-STAFF-PHOTOS-R2-IMPLEMENT-01` implements E locally; live R2 and staging remain unverified.
+See [MEDIA_STORAGE_UPLOAD.md](MEDIA_STORAGE_UPLOAD.md#ux08-staff-photos--local-r2-implementation-2026-10-28).
+No external infrastructure operation is included.
 
 ## SHIFT_TODAY Model
 
@@ -403,7 +403,7 @@ MVP behavior:
   membership role, invite/link state, private contacts, future shifts or the full staff schedule.
 - Catalog may later show a compact line such as `Сегодня: Иван, Алина`.
 - Staff profile detail may show display name, role/custom role, subtype fallback, bio, tags and
-  photo placeholder or approved photo when future upload exists.
+  a placeholder or approved photo from the guarded UX08 E delivery route.
 - After bill requested/paid/closed, a future CTA may offer `Поблагодарить сотрудника`.
 - Tip CTA must stay separate from order payment and bill close.
 
@@ -440,7 +440,7 @@ MVP behavior:
   link.
 - `Другое` requires `Название роли` with guest-facing custom role copy.
 - Raw User ID and raw Photo ref are not visible manual owner inputs.
-- Photo upload is future; use a safe placeholder until real upload/media picker exists.
+- Photo upload/picker follows the separate local UX08 E contract; unavailable storage shows a truthful placeholder.
 - Owner manages profiles, guest visibility and publish/hide state.
 - Manager manages only display-only/Staff-linked cards; Owner/other-Manager cards remain read-only.
 - Every protected Owner/Manager card returns redacted `linkedUserId` and `canManage=false` to
@@ -1161,20 +1161,25 @@ Possible future options:
 Current recommendation: do not add a second group in Schedule Phase 1. Reconsider personal bot
 notifications only in a later bounded slice after the Venue Mode runtime is implemented and smoked.
 
-## Photo Upload Future
+## Staff Photos — Local R2 Slice
 
-- `docs/MEDIA_STORAGE_UPLOAD.md` defines the venue info-section foundation only. It must not bypass
-  the employee consent, moderation, visibility and deletion decisions required here.
-- Current status: **FUTURE**. No supported Bot or Venue Mini App file picker/upload/manage flow
-  exists. Venue Mini App shows `Фото сотрудника — позже`; raw manual Photo ref input is hidden.
-- The nullable `photo_ref` data/API field is not a safe upload pipeline. Current Guest UI renders
-  an initials placeholder instead of using it, and both Guest Preview modes omit the raw photo ref.
-- Future profile photos need safe media upload/photo picker, not manual raw `photo_ref` entry.
-- Employee consent is required before showing a public profile photo.
-- Storage, moderation, replacement and deletion rules must be specified before broad rollout.
-- Guest UI uses a placeholder or approved public photo only.
-- Staff photos remain separate from venue/public-card/menu media even if a future shared storage
-  abstraction is reused.
+UX08 E implements private JPEG/PNG upload, preview, per-image consent, separate approval,
+replacement, hide/delete and durable cleanup. The exact schema, API, limits and staging checklist
+are in `docs/MEDIA_STORAGE_UPLOAD.md` → “UX08 Staff Photos — Local R2 Implementation”.
+
+OWNER and authorized MANAGER upload only within existing profile RBAC. Linked employees consent
+only to their own exact image; OWNER attests to offline consent only for display-only cards.
+STAFF “Моя карточка” exposes own preview/consent/revoke, including when the team module is disabled;
+it gives no profile administration or publication permission. Candidate upload never publishes.
+A new image requires new consent. Relink, removal or role changes invalidate the affected photos.
+
+Guest uses the existing authoritative MANUAL/SCHEDULE visibility and guarded photoUrl; raw
+photo_ref remains null and is never a delivery capability. Failed replacement retains the old
+approved photo. Delete/revoke immediately denies delivery; physical removal remains pending until
+storage acknowledgement. Deleted images have no automatic restore window.
+
+Local deterministic tests do not prove Cloudflare connection, real iPhone Telegram behavior,
+staging acceptance, backup recovery or legal production readiness. No production bucket is approved.
 
 ## STAFF_TIP Future
 
@@ -1235,7 +1240,7 @@ Rules:
 - Schedule Staff DTOs also exclude linked users, Telegram/member ids, usernames, invite state,
   actor metadata, private notes and non-overlapping venue schedule data.
 - External tip links require moderation/allowlist later.
-- Photo consent and moderation are future requirements before broad rollout.
+- Photo consent and human approval are implemented locally in UX08 E; live acceptance and privacy/backup production admission remain required.
 - Rate-limit public profile/tip actions where relevant.
 - Analytics payloads must not include raw Telegram payloads, payment secrets, card data, private contacts or unrelated PII.
 
@@ -1260,7 +1265,7 @@ Analytics events are not the source of truth. Domain tables and audit logs remai
 - Staff profile UX polish: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Staff Identity Linking UX + Duplicate Prevention:
   `DONE / MVP / STAGING-SMOKE-PASSED`.
-- Photo upload/media picker: `FUTURE`.
+- Photo upload/media picker: local UX08 E implementation; live R2/staging/production admission pending.
 - Venue info-section media decision does not close staff-photo scope; see
   `docs/MEDIA_STORAGE_UPLOAD.md`.
 - Staff Operations Slice A:

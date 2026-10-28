@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.platform
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.venue.staff.invalidateStaffPhotosForMember
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.Connection
@@ -912,6 +913,7 @@ class VenueOwnerAccountRepository(private val dataSource: DataSource?) {
                     statement.setLong(2, venueId)
                     statement.setLong(3, ownerUserId)
                     statement.executeUpdate()
+                    invalidateStaffPhotosForMember(connection, venueId, ownerUserId)
                 }
             }
             return

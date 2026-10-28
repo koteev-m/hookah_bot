@@ -18,6 +18,12 @@ kotlin {
 }
 
 dependencies {
+    implementation(libs.aws.s3) {
+        exclude(group = "software.amazon.awssdk", module = "apache5-client")
+        exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
+    }
+    implementation(libs.aws.url.connection)
+    implementation(libs.metadata.extractor)
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.netty)
     implementation(libs.ktor.server.content.negotiation)
