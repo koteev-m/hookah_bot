@@ -4605,3 +4605,24 @@ the full `test-v126-cutover.sh` and the applicable Compose Linux gates. Actual h
 Caddy/systemd, PostgreSQL17 and the CI libpq18 prerequisites remain mandatory where required.
 Missing tools, platform refusal, skipped tests and portable fixture success do not establish a
 Linux gate PASS. No workflow gate is disabled and no historical production fingerprint is replaced.
+
+
+### HT70 optional R2 configuration regression boundary
+
+Run `python3 -B -m unittest discover -s scripts -p test_simple_staging.py -v` and
+`python3 -B -m unittest discover -s scripts -p test_ghcr_publish.py -v` (CI-pinned PyYAML).
+Cover unchanged legacy runtime/default-off, both verified jurisdiction shapes, complete
+backend-only propagation, unknown/missing/invalid fields and input limits, redacted CLI failures,
+old-runtime addition/rotation/disable/removal, explicit `--apply-config`, trusted old hashes,
+actual-container drift (including unexpected photo keys), DB binding and untouched neighbor.
+Combined config + forward migration must still require review and backup, persist UNKNOWN on
+failure, block blind retry and refuse schema rollback. Synthetic credentials are not provider evidence.
+
+Where local Docker and the fixture images are available, run
+`HT_SIMPLE_STAGING_DOCKER=1 python3 -B -m unittest discover -s scripts -p test_simple_staging_docker.py -v`.
+Its isolated historical backend verifies real Compose environment delivery of a complete disabled
+synthetic R2 block, config reload/backend recreation/removal, PostgreSQL forward migration/backup,
+unchanged DB binding and neighbor/cleanup. CI transport is mocked at `verify_ci`; the portable
+suite verifies the real public-API contract. This fixture does not exercise real R2 connectivity
+or actual photo operations. Linux Caddy/systemd/owned-SSH/libpq gates remain separate; macOS or
+skipped fixtures are not their PASS. Frontend suites need no repeat for deployment-only edits.

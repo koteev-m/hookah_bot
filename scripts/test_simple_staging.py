@@ -107,6 +107,193 @@ class MemoryStaging(s.Staging):
         return {'path': 'fixture.dump', 'sha256': 'b' * 64}
 
 
+def r2_config(jurisdiction='eu'):
+    # Deliberately synthetic; no provider credentials or network calls.
+    suffix = 'eu.' if jurisdiction == 'eu' else ''
+    return {'STAFF_PHOTOS_R2_ENABLED': 'true',
+            'STAFF_PHOTOS_R2_ENDPOINT': 'https://' + 'a' * 32 + '.' + suffix + 'r2.cloudflarestorage.com',
+            'STAFF_PHOTOS_R2_BUCKET': 'hookah-tootah-media-staging-eu',
+            'STAFF_PHOTOS_R2_ACCESS_KEY': 'fixture-access-key-only',
+            'STAFF_PHOTOS_R2_SECRET_KEY': 'fixture-secret-key-only-' * 2,
+            'STAFF_PHOTOS_R2_REGION': 'auto', 'STAFF_PHOTOS_R2_JURISDICTION': jurisdiction,
+            'STAFF_PHOTOS_MAX_INPUT_BYTES': '5242880'}
+
+
+class RuntimeStaging(MemoryStaging):
+    """Capture the launched environment; exercise the real previous-backend observer."""
+    def compose(self, *args, **kwargs):
+        result = super().compose(*args, **kwargs)
+        if args[0] == 'up' and args[-1] == 'backend':
+            self.app_env = copy.deepcopy(s.private_json(self.compose_file)['services']['backend']['environment'])
+        return result
+
+    def observe(self, target, binding):
+        app = {'Image': self.app, 'State': {'Running': True}, 'Mounts': [],
+               'Config': {'Labels': {'com.docker.compose.service': 'backend'},
+                          'Env': [k + '=' + v for k, v in self.app_env.items()]},
+               'HostConfig': {'PortBindings': {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '8080'}]}},
+               'NetworkSettings': {'Networks': {'hookah-bot_default': {}}}}
+        with patch.object(self, 'containers', return_value=[app]):
+            s.Staging.observe(self, target, binding)
+
+
+class R2ConfigTests(unittest.TestCase):
+    def test_old_runtime_is_unchanged_and_r2_defaults_off(self):
+        c = config(); original = copy.deepcopy(c)
+        s.validate_config(c)
+        self.assertEqual(c, original)
+        with tempfile.TemporaryDirectory() as tmp:
+            r = MemoryStaging(Path(tmp).resolve())
+            env = r.document(image())['services']['backend']['environment']
+            self.assertFalse(s.PHOTO_RUNTIME_KEYS & set(env))
+        for optional in ({'STAFF_PHOTOS_R2_ENABLED': 'false'}, {'STAFF_PHOTOS_MAX_INPUT_BYTES': '1024'}):
+            c = config(); c['runtime'].update(optional); s.validate_config(c)
+            self.assertNotEqual(c['runtime'].get('STAFF_PHOTOS_R2_ENABLED'), 'true')
+
+    def test_complete_config_reaches_only_backend_for_each_jurisdiction(self):
+        for jurisdiction in ('default', 'eu'):
+            with self.subTest(jurisdiction=jurisdiction), tempfile.TemporaryDirectory() as tmp:
+                r = MemoryStaging(Path(tmp).resolve()); r.config['runtime'].update(r2_config(jurisdiction))
+                s.validate_config(r.config)
+                doc = r.document(image())
+                self.assertEqual({k: v for k, v in doc['services']['backend']['environment'].items()
+                                  if k in s.PHOTO_RUNTIME_KEYS}, r2_config(jurisdiction))
+                self.assertFalse(s.PHOTO_RUNTIME_KEYS & set(doc['services']['postgres']['environment']))
+                self.assertEqual(set(doc['services']), {'postgres', 'backend'})
+                self.assertEqual(doc['services']['backend']['ports'], ['127.0.0.1:8080:8080'])
+
+    def test_required_fields_and_explicit_flag_even_for_disabled_connection_block(self):
+        for flag in ('true', 'false'):
+            for missing in s.R2_CONNECTION_KEYS | {'STAFF_PHOTOS_R2_ENABLED'}:
+                c = config(); c['runtime'].update(r2_config()); c['runtime']['STAFF_PHOTOS_R2_ENABLED'] = flag
+                del c['runtime'][missing]
+                with self.subTest(flag=flag, missing=missing), self.assertRaisesRegex(s.Refused, 'R2_CONFIG_INCOMPLETE'):
+                    s.validate_config(c)
+        c = config(); c['runtime']['STAFF_PHOTOS_R2_ENABLED'] = 'true'
+        with self.assertRaisesRegex(s.Refused, 'R2_CONFIG_INCOMPLETE'): s.validate_config(c)
+        c = config(); c['runtime'].update(r2_config()); del c['runtime']['STAFF_PHOTOS_MAX_INPUT_BYTES']
+        s.validate_config(c)
+
+    def test_invalid_fields_fail_closed_without_secret_values(self):
+        endpoint = r2_config()['STAFF_PHOTOS_R2_ENDPOINT']
+        bad = {
+            'STAFF_PHOTOS_R2_ENABLED': ['TRUE', '', True, None],
+            'STAFF_PHOTOS_R2_ENDPOINT': ['http://' + endpoint[8:], endpoint + '/', endpoint + '?x=1',
+                endpoint + '#x', endpoint + ':443', endpoint.replace('https://', 'https://user@'),
+                endpoint.replace('.eu.', '.'), 'https://example.com',
+                endpoint.replace('a' * 32, 'a' * 31), endpoint + '.evil.invalid'],
+            'STAFF_PHOTOS_R2_JURISDICTION': ['default', 'EU', '', 'unknown'],
+            'STAFF_PHOTOS_R2_BUCKET': ['foreign-bucket', '', 'hookah-tootah-media-staging-eu/'],
+            'STAFF_PHOTOS_R2_REGION': ['', 'eu', 'us-east-1'],
+            'STAFF_PHOTOS_R2_ACCESS_KEY': ['', 'short', 'a' * 129, 'bad key' * 8, 'x' * 32 + '\x00'],
+            'STAFF_PHOTOS_R2_SECRET_KEY': ['', 'short', 'x' * 257, 'x' * 32 + '\n',
+                'x' * 32 + '\r', 'x' * 32 + '$value', 'x' * 32 + ' ', 'x' * 32 + '\t'],
+            'STAFF_PHOTOS_MAX_INPUT_BYTES': ['0', '1023', '5242881', '-1', '1.5', '1e6', ' 1024',
+                '01024', '9' * 10000, 1024],
+            'STAFF_PHOTOS_R2_UNKNOWN': ['value'], 'AWS_SECRET_ACCESS_KEY': ['value'],
+        }
+        for key, values in bad.items():
+            for index, value in enumerate(values):
+                c = config(); c['runtime'].update(r2_config()); c['runtime'][key] = value
+                with self.subTest(key=key, case=index):
+                    with self.assertRaises(s.Refused) as raised: s.validate_config(c)
+                    self.assertRegex(str(raised.exception), r'^[A-Z0-9_]+$')
+                    for secret in r2_config().values():
+                        if secret.startswith('fixture-'): self.assertNotIn(secret, str(raised.exception))
+
+    def test_cli_errors_are_redacted(self):
+        c = config(); c['runtime'].update(r2_config()); c['runtime']['STAFF_PHOTOS_R2_SECRET_KEY'] += ' bad'
+        out = io.StringIO()
+        with patch.object(sys, 'argv', ['simple_staging', 'deploy', '--directory', '/synthetic']), \
+                patch.object(s.sys, 'platform', 'linux'), patch.object(s.os, 'geteuid', return_value=0), \
+                patch.object(s, 'shared_lock', return_value=contextlib.nullcontext()), \
+                patch.object(s, 'Staging', side_effect=lambda _: s.validate_config(c)), contextlib.redirect_stdout(out):
+            self.assertEqual(s.main(), 1)
+        self.assertEqual(json.loads(out.getvalue())['reason'], 'R2_CREDENTIALS_INVALID')
+        self.assertNotIn('fixture-access', out.getvalue()); self.assertNotIn('fixture-secret', out.getvalue())
+
+
+class R2TransitionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.r = RuntimeStaging(Path(self.temp.name).resolve())
+        self.r.apply('install', record(image()))
+
+    def enable(self):
+        self.r.config['runtime'].update(r2_config()); s.validate_config(self.r.config)
+
+    def test_old_to_r2_rotation_disable_and_removal_observe_actual_previous_backend(self):
+        pg, neighbor = copy.deepcopy(self.r.pg), copy.deepcopy(self.r.neighbor)
+        for change in ('enable', 'rotate', 'disable', 'remove'):
+            with self.subTest(change=change):
+                old_env = copy.deepcopy(self.r.app_env)
+                if change == 'enable': self.enable()
+                elif change == 'rotate': self.r.config['runtime']['STAFF_PHOTOS_R2_SECRET_KEY'] = 'rotated-fixture-secret-' * 3
+                elif change == 'disable': self.r.config['runtime']['STAFF_PHOTOS_R2_ENABLED'] = 'false'
+                else: self.r.config['runtime'] = config()['runtime']
+                s.validate_config(self.r.config)
+                calls = len(self.r.calls)
+                with patch.object(self.r, 'observe', wraps=self.r.observe) as observer:
+                    result = self.r.apply('deploy', record(image('b')), apply_config=True)
+                self.assertEqual(result['status'], 'SUCCESS'); self.assertEqual(observer.call_count, 2)
+                self.assertEqual(self.r.app_env, self.r.document(image('b'))['services']['backend']['environment'])
+                self.assertEqual(self.r.state()['runtime_hash'], s.digest(self.r.config['runtime']))
+                self.assertEqual(self.r.calls[calls:], [['up', '-d', '--no-build', '--pull', 'never', '--no-deps', '--force-recreate', 'backend']])
+                self.assertNotEqual(self.r.app_env, old_env)
+                self.assertEqual(self.r.pg, pg); self.assertEqual(self.r.neighbor, neighbor)
+                for name in ('result.json', 'operation-' + self.r.state()['operation'] + '.json'):
+                    text = (self.r.root / name).read_text()
+                    self.assertNotIn('fixture-secret', text); self.assertNotIn('fixture-access', text)
+                self.r.apply('deploy', record(image('b')))  # Unchanged runtime needs no flag.
+
+    def test_without_apply_config_refuses_before_writes(self):
+        before = self.r.state(); doc = self.r.compose_file.read_bytes(); calls = len(self.r.calls)
+        self.enable()
+        with self.assertRaisesRegex(s.Refused, 'RUNTIME_CONFIG_CHANGED_USE_APPLY_CONFIG'):
+            self.r.apply('deploy', record(image('b')))
+        self.assertEqual(self.r.state(), before); self.assertEqual(self.r.compose_file.read_bytes(), doc)
+        self.assertEqual(len(self.r.calls), calls)
+
+    def test_prior_hash_compose_binding_and_actual_runtime_tampering_block(self):
+        for kind in ('runtime_hash', 'compose', 'db', 'legacy_env', 'unexpected_r2', 'r2_env'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                r = RuntimeStaging(Path(tmp).resolve()); r.apply('install', record(image()))
+                if kind == 'r2_env':
+                    r.config['runtime'].update(r2_config()); r.apply('deploy', record(image()), apply_config=True)
+                    r.app_env['STAFF_PHOTOS_R2_SECRET_KEY'] = 'wrong-fixture-secret-' * 3
+                elif kind == 'runtime_hash':
+                    state = r.state(); state['runtime_hash'] = '0' * 64; s.atomic(r.state_file, state)
+                elif kind == 'compose':
+                    doc = s.private_json(r.compose_file); doc['services']['backend']['environment']['API_SESSION_JWT_SECRET'] = 'x' * 40
+                    s.atomic(r.compose_file, doc)
+                elif kind == 'db': r.pg['container'] = 'replacement'
+                elif kind == 'legacy_env': r.app_env['API_SESSION_JWT_SECRET'] = 'wrong'
+                else: r.app_env.update(r2_config())
+                before = r.state(); doc = r.compose_file.read_bytes(); calls = len(r.calls)
+                r.config['runtime'].update(r2_config())
+                with self.assertRaises(s.Refused): r.apply('deploy', record(image('b')), apply_config=True)
+                self.assertEqual(r.state(), before); self.assertEqual(r.compose_file.read_bytes(), doc)
+                self.assertEqual(len(r.calls), calls)
+                self.assertEqual(r.config['runtime']['STAFF_PHOTOS_R2_ENABLED'], 'true')
+
+    def test_forward_migration_and_config_change_backup_unknown_and_no_schema_rollback(self):
+        self.enable(); target = image('b', 127); self.r.images[target['image']] = target
+        review = dict(from_manifest=s.digest(image()['manifest']), to_manifest=s.digest(target['manifest']),
+                      backward_compatible=True, reason='Synthetic additive test review, not a staging approval.')
+        with self.assertRaisesRegex(s.Refused, 'REVIEW'):
+            self.r.apply('deploy', record(target), apply_config=True)
+        with patch.object(self.r, 'ready', side_effect=s.Refused('READINESS_FAILED')):
+            with self.assertRaisesRegex(s.Refused, 'READINESS_FAILED'):
+                self.r.apply('deploy', record(target), review, apply_config=True)
+        self.assertEqual(self.r.state()['status'], 'UNKNOWN'); self.assertEqual(len(self.r.backups), 1)
+        self.assertLess(self.r.calls.index(['backup']), len(self.r.calls) - 1)
+        with self.assertRaisesRegex(s.Refused, 'UNFINISHED'):
+            self.r.apply('deploy', record(target), review, apply_config=True)
+        self.r.apply('reconcile')
+        with self.assertRaisesRegex(s.Refused, 'SCHEMA_ROLLBACK'): self.r.apply('rollback')
+        self.assertEqual(self.r.neighbor['data'], ['sentinel'])
+
+
 class DeploymentTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
