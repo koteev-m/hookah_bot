@@ -573,6 +573,109 @@ class StaffInviteRepositoryTest {
             assertEquals(1, auditRows().size)
         }
 
+    @Test
+    fun `reissue preserves role renews ttl invalidates old code and new code is one use`() =
+        withFixture {
+            prepareActor("OWNER")
+            for (role in listOf("STAFF", "MANAGER")) {
+                val old = createInvite(role, audit = false)
+                nowRef.set(nowRef.get().plusSeconds(10))
+                val result = assertIs<StaffInviteReissueResult.Success>(reissue(old))
+                assertEquals(role, result.role)
+                assertNotEquals(old.handle, result.invite.handle)
+                assertNotEquals(old.code, result.invite.code)
+                assertEquals(nowRef.get().plusSeconds(600), result.invite.expiresAt)
+                assertEquals(StaffInvitePreviewResult.InvalidOrExpired, repository.previewInvite(old.code))
+                assertEquals(StaffInviteReissueResult.InvalidOrExpired, reissue(old))
+                assertIs<StaffInviteAcceptResult.Success>(
+                    repository.acceptInvite(result.invite.code, inviteeUserId, auditLogRepository) { c, v, r, by ->
+                        insertMember(c, v, inviteeUserId, r, by)
+                    },
+                )
+                assertEquals(
+                    StaffInviteAcceptResult.InvalidOrExpired,
+                    repository.acceptInvite(result.invite.code, inviteeUserId, auditLogRepository) { _, _, _, _ ->
+                        error("must never create twice")
+                    },
+                )
+                assertEquals(1, memberCount(venueId, inviteeUserId))
+                assertNotNull(inviteState(old.handle).revokedAt)
+            }
+            assertEquals(4, inviteCount())
+            assertEquals(
+                List(2) {
+                    listOf(
+                        STAFF_INVITE_REVOKED_AUDIT_ACTION,
+                        STAFF_INVITE_CREATED_AUDIT_ACTION,
+                        STAFF_INVITE_ACCEPTED_AUDIT_ACTION,
+                    )
+                }.flatten(),
+                auditRows().map { it.action },
+            )
+            val hashes = storedInviteHashes()
+            auditRows().forEach { audit -> assertTrue(hashes.none { audit.payloadJson.contains(it) }) }
+        }
+
+    @Test
+    fun `reissue checks current actor and excludes foreign venue and OWNER source`() =
+        withFixture {
+            val staff = createInvite("STAFF", audit = false)
+            val manager = createInvite("MANAGER", audit = false)
+            val owner = createInvite("OWNER", audit = false)
+            prepareActor("STAFF")
+            assertEquals(StaffInviteReissueResult.Forbidden, reissue(staff))
+            prepareActor("MANAGER")
+            assertEquals(StaffInviteReissueResult.Forbidden, reissue(manager))
+            assertEquals(StaffInviteReissueResult.InvalidOrExpired, reissue(owner))
+            assertEquals(StaffInviteReissueResult.InvalidOrExpired, reissue(staff, targetVenueId = foreignVenueId))
+            assertEquals(StaffInviteReissueResult.InvalidOrExpired, reissue(staff.copy(handle = "invalid")))
+            assertTrue(auditRows().isEmpty())
+            assertEquals(3, inviteCount())
+            assertIs<StaffInviteReissueResult.Success>(reissue(staff))
+            prepareActor(null)
+            assertEquals(StaffInviteReissueResult.Forbidden, reissue(manager))
+            assertEquals(2, auditRows().size)
+            assertIs<StaffInvitePreviewResult.Success>(repository.previewInvite(manager.code))
+        }
+
+    @Test
+    fun `reissue second audit failure rolls back both mutations and first audit`() =
+        withFixture {
+            prepareActor("OWNER")
+            val old = createInvite("STAFF", audit = false)
+            val calls = AtomicInteger()
+            val failing =
+                TransactionalAuditLogWriter { c, actor, action, type, id, payload ->
+                    auditLogRepository.appendJson(c, actor, action, type, id, payload)
+                    if (calls.incrementAndGet() == 2) throw SQLException("synthetic second audit failure")
+                }
+            assertEquals(StaffInviteReissueResult.DatabaseError, reissue(old, writer = failing))
+            assertEquals(2, calls.get())
+            assertEquals(1, inviteCount())
+            assertTrue(auditRows().isEmpty())
+            assertNull(inviteState(old.handle).revokedAt)
+            assertEquals(listOf(old.handle), repository.listPendingInvites(venueId, setOf("STAFF"))?.map { it.handle })
+            assertIs<StaffInvitePreviewResult.Success>(repository.previewInvite(old.code))
+        }
+
+    @Test
+    fun `reissue uses one pending slot and rolls back when quota is already exceeded`() =
+        withFixture {
+            prepareActor("OWNER")
+            val old = createInvite("STAFF", audit = false)
+            val first = assertIs<StaffInviteReissueResult.Success>(reissue(old, cap = 1)).invite
+            val next = assertIs<StaffInviteReissueResult.Success>(reissue(first, cap = 1)).invite
+            assertEquals(1, repository.listPendingInvites(venueId, setOf("STAFF"))?.size)
+            createInvite("STAFF", audit = false)
+            assertIs<StaffInviteReissueResult.RateLimited>(reissue(next, cap = 1))
+            assertEquals(4, inviteCount())
+            assertEquals(4, auditRows().size)
+            assertNull(inviteState(next.handle).revokedAt)
+            nowRef.set(nowRef.get().plusSeconds(601))
+            assertEquals(StaffInviteReissueResult.InvalidOrExpired, reissue(next))
+            assertEquals(4, auditRows().size)
+        }
+
     private fun withFixture(block: suspend Fixture.() -> Unit) =
         runBlocking {
             val fixture = Fixture.create()
@@ -615,6 +718,32 @@ class StaffInviteRepositoryTest {
                     auditLogRepository = NO_OP_AUDIT_LOG_WRITER,
                 )
             } ?: error("Failed to create invite")
+
+        fun prepareActor(role: String?) {
+            dataSource.connection.use { c ->
+                c.prepareStatement("DELETE FROM venue_members WHERE venue_id = ? AND user_id = ?").use {
+                    it.setLong(1, venueId)
+                    it.setLong(2, ownerUserId)
+                    it.executeUpdate()
+                }
+                if (role != null) insertMember(c, venueId, ownerUserId, role, null)
+            }
+        }
+
+        suspend fun reissue(
+            old: StaffInviteCodeResult,
+            cap: Int = 10,
+            targetVenueId: Long = venueId,
+            writer: TransactionalAuditLogWriter = auditLogRepository,
+        ): StaffInviteReissueResult =
+            repository.reissuePendingInvite(
+                targetVenueId,
+                old.handle,
+                ownerUserId,
+                600,
+                cap,
+                writer,
+            )
 
         fun insertMember(
             connection: Connection,

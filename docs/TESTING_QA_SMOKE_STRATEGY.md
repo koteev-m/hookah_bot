@@ -72,6 +72,26 @@ RBAC or accept/revoke logic change; H2 route tests do not claim fresh PostgreSQL
 Separate authorized staging/iPhone smoke remains required; no real send/revoke/member mutation is
 authorized by local tests. Addressed invites and durable photo upload remain design proposals.
 
+UX07 local regression scope (`HT-STAFF-INVITE-REISSUE-SCHEDULE-UX07`): exact-handle atomic reissue,
+Owner Staff/Manager and Manager Staff only, current membership demotion/removal, foreign/OWNER
+rejection, old-code invalidation, new-code one-time use, same create limiter and pending cap,
+default TTL and secret-free pending/audit. `StaffInviteReissuePostgresTest` must execute (no skips):
+observed blocked backend PIDs for accept/revoke/reissue, two replacement handles plus create at cap,
+actor loss and expiry during waits; second-audit failure leaves old invite and no partial audit.
+Run StaffInvite*, VenueStaff*, VenueRbacRoutesTest, GuestVenueRoutesTest, VenueGuestPreviewRoutesTest,
+AuditLogRepositoryTest and MiniAppAbuseProtectionTest, plus compileKotlin/ktlintCheck.
+
+Browser coverage: confirmation/cancel, one POST, GET during POST, lost response plus failed GET,
+read-only recovery and old-action blocking; one/common/multiple/individual schedule times, retained
+separate drafts, 2→1 interval preservation, explicit saved/new canceled restore, full-batch conflict,
+venue defaults/manual times, overnight 14:00–00:00, stale preflight date roundtrip/close, boundary
+weeks, Staff/Manager/venue isolation, unknown batch outcome and BackButton. Run TypeScript,
+production build, focused and full Playwright. Inspect synthetic 390px, 390×568 and desktop
+screenshots; browser focus checks do not establish actual iOS keyboard/WebView behavior.
+Schedule API/schema, lifecycle, CAS, batch audit, timezone/DST and Guest sources remain unchanged.
+No migration or deployment belongs to local validation; separately authorized staging and real
+Telegram iPhone smoke are required before acceptance. Addressed invites/photos remain future.
+
 UX06 CI regressions: compare create/pending handles exactly. For the H2 route fixture,
 compare expiry as an Instant rounded to TIMESTAMP(6) microseconds; creation retains JVM
 nanoseconds and pending reads persisted precision. Fixed-clock repository samples cover

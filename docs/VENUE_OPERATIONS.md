@@ -417,6 +417,15 @@ limiter is not distributed or durable across restarts; persistent exactly-once d
 
 ## Staff / Roles / Invites
 
+UX07 local implementation (separate staging/iPhone acceptance): pending Staff/Manager invitations
+have **Перевыпустить ссылку** with explicit old-link invalidation/unchanged-role/no-access-yet
+confirmation. One `POST /api/venue/{venueId}/staff/invites/{handle}/reissue` atomically revokes the
+exact source, inserts its same-role replacement with the server default TTL and writes both audits.
+It shares create rate limits/quota and checks current actor membership transactionally. Owner may
+reissue Staff/Manager, Manager only Staff; OWNER is excluded. Pending remains secret-free. On a lost
+response UI blocks old actions until GET recovery and never retries POST automatically. The full
+contract is in `STAFF_PROFILES_SHIFTS_TIPS.md`; no new schema, addressed invites or photos.
+
 UX06 local behavior: **Создать приглашение** creates a one-time link and returns its existing
 opaque `handle` in the additive create response. That exact handle identifies the same pending
 API row, so the result and list are one expandable card. Pending DTO fields remain unchanged:
@@ -520,9 +529,14 @@ ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`):
 - ordinary create never restores silently. Authorized Owner/Manager receives a typed safe conflict:
   canceled can offer restore; scheduled says `Смена уже запланирована на эту дату.`; active and
   completed keep lifecycle denial. Foreign/unauthorized actors receive no existing-row details;
-- `Добавить смену` supports multi-select, common effective-hours defaults, apply-to-all and
-  per-employee interval overrides. Preflight requires explicit restore for a canceled row, blocks
-  scheduled/active/completed conflicts and shows created/restored counts;
+- UX07 local `Добавить смену` asks for date and one common interval, then one or more employees.
+  Individual time fields are opt-in for multiple employees; returning to common preserves their
+  drafts and explicit apply-to-all confirms reset. One selected employee has only the top time pair.
+  Compact week arrows, bounded partial weeks and empty-day add actions retain date-specific access.
+  Opening focuses a heading without opening the keyboard. Preflight requires explicit restore for
+  `Ранее отменена`, keeps saved or chosen time, blocks other lifecycle conflicts and shows counts;
+- stale preflight after editing/closing cannot open confirmation; an unknown mutation result offers
+  read-only refresh and does not claim that no shifts were created or automatically resend;
 - one `POST /api/venue/{venueId}/staff/shifts/batch` carries 1..50 normalized `CREATE`/`RESTORE`
   assignments. Duplicate profile/date slots, missing/foreign profiles, invalid intervals, stale
   restore or any lifecycle conflict reject the whole request;

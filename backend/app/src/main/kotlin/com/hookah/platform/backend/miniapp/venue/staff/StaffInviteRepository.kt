@@ -2,6 +2,8 @@ package com.hookah.platform.backend.miniapp.venue.staff
 
 import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.TransactionalTargetedAuditLogWriter
+import com.hookah.platform.backend.miniapp.venue.VenuePermission
+import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
 import kotlinx.coroutines.Dispatchers
@@ -107,23 +109,7 @@ class StaffInviteRepository(
                             }
                         }
                     }
-                    connection.prepareStatement(
-                        """
-                        INSERT INTO venue_staff_invites (
-                            code_hash, code_hint, venue_id, role, created_by_user_id, created_at, expires_at
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setString(1, codeHash)
-                        statement.setString(2, codeHint)
-                        statement.setLong(3, venueId)
-                        statement.setString(4, role)
-                        statement.setLong(5, createdByUserId)
-                        statement.setTimestamp(6, java.sql.Timestamp.from(nowTs))
-                        statement.setTimestamp(7, java.sql.Timestamp.from(expiresAt))
-                        statement.executeUpdate()
-                    }
+                    insertInvite(connection, codeHash, codeHint, venueId, role, createdByUserId, nowTs, expiresAt)
                     if (auditLogWriter != null) {
                         appendInviteAudit(
                             connection = connection,
@@ -148,6 +134,151 @@ class StaffInviteRepository(
                     rollbackBestEffort(connection)
                     logger.warn("Failed to create staff invite error_type={}", e::class.simpleName ?: "unknown")
                     StaffInviteCreateResult.DatabaseError
+                } finally {
+                    connection.autoCommit = initialAutoCommit
+                }
+            }
+        }
+    }
+
+    private fun insertInvite(
+        connection: Connection,
+        codeHash: String,
+        codeHint: String,
+        venueId: Long,
+        role: String,
+        createdByUserId: Long,
+        nowTs: Instant,
+        expiresAt: Instant,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO venue_staff_invites (
+                code_hash, code_hint, venue_id, role, created_by_user_id, created_at, expires_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, codeHash)
+            statement.setString(2, codeHint)
+            statement.setLong(3, venueId)
+            statement.setString(4, role)
+            statement.setLong(5, createdByUserId)
+            statement.setTimestamp(6, java.sql.Timestamp.from(nowTs))
+            statement.setTimestamp(7, java.sql.Timestamp.from(expiresAt))
+            statement.executeUpdate()
+        }
+    }
+
+    suspend fun reissuePendingInvite(
+        venueId: Long,
+        handle: String,
+        actorUserId: Long,
+        ttlSeconds: Long,
+        maxActivePendingPerVenueRole: Int,
+        auditLogRepository: TransactionalAuditLogWriter,
+    ): StaffInviteReissueResult {
+        require(ttlSeconds > 0 && maxActivePendingPerVenueRole > 0)
+        val ds = dataSource ?: return StaffInviteReissueResult.DatabaseError
+        val normalizedHandle = normalizeOpaqueHandle(handle) ?: return StaffInviteReissueResult.InvalidOrExpired
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                val initialAutoCommit = connection.autoCommit
+                connection.autoCommit = false
+                try {
+                    val row =
+                        loadPendingInviteRows(connection, venueId, listOf("STAFF", "MANAGER"), now())
+                            .firstOrNull { opaqueHandlesEqual(deriveOpaqueHandle(it.codeHash), normalizedHandle) }
+                            ?: return@use rollbackAndReturn(connection) { StaffInviteReissueResult.InvalidOrExpired }
+                    // Accept locks the invite before inserting a membership (which takes a venue FK lock).
+                    // Lock this exact invite first, then the shared create/quota lock, then the actor.
+                    if (loadActiveInvite(connection, row.codeHash, now()) == null) {
+                        return@use rollbackAndReturn(connection) { StaffInviteReissueResult.InvalidOrExpired }
+                    }
+                    if (!lockVenueForInviteCreation(connection, venueId)) {
+                        return@use rollbackAndReturn(connection) { StaffInviteReissueResult.InvalidOrExpired }
+                    }
+                    val actorRole =
+                        loadMember(connection, venueId, actorUserId, forUpdate = true)
+                            ?.role?.let(VenueRoleMapping::fromDb)
+                    val permissions = actorRole?.let(VenuePermissions::forRole).orEmpty()
+                    val createPermission =
+                        if (row.role == "STAFF") {
+                            VenuePermission.STAFF_INVITE_CREATE_STAFF
+                        } else {
+                            VenuePermission.STAFF_INVITE_CREATE_MANAGER
+                        }
+                    val revokePermission =
+                        if (row.role == "STAFF") {
+                            VenuePermission.STAFF_INVITE_REVOKE_STAFF
+                        } else {
+                            VenuePermission.STAFF_INVITE_REVOKE_MANAGER
+                        }
+                    if (createPermission !in permissions || revokePermission !in permissions) {
+                        return@use rollbackAndReturn(connection) { StaffInviteReissueResult.Forbidden }
+                    }
+                    val nowTs = now()
+                    // Recheck expiry after any lock wait; the conditional claim also excludes accept/revoke.
+                    val claimed =
+                        connection.prepareStatement(
+                            """
+                            UPDATE venue_staff_invites SET revoked_at = ?, revoked_by_user_id = ?
+                            WHERE code_hash = ? AND venue_id = ? AND role = ?
+                              AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+                            """.trimIndent(),
+                        ).use { statement ->
+                            statement.setTimestamp(1, java.sql.Timestamp.from(nowTs))
+                            statement.setLong(2, actorUserId)
+                            statement.setString(3, row.codeHash)
+                            statement.setLong(4, venueId)
+                            statement.setString(5, row.role)
+                            statement.setTimestamp(6, java.sql.Timestamp.from(nowTs))
+                            statement.executeUpdate() == 1
+                        }
+                    if (!claimed) {
+                        return@use rollbackAndReturn(connection) { StaffInviteReissueResult.InvalidOrExpired }
+                    }
+                    activePendingInviteRetryAfterSeconds(
+                        connection,
+                        venueId,
+                        row.role,
+                        nowTs,
+                        maxActivePendingPerVenueRole,
+                    )?.let { retryAfter ->
+                        return@use rollbackAndReturn(connection) { StaffInviteReissueResult.RateLimited(retryAfter) }
+                    }
+                    val code = generateCode()
+                    val codeHash = hashCode(code)
+                    val newHandle = deriveOpaqueHandle(codeHash)
+                    val expiresAt = nowTs.plusSeconds(ttlSeconds)
+                    insertInvite(connection, codeHash, code.take(3), venueId, row.role, actorUserId, nowTs, expiresAt)
+                    appendInviteAudit(
+                        connection,
+                        auditLogRepository,
+                        actorUserId,
+                        STAFF_INVITE_REVOKED_AUDIT_ACTION,
+                        venueId,
+                        normalizedHandle,
+                        row.role,
+                    )
+                    appendInviteAudit(
+                        connection,
+                        auditLogRepository,
+                        actorUserId,
+                        STAFF_INVITE_CREATED_AUDIT_ACTION,
+                        venueId,
+                        newHandle,
+                        row.role,
+                    )
+                    connection.commit()
+                    StaffInviteReissueResult.Success(
+                        StaffInviteCodeResult(code, expiresAt, ttlSeconds, newHandle),
+                        row.role,
+                    )
+                } catch (e: Exception) {
+                    rollbackBestEffort(connection)
+                    logger.warn("Failed to reissue staff invite error_type={}", e::class.simpleName ?: "unknown")
+                    StaffInviteReissueResult.DatabaseError
                 } finally {
                     connection.autoCommit = initialAutoCommit
                 }
@@ -818,6 +949,18 @@ data class PendingStaffInvite(
     val createdAt: Instant,
     val expiresAt: Instant,
 )
+
+sealed interface StaffInviteReissueResult {
+    data class Success(val invite: StaffInviteCodeResult, val role: String) : StaffInviteReissueResult
+
+    data class RateLimited(val retryAfterSeconds: Long) : StaffInviteReissueResult
+
+    data object InvalidOrExpired : StaffInviteReissueResult
+
+    data object Forbidden : StaffInviteReissueResult
+
+    data object DatabaseError : StaffInviteReissueResult
+}
 
 sealed interface StaffInviteRevokeResult {
     data class Success(

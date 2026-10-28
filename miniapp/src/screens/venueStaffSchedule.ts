@@ -47,6 +47,7 @@ type AdminFormRefs = {
   bulkControls: HTMLElement
   profileOptions: HTMLDivElement
   selectedAssignments: HTMLDivElement
+  individualTimeButton: HTMLButtonElement
   applyCommonTimeButton: HTMLButtonElement
   dateInput: HTMLInputElement
   startInput: HTMLInputElement
@@ -171,7 +172,7 @@ function formatDate(value: string, withWeekday = false): string {
 }
 
 function formatWeekRange(from: string): string {
-  return `${formatDate(from)} — ${formatDate(addIsoDays(from, 6))}`
+  return `${formatDate(from).slice(0, 5)} — ${formatDate(addIsoDays(from, 6))}`
 }
 
 function formatProfileSubtype(subtype: VenueStaffProfileSubtype): string {
@@ -273,17 +274,21 @@ function buildScheduleDom(root: HTMLDivElement, canManage: boolean): ScheduleRef
   const weekNavigation = el('div', { className: 'venue-schedule-week-navigation' })
   const previousButton = el('button', {
     className: 'button-secondary button-small',
-    text: 'Предыдущая неделя'
+    text: '‹'
   }) as HTMLButtonElement
   const weekLabel = el('span', { className: 'venue-schedule-week-label' }) as HTMLSpanElement
   const nextButton = el('button', {
     className: 'button-secondary button-small',
-    text: 'Следующая неделя'
+    text: '›'
   }) as HTMLButtonElement
   const currentButton = el('button', {
     className: 'button-tertiary button-small',
     text: 'Текущая неделя'
   }) as HTMLButtonElement
+  previousButton.setAttribute('aria-label', 'Предыдущая неделя')
+  nextButton.setAttribute('aria-label', 'Следующая неделя')
+  currentButton.classList.add('venue-schedule-current-week')
+  currentButton.hidden = true
   append(weekNavigation, previousButton, weekLabel, nextButton, currentButton)
 
   const timezoneCopy = el('p', {
@@ -332,6 +337,7 @@ function buildAdminDom(): AdminFormRefs {
   const formCard = el('section', { className: 'card venue-schedule-form' })
   formCard.hidden = true
   const formTitle = el('h3', { text: 'Новая смена' }) as HTMLHeadingElement
+  formTitle.tabIndex = -1
   const profileSelect = document.createElement('select')
   profileSelect.className = 'venue-select'
   const profileField = renderField('Сотрудник', profileSelect)
@@ -378,16 +384,12 @@ function buildAdminDom(): AdminFormRefs {
   }) as HTMLParagraphElement
   const bulkControls = el('div', { className: 'venue-schedule-bulk-controls' })
   const profileOptionsTitle = el('h4', { text: 'Сотрудники' })
-  const profileOptionsCopy = el('p', {
-    className: 'venue-order-sub',
-    text: 'Выберите одного или нескольких сотрудников для общей даты.'
-  })
   const profileOptions = el('div', {
     className: 'venue-schedule-profile-options'
   }) as HTMLDivElement
   profileOptions.setAttribute('role', 'group')
   profileOptions.setAttribute('aria-label', 'Выбор сотрудников')
-  const selectedTitle = el('h4', { text: 'Выбранные сотрудники' })
+  const individualTimeButton = el('button', { className: 'button-tertiary button-small', text: 'Настроить время отдельно' }) as HTMLButtonElement
   const applyCommonTimeButton = el('button', {
     className: 'button-tertiary button-small',
     text: 'Применить общее время всем'
@@ -399,9 +401,8 @@ function buildAdminDom(): AdminFormRefs {
   append(
     bulkControls,
     profileOptionsTitle,
-    profileOptionsCopy,
     profileOptions,
-    selectedTitle,
+    individualTimeButton,
     applyCommonTimeButton,
     selectedAssignments
   )
@@ -426,6 +427,7 @@ function buildAdminDom(): AdminFormRefs {
   const confirmationCard = el('section', { className: 'card venue-schedule-confirmation' })
   confirmationCard.hidden = true
   const confirmationTitle = el('h3') as HTMLHeadingElement
+  confirmationTitle.tabIndex = -1
   const confirmationSummary = el('div', { className: 'venue-schedule-confirmation-summary' }) as HTMLDivElement
   const confirmButton = el('button', { text: 'Подтвердить' }) as HTMLButtonElement
   const closeConfirmationButton = el('button', {
@@ -445,6 +447,7 @@ function buildAdminDom(): AdminFormRefs {
     bulkControls,
     profileOptions,
     selectedAssignments,
+    individualTimeButton,
     applyCommonTimeButton,
     dateInput,
     startInput,
@@ -569,6 +572,10 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   let mutationPending = false
   let weekExplicitlyChanged = false
   let timeSource: ShiftTimeSource = 'AUTO'
+  let individualTimes = false
+  let editorVersion = 0
+  let previewPending = false
+  const individualDrafts = new Map<number, { startsAt: string; endsAt: string }>()
   const bulkAssignments = new Map<number, BulkAssignmentDraft>()
   const effectiveHoursByDate = new Map<string, VenueStaffScheduleEffectiveHoursDto>()
   const effectiveHoursLookupStates = new Map<string, EffectiveHoursLookupState>()
@@ -608,6 +615,10 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   }
 
   const resetEditor = () => {
+    editorVersion += 1
+    previewPending = false
+    individualTimes = false
+    individualDrafts.clear()
     editingShift = null
     restoringShift = null
     pendingConfirmation = null
@@ -616,6 +627,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     if (!admin) return
     admin.formCard.hidden = true
     admin.confirmationCard.hidden = true
+    admin.previewButton.disabled = false
     admin.confirmationTitle.textContent = ''
     admin.confirmationSummary.replaceChildren()
     admin.profileSelect.disabled = false
@@ -699,16 +711,17 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
 
   const updateWeekControls = () => {
     refs.weekLabel.textContent = formatWeekRange(weekStart)
+    refs.currentButton.hidden = !venueToday || weekStart === startOfIsoWeek(venueToday)
     if (!venueToday) {
-      refs.previousButton.disabled = false
-      refs.nextButton.disabled = false
+      refs.previousButton.disabled = true
+      refs.nextButton.disabled = true
       refs.currentButton.disabled = true
       return
     }
     const minDate = addIsoDays(venueToday, -30)
     const maxDate = addIsoDays(venueToday, 90)
-    refs.previousButton.disabled = addIsoDays(weekStart, -7) < minDate
-    refs.nextButton.disabled = addIsoDays(weekStart, 13) > maxDate
+    refs.previousButton.disabled = addIsoDays(weekStart, -1) < minDate
+    refs.nextButton.disabled = addIsoDays(weekStart, 7) > maxDate
     refs.currentButton.disabled = weekStart === startOfIsoWeek(venueToday)
   }
 
@@ -804,9 +817,8 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       checkbox.checked = bulkAssignments.has(profile.id)
       checkbox.disabled = !checkbox.checked && bulkAssignments.size >= MAX_BATCH_ASSIGNMENTS
       checkbox.setAttribute('aria-label', `Выбрать ${profile.displayName}`)
-      const linkage = profileLinkageLabel(profile)
       const copy = el('span', {
-        text: `${profile.displayName} · ${profileRoleLabel(profile)} · ${linkage}`
+        text: `${profile.displayName} · ${profileRoleLabel(profile)}`
       })
       checkbox.addEventListener('change', () => {
         hideError()
@@ -839,127 +851,145 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     })
   }
 
+  const preserveIndividualTimes = () => {
+    bulkAssignments.forEach((assignment) => {
+      if (assignment.timeSource === 'MANUAL') individualDrafts.set(assignment.staffProfileId, {
+        startsAt: assignment.startsAt, endsAt: assignment.endsAt
+      })
+    })
+  }
+
+  const useCommonTimes = () => {
+    const admin = refs.admin
+    if (!admin) return
+    preserveIndividualTimes()
+    individualTimes = false
+    bulkAssignments.forEach((assignment) => {
+      if (assignment.timeSource === 'RESTORE_SAVED') return
+      assignment.timeSource = 'COMMON'
+      assignment.startsAt = admin.startInput.value
+      assignment.endsAt = admin.endInput.value
+    })
+  }
+
   const renderSelectedAssignments = () => {
     const admin = refs.admin
     if (!admin) return
-    admin.selectedAssignments.replaceChildren()
-    admin.applyCommonTimeButton.disabled =
-      !bulkAssignments.size || !admin.startInput.value || !admin.endInput.value
-    if (!bulkAssignments.size) {
-      admin.selectedAssignments.appendChild(
-        el('p', { className: 'venue-empty', text: 'Сотрудники пока не выбраны.' })
-      )
-      return
+    if (bulkAssignments.size < 2 && individualTimes) {
+      const remaining = Array.from(bulkAssignments.values())[0]
+      if (remaining?.timeSource === 'MANUAL') {
+        admin.startInput.value = remaining.startsAt
+        admin.endInput.value = remaining.endsAt
+        timeSource = 'MANUAL'
+        updateOvernightHint()
+        syncEffectiveHoursForForm(false)
+      }
+      useCommonTimes()
     }
-
-    const assignments = Array.from(bulkAssignments.values()).sort((left, right) =>
-      profileNameFor(left.staffProfileId).localeCompare(profileNameFor(right.staffProfileId), 'ru')
-    )
+    admin.individualTimeButton.hidden = bulkAssignments.size < 2
+    admin.individualTimeButton.textContent = individualTimes ? 'Вернуться к общему времени' : 'Настроить время отдельно'
+    admin.individualTimeButton.setAttribute('aria-expanded', String(individualTimes))
+    admin.applyCommonTimeButton.hidden = !individualTimes || bulkAssignments.size < 2
+    admin.applyCommonTimeButton.disabled = !admin.startInput.value || !admin.endInput.value
+    admin.selectedAssignments.replaceChildren()
+    if (!bulkAssignments.size) return
+    const assignments = Array.from(bulkAssignments.values()).sort((a, b) =>
+      profileNameFor(a.staffProfileId).localeCompare(profileNameFor(b.staffProfileId), 'ru'))
+    const common = assignments.filter((item) => item.operation === 'CREATE' && !individualTimes)
+    if (common.length) {
+      admin.selectedAssignments.appendChild(el('p', {
+        className: 'venue-schedule-draft-summary',
+        text: `${common.map((item) => profileNameFor(item.staffProfileId)).join(', ')} · ${formatInterval(admin.startInput.value, admin.endInput.value, endsNextDay(admin.startInput.value, admin.endInput.value))}`
+      }))
+    }
     assignments.forEach((assignment) => {
-      const profile = profiles.find((candidate) => candidate.id === assignment.staffProfileId)
-      const displayName = profile?.displayName ?? profileNameFor(assignment.staffProfileId)
+      const existing = assignment.existingShift
+      const canceled = existing && (existing.computedStatus ?? existing.storedStatus).toLowerCase() === 'canceled'
+      if (!individualTimes && assignment.operation === 'CREATE') return
+      const name = profileNameFor(assignment.staffProfileId)
       const row = el('article', { className: 'venue-schedule-assignment' })
       const heading = el('div', { className: 'venue-schedule-assignment-heading' })
-      const identity = el('div')
-      append(
-        identity,
-        el('strong', { text: displayName }),
-        el('p', {
-          className: 'venue-order-sub',
-          text: profile ? profileRoleLabel(profile) : 'Сотрудник'
-        })
-      )
-      const removeButton = el('button', {
-        className: 'button-tertiary button-small',
-        text: 'Убрать'
-      }) as HTMLButtonElement
-      removeButton.setAttribute('aria-label', `Убрать ${displayName}`)
-      removeButton.addEventListener('click', () => {
+      const remove = el('button', { className: 'button-tertiary button-small', text: 'Убрать' }) as HTMLButtonElement
+      remove.setAttribute('aria-label', `Убрать ${name}`)
+      remove.addEventListener('click', () => {
         bulkAssignments.delete(assignment.staffProfileId)
         invalidateBatchConfirmation()
         renderProfileOptions()
         renderSelectedAssignments()
       })
-      append(heading, identity, removeButton)
-
-      const start = document.createElement('input')
-      start.className = 'venue-input'
-      start.type = 'time'
-      start.required = true
-      start.value = assignment.startsAt
-      const end = document.createElement('input')
-      end.className = 'venue-input'
-      end.type = 'time'
-      end.required = true
-      end.value = assignment.endsAt
-      const intervalHint = el('p', {
-        className: 'venue-order-sub venue-schedule-assignment-hint'
-      }) as HTMLParagraphElement
-      const updateHint = () => {
-        intervalHint.textContent = start.value && end.value
-          ? formatInterval(start.value, end.value, endsNextDay(start.value, end.value))
-          : 'Укажите начало и окончание.'
-      }
-      const updateAssignmentTime = () => {
-        assignment.startsAt = start.value
-        assignment.endsAt = end.value
-        assignment.timeSource = 'MANUAL'
-        invalidateBatchConfirmation()
-        updateHint()
-      }
-      start.addEventListener('input', updateAssignmentTime)
-      end.addEventListener('input', updateAssignmentTime)
-      const timeGrid = el('div', { className: 'venue-schedule-assignment-time' })
-      append(
-        timeGrid,
-        renderField(`Начало — ${displayName}`, start),
-        renderField(`Окончание — ${displayName}`, end)
-      )
-      updateHint()
-      append(row, heading, timeGrid, intervalHint)
-
-      const existing = assignment.existingShift
-      if (existing && (existing.computedStatus ?? existing.storedStatus).toLowerCase() === 'canceled') {
-        row.appendChild(
-          el('p', {
-            className: 'venue-schedule-assignment-warning',
-            text: `Смена на эту дату была отменена. Прежнее время: ${formatInterval(
-              existing.startsAt,
-              existing.endsAt,
-              existing.endsNextDay
-            )}.`
-          })
-        )
+      append(heading, el('strong', { text: name }), remove)
+      row.appendChild(heading)
+      if (canceled) {
+        row.appendChild(el('p', {
+          className: 'venue-schedule-assignment-warning',
+          text: `Ранее отменена. Прежнее время: ${formatInterval(existing.startsAt, existing.endsAt, existing.endsNextDay)}.`
+        }))
         if (existing.restoreAllowed && assignment.operation !== 'RESTORE') {
-          const restoreButton = el('button', {
-            className: 'button-secondary button-small',
-            text: 'Восстановить'
-          }) as HTMLButtonElement
-          restoreButton.setAttribute('aria-label', `Восстановить ${displayName}`)
-          restoreButton.addEventListener('click', () => {
+          const restore = el('button', { className: 'button-secondary button-small', text: 'Восстановить смену' }) as HTMLButtonElement
+          restore.setAttribute('aria-label', `Восстановить ${name}`)
+          restore.addEventListener('click', () => {
             assignment.operation = 'RESTORE'
             assignment.conflict = null
             invalidateBatchConfirmation()
             renderSelectedAssignments()
           })
-          row.appendChild(restoreButton)
+          row.appendChild(restore)
         } else if (assignment.operation === 'RESTORE') {
-          row.appendChild(
-            el('p', { className: 'venue-schedule-assignment-ready', text: 'Будет восстановлена.' })
-          )
+          row.appendChild(el('p', { className: 'venue-schedule-assignment-ready', text: `Будет восстановлена · ${formatInterval(assignment.startsAt, assignment.endsAt, endsNextDay(assignment.startsAt, assignment.endsAt))}` }))
+          const savedTime = assignment.timeSource === 'RESTORE_SAVED'
+          const chooseTime = el('button', { className: 'button-tertiary button-small', text: savedTime ? 'Использовать общее время' : 'Вернуть прежнее время' }) as HTMLButtonElement
+          chooseTime.addEventListener('click', () => {
+            assignment.timeSource = savedTime ? 'COMMON' : 'RESTORE_SAVED'
+            assignment.startsAt = savedTime ? admin.startInput.value : existing.startsAt
+            assignment.endsAt = savedTime ? admin.endInput.value : existing.endsAt
+            individualDrafts.delete(assignment.staffProfileId)
+            invalidateBatchConfirmation()
+            renderSelectedAssignments()
+          })
+          row.appendChild(chooseTime)
         }
-      } else if (assignment.operation === 'CREATE') {
-        row.appendChild(
-          el('p', { className: 'venue-schedule-assignment-ready', text: 'Будет создана.' })
-        )
       }
-      if (assignment.conflict) {
-        row.appendChild(
-          el('p', { className: 'venue-schedule-assignment-warning', text: assignment.conflict })
-        )
+      if (individualTimes && !assignment.conflict && assignment.operation) {
+        const grid = el('div', { className: 'venue-schedule-assignment-time' })
+        const start = document.createElement('input')
+        const end = document.createElement('input')
+        for (const input of [start, end]) { input.type = 'time'; input.className = 'venue-input'; input.required = true }
+        start.value = assignment.startsAt
+        end.value = assignment.endsAt
+        const hint = el('p', { className: 'venue-schedule-assignment-hint' })
+        const updateHint = () => { hint.textContent = formatInterval(start.value, end.value, endsNextDay(start.value, end.value)) }
+        const update = () => {
+          assignment.startsAt = start.value
+          assignment.endsAt = end.value
+          assignment.timeSource = 'MANUAL'
+          individualDrafts.set(assignment.staffProfileId, { startsAt: start.value, endsAt: end.value })
+          invalidateBatchConfirmation()
+          updateHint()
+        }
+        start.addEventListener('input', update)
+        end.addEventListener('input', update)
+        updateHint()
+        append(grid, renderField(`Начало — ${name}`, start), renderField(`Окончание — ${name}`, end))
+        append(row, grid, hint)
       }
+      if (assignment.conflict) row.appendChild(el('p', { className: 'venue-schedule-assignment-warning', text: assignment.conflict }))
       admin.selectedAssignments.appendChild(row)
     })
+  }
+
+  const toggleIndividualTimes = () => {
+    if (individualTimes) useCommonTimes()
+    else {
+      individualTimes = true
+      bulkAssignments.forEach((assignment) => {
+        const saved = individualDrafts.get(assignment.staffProfileId)
+        if (saved && assignment.timeSource !== 'RESTORE_SAVED') {
+          Object.assign(assignment, saved, { timeSource: 'MANUAL' })
+        }
+      })
+    }
+    invalidateBatchConfirmation()
+    renderSelectedAssignments()
   }
 
   const syncCommonAssignments = () => {
@@ -1131,9 +1161,19 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       const shifts = isStaffView
         ? ownShifts.filter((shift) => shift.shiftDate === date)
         : adminShifts.filter((shift) => shift.shiftDate === date)
-      day.appendChild(dayTitle)
+      const dayHeading = el('div', { className: 'venue-schedule-day-heading' })
+      dayHeading.appendChild(dayTitle)
+      if (canManage && venueToday && date >= venueToday && date <= addIsoDays(venueToday, 90)) {
+        const add = el('button', { className: 'button-tertiary button-small', text: '+ Смена' }) as HTMLButtonElement
+        add.setAttribute('aria-label', `Добавить смену на ${formatDate(date)}`)
+        add.addEventListener('click', () => openCreateForm(date))
+        dayHeading.appendChild(add)
+      }
+      day.appendChild(dayHeading)
+      day.classList.toggle('venue-schedule-day-empty', !shifts.length)
       if (!shifts.length) {
-        day.appendChild(el('p', { className: 'venue-empty', text: 'Смен нет.' }))
+        const outside = venueToday && (date < addIsoDays(venueToday, -30) || date > addIsoDays(venueToday, 90))
+        day.appendChild(el('p', { className: 'venue-empty', text: outside ? 'За пределами доступного периода.' : 'Смен нет.' }))
       } else if (isStaffView) {
         ;(shifts as VenueStaffScheduleOwnShiftDto[]).forEach((shift) =>
           day.appendChild(renderOwnShift(shift))
@@ -1319,8 +1359,8 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     mutationAbort?.abort()
     mutationAbort = null
     mutationPending = false
-    const from = weekStart
-    const to = weekEnd()
+    const from = venueToday && weekStart < addIsoDays(venueToday, -30) ? addIsoDays(venueToday, -30) : weekStart
+    const to = venueToday && weekEnd() > addIsoDays(venueToday, 90) ? addIsoDays(venueToday, 90) : weekEnd()
 
     effectiveHoursAbort?.abort()
     effectiveHoursAbort = null
@@ -1414,9 +1454,17 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     void load()
   }
 
-  const openCreateForm = () => {
+  const focusPanel = (heading: HTMLElement) => {
+    requestAnimationFrame(() => {
+      if (disposed || !heading.isConnected || heading.closest('[hidden]')) return
+      heading.focus({ preventScroll: true })
+      heading.scrollIntoView({ block: 'start', behavior: 'auto' })
+    })
+  }
+
+  const openCreateForm = (selectedDate?: string) => {
     const admin = refs.admin
-    if (!admin || !canManage) return
+    if (!admin || !canManage || mutationPending) return
     hideError()
     resetEditor()
     admin.formTitle.textContent = 'Добавить смены'
@@ -1425,7 +1473,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     admin.bulkControls.hidden = false
     admin.dateInput.min = venueToday ?? ''
     admin.dateInput.max = venueToday ? addIsoDays(venueToday, 90) : ''
-    admin.dateInput.value = venueToday && weekStart < venueToday ? venueToday : weekStart
+    admin.dateInput.value = selectedDate ?? (venueToday && weekStart < venueToday ? venueToday : weekStart)
     admin.startInput.value = ''
     admin.endInput.value = ''
     timeSource = 'AUTO'
@@ -1442,12 +1490,12 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       syncEffectiveHoursForForm(true)
       reconcileBulkAssignments(true)
     }
-    ;(admin.profileOptions.querySelector('input') as HTMLInputElement | null)?.focus()
+    focusPanel(admin.formTitle)
   }
 
   function openEditForm(shift: VenueStaffScheduleAdminShiftDto) {
     const admin = refs.admin
-    if (!admin || !canManage) return
+    if (!admin || !canManage || mutationPending) return
     hideError()
     resetEditor()
     editingShift = shift
@@ -1473,12 +1521,12 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     } else {
       syncEffectiveHoursForForm(false)
     }
-    admin.dateInput.focus()
+    focusPanel(admin.formTitle)
   }
 
   function openRestoreForm(shift: VenueStaffScheduleAdminShiftDto) {
     const admin = refs.admin
-    if (!admin || !canManage || !canRestoreShift(shift)) return
+    if (!admin || !canManage || mutationPending || !canRestoreShift(shift)) return
     hideError()
     resetEditor()
     restoringShift = shift
@@ -1505,7 +1553,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     } else {
       syncEffectiveHoursForForm(false)
     }
-    admin.startInput.focus()
+    focusPanel(admin.formTitle)
   }
 
   function updateOvernightHint() {
@@ -1561,6 +1609,8 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   const applyCommonTimeToAll = () => {
     const admin = refs.admin
     if (!admin || !admin.startInput.value || !admin.endInput.value) return
+    if (!window.confirm('Применить общее время всем? Индивидуальные интервалы и выбор прежнего времени будут сброшены.')) return
+    individualDrafts.clear()
     bulkAssignments.forEach((assignment) => {
       assignment.startsAt = admin.startInput.value
       assignment.endsAt = admin.endInput.value
@@ -1644,7 +1694,8 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
 
   const openDraftConfirmation = async () => {
     const admin = refs.admin
-    if (!admin) return
+    if (!admin || previewPending || mutationPending || admin.formCard.hidden) return
+    const version = editorVersion
 
     if (!editingShift && !restoringShift) {
       if (!admin.dateInput.value || !bulkAssignments.size) {
@@ -1652,9 +1703,12 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
         return
       }
       const checkedDate = admin.dateInput.value
+      previewPending = true
       admin.previewButton.disabled = true
       setStatus('Проверяем смены…')
       const refreshed = await loadEffectiveHoursForDate(checkedDate, true)
+      if (disposed || version !== editorVersion) return
+      previewPending = false
       admin.previewButton.disabled = false
       if (disposed || admin.dateInput.value !== checkedDate || editingShift || restoringShift) return
       setStatus('')
@@ -1694,6 +1748,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       admin.confirmButton.className = ''
       admin.formCard.hidden = true
       admin.confirmationCard.hidden = false
+      focusPanel(admin.confirmationTitle)
       return
     }
 
@@ -1745,7 +1800,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
 
   function openCancelConfirmation(shift: VenueStaffScheduleAdminShiftDto) {
     const admin = refs.admin
-    if (!admin || !canManage) return
+    if (!admin || !canManage || mutationPending) return
     const state = confirmationStateFor(shift)
     if (!state) return
     hideError()
@@ -1897,6 +1952,14 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
     if (!result.ok) {
       setStatus('')
       if (result.error.code !== REQUEST_ABORTED_CODE) {
+        if (result.error.status === 0 || result.error.status >= 500) {
+          resetEditor()
+          refs.errorTitle.textContent = 'Результат операции не подтверждён'
+          refs.errorMessage.textContent = 'Ответ не получен. Смены могли сохраниться. Обновите график перед новым назначением; запрос не повторён.'
+          renderErrorActions(refs.errorActions, [{ label: 'Обновить график', kind: 'primary', onClick: () => void load() }])
+          refs.error.hidden = false
+          return
+        }
         if (confirmation.kind === 'batch') showBatchMutationError(result.error)
         else showMutationError(result.error)
       }
@@ -1925,8 +1988,17 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
   )
   if (refs.admin) {
     const admin = refs.admin
+    const invalidatePreview = () => {
+      editorVersion += 1
+      previewPending = false
+      admin.previewButton.disabled = false
+      invalidateBatchConfirmation()
+    }
     disposables.push(
-      on(admin.addButton, 'click', openCreateForm),
+      on(admin.formCard, 'input', invalidatePreview),
+      on(admin.formCard, 'change', invalidatePreview),
+      on(admin.formCard, 'click', (event) => { if (event.target !== admin.previewButton) invalidatePreview() }),
+      on(admin.addButton, 'click', () => openCreateForm()),
       on(admin.closeFormButton, 'click', resetEditor),
       on(admin.previewButton, 'click', () => void openDraftConfirmation()),
       on(admin.dateInput, 'input', handleDateChange),
@@ -1934,6 +2006,7 @@ export function renderVenueStaffScheduleScreen(options: VenueStaffScheduleOption
       on(admin.endInput, 'input', markTimesManual),
       on(admin.manualTimeButton, 'click', enableManualTimes),
       on(admin.applyHoursButton, 'click', applyVenueHours),
+      on(admin.individualTimeButton, 'click', toggleIndividualTimes),
       on(admin.applyCommonTimeButton, 'click', applyCommonTimeToAll),
       on(admin.closeConfirmationButton, 'click', () => {
         if (pendingConfirmation?.kind === 'cancel') {

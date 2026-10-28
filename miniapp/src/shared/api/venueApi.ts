@@ -1725,6 +1725,20 @@ export async function venueGetPendingStaffInvites(
   )
 }
 
+export async function venueReissueStaffInvite(
+  backendUrl: string,
+  params: { venueId: number; handle: string },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+) {
+  return requestApi<VenueStaffInviteResponse>(
+    backendUrl,
+    `/api/venue/${params.venueId}/staff/invites/${encodeURIComponent(params.handle)}/reissue`,
+    { method: 'POST', signal },
+    deps
+  )
+}
+
 export async function venueRevokeStaffInvite(
   backendUrl: string,
   params: { venueId: number; handle: string },
