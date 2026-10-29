@@ -53,7 +53,7 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
       : code === 'FORBIDDEN' ? 'Действие недоступно для этой карточки. Обновите состояние или обратитесь к владельцу.'
         : message || 'Ответ не получен. Проверьте состояние фото перед повторной загрузкой.'
   }
-  const loadImage = async (photo: StaffPhoto, target: HTMLElement, signal: AbortSignal, onLoaded: () => void) => {
+  const loadImage = async (photo: StaffPhoto, target: HTMLElement, signal: AbortSignal) => {
     const expected = `${path}/${photo.id}/content`
     if (photo.previewUrl !== expected || !/^[a-f0-9-]{36}$/.test(photo.id)) return
     const result = await requestBinary(backendUrl, expected, { signal }, deps)
@@ -61,21 +61,17 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
     if (!result.ok) { target.textContent = 'Фото недоступно. Проверьте состояние.'; return }
     const url = URL.createObjectURL(result.data.blob); urls.add(url)
     const img = el('img', { className: 'staff-photo-image' }) as HTMLImageElement
-    img.src = url; img.alt = 'Фото сотрудника'; target.replaceChildren(img); onLoaded()
+    img.src = url; img.alt = 'Фото сотрудника'; target.replaceChildren(img)
   }
-  const mutation = async (action: string, photo?: StaffPhoto) => {
-    if (!state || busy) return
-    if (action === 'delete' && !window.confirm('Удалить все фото этой карточки? Показ гостям прекратится сразу; восстановить фото можно только новой загрузкой.')) return
-    if (action === 'revoke' && !window.confirm('Отозвать согласие и удалить фотографии этой карточки? Показ прекратится сразу. Новая публикация потребует нового согласия.')) return
-    if (action === 'consent' && !window.confirm(state.isSelf
-      ? 'Я согласен на публичный показ именно этой фотографии в карточке заведения. Я могу отозвать согласие. Само согласие не публикует фото.'
-      : 'Я получил согласие изображённого человека на публичный показ именно этой фотографии и записываю это как владелец. Это не независимая проверка согласия.')) return
+  const deletePhoto = async () => {
+    if (!state?.canManage || busy || uncertain || selected) return
+    if (!window.confirm('Удалить все фото этой карточки? Показ гостям прекратится сразу; восстановить фото можно только новой загрузкой.')) return
     readAbort?.abort(); readAbort = null
     busy = true; render(); status.textContent = 'Сохраняем состояние фото…'
     const controller = new AbortController(); writeAbort = controller
-    const result = await requestApi<StaffPhotoState>(backendUrl, `${path}/${action}`, {
+    const result = await requestApi<StaffPhotoState>(backendUrl, `${path}/delete`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-      body: JSON.stringify({ revision: state.revision, photoId: photo?.id ?? null, confirmed: action === 'consent', policy: state.consentPolicy })
+      body: JSON.stringify({ revision: state.revision })
     }, deps)
     if (disposed || writeAbort !== controller) return
     writeAbort = null; busy = false
@@ -86,7 +82,7 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
     if (disposed || !state || !selected || busy || !state.enabled || uncertain || state.uploading || !state.canManage) return
     requestId ??= crypto.randomUUID()
     readAbort?.abort(); readAbort = null
-    busy = true; render(); status.textContent = 'Загружаем фото. Публикация выполняется отдельно.'
+    busy = true; render(); status.textContent = 'Загружаем фото. Текущее фото сохранится до завершения загрузки.'
     const controller = new AbortController(); writeAbort = controller
     const result = await requestApi<StaffPhotoState>(backendUrl, path, {
       method: 'POST', headers: { 'Content-Type': selected.type || 'application/octet-stream', 'Idempotency-Key': requestId, 'X-Photo-Revision': String(requestRevision) },
@@ -94,7 +90,7 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
     }, deps)
     if (disposed || writeAbort !== controller) return
     writeAbort = null; busy = false
-    if (result.ok) { state = result.data; clearSelection(); uncertain = false; render(); status.textContent = 'Фото загружено приватно. Для показа нужны согласие и отдельное разрешение.' }
+    if (result.ok) { state = result.data; clearSelection(); uncertain = false; render(); status.textContent = 'Фото сохранено и стало текущим. Показ гостям зависит от видимости карточки и настроек команды.' }
     else {
       uncertain = true
       if (result.error.status > 0 && result.error.status < 500) clearSelection()
@@ -108,7 +104,7 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
     if (selected && selectedUrl) {
       const image = el('img', { className: 'staff-photo-image' }) as HTMLImageElement
       image.src = selectedUrl; image.alt = 'Предпросмотр выбранного фото'
-      append(body, image, el('p', { text: busy ? 'Фото загружается приватно. Дождитесь результата.' : 'Результат загрузки не подтверждён. Проверьте состояние перед повтором.' }))
+      append(body, image, el('p', { text: busy ? 'Фото загружается. Дождитесь результата.' : 'Результат загрузки не подтверждён. Проверьте состояние перед повтором.' }))
       if (!busy) actions.appendChild(button('Отменить выбор', () => { clearSelection(); render(); status.textContent = 'Локальный выбор отменён. Это не удаляет уже загруженное фото; проверьте состояние.' }))
     }
     if (!state) { actions.appendChild(button('Проверить состояние фото', () => void refresh())); return }
@@ -118,22 +114,12 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
       const card = el('div', { className: 'staff-photo-version' })
       const preview = el('div', { className: 'staff-photo-placeholder', text: 'Фото загружается…' })
       const isCandidate = photo.id === state?.candidate?.id
-      const label = isCandidate ? 'Новое фото · приватно' : state?.guestVisible ? 'Фото видно гостям' : 'Фото сейчас не показывается гостям'
-      append(card, preview, el('p', { text: label }), el('p', { className: 'venue-order-sub', text: photo.consent === 'NONE'
-        ? 'Согласие на это фото ещё не получено.' : photo.consent === 'SELF' ? 'Согласие подтверждено сотрудником.' : 'Согласие записано владельцем; независимая проверка не проводилась.' }))
-      let consentButton: HTMLButtonElement | null = null
-      if (state?.canConsent && photo.consent === 'NONE') {
-        consentButton = button(state.isSelf ? 'Дать согласие на показ' : 'Зафиксировать согласие', () => void mutation('consent', photo), true)
-        card.appendChild(consentButton)
-      }
-      void loadImage(photo, preview, renderAbort!.signal, () => { if (consentButton) consentButton.disabled = busy || uncertain || !!selected })
-      if (state?.canManage) {
-        if (photo.state !== 'APPROVED' && photo.consent !== 'NONE') card.appendChild(button('Разрешить показ фото', () => void mutation('publish', photo), busy || uncertain || !!selected))
-        if (photo.state === 'APPROVED') card.appendChild(button('Скрыть фото', () => void mutation('hide', photo), busy || uncertain || !!selected))
-      }
+      const label = isCandidate ? 'Ранее загруженное фото · приватно' : state?.guestVisible ? 'Фото видно гостям' : 'Фото сейчас не показывается гостям'
+      append(card, preview, el('p', { text: label }))
+      void loadImage(photo, preview, renderAbort!.signal)
       body.appendChild(card)
     })
-    if (state.candidate && state.current) body.appendChild(el('p', { className: 'venue-order-sub', text: 'Текущее фото сохраняется до согласия и разрешения показа нового. После замены прежнее фото будет удалено.' }))
+    if (state.candidate) body.appendChild(el('p', { className: 'venue-order-sub', text: state.canManage ? 'Это фото осталось от прежнего процесса и не будет показано автоматически. Для замены выберите фото заново или удалите фотографии карточки.' : 'Это фото осталось от прежнего процесса и не будет показано автоматически. Заменить или удалить его может владелец или менеджер.' }))
     status.textContent = !state.enabled ? 'Загрузка фотографий временно недоступна'
       : state.uploading ? 'Результат предыдущей загрузки ещё проверяется. Обновите состояние; запрос не повторяется автоматически.'
         : state.cleanupPending ? 'Показ удалённого фото прекращён. Физическое удаление из хранилища ещё не подтверждено.' : ''
@@ -153,9 +139,9 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
         }
         body.appendChild(el('p', { className: 'venue-order-sub', text: 'JPEG или PNG, до 5 МБ и 4096 px по стороне. HEIC/HEIF и WebP пока не поддерживаются.' }))
       }
-      if (photos.length || state.uploading) actions.appendChild(button('Удалить фото', () => void mutation('delete'), busy || uncertain || !!selected))
-    } else body.appendChild(el('p', { className: 'venue-order-sub', text: state.isSelf ? 'Загрузкой и публикацией управляет владелец. Вы управляете только своим согласием.' : 'Фото этой карточки доступно только владельцу.' }))
-    if (state.isSelf && (photos.length || state.uploading)) actions.appendChild(button('Отозвать согласие и удалить фото', () => void mutation('revoke'), busy || uncertain || !!selected))
+      if (photos.length || state.uploading) actions.appendChild(button('Удалить фото', () => void deletePhoto(), busy || uncertain || !!selected))
+      body.appendChild(el('p', { className: 'venue-order-sub', text: 'После загрузки фото сразу станет текущим. Гости увидят его только по действующим настройкам показа карточки и команды.' }))
+    } else body.appendChild(el('p', { className: 'venue-order-sub', text: 'Фотографией управляют владелец и менеджер заведения. Вам доступен просмотр своей карточки.' }))
     actions.appendChild(button('Проверить состояние фото', () => void refresh()))
   }
   const refresh = async () => {

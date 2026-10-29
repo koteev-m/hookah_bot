@@ -5,7 +5,6 @@ import com.hookah.platform.backend.api.RequestBodyTooLargeException
 import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
 import com.hookah.platform.backend.miniapp.security.enforceMiniAppRateLimit
 import com.hookah.platform.backend.miniapp.security.receiveBoundedJson
-import com.hookah.platform.backend.miniapp.venue.staff.STAFF_PHOTO_CONSENT_POLICY
 import com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoService
 import com.hookah.platform.backend.telegram.db.VenueAccessRepository
 import io.ktor.http.ContentType
@@ -82,7 +81,7 @@ internal fun Route.venueStaffPhotoRoutes(
                 },
             )
             val body = call.receiveBoundedJson<StaffPhotoActionRequest>(Json { ignoreUnknownKeys = false }, 1024)
-            if (body.revision < 0 || action == "consent" && body.policy != STAFF_PHOTO_CONSENT_POLICY) {
+            if (body.revision < 0) {
                 throw InvalidInputException()
             }
             call.respond(
@@ -93,7 +92,6 @@ internal fun Route.venueStaffPhotoRoutes(
                     body.photoId,
                     body.revision,
                     action,
-                    body.confirmed,
                 ),
             )
         }

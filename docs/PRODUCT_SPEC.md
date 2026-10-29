@@ -62,6 +62,12 @@ Staff profiles, Today Shift, Staff Schedule and staff tips source of truth:
   canonical in the staff document.
   Staff tips and any payment provider/direct payout path are future and require separate
   legal/product decision.
+- Staff photos: local direct OWNER/MANAGER upload/replace/delete now includes protected linked
+  cards; STAFF has own preview only. Successful upload atomically becomes current without consent
+  or a publish request. Card/Guest/Today visibility and all non-photo permissions are unchanged.
+  This supersedes the former UX08 consent model; old private candidates stay private and existing
+  active photos survive without a data migration. See `MEDIA_STORAGE_UPLOAD.md`; staging/iPhone
+  acceptance remains open.
 
 Booking lifecycle source of truth:
 - Canonical booking flow, queue, status state machine, hold/deadline, reminders, booking chat, support routing, analytics and RBAC rules are tracked in `docs/BOOKING_LIFECYCLE.md`.

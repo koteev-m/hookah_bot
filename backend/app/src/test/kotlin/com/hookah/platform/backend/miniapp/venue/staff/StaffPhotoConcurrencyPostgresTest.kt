@@ -22,7 +22,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class StaffPhotoConcurrencyPostgresTest {
-    @Test fun `cleanup waiting on finalization commit rechecks predicate and preserves candidate`() =
+    @Test fun `cleanup waiting on finalization commit rechecks predicate and preserves current`() =
         runBlocking<Unit> {
             photoTestDataSource(true).use { ds ->
                 val f = PhotoFixture(ds)
@@ -87,8 +87,8 @@ class StaffPhotoConcurrencyPostgresTest {
                     }
                 }
                 val snapshot = repo.snapshot(f.venue, f.display, 101)
-                assertEquals(reservation.photo.id, snapshot.candidate?.id)
-                assertEquals("PENDING", snapshot.candidate?.state)
+                assertEquals(reservation.photo.id, snapshot.current?.id)
+                assertEquals("APPROVED", snapshot.current?.state)
                 assertTrue(f.storage.exists(reservation.photo.key))
             }
         }

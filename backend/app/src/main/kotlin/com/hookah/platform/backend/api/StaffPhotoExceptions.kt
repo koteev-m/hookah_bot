@@ -14,6 +14,14 @@ class StaffPhotoConflictException : ApiException(
     message = "Состояние фотографии изменилось. Обновите карточку перед новым действием.",
 )
 
+class StaffPhotoActionRetiredException : ApiException(
+    code = "STAFF_PHOTO_ACTION_RETIRED",
+    httpStatus = HttpStatusCode.Gone,
+    message =
+        "Обновите Mini App. Фото становится текущим после загрузки владельцем или менеджером; " +
+            "отдельное согласие и публикация больше не используются.",
+)
+
 class StaffPhotoInvalidException(message: String = "Не удалось прочитать фото. Выберите JPEG или PNG.") : ApiException(
     code = "STAFF_PHOTO_INVALID",
     httpStatus = HttpStatusCode.BadRequest,

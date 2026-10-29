@@ -203,7 +203,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Staff | `booking.view`, arrival/no-show where allowed | Own venue bookings | Current STAFF booking split. Confirm/cancel/change/message/settings and `BOOKING_CHAT` denied. |
 | Staff | `menu.view`, `table.view`, `menu_availability.manage` | Own venue operational availability | Current docs say item/option stop-list parity is aligned. Target menu policy is `staff_stoplist_enabled` or equivalent before Staff can change availability; see `docs/MENU_OPTIONS_STOPLIST.md`. |
 | Staff | `MENU_SHIFT_CHECK` denied | All venue scopes | Current Phase 1 rule. Entry is hidden and direct API is denied; existing individual item/option availability permission is unchanged. |
-| Staff | `staff_profile.edit_own_draft` | Own linked profile only | Current Phase 1 where policy allows. Staff may edit own draft fields only, cannot self-publish or enable guest visibility. Photo upload remains future. |
+| Staff | `staff_profile.edit_own_draft` | Own linked profile only | Current Phase 1 where policy allows. Staff may edit own bio/tags only, cannot self-publish or enable guest visibility. Local direct-photo management is OWNER/MANAGER only; STAFF cannot mutate photos or legacy photoRef. |
 | Staff | `STAFF_SCHEDULE_VIEW_OWN` | Own linked profiles in one venue plus safe overlapping colleagues | Current Schedule Phase 1 runtime while the optional module is enabled. The colleague projection may include safe `staffProfileId` plus display/schedule fields; no full roster/calendar, mutation, linked user/account ids, Telegram data, actor metadata or non-overlapping shifts. |
 | Staff | `support_ticket.none`, `venue_chat.none`, `feedback.none`, `venue_preview.none`, `billing.none`, `platform.none`, `settings.none` | All scopes | Current product rule. Direct API must return 403/denial even if UI hides nav. |
 | Staff | `promotion.manage.none`, `promotion.calculate.none` | All scopes | Phase 1/2 rule. Staff may see persisted order facts but does not configure or calculate promotions. |
@@ -217,7 +217,7 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Venue Manager | `feedback.view_own_venue`, `feedback.follow_up_low` | Own venue only | Current MVP. Read-only aggregate/list; rating `1..3` follow-up opens exact `VENUE_CHAT`. Public review link edit denied. |
 | Venue Manager | `promotion.manage` | Own venue only | Current for informational Phase 1 and the Happy Hours percentage schedule/target/reward/status slice through server-validated routes. |
 | Venue Manager | `STAFF_ACCESS_VIEW`, `STAFF_INVITE_CREATE_STAFF`, `STAFF_INVITE_REVOKE_STAFF` | Own venue | Lists current active Staff through the safe identity/link-state projection and pending Staff invites without recipient identity; creates/revokes Staff only, including previously unknown Telegram recipients without manifest edits. Owner/Manager/Admin identities are not returned as link targets. |
-| Venue Manager | `STAFF_PROFILE_MANAGE_STAFF`, `STAFF_PROFILE_PUBLISH_STAFF` | Own venue | Creates/opens and manages display-only/active-Staff-linked cards. One active member has at most one active linked card. Duplicate state is read-only and offers no repair/open/edit/link/unlink authority. Owner/Manager/missing/foreign linkage is protected, `linkedUserId` is redacted and `canManage=false`; duplicate repair is Owner-only. |
+| Venue Manager | `STAFF_PROFILE_MANAGE_STAFF`, `STAFF_PROFILE_PUBLISH_STAFF` | Own venue | Creates/opens and manages display-only/active-Staff-linked cards. One active member has at most one active linked card. Duplicate state is read-only and offers no repair/open/edit/link/unlink authority. Owner/Manager/missing/foreign linkage is protected, `linkedUserId` is redacted and `canManage=false`; duplicate repair is Owner-only. Photos have the separate direct-management exception below. |
 | Venue Manager | `staff_shift.manage_today` | Own venue | Current conservative Phase 1 in source `MANUAL`. Source `SCHEDULE` rejects direct manual Today mutation with a typed safe conflict. Manager does not approve public profiles or future tip methods by default. |
 | Venue Manager | `STAFF_SCHEDULE_VIEW`, `STAFF_SCHEDULE_MANAGE` | Own venue only | Current Schedule Phase 1 runtime. Same bounded future-shift create/update/cancel authority as Owner; distinct from current Today Shift policy. |
 | Venue Manager | `STAFF_MODULE_SETTINGS_MANAGE` | Own venue only | Current Slice B runtime. Narrow full-object Team/Schedule settings authority with CAS and safe transaction-bound audit; it does not grant broad `VENUE_SETTINGS`. Tenant/RBAC denial happens before module-state lookup. |
@@ -291,6 +291,16 @@ These actions require server-side authorization and should require confirmation,
 | Staff profile created/updated/published/hidden | Transaction-bound `STAFF_PROFILE_*`; target membership and one-active-link check share the transaction. Audit contains safe venue/profile id, linkage/target-role class, changed field names and old/new visibility/linkage only. Denial/duplicate/no-op/rollback has no success audit or Telegram identity. |
 | Staff Schedule shift created/updated/canceled/restored | Owner/Manager own venue only; update preview and cancel confirmation; active cancel has stronger warning; optimistic stale rejection; `STAFF_SHIFT_CREATED/UPDATED/CANCELED/RESTORED` audit is atomic with safe old/new interval/lifecycle/timezone fields and no private linkage/raw request. |
 | Staff module settings updated | Owner/Manager own venue only through `STAFF_MODULE_SETTINGS_MANAGE`; full-object CAS and `STAFF_MODULE_SETTINGS_UPDATED` audit are atomic. No-op, stale, denial, audit failure or rollback writes no success audit; payload contains only safe old/new setting values and changed field names. |
+
+Staff photos (`HT-UX08-STAFF-PHOTO-DIRECT-MANAGEMENT-01`, local implementation): OWNER and
+MANAGER have equal own-venue upload/replace/delete rights, even when the profile is protected and
+its general `canManage=false`. This does not grant protected account, role, linkage, finance or
+card-publication access. Server photo transactions check membership and lock venue/profile again
+at upload finalization. STAFF has only own preview; all photo mutations, including legacy
+self-edit of `photoRef`, are forbidden. Other-venue actors are forbidden. Retired consent/publish/
+revoke actions return 410 to authorized management and 403 to STAFF/outsiders, without changes.
+No new consent is recorded; legacy candidates never activate automatically. Current-photo
+visibility still uses the existing Guest/MANUAL/SCHEDULE resolver. See [media contract](MEDIA_STORAGE_UPLOAD.md).
 
 ### STAFF ROLE / REMOVAL AUDIT target-identity contract
 

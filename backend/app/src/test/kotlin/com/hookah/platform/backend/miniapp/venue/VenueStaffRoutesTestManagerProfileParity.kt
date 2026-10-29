@@ -552,7 +552,6 @@ class VenueStaffRoutesTestManagerProfileParity {
                     staffProfile.id,
                     staffToken,
                     StaffProfileUpdateRequest(
-                        photoRef = "staff-private-photo-must-not-leak",
                         bio = "staff private bio must not leak",
                         tags = listOf("staff-private-tag"),
                     ),
@@ -572,6 +571,13 @@ class VenueStaffRoutesTestManagerProfileParity {
 
             val forbiddenStaffResponses =
                 listOf(
+                    patchProfile(
+                        client,
+                        venueId,
+                        staffProfile.id,
+                        staffToken,
+                        StaffProfileUpdateRequest(photoRef = "staff-private-photo-must-not-leak"),
+                    ),
                     patchProfile(
                         client,
                         venueId,
