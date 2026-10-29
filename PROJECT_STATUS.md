@@ -1,5 +1,34 @@
 # Project Status
 
+## HT-UX08-STAFF-UI-CONSENT-FIX-01 — local verification complete, acceptance open (2026-10-29)
+
+**LOCAL_VERIFIED / LIVE_CAUSE_NOT_PROVEN / UX08_ACCEPTANCE_OPEN**.
+Identity PASS: project `Hookah_Tootah`, primary root/common/index, origin
+`github.com/koteev-m/hookah_bot`. Branch `codex/ht-ux08-r2-ht70-config`, starting/current HEAD
+`6951f468a9f86cfb246d9e1e32593ba0c4d6cec2`; expected HEAD/base/branch/parent NOT_SUPPLIED.
+User reports staging release `c805d4d0af63b0c4135eb895741ae2559fe47afb`, PostgreSQL V127 and
+technical deploy/R2 smoke PASS; no live verification performed in this task.
+
+Local UI separates Accounts/Team, collapses profiles, loads private photos only when opened,
+automatically uploads one selected JPEG/PNG privately, retains exact-key/revision recovery,
+and exposes Manager own photo consent through existing rights. Open panels refresh on app return;
+Back from own profile returns to its entry section. No backend runtime, storage or migration change.
+Authenticated PostgreSQL Owner→Manager→Owner regression proves exact-photo SELF consent persistence,
+fresh revision and separate publication; it does not prove the reported live incident cause.
+
+Validation: photo48/48 + affected backend189/189 PASS (real PostgreSQL, zero skips/errors/failures),
+compileKotlin/ktlint PASS, TypeScript/build PASS, focused78/78 then final navigation subset20/20,
+final full Playwright450/450 PASS. Synthetic mobile390×844/390×568/desktop screenshots inspected.
+Independent review found two P2s (repeated private reads and stale picker pending state), both fixed;
+final review has no remaining actionable P0/P1/P2. Existing Vite large-chunk warning remains.
+
+Evidence/queries/changed files: [local report](docs/UX08_STAFF_UI_CONSENT_FIX.md),
+`/private/tmp/HT-UX08-STAFF-UI-CONSENT-FIX-01/`, `.tmp-checks/ht-ux08-photos/screenshots/`.
+No unfinished operations. Authorization local code/tests/docs only. No commit/stage/push/PR/merge,
+SSH/deploy/live writes; scripts/dev/, SQL helpers, stash/archive refs not touched. Staging/iPhone,
+hosted CI and exact live account/profile/photo correspondence remain unverified. Next: review diff;
+separately authorize staging/iPhone acceptance or the report's minimal read-only live diagnosis.
+
 ## HT-UX08-CI-PLAYWRIGHT-STABILITY-01 — bounded CI race fixes (2026-10-28)
 
 Identity PASS at the primary Hookah root/common/index, origin `github.com/koteev-m/hookah_bot`.

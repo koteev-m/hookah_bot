@@ -83,7 +83,7 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
     else { uncertain = true; render(); showError(result.error.code, result.error.message) }
   }
   const upload = async () => {
-    if (!state || !selected || busy || !state.enabled || uncertain || state.uploading) return
+    if (disposed || !state || !selected || busy || !state.enabled || uncertain || state.uploading || !state.canManage) return
     requestId ??= crypto.randomUUID()
     readAbort?.abort(); readAbort = null
     busy = true; render(); status.textContent = 'Загружаем фото. Публикация выполняется отдельно.'
@@ -97,7 +97,7 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
     if (result.ok) { state = result.data; clearSelection(); uncertain = false; render(); status.textContent = 'Фото загружено приватно. Для показа нужны согласие и отдельное разрешение.' }
     else {
       uncertain = true
-      if (result.error.status > 0 && result.error.status < 500) requestId = null
+      if (result.error.status > 0 && result.error.status < 500) clearSelection()
       render(); showError(result.error.code, result.error.message)
     }
   }
@@ -108,8 +108,8 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
     if (selected && selectedUrl) {
       const image = el('img', { className: 'staff-photo-image' }) as HTMLImageElement
       image.src = selectedUrl; image.alt = 'Предпросмотр выбранного фото'
-      append(body, image, el('p', { text: 'Выбранное фото ещё не загружено и не опубликовано.' }))
-      actions.appendChild(button('Отменить выбор', () => { clearSelection(); render() }))
+      append(body, image, el('p', { text: busy ? 'Фото загружается приватно. Дождитесь результата.' : 'Результат загрузки не подтверждён. Проверьте состояние перед повтором.' }))
+      if (!busy) actions.appendChild(button('Отменить выбор', () => { clearSelection(); render(); status.textContent = 'Локальный выбор отменён. Это не удаляет уже загруженное фото; проверьте состояние.' }))
     }
     if (!state) { actions.appendChild(button('Проверить состояние фото', () => void refresh())); return }
     const photos = [state.current, state.candidate].filter((item): item is StaffPhoto => !!item)
@@ -126,10 +126,10 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
         consentButton = button(state.isSelf ? 'Дать согласие на показ' : 'Зафиксировать согласие', () => void mutation('consent', photo), true)
         card.appendChild(consentButton)
       }
-      void loadImage(photo, preview, renderAbort!.signal, () => { if (consentButton) consentButton.disabled = busy || uncertain })
+      void loadImage(photo, preview, renderAbort!.signal, () => { if (consentButton) consentButton.disabled = busy || uncertain || !!selected })
       if (state?.canManage) {
-        if (photo.state !== 'APPROVED' && photo.consent !== 'NONE') card.appendChild(button('Разрешить показ фото', () => void mutation('publish', photo), busy || uncertain))
-        if (photo.state === 'APPROVED') card.appendChild(button('Скрыть фото', () => void mutation('hide', photo), busy || uncertain))
+        if (photo.state !== 'APPROVED' && photo.consent !== 'NONE') card.appendChild(button('Разрешить показ фото', () => void mutation('publish', photo), busy || uncertain || !!selected))
+        if (photo.state === 'APPROVED') card.appendChild(button('Скрыть фото', () => void mutation('hide', photo), busy || uncertain || !!selected))
       }
       body.appendChild(card)
     })
@@ -142,27 +142,27 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
         const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/jpeg,image/png'; input.hidden = true
         input.setAttribute('aria-label', 'Выбрать фотографию сотрудника')
         input.addEventListener('change', () => {
-          const file = input.files?.[0]; if (!file) return
+          const file = input.files?.[0]; if (disposed || !file || busy || selected || uncertain || !state?.enabled || !state.canManage || state.uploading) return
           if (file.size > 5 * 1024 * 1024) { status.textContent = 'Выберите фото не больше 5 МБ.'; return }
-          if (file.type && !['image/jpeg', 'image/png'].includes(file.type)) { status.textContent = 'Поддерживаются JPEG и PNG. HEIC/HEIF и WebP экспортируйте в JPEG.'; return }
-          clearSelection(); selected = file; requestRevision = state!.revision; selectedUrl = URL.createObjectURL(file); uncertain = false; render()
+          if (!['image/jpeg', 'image/png'].includes(file.type)) { status.textContent = 'Поддерживаются JPEG и PNG. HEIC/HEIF и WebP экспортируйте в JPEG.'; return }
+          clearSelection(); selected = file; requestRevision = state!.revision; selectedUrl = URL.createObjectURL(file); uncertain = false; void upload()
         })
-        append(actions, input, button(photos.length ? 'Заменить фото' : 'Добавить фото', () => input.click(), busy || state.uploading))
-        if (selected && selectedUrl) {
-          actions.appendChild(button('Загрузить', () => void upload(), busy || uncertain || state.uploading))
+        if (!selected) append(actions, input, button(photos.length ? 'Заменить фото' : 'Добавить фото', () => input.click(), busy || uncertain || !!selected || state.uploading))
+        if (selected && selectedUrl && !busy) {
+          actions.appendChild(button('Повторить загрузку безопасно', () => void upload(), busy || uncertain || state.uploading))
         }
         body.appendChild(el('p', { className: 'venue-order-sub', text: 'JPEG или PNG, до 5 МБ и 4096 px по стороне. HEIC/HEIF и WebP пока не поддерживаются.' }))
       }
-      if (photos.length || state.uploading) actions.appendChild(button('Удалить фото', () => void mutation('delete'), busy || uncertain))
+      if (photos.length || state.uploading) actions.appendChild(button('Удалить фото', () => void mutation('delete'), busy || uncertain || !!selected))
     } else body.appendChild(el('p', { className: 'venue-order-sub', text: state.isSelf ? 'Загрузкой и публикацией управляет владелец. Вы управляете только своим согласием.' : 'Фото этой карточки доступно только владельцу.' }))
-    if (state.isSelf && (photos.length || state.uploading)) actions.appendChild(button('Отозвать согласие и удалить фото', () => void mutation('revoke'), busy || uncertain))
+    if (state.isSelf && (photos.length || state.uploading)) actions.appendChild(button('Отозвать согласие и удалить фото', () => void mutation('revoke'), busy || uncertain || !!selected))
     actions.appendChild(button('Проверить состояние фото', () => void refresh()))
   }
   const refresh = async () => {
     if (disposed || busy) return
     readAbort?.abort(); const controller = new AbortController(); readAbort = controller
     status.textContent = 'Проверяем состояние фото…'
-    const result = await requestApi<StaffPhotoState>(backendUrl, path, { signal: controller.signal }, deps)
+    const result = await requestApi<StaffPhotoState>(backendUrl, path, { signal: controller.signal, cache: 'no-store' }, deps)
     if (disposed || readAbort !== controller) return
     readAbort = null
     if (result.ok) { state = result.data; uncertain = false; if (selected && !requestId && requestRevision !== state.revision) {
@@ -172,14 +172,19 @@ export function createStaffPhotoPanel(backendUrl: string, isDebug: boolean, venu
   }
   const canLeave = () => {
     if (busy) { status.textContent = 'Дождитесь результата операции с фото.'; return false }
-    if (selected) { status.textContent = 'Сначала загрузите фотографию или нажмите «Отменить выбор».'; return false }
+    if (selected) { status.textContent = 'Проверьте результат загрузки или нажмите «Отменить выбор».'; return false }
     return true
   }
   const beforeUnload = (event: BeforeUnloadEvent) => { if (busy || selected) { event.preventDefault(); event.returnValue = '' } }
+  const onReturn = () => {
+    if (document.visibilityState === 'visible' && element.isConnected && !element.closest('[hidden]')) void refresh()
+  }
+  window.addEventListener('focus', onReturn)
+  document.addEventListener('visibilitychange', onReturn)
   window.addEventListener('beforeunload', beforeUnload)
   if (state) render(); else { render(); void refresh() }
   return { element, refresh, canLeave, hasPending: () => busy || !!selected, dispose: () => {
-    disposed = true; readAbort?.abort(); writeAbort?.abort(); renderAbort?.abort(); revokeImages(); clearSelection(); window.removeEventListener('beforeunload', beforeUnload)
+    disposed = true; readAbort?.abort(); writeAbort?.abort(); renderAbort?.abort(); revokeImages(); clearSelection(); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('focus', onReturn); document.removeEventListener('visibilitychange', onReturn)
   } }
 }
 
@@ -189,7 +194,7 @@ export function renderOwnStaffPhotoScreen(root: HTMLElement, backendUrl: string,
   root.replaceChildren(el('h2', { text: 'Моя карточка' }))
   const body = el('div', { className: 'staff-own-photos' }); root.appendChild(body)
   body.textContent = 'Загрузка…'; setNavigation({ guard: () => panels.every((panel) => panel.canLeave()), hasPending: () => panels.some((panel) => panel.hasPending()), refresh: () => panels.forEach((panel) => void panel.refresh()) })
-  void requestApi<Array<{ profileId: number; displayName: string; photo: StaffPhotoState }>>(backendUrl, `/api/venue/${venueId}/staff/photos/me`, { signal: controller.signal }, { isDebug, getAccessToken, clearSession }).then((result) => {
+  void requestApi<Array<{ profileId: number; displayName: string; photo: StaffPhotoState }>>(backendUrl, `/api/venue/${venueId}/staff/photos/me`, { signal: controller.signal, cache: 'no-store' }, { isDebug, getAccessToken, clearSession }).then((result) => {
     if (disposed) return
     body.replaceChildren()
     if (!result.ok) { body.textContent = 'Не удалось загрузить собственную карточку. Откройте раздел ещё раз.'; return }

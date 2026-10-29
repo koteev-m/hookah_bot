@@ -51,6 +51,9 @@ export type VenueStaffOptions = {
 }
 
 type StaffRefs = {
+  accessCard: HTMLElement
+  accessTab: HTMLButtonElement
+  profilesTab: HTMLButtonElement
   status: HTMLParagraphElement
   error: HTMLDivElement
   errorTitle: HTMLHeadingElement
@@ -127,10 +130,10 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   const wrapper = el('div', { className: 'venue-staff' })
   const header = el('div', { className: 'card' })
   const title = el('h2', { text: 'Персонал' })
-  const accessTitle = el('h3', { text: 'Доступ сотрудников' })
+  const accessTitle = el('h3', { text: 'Аккаунты и доступ' })
   const accessDescription = el('p', {
     className: 'venue-order-sub',
-    text: 'Управляйте текущими доступами и приглашениями в это заведение.'
+    text: 'Telegram-аккаунты с доступом в кабинет и приглашения в это заведение.'
   })
   const inviteRow = el('div', { className: 'venue-form-row' })
   const inviteRole = document.createElement('select')
@@ -163,19 +166,15 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
 
   append(
     header,
-    title,
     accessTitle,
     accessDescription,
-    ...(access.role === 'MANAGER' ? [el('p', { className: 'venue-staff-current-access', text: 'Это вы · Менеджер' })] : []),
+    el('p', { className: 'venue-staff-current-access', text: `Ваша роль · ${formatStaffRole(access.role)}` }),
     inviteRow,
     el('p', { className: 'field-help', text: 'Доступ выдаётся после принятия. Получатель до принятия неизвестен; Telegram не сообщает о доставке ссылки.' }),
-    refreshButton,
     pendingInviteTitle,
     pendingInviteStatus,
     pendingInviteList,
-    status,
-    error,
-    el('h3', { text: 'Текущие доступы' }),
+    el('h3', { text: 'Аккаунты с доступом' }),
     list
   )
 
@@ -288,10 +287,21 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   )
   append(profileCard, profileTitle, profileDisabledPanel, profileEnabledContent)
 
-  append(wrapper, header, profileCard)
+  const navigation = el('nav', { className: 'venue-staff-tabs' })
+  navigation.setAttribute('aria-label', 'Разделы персонала')
+  const accessTab = el('button', { className: 'button-small', text: 'Аккаунты и доступ' }) as HTMLButtonElement
+  const profilesTab = el('button', { className: 'button-small', text: 'Карточки команды' }) as HTMLButtonElement
+  append(navigation, accessTab, profilesTab)
+  if (access.role === 'MANAGER' && access.permissions.includes('STAFF_PROFILE_EDIT_OWN')) {
+    const own = el('a', { className: 'venue-owner-action', text: 'Моя карточка' }) as HTMLAnchorElement
+    own.href = '#/my-profile'
+    navigation.appendChild(own)
+  }
+  append(wrapper, title, navigation, refreshButton, status, error, header, profileCard)
   root.replaceChildren(wrapper)
 
   return {
+    accessCard: header, accessTab, profilesTab,
     status,
     error,
     errorTitle,
@@ -711,18 +721,9 @@ function renderProfileRow(
   const row = el('div', { className: 'venue-staff-row venue-profile-row' })
   row.dataset.staffProfileId = String(profile.id)
   const info = el('div', { className: 'venue-staff-info' })
-  append(
-    info,
-    el('strong', { text: profile.displayName }),
-    el('p', {
-      className: 'venue-order-sub',
-      text: formatProfileRole(profile)
-    })
-  )
   const manualGuestVisible =
     profile.todayShift?.isGuestVisible === true &&
     (profile.todayShift.status === 'active' || profile.todayShift.status === 'scheduled')
-  info.appendChild(el('p', { className: 'venue-profile-visibility', text: formatProfileVisibility(profile, moduleSettings, guestVisibility) }))
   if (moduleSettings?.todayStaffSource === 'SCHEDULE') {
     const scheduleDetails = document.createElement('details')
     scheduleDetails.className = 'venue-profile-schedule-details'
@@ -872,7 +873,7 @@ function renderProfileRow(
   if (canPublishProfile) {
     const visibilityButton = el('button', {
       className: 'button-small button-secondary',
-      text: profile.isGuestVisible && profile.publishedAt && !profile.disabledAt ? 'Скрыть' : 'Опубликовать'
+      text: profile.isGuestVisible && profile.publishedAt && !profile.disabledAt ? 'Скрыть карточку' : 'Опубликовать'
     }) as HTMLButtonElement
     visibilityButton.addEventListener('click', () => {
       if (profile.isGuestVisible && profile.publishedAt && !profile.disabledAt) {
@@ -937,8 +938,25 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   const refs = buildStaffDom(root, access)
   const deps = buildApiDeps(isDebug)
 
+  let section: 'accounts' | 'profiles' = 'accounts'
+  const expandedProfiles = new Set<number>()
   const photoPanels = new Map<number, { identity: string; panel: StaffPhotoPanel }>()
   options.setPhotoNavigation?.({ guard: () => [...photoPanels.values()].every(({ panel }) => panel.canLeave()), hasPending: () => [...photoPanels.values()].some(({ panel }) => panel.hasPending()), refresh: () => { void reloadMemberProfiles() } })
+  const showSection = (next: 'accounts' | 'profiles') => {
+    if (next !== section && ![...photoPanels.values()].every(({ panel }) => panel.canLeave())) return false
+    section = next
+    refs.accessCard.hidden = section !== 'accounts'
+    refs.profileCard.hidden = section !== 'profiles'
+    refs.accessTab.setAttribute('aria-pressed', String(section === 'accounts'))
+    refs.profilesTab.setAttribute('aria-pressed', String(section === 'profiles'))
+    if (section === 'accounts') {
+      photoPanels.forEach(({ panel }) => panel.dispose()); photoPanels.clear()
+    }
+    return true
+  }
+  showSection('accounts')
+  refs.accessTab.addEventListener('click', () => { if (showSection('accounts')) renderProfiles(currentProfiles) })
+  refs.profilesTab.addEventListener('click', () => { if (showSection('profiles')) renderProfiles(currentProfiles) })
   let disposed = false
   let loadAbort: AbortController | null = null
   let profileLoadAbort: AbortController | null = null
@@ -1381,6 +1399,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
   }
 
   const renderProfiles = (profiles: VenueStaffProfileDto[]) => {
+    if (editingProfileId != null) expandedProfiles.add(editingProfileId)
     for (const [id, entry] of photoPanels) {
       if (!profiles.some((profile) => profile.id === id)) { entry.panel.dispose(); photoPanels.delete(id) }
     }
@@ -1423,16 +1442,40 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
           }
         )
       if (!profile.canManage && !profile.isSelf) { photoPanels.get(profile.id)?.panel.dispose(); photoPanels.delete(profile.id) }
-      if (profile.canManage || profile.isSelf) {
+      const expanded = expandedProfiles.has(profile.id) || editingProfileId === profile.id
+      if (section === 'profiles' && expanded && (profile.canManage || profile.isSelf)) {
         const identity = JSON.stringify([profile.linkedUserId, profile.linkageClass, profile.canManage, profile.isSelf])
         let entry = photoPanels.get(profile.id)
         if (entry && entry.identity !== identity) { entry.panel.dispose(); photoPanels.delete(profile.id); entry = undefined }
         if (!entry) { entry = { identity, panel: createStaffPhotoPanel(backendUrl, isDebug, venueId, profile.id, undefined, options.onPhotoChange) }; photoPanels.set(profile.id, entry) }
-        else void entry.panel.refresh()
         row.querySelector('.venue-staff-info')?.appendChild(entry.panel.element)
-      } else {
+      } else if (!profile.canManage && !profile.isSelf) {
         row.querySelector('.venue-staff-info')?.appendChild(el('p', { className: 'venue-order-sub', text: 'Фотографией защищённой карточки управляет владелец.' }))
       }
+      const details = el('div', { className: 'venue-profile-details' })
+      details.id = `staff-profile-details-${profile.id}`
+      details.hidden = !expanded
+      details.append(...Array.from(row.childNodes))
+      const summary = el('button', { className: 'venue-profile-summary button-secondary' }) as HTMLButtonElement
+      summary.setAttribute('aria-expanded', String(expanded))
+      summary.setAttribute('aria-controls', details.id)
+      const avatar = el('span', { className: 'venue-profile-avatar', text: profile.displayName.trim().slice(0, 1).toUpperCase() || '•' })
+      avatar.setAttribute('aria-hidden', 'true')
+      const label = el('span', { className: 'venue-profile-summary-label' })
+      append(label, el('strong', { text: profile.displayName }), el('span', { text: formatProfileRole(profile) }),
+        el('span', { className: 'venue-profile-visibility', text: formatProfileVisibility(profile, moduleSettings, guestVisibility) }))
+      append(summary, avatar, label)
+      summary.addEventListener('click', () => {
+        if (expanded) {
+          if (!photoPanels.get(profile.id)?.panel.canLeave() && photoPanels.has(profile.id)) return
+          photoPanels.get(profile.id)?.panel.dispose(); photoPanels.delete(profile.id)
+          expandedProfiles.delete(profile.id)
+          if (editingProfileId === profile.id) editingProfileId = null
+        } else expandedProfiles.add(profile.id)
+        renderProfiles(currentProfiles)
+        refs.profileList.querySelector<HTMLButtonElement>(`[data-staff-profile-id="${profile.id}"] .venue-profile-summary`)?.focus({ preventScroll: true })
+      })
+      append(row, summary, details)
       refs.profileList.appendChild(row)
     })
     syncProfilePending()
@@ -1451,6 +1494,7 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
       return
     }
     if (creatingProfile) return
+    if (!showSection('profiles')) return
     keepCreateDraft()
     clearCreateFormFields()
     populateLinkedUserSelect(
@@ -1485,6 +1529,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     keepCreateDraft()
     isCreateFormOpen = false
     syncCreateFormVisibility()
+    if (!showSection('profiles')) return
+    expandedProfiles.add(profileId)
     editingProfileId = profileId
     pendingOpenProfileId = profileId
     renderProfiles(currentProfiles)
@@ -1546,8 +1592,8 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
 
   const updateGuestVisibilityLabels = () => {
     currentProfiles.forEach((profile) => {
-      const label = refs.profileList.querySelector<HTMLElement>(`[data-staff-profile-id="${profile.id}"] .venue-profile-visibility`)
-      if (label) label.textContent = formatProfileVisibility(profile, moduleSettings, guestVisibility)
+      const labels = refs.profileList.querySelectorAll<HTMLElement>(`[data-staff-profile-id="${profile.id}"] .venue-profile-visibility`)
+      labels.forEach((label) => { label.textContent = formatProfileVisibility(profile, moduleSettings, guestVisibility) })
     })
   }
 
@@ -1610,7 +1656,11 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
     currentProfiles = result.data.profiles
     profilesReadReady = true
     void loadGuestVisibility()
+    const existingPanels = new Map(photoPanels)
     renderProfiles(result.data.profiles)
+    for (const [id, entry] of photoPanels) {
+      if (existingPanels.get(id) === entry) void entry.panel.refresh()
+    }
     setProfileStatus(`Обновлено: ${new Date().toLocaleTimeString()}`)
   }
 

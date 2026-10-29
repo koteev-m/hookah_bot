@@ -3722,3 +3722,14 @@ input[type="number"] {
 .staff-own-photos { display: grid; gap: 16px; }
 .guest-today-staff-avatar { overflow: hidden; }
 .guest-today-staff-avatar img { width: 100%; height: 100%; object-fit: cover; }
+
+/* Staff directory: one section at a time; private media is mounted only on expansion. */
+.venue-staff-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.venue-staff-tabs [aria-pressed="true"] { outline: 2px solid currentColor; outline-offset: 2px; }
+.venue-profile-row { display: block; }
+.venue-profile-summary { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 10px; }
+.venue-profile-avatar { color: #fff; display: grid; place-items: center; width: 40px; height: 40px; flex: 0 0 40px; border-radius: 50%; background: var(--surface-secondary, #343434); }
+.venue-profile-summary-label { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.venue-profile-summary-label > span { font-size: 12px; font-weight: normal; }
+.venue-profile-details { padding-top: 12px; }
+.venue-profile-details[hidden] { display: none; }

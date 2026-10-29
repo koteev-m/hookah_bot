@@ -1169,9 +1169,24 @@ are in `docs/MEDIA_STORAGE_UPLOAD.md` → “UX08 Staff Photos — Local R2 Impl
 
 OWNER and authorized MANAGER upload only within existing profile RBAC. Linked employees consent
 only to their own exact image; OWNER attests to offline consent only for display-only cards.
-STAFF “Моя карточка” exposes own preview/consent/revoke, including when the team module is disabled;
+STAFF and MANAGER “Моя карточка” expose own preview/consent/revoke, including when the team module is disabled;
 it gives no profile administration or publication permission. Candidate upload never publishes.
 A new image requires new consent. Relink, removal or role changes invalidate the affected photos.
+
+Local follow-up `HT-UX08-STAFF-UI-CONSENT-FIX-01` separates “Аккаунты и доступ” from
+“Карточки команды”. Accounts remain the initial section; each team card starts collapsed with
+an initials placeholder, name, role and visibility. Private photo state/bytes load on expansion;
+opening another card does not refresh existing images. Closing a card disposes its private previews.
+Pending/uncertain uploads block collapse or section changes until completion or explicit recovery.
+
+Selecting supported JPEG/PNG starts one private upload immediately. There is no manual initial
+“Загрузить” step. Unknown results require “Проверить состояние фото” and, if needed, explicit
+“Повторить загрузку безопасно” with the same file/idempotency key/original revision. No automatic
+retry, revision rebasing or publication. Definite rejection clears the file; a fresh state is
+required before selecting again. “Скрыть карточку” and “Скрыть фото” remain separate actions.
+An open photo panel rechecks state without HTTP caching on app focus/visibility return; collapsed
+cards do not read private photos. This closes a stale-screen opportunity, but does not establish
+the cause of the reported staging incident. See [local diagnosis](UX08_STAFF_UI_CONSENT_FIX.md).
 
 Guest uses the existing authoritative MANUAL/SCHEDULE visibility and guarded photoUrl; raw
 photo_ref remains null and is never a delivery capability. Failed replacement retains the old

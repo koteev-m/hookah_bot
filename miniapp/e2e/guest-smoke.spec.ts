@@ -14172,7 +14172,7 @@ test('venue manager creates and revokes only staff invites', async ({ page }) =>
 
   const accessCard = page.locator('.venue-staff > .card').first()
   const roleSelect = accessCard.getByLabel('Роль приглашения')
-  await expect(accessCard.getByRole('heading', { name: 'Доступ сотрудников' })).toBeVisible()
+  await expect(accessCard.getByRole('heading', { name: 'Аккаунты и доступ' })).toBeVisible()
   await expect(accessCard.getByRole('button', { name: 'Создать приглашение' })).toBeVisible()
   await expect(roleSelect.getByRole('option')).toHaveCount(1)
   await expect(roleSelect.getByRole('option', { name: 'Сотрудник' })).toHaveText('Сотрудник')
@@ -14231,6 +14231,7 @@ test('venue manager manages staff and display cards while protected cards stay r
   await expect(accessCard).not.toContainText('444444444')
   await expect(accessCard).not.toContainText('555555555')
 
+  await openStaffCards(page)
   const cards = page.locator('.venue-public-staff')
   await expect(cards.getByRole('heading', { name: 'Карточки команды' })).toBeVisible()
   await expect(cards).toContainText('Карточками владельцев и других менеджеров управляет владелец.')
@@ -14266,6 +14267,7 @@ test('venue manager manages staff and display cards while protected cards stay r
   expect(api.getProfileCreateRequests()[0]).not.toHaveProperty('linkedUserId')
   expect(api.getProfileCreateFromMemberRequests()).toHaveLength(0)
 
+  await page.getByRole('button', { name: 'Аккаунты и доступ', exact: true }).click()
   await maximMember.getByRole('button', { name: 'Создать карточку' }).click()
   createForm = cards.locator('.venue-profile-form')
   await expect(createForm.getByLabel('Имя на карточке')).toHaveValue('Максим Катаев')
@@ -14293,6 +14295,7 @@ test('venue manager manages staff and display cards while protected cards stay r
   await expect(createdDraft).toContainText('Не видна гостям · карточка скрыта')
   await expect(createdDraft.getByLabel('Имя на карточке')).toHaveValue('Максим Катаев')
 
+  await page.getByRole('button', { name: 'Аккаунты и доступ', exact: true }).click()
   await svetlanaMember.getByRole('button', { name: 'Открыть карточку' }).click()
   let staffCard = cards.locator('.venue-profile-row').filter({ hasText: 'Светлана' })
   await expect(staffCard).toBeFocused()
@@ -14307,7 +14310,7 @@ test('venue manager manages staff and display cards while protected cards stay r
   staffCard = cards.locator('.venue-profile-row').filter({ hasText: 'Светлана Новая' })
   await staffCard.getByRole('button', { name: 'Опубликовать' }).click()
   await expect(staffCard.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · показ на сегодня выключен')
-  await staffCard.getByRole('button', { name: 'Скрыть' }).click()
+  await staffCard.getByRole('button', { name: 'Скрыть карточку' }).click()
   await expect(staffCard).toContainText('Не видна гостям · карточка скрыта')
 })
 
@@ -14324,6 +14327,7 @@ test('staff profile controls fail closed while the current directory loads or er
   await openVenueSection(page, 'Персонал')
 
   const staff = page.locator('.venue-staff')
+  await openStaffCards(page)
   const cards = staff.locator('.venue-public-staff')
   const displayOnly = cards.locator('.venue-profile-row').filter({ hasText: 'Карточка без доступа' })
   await expect(displayOnly).toBeVisible()
@@ -14446,9 +14450,10 @@ test('manager duplicate staff links stay read-only across reload refresh and ven
     expect(rawJson).not.toContain('111111111')
   }
   const assertDuplicateUiIsReadOnly = async () => {
+    await page.getByRole('button', { name: 'Аккаунты и доступ', exact: true }).click()
     const staff = page.locator('.venue-staff')
     const accessCard = staff.locator(':scope > .card').filter({
-      has: page.getByRole('heading', { name: 'Доступ сотрудников', exact: true })
+      has: page.getByRole('heading', { name: 'Аккаунты и доступ', exact: true })
     })
     const memberRow = accessCard.locator('.venue-staff-row').filter({
       has: page.getByText('Светлана Орлова', { exact: true })
@@ -14472,10 +14477,11 @@ test('manager duplicate staff links stay read-only across reload refresh and ven
     await expect(memberRow.getByRole('button')).toHaveCount(0)
     await expect(memberRow.locator('input, select, textarea')).toHaveCount(0)
 
+    await openStaffCards(page, [502, 506])
     for (const profileId of [502, 506]) {
       const profile = staff.locator(`.venue-profile-row[data-staff-profile-id="${profileId}"]`)
       await expect(profile).toBeVisible()
-      await expect(profile.getByRole('button')).toHaveCount(0)
+      await expect(profile.locator('.venue-profile-details').getByRole('button')).toHaveCount(0)
       await expect(profile.locator('input, select, textarea')).toHaveCount(0)
       await expect(profile.locator('option[value="222222222"]')).toHaveCount(0)
     }
@@ -14619,7 +14625,7 @@ test('owner repairs one concrete duplicate staff card with safe unlink only', as
   })
 
   const accessCard = page.locator('.venue-staff > .card').filter({
-    has: page.getByRole('heading', { name: 'Доступ сотрудников', exact: true })
+    has: page.getByRole('heading', { name: 'Аккаунты и доступ', exact: true })
   })
   const memberRow = accessCard.locator('.venue-staff-row').filter({
     has: page.getByText('Светлана Орлова', { exact: true })
@@ -14628,6 +14634,7 @@ test('owner repairs one concrete duplicate staff card with safe unlink only', as
     'К этому сотруднику привязано несколько карточек. Выберите основную и отвяжите остальные.'
   )
 
+  await openStaffCards(page)
   const cards = page.locator('.venue-public-staff')
   const primaryProfile = cards.locator('.venue-profile-row[data-staff-profile-id="502"]')
   const wrongProfile = cards.locator('.venue-profile-row[data-staff-profile-id="506"]')
@@ -14704,6 +14711,7 @@ test('owner repairs one concrete duplicate staff card with safe unlink only', as
   expect(reloadedWrongCard?.todayShift).toEqual(wrongCardShift)
   expect(reloadedPrimary).toMatchObject({ linkageClass: 'STAFF_LINKED', disabledAt: null })
   expect(reloadedWrongCard).toMatchObject({ linkageClass: 'DISPLAY_ONLY', disabledAt: null })
+  await openStaffCards(page, [502, 506])
   await expect(primaryProfile).toBeVisible()
   await expect(wrongProfile).toBeVisible()
   await expect(primaryProfile.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · карточка скрыта')
@@ -14740,6 +14748,7 @@ test('concurrent profile link conflict opens the winning safe profile without a 
 
   const accessCard = page.locator('.venue-staff > .card').first()
   let maximMember = accessCard.locator('.venue-staff-row').filter({ hasText: 'Максим Катаев' })
+  await page.getByRole('button', { name: 'Аккаунты и доступ', exact: true }).click()
   await maximMember.getByRole('button', { name: 'Создать карточку' }).click()
   const createForm = page.locator('.venue-public-staff .venue-profile-form')
   await createForm.getByLabel('Тип сотрудника').selectOption('waiter')
@@ -14750,11 +14759,12 @@ test('concurrent profile link conflict opens the winning safe profile without a 
   await expect(createForm).toBeHidden()
   maximMember = accessCard.locator('.venue-staff-row').filter({ hasText: 'Максим Катаев' })
   await expect(maximMember).toContainText('Привязан к карточке «Максим Катаев»')
-  await expect(maximMember.getByRole('button', { name: 'Открыть карточку' })).toBeVisible()
   const winningProfile = page.locator('.venue-profile-row[data-staff-profile-id="706"]')
   await expect(winningProfile).toBeFocused()
   await expect(winningProfile.getByLabel('Имя на карточке')).toHaveValue('Максим Катаев')
   await expect(page.locator('.venue-profile-row').filter({ hasText: 'Максим Катаев' })).toHaveCount(1)
+  await page.getByRole('button', { name: 'Аккаунты и доступ', exact: true }).click()
+  await expect(maximMember.getByRole('button', { name: 'Открыть карточку' })).toBeVisible()
 })
 
 test('venue switch clears staff invite and profile drafts', async ({ page }) => {
@@ -14823,13 +14833,14 @@ test('venue switch clears staff invite and profile drafts', async ({ page }) => 
   let staff = page.locator('.venue-staff')
   await staff.getByRole('button', { name: 'Создать приглашение' }).click()
   await expect(staff.locator('.venue-invite-result')).toBeVisible()
+  await openStaffCards(page, [])
   await staff.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
   await expect(staff.locator('.venue-profile-form')).toBeVisible()
   await expect(staff).toContainText('Максим Катаев')
 
   await page.locator('.venue-controls select.venue-select').selectOption('2')
   staff = page.locator('.venue-staff')
-  await expect(staff.getByRole('heading', { name: 'Доступ сотрудников' })).toBeVisible()
+  await expect(staff.getByRole('heading', { name: 'Аккаунты и доступ' })).toBeVisible()
   await expect(staff.locator('.venue-invite-result')).toBeHidden()
   await expect(staff.locator('.venue-profile-form')).toBeHidden()
   await expect(staff.locator('.venue-pending-invite-list')).toContainText('Действующих приглашений нет.')
@@ -14911,12 +14922,13 @@ test('staff module off keeps access and invites available and explains profile a
   await openVenueSection(page, 'Персонал')
 
   const accessCard = page.locator('.venue-staff > .card').first()
-  await expect(accessCard.getByRole('heading', { name: 'Доступ сотрудников' })).toBeVisible()
+  await expect(accessCard.getByRole('heading', { name: 'Аккаунты и доступ' })).toBeVisible()
   await expect(accessCard).toContainText('Светлана Орлова')
   await expect(accessCard).toContainText('Ссылка создана')
   await accessCard.getByRole('button', { name: 'Создать приглашение' }).click()
   await expect.poll(() => api.getStaffInvites()).toBe(1)
 
+  await openStaffCards(page, [])
   const profileCard = page.locator('.venue-public-staff')
   await expect(profileCard).toContainText('Карточки команды и график смен отключены.')
   await expect(profileCard).toContainText('Сохранённые данные не удалены')
@@ -14971,6 +14983,7 @@ test('manual Today publication is persisted and schedule source removes the manu
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page)
   let profileRow = page.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
   await expect(profileRow.locator('.venue-profile-visibility')).toHaveText('Не видна гостям · карточка скрыта')
   await expect(profileRow.getByText('По графику: не запланирован сегодня')).toHaveCount(0)
@@ -15028,6 +15041,7 @@ test('manual Today success copy does not claim public visibility when guest team
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page)
   const profileRow = page.locator('.venue-profile-row').filter({ hasText: 'Алексей' })
   await profileRow.getByRole('switch', { name: 'Выключено' }).click()
 
@@ -15048,6 +15062,7 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
 
+  await openStaffCards(page)
   const staffCards = page.locator('.venue-public-staff')
   const createForm = staffCards.locator('.venue-profile-form')
   await expect(staffCards.getByRole('heading', { name: 'Карточки команды' })).toBeVisible()
@@ -15117,6 +15132,7 @@ test('venue owner staff cards use human profile labels and hide raw technical fi
   expect(createRequest).not.toHaveProperty('photoRef')
 
   const profileRow = staffCards.locator('.venue-profile-row').filter({ hasText: 'Максим' })
+  await profileRow.locator('.venue-profile-summary').click()
   await expect(profileRow).not.toContainText('Другое')
   await expect(profileRow.getByPlaceholder('User ID')).toHaveCount(0)
   await expect(profileRow.getByPlaceholder('Фото ref')).toHaveCount(0)
@@ -24128,9 +24144,11 @@ test('UX05 card edits survive switching cards and a failed save followed by read
   })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page, [502])
   const row = page.locator('[data-staff-profile-id="502"]')
   await row.getByRole('button', { name: 'Редактировать' }).click()
   await row.getByLabel('Коротко о сотруднике').fill('  Новый черновик  ')
+  await page.getByRole('button', { name: 'Аккаунты и доступ', exact: true }).click()
   await page.locator('.venue-staff > .card').first().getByRole('button', { name: 'Открыть карточку' }).first().click()
   await row.getByRole('button', { name: 'Редактировать' }).click()
   await expect(row.getByLabel('Коротко о сотруднике')).toHaveValue('  Новый черновик  ')
@@ -24149,6 +24167,7 @@ test('UX05 manual card creation ignores duplicate requests', async ({ page }) =>
   })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page, [502])
   await page.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
   const form = page.locator('.venue-profile-form')
   await form.getByLabel('Имя на карточке').fill('Новая карточка')
@@ -24227,6 +24246,7 @@ test('UX05 card drafts collapse refresh and keyboard layout retain raw values wi
   const api = await mockVenueStaffChatApi(page, { role: 'OWNER' })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page, [502])
   const form = page.locator('.venue-profile-form')
   await page.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
   await form.getByLabel('Имя на карточке').fill('  Ручная карточка  ')
@@ -24301,6 +24321,7 @@ test('UX05 failed card save deduplicates requests and preserves only its own dra
   })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page, [502])
   const row = page.locator('[data-staff-profile-id="502"]')
   await row.getByRole('button', { name: 'Редактировать' }).click()
   await row.getByLabel('Коротко о сотруднике').fill('  exact raw value  ')
@@ -24424,10 +24445,12 @@ test('UX05 pending member card creation cannot replace an independent manual dra
   })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page, [502])
   await page.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
   const form = page.locator('.venue-profile-form')
   await form.getByLabel('Имя на карточке').fill('  Независимый черновик  ')
   await form.getByRole('button', { name: 'Свернуть' }).click()
+  await page.getByRole('button', { name: 'Аккаунты и доступ', exact: true }).click()
   await page.locator('[data-member-id="444444444"]').getByRole('button', { name: 'Создать карточку' }).click()
   await form.getByLabel('Тип сотрудника').selectOption('waiter')
   await form.getByRole('button', { name: 'Создать карточку' }).click()
@@ -24453,6 +24476,7 @@ test('UX05 delayed profile link conflict preserves an independent create form an
   })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page, [502])
   const row = page.locator('[data-staff-profile-id="502"]')
   await row.getByRole('button', { name: 'Редактировать' }).click()
   await row.getByLabel('Коротко о сотруднике').fill('  Исходный черновик  ')
@@ -24492,8 +24516,9 @@ for (const role of ['OWNER', 'MANAGER'] as const) {
     await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
     await openVenueSection(page, 'Персонал')
     if (role === 'MANAGER') {
-      await expect(page.locator('.venue-staff-current-access')).toHaveText('Это вы · Менеджер')
+      await expect(page.locator('.venue-staff-current-access')).toHaveText('Ваша роль · Менеджер')
     }
+    await openStaffCards(page, [503, 504, 505])
     const existingCard = page.locator('[data-staff-profile-id="503"]')
     await existingCard.getByRole('button', { name: 'Редактировать' }).click()
     const linkedUser = existingCard.getByLabel('Привязать к сотруднику')
@@ -24513,6 +24538,7 @@ for (const role of ['OWNER', 'MANAGER'] as const) {
     await expect.poll(() => api.getProfileUpdateRequests()).toEqual([
       expect.objectContaining({ linkedUserId: 777777777 })
     ])
+    await page.getByRole('button', { name: 'Аккаунты и доступ', exact: true }).click()
     const member = page.locator('[data-member-id="777777777"]')
     await expect(member.getByRole('button', { name: 'Открыть карточку', exact: true })).toBeVisible()
     await expect(member.getByRole('button', { name: 'Создать карточку', exact: true })).toHaveCount(0)
@@ -24523,8 +24549,8 @@ for (const role of ['OWNER', 'MANAGER'] as const) {
     expect(api.getProfileCreateFromMemberRequests()).toHaveLength(0)
     if (role === 'MANAGER') {
       await expect(linkedUser.locator('option[value="111111111"], option[value="333333333"]')).toHaveCount(0)
-      await expect(page.locator('[data-staff-profile-id="504"]').getByRole('button')).toHaveCount(0)
-      await expect(page.locator('[data-staff-profile-id="505"]').getByRole('button')).toHaveCount(0)
+      await expect(page.locator('[data-staff-profile-id="504"] .venue-profile-details').getByRole('button', { includeHidden: true })).toHaveCount(0)
+      await expect(page.locator('[data-staff-profile-id="505"] .venue-profile-details').getByRole('button', { includeHidden: true })).toHaveCount(0)
     }
   })
 }
@@ -24543,6 +24569,7 @@ test('UX06 MANUAL primary visibility follows saved guest projection without a sc
   })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page, [501])
   const row = page.locator('[data-staff-profile-id="501"]')
   await expect(row.locator('.venue-profile-visibility')).toHaveText('Видна гостям · включена вручную')
   await expect(row.getByText(/не запланирован сегодня/)).not.toBeVisible()
@@ -24576,6 +24603,7 @@ test('UX06 SCHEDULE visibility uses authoritative active guest projection includ
   })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page, [])
   await expect(page.locator('[data-staff-profile-id="501"] .venue-profile-visibility')).toHaveText('Видна гостям · активная смена')
   await expect(page.locator('[data-staff-profile-id="502"] .venue-profile-visibility')).toHaveText('Не видна гостям · нет активной смены')
   await expect(page.locator('.venue-public-staff').getByRole('switch')).toHaveCount(0)
@@ -24620,6 +24648,7 @@ test('UX06 hidden guest team is the primary reason and photo upload is accuratel
   })))
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page, [503])
   await expect(page.locator('[data-staff-profile-id="504"] .venue-profile-visibility')).toHaveText('Не видна гостям · показ команды отключён')
   await page.getByRole('button', { name: 'Добавить карточку сотрудника' }).click()
   await expect(page.locator('.venue-profile-photo-placeholder')).toHaveText('Фото можно добавить после создания карточки. Загрузка и публикация выполняются отдельно.')
@@ -24806,6 +24835,7 @@ test('UX06 fresh PRIVATE_DRAFT preview overrides stale published access metadata
   })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Персонал')
+  await openStaffCards(page, [])
   await expect(page.locator('[data-staff-profile-id="501"] .venue-profile-visibility')).toHaveText('Не видна гостям · заведение не опубликовано')
 })
 
@@ -24868,12 +24898,13 @@ for (const mutation of ['publish', 'hide'] as const) {
     })
     await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
     await openVenueSection(page, 'Персонал')
+    await openStaffCards(page, [501])
     const witness = page.locator('[data-staff-profile-id="502"] .venue-profile-visibility')
     await expect(witness).toHaveText(mutation === 'hide' ? 'Видна гостям · активная смена' : 'Не видна гостям · нет активной смены')
     await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
     await expect.poll(() => oldPreviewStarted).toBe(true)
     const target = page.locator('[data-staff-profile-id="501"]')
-    await target.getByRole('button', { name: mutation === 'publish' ? 'Опубликовать' : 'Скрыть', exact: true }).click()
+    await target.getByRole('button', { name: mutation === 'publish' ? 'Опубликовать' : 'Скрыть карточку', exact: true }).click()
     await expect.poll(() => profileReadStarted && settingsReadStarted).toBe(true)
     releaseOldPreview()
     await expect.poll(() => oldPreviewSettled).toBe(true)
@@ -25767,9 +25798,9 @@ test('UX08 Staff denied nested routes Back selects an allowed parent', async ({ 
 
 const syntheticStaffPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAIAAAAErfB6AAACCklEQVR4nO3asQ3DMBAEwW/EPaoStefUsapQC4QCA1wNcPk8sSnncx6P971+j8f9jztve/DbXIHjrsBxV+C4K3DcFTjuChx3BY67AsddgeOuwHFX4LgrcNwVOO4KHHcFjrsCx12B467AcXd2PJq7PoHjrsBxV+C4K3DcFTjuChx3BY67AsddgeOuwHFX4LgrcNwVOO4KHHcFjrsCx12B467AcVfguOvTXdwVOO4KHHcFjrsCx12B467AcVfguCtw3BU47gocdwWOuwLHXYHjrsBxV+C4K3DcFTjuChx3BY67s+PR3PUJHHcFjrsCx12B467AcVfguCtw3BU47gocdwWOuwLHXYHjrsBxV+C4K3DcFTjuChx3BY67Asddn+7irsBxV+C4K3DcFTjuChx3BY67AsddgeOuwHFX4LgrcNwVOO4KHHcFjrsCx12B467AcVfguCtw3J0dj+auT+C4K3DcFTjuChx3BY67AsddgeOuwHFX4LgrcNwVOO4KHHcFjrsCx12B467AcVfguCtw3BU47vp0F3cFjrsCx12B467AcVfguCtw3BU47gocdwWOuwLHXYHjrsBxV+C4K3DcFTjuChx3BY67AsddgePu7Hg0d30Cx12B467AcVfguCtw3BU47gocdwWOuwLHXYHjrsBxV+C4K3DcFTjuChx3BY67AsddgeOuwHH3BpRrwucJK8BwAAAAAElFTkSuQmCC', 'base64')
 type PhotoFixtureState = import('../src/screens/staffPhoto').StaffPhotoState
-async function mockStaffPhotoApi(page: Page, role: 'OWNER' | 'MANAGER' | 'STAFF' = 'OWNER') {
+async function mockStaffPhotoApi(page: Page, role: 'OWNER' | 'MANAGER' | 'STAFF' = 'OWNER', shared?: Map<number, PhotoFixtureState>) {
   const base = await mockVenueStaffChatApi(page, { role })
-  const states = new Map<number, PhotoFixtureState>()
+  const states = shared ?? new Map<number, PhotoFixtureState>()
   const requests: Array<{ key: string; revision: string }> = []
   let sequence = 1
   let loseResponse = false
@@ -25777,26 +25808,35 @@ async function mockStaffPhotoApi(page: Page, role: 'OWNER' | 'MANAGER' | 'STAFF'
   let previewFails = false
   let holdUpload: Promise<void> | null = null
   const fresh = (profile: number): PhotoFixtureState => ({
-    enabled: true, revision: 0, current: null, candidate: null, canManage: role !== 'STAFF',
-    canConsent: role === 'OWNER' && profile === 503 || role === 'STAFF' && profile === 501,
-    isSelf: role === 'STAFF' && profile === 501, displayOnly: profile === 503,
+    enabled: true, revision: 0, current: null, candidate: null, canManage: role === 'OWNER' || role === 'MANAGER' && profile !== 501,
+    canConsent: role === 'OWNER' && profile === 503 || role !== 'OWNER' && profile === 501,
+    isSelf: role !== 'OWNER' && profile === 501, displayOnly: profile === 503,
     guestVisible: false, cleanupPending: false, uploading: false, consentPolicy: 'staff-photo-v1'
   })
   const state = (id: number) => { if (!states.has(id)) states.set(id, fresh(id)); return states.get(id)! }
+  const view = (id: number) => {
+    const value = state(id); if (!shared) return value
+    const rights = fresh(id)
+    return { ...value, canManage: rights.canManage, canConsent: rights.canConsent, isSelf: rights.isSelf, displayOnly: rights.displayOnly }
+  }
   const completed = new Map<string, string>()
-  await page.route('**/api/venue/1/staff/photos/me', (route) => route.fulfill(jsonResponse([{ profileId: 501, displayName: 'Алексей', photo: state(501) }])))
+  await page.route('**/api/venue/1/staff/photos/me', (route) => route.fulfill(jsonResponse([{ profileId: 501, displayName: 'Алексей', photo: view(501) }])))
   await page.route(/\/api\/venue\/1\/staff\/profiles\/\d+\/photos(?:\/.*)?$/, async (route) => {
     const match = new URL(route.request().url()).pathname.match(/profiles\/(\d+)\/photos(?:\/(.*))?$/)!
     const id = Number(match[1]); const action = match[2]; const current = state(id)
     if (action?.endsWith('/content')) {
       await route.fulfill(previewFails ? { status: 404, body: '{}' } : { status: 200, contentType: 'image/png', body: syntheticStaffPng }); return
     }
-    if (route.request().method() === 'GET') { await route.fulfill(jsonResponse(current)); return }
+    if (route.request().method() === 'GET') { await route.fulfill(jsonResponse(view(id))); return }
     if (!action) {
       requests.push({ key: route.request().headers()['idempotency-key'], revision: route.request().headers()['x-photo-revision'] })
+      const key = requests.at(-1)!.key
+      const revision = requests.at(-1)!.revision
       if (holdUpload) await holdUpload
       if (failUpload) { await route.fulfill(jsonResponse({ error: { code: 'STAFF_PHOTO_UNAVAILABLE', message: 'Загрузка фотографий временно недоступна' } }, 503)); return }
-      const key = requests.at(-1)!.key
+      if (!completed.has(key) && Number(revision) !== current.revision) {
+        await route.fulfill(jsonResponse({ error: { code: 'CONFLICT', message: 'Карточка изменилась. Выберите фотографию заново.' } }, 409)); return
+      }
       if (!completed.has(key)) {
         const photoId = `00000000-0000-4000-8000-${String(sequence++).padStart(12, '0')}`
         completed.set(key, photoId); current.revision += 2
@@ -25808,12 +25848,12 @@ async function mockStaffPhotoApi(page: Page, role: 'OWNER' | 'MANAGER' | 'STAFF'
       expect(body.revision).toBe(current.revision)
       current.revision++
       const photo = [current.candidate, current.current].find((photo) => photo?.id === body.photoId)
-      if (action === 'consent' && photo) { photo.consent = current.isSelf ? 'SELF' : 'OWNER_RECORDED'; photo.consentAt = '2030-01-10T18:00:00Z' }
+      if (action === 'consent' && photo) { photo.consent = view(id).isSelf ? 'SELF' : 'OWNER_RECORDED'; photo.consentAt = '2030-01-10T18:00:00Z' }
       if (action === 'publish' && photo) { photo.state = 'APPROVED'; current.current = photo; current.candidate = null; current.guestVisible = true }
       if (action === 'hide' && photo) { photo.state = 'HIDDEN'; current.guestVisible = false }
       if (action === 'delete' || action === 'revoke') { current.current = null; current.candidate = null; current.guestVisible = false; current.cleanupPending = true }
     }
-    await route.fulfill(jsonResponse(current))
+    await route.fulfill(jsonResponse(view(id)))
   })
   return { base, state, requests, completed, loseNextResponse: () => { loseResponse = true }, fail: (value: boolean) => { failUpload = value }, previewFail: () => { previewFails = true }, hold: (promise: Promise<void> | null) => { holdUpload = promise } }
 }
@@ -25827,35 +25867,51 @@ async function photoScreenshots(page: Page, name: string, target: Locator) {
   }
 }
 
+async function openStaffCards(page: Page, ids?: number[]) {
+  await page.getByRole('button', { name: 'Карточки команды', exact: true }).click()
+  if (!ids) {
+    await expect(page.locator('.venue-profile-summary').first()).toBeVisible()
+    ids = await page.locator('[data-staff-profile-id]').evaluateAll((rows) => rows.map((row) => Number((row as HTMLElement).dataset.staffProfileId)))
+  }
+  for (const id of ids) {
+    const summary = page.locator(`[data-staff-profile-id="${id}"] .venue-profile-summary`)
+    if (await summary.getAttribute('aria-expanded') !== 'true') await summary.click()
+  }
+}
+
 test('R2 photos owner upload consent replace hide delete and profile draft survive', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockStaffPhotoApi(page)
   page.on('dialog', (dialog) => dialog.accept())
   await page.goto('?mode=venue#/staff')
+  await openStaffCards(page, [503])
   const panel = photoPanel(page)
   await expect(panel).toContainText('Фото не добавлено')
   await photoScreenshots(page, 'owner-card', panel)
   const row = page.locator('.venue-profile-row[data-staff-profile-id="503"]')
   await row.getByRole('button', { name: 'Редактировать', exact: true }).click()
   await row.getByLabel('Имя на карточке').fill('Несохранённое имя')
+  let release!: () => void
+  api.hold(new Promise<void>((resolve) => { release = resolve }))
   await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
   await expect(panel.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
-  await panel.locator('input[type=file]').setInputFiles([])
-  await expect(panel.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
+  await expect(panel.getByRole('button', { name: 'Добавить фото' })).toHaveCount(0)
+  await expect(panel.getByRole('button', { name: 'Повторить загрузку безопасно' })).toHaveCount(0)
   await photoScreenshots(page, 'upload-preview', panel)
-  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  expect(api.requests).toHaveLength(1)
+  release(); api.hold(null)
   await expect(panel).toContainText('Фото загружено приватно')
   await expect(row.getByLabel('Имя на карточке')).toHaveValue('Несохранённое имя')
   expect(api.state(503).guestVisible).toBe(false)
   await photoScreenshots(page, 'upload-complete', panel)
   await page.reload()
+  await openStaffCards(page, [503])
   await expect(panel.getByAltText('Фото сотрудника')).toBeVisible()
   await panel.getByRole('button', { name: 'Зафиксировать согласие' }).click()
   await panel.getByRole('button', { name: 'Разрешить показ фото' }).click()
   await expect(panel).toContainText('Фото видно гостям')
   const old = api.state(503).current!.id
   await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
-  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
   await expect(panel).toContainText('Текущее фото сохраняется')
   expect(api.state(503).current!.id).toBe(old)
   await panel.getByRole('button', { name: 'Зафиксировать согласие' }).click()
@@ -25874,8 +25930,10 @@ test('R2 photos manager allowed protected and staff own consent boundaries', asy
   await installTelegramWebApp(page, 123456789)
   await mockStaffPhotoApi(page, 'MANAGER')
   await page.goto('?mode=venue#/staff')
+  await openStaffCards(page, [503])
   await expect(photoPanel(page)).toContainText('Фото не добавлено')
   await photoScreenshots(page, 'manager-allowed', photoPanel(page))
+  await openStaffCards(page, [504])
   const protectedCard = page.locator('.venue-profile-row[data-staff-profile-id="504"]')
   await expect(protectedCard).toContainText('Фотографией защищённой карточки управляет владелец')
   await expect(protectedCard.locator('.staff-photo-panel')).toHaveCount(0)
@@ -25893,21 +25951,20 @@ test('R2 photos lost response explicit retry keeps idempotency key and pending g
   await installTelegramWebApp(page, 123456789)
   const api = await mockStaffPhotoApi(page)
   await page.goto('?mode=venue#/staff')
+  await openStaffCards(page, [503])
   const panel = photoPanel(page)
   api.loseNextResponse()
   await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
-  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
-  await expect(panel.getByRole('button', { name: 'Загрузить', exact: true })).toBeDisabled()
+  await expect(panel.getByRole('button', { name: 'Повторить загрузку безопасно', exact: true })).toBeDisabled()
   expect(api.requests).toHaveLength(1)
   await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
-  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await panel.getByRole('button', { name: 'Повторить загрузку безопасно' }).click()
   await expect(panel).toContainText('Фото загружено приватно')
   expect(api.requests).toHaveLength(2); expect(api.requests[0]).toEqual(api.requests[1]); expect(api.completed.size).toBe(1)
-  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
   let release!: () => void
   api.hold(new Promise<void>((resolve) => { release = resolve }))
-  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
-  await expect(panel.getByRole('button', { name: 'Загрузить', exact: true })).toBeDisabled()
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await expect(panel).toContainText('Загружаем фото')
   await clickTelegramBackButton(page)
   await expect(page).toHaveURL(/#\/staff$/)
   await expect(panel).toContainText('Дождитесь результата')
@@ -25920,20 +25977,21 @@ test('R2 photos unavailable invalid file preview failure and cancelled picker ar
   const api = await mockStaffPhotoApi(page)
   api.state(502).enabled = false
   await page.goto('?mode=venue#/staff')
+  await openStaffCards(page, [503])
+  await openStaffCards(page, [502])
   await expect(photoPanel(page, 502)).toContainText('Загрузка фотографий временно недоступна')
   await expect(photoPanel(page, 502).getByRole('button', { name: 'Добавить фото' })).toHaveCount(0)
   const panel = photoPanel(page)
   await panel.locator('input[type=file]').setInputFiles([])
-  await expect(panel.getByRole('button', { name: 'Загрузить', exact: true })).toHaveCount(0)
+  await expect(panel.getByRole('button', { name: 'Повторить загрузку безопасно', exact: true })).toHaveCount(0)
   await panel.locator('input[type=file]').setInputFiles({ ...syntheticUpload, name: 'test.heic', mimeType: 'image/heic' })
   await expect(panel).toContainText('HEIC/HEIF и WebP экспортируйте в JPEG')
-  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
   api.fail(true)
-  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
   await expect(panel).toContainText('Загрузка фотографий временно недоступна')
   api.fail(false); api.previewFail()
   await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
-  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await panel.getByRole('button', { name: 'Повторить загрузку безопасно' }).click()
   await expect(panel).toContainText('Фото недоступно. Проверьте состояние.')
   await expect(panel.getByRole('button', { name: 'Зафиксировать согласие' })).toBeDisabled()
 })
@@ -25952,7 +26010,10 @@ test('R2 photos noncancelable Back retains file and releases completed offscreen
   await expect(page).toHaveURL(/venueId=1#\/more$/)
   await expect(page.getByRole('heading', { name: 'Ещё', exact: true })).toBeVisible()
   await page.evaluate(() => { window.location.hash = '#/staff' })
+  await openStaffCards(page, [503])
   const panel = photoPanel(page)
+  let release!: () => void
+  api.hold(new Promise<void>((resolve) => { release = resolve }))
   await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
   await expect(panel.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
   await page.goBack()
@@ -25960,9 +26021,6 @@ test('R2 photos noncancelable Back retains file and releases completed offscreen
   await expect(page.getByRole('link', { name: 'Вернуться к фотографии сотрудника' })).toBeVisible()
   await page.goForward()
   await expect(panel.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
-  let release!: () => void
-  api.hold(new Promise<void>((resolve) => { release = resolve }))
-  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
   await page.goBack()
   await expect(page).toHaveURL(/venueId=1#\/more$/)
   await expect(page.getByRole('link', { name: 'Вернуться к фотографии сотрудника' })).toBeVisible()
@@ -25970,6 +26028,7 @@ test('R2 photos noncancelable Back retains file and releases completed offscreen
   await expect.poll(() => api.completed.size).toBe(1)
   await expect(page.getByRole('link', { name: 'Вернуться к фотографии сотрудника' })).toHaveCount(0)
   await page.goForward()
+  await openStaffCards(page, [503])
   await expect(panel.getByAltText('Фото сотрудника')).toBeVisible()
   await expect(panel.getByAltText('Предпросмотр выбранного фото')).toHaveCount(0)
 })
@@ -25990,13 +26049,13 @@ test('R2 photos Guest authorized blob delivery and denied image keeps initials',
   await photoScreenshots(page, 'guest-visible', staff)
 })
 
-test('R2 photos stale GET cannot replace committed upload and changed revision discards stale selection', async ({ page }) => {
+test('R2 photos stale GET cannot replace committed upload and changed revision rejects the original retry', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockStaffPhotoApi(page)
   await page.goto('?mode=venue#/staff')
+  await openStaffCards(page, [503])
   const panel = photoPanel(page)
   await expect(panel).toContainText('Фото не добавлено')
-  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
   let release!: () => void; let started = false; let held = false
   const pending = new Promise<void>((resolve) => { release = resolve })
   await page.route('**/api/venue/1/staff/profiles/503/photos', async (route) => {
@@ -26007,16 +26066,23 @@ test('R2 photos stale GET cannot replace committed upload and changed revision d
   })
   await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
   await expect.poll(() => started).toBe(true)
-  await panel.getByRole('button', { name: 'Загрузить', exact: true }).click()
+  await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
   await expect(panel).toContainText('Фото загружено приватно')
   release()
   await expect(panel.getByAltText('Фото сотрудника')).toBeVisible()
+  api.fail(true)
   await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await expect(panel).toContainText('Загрузка фотографий временно недоступна')
   api.state(503).revision++ // identity invalidation while a file is selected
   await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
+  await expect(panel.getByRole('button', { name: 'Повторить загрузку безопасно' })).toBeEnabled()
+  api.fail(false)
+  await panel.getByRole('button', { name: 'Повторить загрузку безопасно' }).click()
   await expect(panel).toContainText('Выберите фотографию заново')
   await expect(panel.getByAltText('Предпросмотр выбранного фото')).toHaveCount(0)
-  expect(api.requests).toHaveLength(1)
+  expect(api.requests).toHaveLength(3)
+  expect(api.requests[1]).toEqual(api.requests[2])
+  expect(api.completed.size).toBe(1)
 })
 
 test('R2 photos Staff grants and revokes exact own image without administration', async ({ page }) => {
@@ -26039,11 +26105,15 @@ test('R2 photos Staff grants and revokes exact own image without administration'
 
 test('R2 photos multiple selected cards block departure without partial loss', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
-  await mockStaffPhotoApi(page)
+  const api = await mockStaffPhotoApi(page)
+  api.fail(true)
   await page.goto('?mode=venue#/staff')
+  await openStaffCards(page, [503])
+  await openStaffCards(page, [502])
   const one = photoPanel(page, 503); const two = photoPanel(page, 502)
   await one.locator('input[type=file]').setInputFiles(syntheticUpload)
   await two.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await expect(two).toContainText('Загрузка фотографий временно недоступна')
   await clickTelegramBackButton(page)
   await expect(page).toHaveURL(/#\/staff$/)
   await expect(one.getByAltText('Предпросмотр выбранного фото')).toBeVisible()
@@ -26067,12 +26137,15 @@ test('R2 photos profile hide refreshes visibility and lost Manager rights dispos
   api.state(503).current = { id, state: 'APPROVED', consent: 'OWNER_RECORDED', consentAt: '2030-01-10T18:00:00Z', previewUrl: `/api/venue/1/staff/profiles/503/photos/${id}/content`, width: 160, height: 160 }
   api.state(503).guestVisible = true
   await page.goto('?mode=venue#/staff')
+  await openStaffCards(page, [503])
   const panel = photoPanel(page)
   await expect(panel).toContainText('Фото видно гостям')
   api.state(503).guestVisible = false
-  await page.locator('.venue-profile-row').getByRole('button', { name: 'Скрыть', exact: true }).click()
+  await page.locator('.venue-profile-row').getByRole('button', { name: 'Скрыть карточку', exact: true }).click()
   await expect(panel).toContainText('Фото сейчас не показывается гостям')
+  api.fail(true)
   await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await expect(panel).toContainText('Загрузка фотографий временно недоступна')
   api.base.setAccountStaffState(123456789, api.base.getStaffMembers(), [{ ...profile, linkedUserId: 333333333 }])
   await page.getByRole('button', { name: 'Обновить доступы и карточки', exact: true }).click()
   await expect(panel).toHaveCount(0)
@@ -26085,13 +26158,16 @@ test('R2 photos retained selection is scoped to venue and rechecked when returni
   await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
   await installTelegramWebApp(page, 123456789)
   const api = await mockStaffPhotoApi(page)
+  api.fail(true)
   const permissions = ['STAFF_PROFILE_MANAGE_STAFF', 'STAFF_PROFILE_MANAGE_PROTECTED', 'STAFF_PROFILE_EDIT_OWN']
   await page.route('**/api/venue/me', (route) => route.fulfill(jsonResponse({ userId: 123456789, venues: [
     { venueId: 1, venueName: 'Первое', venueStatus: 'PUBLISHED', role: 'OWNER', permissions },
     { venueId: 2, venueName: 'Второе', venueStatus: 'PUBLISHED', role: 'OWNER', permissions }
   ] })))
   await page.goto('?mode=venue&venueId=1#/staff')
+  await openStaffCards(page, [503])
   await photoPanel(page).locator('input[type=file]').setInputFiles(syntheticUpload)
+  await expect(photoPanel(page)).toContainText('Загрузка фотографий временно недоступна')
   await page.evaluate(() => {
     history.pushState({}, '', '?mode=venue&venueId=2#/more')
     window.dispatchEvent(new PopStateEvent('popstate'))
@@ -26102,16 +26178,20 @@ test('R2 photos retained selection is scoped to venue and rechecked when returni
   api.state(503).revision++
   await page.goBack()
   await expect(page.locator('.venue-select').first()).toHaveValue('1')
-  await expect(photoPanel(page)).toContainText('Выберите фотографию заново')
-  expect(api.requests).toHaveLength(0)
+  await expect(photoPanel(page).getByRole('button', { name: 'Повторить загрузку безопасно' })).toBeEnabled()
+  expect(api.requests[0].revision).toBe('0')
+  expect(api.requests).toHaveLength(1)
 })
 
 test('R2 photos local cancellation stays available after failed refresh or disabled storage', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockStaffPhotoApi(page)
+  api.fail(true)
   await page.goto('?mode=venue#/staff')
+  await openStaffCards(page, [503])
   const panel = photoPanel(page)
   await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await expect(panel).toContainText('Загрузка фотографий временно недоступна')
   const failRead = async (route: Route) => route.fulfill(jsonResponse({ error: { code: 'FORBIDDEN', message: 'Недостаточно прав' } }, 403))
   await page.route('**/api/venue/1/staff/profiles/503/photos', failRead)
   await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
@@ -26121,10 +26201,130 @@ test('R2 photos local cancellation stays available after failed refresh or disab
   await page.unroute('**/api/venue/1/staff/profiles/503/photos', failRead)
   await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
   await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+  await expect(panel).toContainText('Загрузка фотографий временно недоступна')
   api.state(503).enabled = false
   await panel.getByRole('button', { name: 'Проверить состояние фото' }).click()
   await expect(panel).toContainText('Загрузка фотографий временно недоступна')
   await panel.getByRole('button', { name: 'Отменить выбор' }).click()
+  await clickTelegramBackButton(page)
+  await expect(page).not.toHaveURL(/#\/staff$/)
+})
+
+for (const count of [1, 10]) {
+  test(`UX08 staff compact ${count} cards load photos only on expansion`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 568 })
+    await installTelegramWebApp(page, 123456789)
+    const api = await mockStaffPhotoApi(page)
+    const profiles = Array.from({ length: count }, (_, index) => ({
+      id: 600 + index, linkedUserId: null, displayName: `Команда ${index + 1}`, subtype: 'waiter',
+      roleLabel: null, photoRef: null, bio: 'Описание', tags: [], isGuestVisible: false,
+      publishedAt: null, disabledAt: null, createdAt: '2030-01-10T18:00:00Z', updatedAt: '2030-01-10T18:00:00Z', todayShift: null
+    }))
+    api.base.setAccountStaffState(123456789, api.base.getStaffMembers(), profiles)
+    for (const profile of profiles) {
+      const id = `00000000-0000-4000-8000-${String(profile.id).padStart(12, '0')}`
+      api.state(profile.id).candidate = { id, state: 'PENDING', consent: 'NONE', consentAt: null,
+        previewUrl: `/api/venue/1/staff/profiles/${profile.id}/photos/${id}/content`, width: 160, height: 160 }
+    }
+    const reads: string[] = []
+    page.on('request', (request) => { if (/\/photos(?:\/.*)?$/.test(new URL(request.url()).pathname)) reads.push(request.url()) })
+    await page.goto('?mode=venue#/staff')
+    await expect(page.getByRole('heading', { name: 'Аккаунты и доступ', exact: true })).toBeVisible()
+    await expect(page.locator('.venue-public-staff')).toBeHidden()
+    await openStaffCards(page, [])
+    await expect(page.locator('.venue-profile-summary')).toHaveCount(count)
+    await expect(page.locator('.venue-profile-summary[aria-expanded="true"]')).toHaveCount(0)
+    await expect(page.locator('.staff-photo-panel')).toHaveCount(0)
+    expect(reads).toEqual([])
+    for (const row of await page.locator('.venue-profile-row').all()) expect((await row.boundingBox())!.height).toBeLessThan(135)
+    await expect(page.getByRole('heading', { name: 'Аккаунты с доступом' })).toBeHidden()
+    await photoScreenshots(page, `compact-${count}`, page.locator('.venue-profile-list'))
+    await openStaffCards(page, [600])
+    await expect(photoPanel(page, 600).getByAltText('Фото сотрудника')).toHaveAttribute('src', /^blob:/)
+    expect(reads.every((url) => url.includes('/profiles/600/photos'))).toBe(true)
+    expect(reads.some((url) => url.endsWith('/content'))).toBe(true)
+    if (count === 10) {
+      const firstReads = reads.filter((url) => url.includes('/profiles/600/photos')).length
+      await openStaffCards(page, [601])
+      await expect(photoPanel(page, 601).getByAltText('Фото сотрудника')).toHaveAttribute('src', /^blob:/)
+      expect(reads.filter((url) => url.includes('/profiles/600/photos'))).toHaveLength(firstReads)
+    }
+    await page.locator('[data-staff-profile-id="600"] .venue-profile-summary').click()
+    await expect(photoPanel(page, 600)).toHaveCount(0)
+    await openStaffCards(page, [600])
+    await expect(photoPanel(page, 600).getByAltText('Фото сотрудника')).toHaveAttribute('src', /^blob:/)
+    await clickTelegramBackButton(page)
+    await expect(page).not.toHaveURL(/#\/staff$/)
+  })
+}
+
+test('UX08 Manager own entry empty state and module-disabled consent permissions', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockStaffPhotoApi(page, 'MANAGER')
+  await page.route('**/api/venue/me', (route) => route.fulfill(jsonResponse({ userId: 123456789, venues: [{
+    venueId: 1, venueName: 'Команда', venueStatus: 'PUBLISHED', role: 'MANAGER',
+    permissions: ['STAFF_PROFILE_EDIT_OWN'], teamScheduleModuleEnabled: false
+  }] })))
+  await page.goto('?mode=venue#/staff')
+  await page.getByRole('link', { name: 'Моя карточка', exact: true }).click()
+  const own = page.locator('.staff-own-photos')
+  await expect(own).toContainText('Вы управляете только своим согласием')
+  await expect(own.getByRole('button', { name: 'Добавить фото' })).toHaveCount(0)
+  await expect(own.getByRole('button', { name: 'Разрешить показ фото' })).toHaveCount(0)
+  await expect(page.locator('[data-nav-route="more"]')).toHaveAttribute('aria-current', 'page')
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/staff$/)
+  await page.route('**/api/venue/1/staff/photos/me', (route) => route.fulfill(jsonResponse([])))
+  await page.goto('?mode=venue#/my-profile')
+  await expect(own).toContainText('Связанной карточки пока нет. Обратитесь к владельцу заведения.')
+})
+
+test('UX08 Owner refresh observes Manager consent on the same photo across browser sessions', async ({ browser }) => {
+  const ownerContext = await browser.newContext()
+  const managerContext = await browser.newContext()
+  try {
+    const owner = await ownerContext.newPage(); const manager = await managerContext.newPage()
+    const shared = new Map<number, PhotoFixtureState>()
+    await installTelegramWebApp(owner, 123456789); await installTelegramWebApp(manager, 123456789)
+    const ownerApi = await mockStaffPhotoApi(owner, 'OWNER', shared)
+    await mockStaffPhotoApi(manager, 'MANAGER', shared)
+    owner.on('dialog', (dialog) => dialog.accept()); manager.on('dialog', (dialog) => dialog.accept())
+    await owner.goto('?mode=venue#/staff'); await openStaffCards(owner, [501])
+    const panel = photoPanel(owner, 501)
+    await panel.locator('input[type=file]').setInputFiles(syntheticUpload)
+    await expect(panel).toContainText('Согласие на это фото ещё не получено')
+    const photoId = ownerApi.state(501).candidate!.id
+    await expect(panel.getByRole('button', { name: 'Разрешить показ фото' })).toHaveCount(0)
+    await manager.goto('?mode=venue#/my-profile')
+    await manager.getByRole('button', { name: 'Дать согласие на показ' }).click()
+    await expect(manager.locator('.staff-own-photos')).toContainText('Согласие подтверждено сотрудником')
+    expect(ownerApi.state(501).candidate!.id).toBe(photoId)
+    expect(ownerApi.state(501).guestVisible).toBe(false)
+    await owner.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await expect(panel).toContainText('Согласие подтверждено сотрудником')
+    await expect(panel.getByRole('button', { name: 'Разрешить показ фото' })).toBeEnabled()
+    await panel.getByRole('button', { name: 'Разрешить показ фото' }).click()
+    expect(ownerApi.state(501).current!.id).toBe(photoId)
+    expect(ownerApi.state(501).guestVisible).toBe(true)
+  } finally { await ownerContext.close(); await managerContext.close() }
+})
+
+test('UX08 picker return after storage disabled cannot create invisible pending upload', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockStaffPhotoApi(page)
+  await page.goto('?mode=venue#/staff'); await openStaffCards(page, [503])
+  const panel = photoPanel(page)
+  await expect(panel.getByRole('button', { name: 'Добавить фото' })).toBeEnabled()
+  await panel.locator('input[type=file]').evaluate((input) => { (window as Window & { __oldPicker?: HTMLInputElement }).__oldPicker = input as HTMLInputElement })
+  api.state(503).enabled = false
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(panel).toContainText('Загрузка фотографий временно недоступна')
+  await page.evaluate(() => {
+    const input = (window as Window & { __oldPicker?: HTMLInputElement }).__oldPicker!
+    const data = new DataTransfer(); data.items.add(new File(['synthetic'], 'synthetic.png', { type: 'image/png' }))
+    input.files = data.files; input.dispatchEvent(new Event('change'))
+  })
+  expect(api.requests).toHaveLength(0)
   await clickTelegramBackButton(page)
   await expect(page).not.toHaveURL(/#\/staff$/)
 })
