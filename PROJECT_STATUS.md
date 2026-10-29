@@ -1,5 +1,35 @@
 # Project Status
 
+## HT-UX08-STAFF-PHOTO-DIRECT-MANAGEMENT-01 — ready for local review, acceptance open (2026-10-29)
+
+**LOCAL_VERIFIED / READY_FOR_REVIEW / STAGING_ACCEPTANCE_OPEN**.
+Identity PASS: `Hookah_Tootah`, primary root/common/index and origin
+`github.com/koteev-m/hookah_bot`; branch `codex/ht-ux08-staff-ui-consent-fix-01`, starting/unchanged HEAD
+`0256e62b21862ecef0de72b6eea3081ba789f2c6`; expected HEAD/base/branch/parent NOT_SUPPLIED.
+Initial status: only `?? scripts/dev/`; all existing user changes preserved.
+
+Explicit product-owner requirement supersedes the prior UX08 consent/separate-publish contract.
+OWNER/MANAGER equally upload/replace/delete own-venue photos, including protected linked cards;
+STAFF has own preview only, including denial of legacy photoRef self-edit. Account/profile/linkage/
+finance rights and Guest/MANUAL/SCHEDULE/Today visibility are unchanged. Successful private PUT
+atomically activates current and queues replaced bytes; no consent records are fabricated.
+Legacy consent/publish/revoke deny without writes (403 STAFF/outsiders, 410 management); hide remains
+an OWNER/MANAGER-only legacy action. Existing active photos survive, legacy candidates remain
+private even on idempotent replay. No new migrations or bulk/irreversible data conversion.
+
+Validation: photo62/62 + affected backend189/189 PASS; PostgreSQL executed, zero test skips/errors/
+failures. Kotlin compile/ktlint, TypeScript/build, final focused Playwright38/38 and full450/450 PASS.
+Docs sanity/diff check PASS; V127/H2 V128 byte-identical HEAD. Mobile/short/desktop screenshots
+inspected. Existing Vite >500kB warning remains. First full browser failures were four old-contract
+expectations, corrected while retaining account/profile/linkage denials; no skips/retries relaxed.
+
+Evidence and exact changed-file list: [local report](docs/UX08_STAFF_PHOTO_DIRECT_MANAGEMENT.md),
+`/private/tmp/HT-UX08-STAFF-PHOTO-DIRECT-MANAGEMENT-01/`, `.tmp-checks/ht-ux08-photos/screenshots/`.
+No unfinished operations. Authorization local code/tests/docs only; no stage/commit/push/PR/merge,
+SSH/deploy/R2/live data/secret changes. scripts/dev/ untouched. Next: review local diff, then separately
+authorized publication, exact-release CI, staging deploy and manual iPhone acceptance. Local tests
+are not staging acceptance, real R2 verification or production readiness.
+
 ## HT-UX08-STAFF-UI-CONSENT-FIX-01 — local verification complete, acceptance open (2026-10-29)
 
 **LOCAL_VERIFIED / LIVE_CAUSE_NOT_PROVEN / UX08_ACCEPTANCE_OPEN**.

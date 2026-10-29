@@ -61,20 +61,11 @@ class VenueStaffProfileRepository(
             val profile =
                 findProfileInConnection(connection, venueId, profileId, forUpdate = true) ?: throw NotFoundException()
             val access = profileAccessInConnection(connection, profile, actorId, role)
+            // Photo management is independent of protected account/profile editing rights.
+            val canManagePhotos = role == VenueRole.OWNER || role == VenueRole.MANAGER
             if (manage) {
-                if (!access.canManage ||
-                    VenuePermission.STAFF_PROFILE_MANAGE_STAFF !in VenuePermissions.forRole(role)
-                ) {
-                    throw ForbiddenException()
-                }
-                if (authorizeProfileMutation(
-                        connection, venueId, actorId, role, profile, profile.linkedUserId,
-                        setOf("photoRef"), false, false,
-                    ) != StaffProfileLinkValidation.ALLOWED
-                ) {
-                    throw ForbiddenException()
-                }
-            } else if (!access.canManage && !access.isSelf) {
+                if (!canManagePhotos) throw ForbiddenException()
+            } else if (!canManagePhotos && !access.isSelf) {
                 throw ForbiddenException()
             }
             if (requireEnabled) requireStaffModuleEnabledAfterVenueLock(connection, venueId)
@@ -823,6 +814,7 @@ class VenueStaffProfileRepository(
                     requestedLinkedUserId == current.linkedUserId &&
                     selfEditOnlyRequest &&
                     !publishing &&
+                    "photoRef" !in changedFields &&
                     changedFields.all { it in STAFF_PROFILE_SELF_EDIT_FIELDS }
             return if (safeSelfEdit) {
                 StaffProfileLinkValidation.ALLOWED

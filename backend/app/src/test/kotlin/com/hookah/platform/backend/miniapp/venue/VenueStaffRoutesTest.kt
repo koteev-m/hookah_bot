@@ -2123,7 +2123,6 @@ class VenueStaffRoutesTest {
                             StaffProfileUpdateRequest.serializer(),
                             StaffProfileUpdateRequest(
                                 bio = "Помогает с посадкой",
-                                photoRef = "photo-ref",
                                 tags = listOf("зал"),
                             ),
                         ),
@@ -2134,6 +2133,20 @@ class VenueStaffRoutesTest {
             assertEquals("Алина", ownEdit.displayName)
             assertEquals("Помогает с посадкой", ownEdit.bio)
             assertEquals(listOf("зал"), ownEdit.tags)
+
+            val forbiddenPhotoResponse =
+                client.patch("/api/venue/$venueId/staff/profiles/${profile.id}") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            StaffProfileUpdateRequest.serializer(),
+                            StaffProfileUpdateRequest(photoRef = "photo-ref"),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.Forbidden, forbiddenPhotoResponse.status)
+            assertApiErrorEnvelope(forbiddenPhotoResponse, ApiErrorCodes.FORBIDDEN)
 
             val forbiddenNameResponse =
                 client.patch("/api/venue/$venueId/staff/profiles/${profile.id}") {

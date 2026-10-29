@@ -219,13 +219,23 @@ internal class PhotoFixture(val ds: DataSource) {
             photo ?: s.candidate?.id ?: s.current?.id,
             revision ?: s.revision,
             action,
-            true,
         )
     }
 
-    suspend fun publish(profile: Long = display): StaffPhotoStateDto {
-        upload(profile)
-        action("consent", profile, if (profile == linked) 103 else 101)
-        return action("publish", profile)
+    suspend fun legacyCandidate(
+        profile: Long = display,
+        request: String = UUID.randomUUID().toString(),
+    ): StaffPhotoStateDto {
+        val previous = state(profile).current?.id
+        val uploaded = upload(profile, request = request)
+        val id = uploaded.current!!.id
+        // Seed the pre-upgrade persisted shape; never call a legacy production mutation.
+        sql("UPDATE staff_profile_photos SET state='PENDING' WHERE id='$id'")
+        if (previous != null) sql("UPDATE staff_profile_photos SET state='APPROVED' WHERE id='$previous'")
+        sql(
+            "UPDATE staff_profile_photo_state SET current_id=${previous?.let { "'$it'" } ?: "NULL"}, " +
+                "candidate_id='$id' WHERE profile_id=$profile",
+        )
+        return state(profile)
     }
 }

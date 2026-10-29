@@ -168,7 +168,8 @@ Current Phase 1 implementation plus Staff Operations Slice A includes:
   `Открыть карточку` opens the existing linked card. Manual id copying is not required.
 - One venue member may have at most one active linked profile. Existing duplicates are reported and
   repaired only by Owner through explicit safe unlink of the wrong card; Manager sees duplicate
-  state read-only. Rows are never merged, deleted, relinked or hidden automatically.
+  linkage state read-only; the later direct-photo management contract is independent. Rows are
+  never merged, deleted, relinked or hidden automatically.
 - The create form is collapsed
   by default, existing cards are compact, `Другое` requires `Название роли`, and raw User ID /
   Photo ref inputs are not exposed.
@@ -1163,15 +1164,21 @@ notifications only in a later bounded slice after the Venue Mode runtime is impl
 
 ## Staff Photos — Local R2 Slice
 
-UX08 E implements private JPEG/PNG upload, preview, per-image consent, separate approval,
-replacement, hide/delete and durable cleanup. The exact schema, API, limits and staging checklist
-are in `docs/MEDIA_STORAGE_UPLOAD.md` → “UX08 Staff Photos — Local R2 Implementation”.
+`HT-UX08-STAFF-PHOTO-DIRECT-MANAGEMENT-01` supersedes the former UX08 consent/approval model
+by explicit product-owner instruction. JPEG/PNG upload becomes the current photo immediately
+following successful private R2 PUT and atomic revision-checked finalization. No employee consent,
+owner-recorded consent or separate publication request is required or fabricated.
+Exact schema, API, limits and staging checklist: `docs/MEDIA_STORAGE_UPLOAD.md` →
+“UX08 Staff Photos — Local R2 Implementation”.
 
-OWNER and authorized MANAGER upload only within existing profile RBAC. Linked employees consent
-only to their own exact image; OWNER attests to offline consent only for display-only cards.
-STAFF and MANAGER “Моя карточка” expose own preview/consent/revoke, including when the team module is disabled;
-it gives no profile administration or publication permission. Candidate upload never publishes.
-A new image requires new consent. Relink, removal or role changes invalidate the affected photos.
+OWNER and MANAGER equally manage own-venue photos, including protected OWNER/MANAGER/STAFF-linked
+cards. This narrow right does not change general profile `canManage`, account roles/linkage,
+finances, publication of the card, Guest settings or MANUAL/SCHEDULE/Today rules. STAFF has own
+preview only, including with the module disabled, and cannot mutate photos or the legacy photoRef.
+Existing bio/tags self-edit stays available. Consent/publish/revoke endpoints reject old clients
+without writes (403 STAFF/outsiders, 410 authorized management); old private candidates and hidden
+photos never auto-publish. Existing active photos survive; no schema/data migration is introduced.
+Relink, membership removal and role changes still invalidate affected photos.
 
 Local follow-up `HT-UX08-STAFF-UI-CONSENT-FIX-01` separates “Аккаунты и доступ” from
 “Карточки команды”. Accounts remain the initial section; each team card starts collapsed with
@@ -1179,18 +1186,19 @@ an initials placeholder, name, role and visibility. Private photo state/bytes lo
 opening another card does not refresh existing images. Closing a card disposes its private previews.
 Pending/uncertain uploads block collapse or section changes until completion or explicit recovery.
 
-Selecting supported JPEG/PNG starts one private upload immediately. There is no manual initial
+Selecting supported JPEG/PNG starts one upload immediately; success activates that photo. There is no manual initial
 “Загрузить” step. Unknown results require “Проверить состояние фото” and, if needed, explicit
 “Повторить загрузку безопасно” with the same file/idempotency key/original revision. No automatic
-retry, revision rebasing or publication. Definite rejection clears the file; a fresh state is
-required before selecting again. “Скрыть карточку” and “Скрыть фото” remain separate actions.
+retry or revision rebasing. Definite rejection clears the file; a fresh state is required before
+selecting again. The new photo UI offers add/replace/delete and actual visibility, without consent
+or photo-publication controls. “Скрыть карточку” keeps its existing separate meaning.
 An open photo panel rechecks state without HTTP caching on app focus/visibility return; collapsed
 cards do not read private photos. This closes a stale-screen opportunity, but does not establish
 the cause of the reported staging incident. See [local diagnosis](UX08_STAFF_UI_CONSENT_FIX.md).
 
 Guest uses the existing authoritative MANUAL/SCHEDULE visibility and guarded photoUrl; raw
 photo_ref remains null and is never a delivery capability. Failed replacement retains the old
-approved photo. Delete/revoke immediately denies delivery; physical removal remains pending until
+active photo. Delete immediately denies delivery; physical removal remains pending until
 storage acknowledgement. Deleted images have no automatic restore window.
 
 Local deterministic tests do not prove Cloudflare connection, real iPhone Telegram behavior,
@@ -1255,7 +1263,7 @@ Rules:
 - Schedule Staff DTOs also exclude linked users, Telegram/member ids, usernames, invite state,
   actor metadata, private notes and non-overlapping venue schedule data.
 - External tip links require moderation/allowlist later.
-- Photo consent and human approval are implemented locally in UX08 E; live acceptance and privacy/backup production admission remain required.
+- Direct OWNER/MANAGER photo management supersedes UX08 consent/approval; live acceptance and privacy/backup production admission remain required.
 - Rate-limit public profile/tip actions where relevant.
 - Analytics payloads must not include raw Telegram payloads, payment secrets, card data, private contacts or unrelated PII.
 

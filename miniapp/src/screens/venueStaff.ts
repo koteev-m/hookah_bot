@@ -202,7 +202,7 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   })
   const protectedNote = el('p', {
     className: 'venue-order-sub',
-    text: 'Карточками владельцев и других менеджеров управляет владелец.'
+    text: 'Карточками владельцев и других менеджеров управляет владелец. Их фотографии может менять и менеджер; права и привязки аккаунтов при этом не меняются.'
   })
   protectedNote.hidden = access.role !== 'MANAGER'
   const profileHelp = document.createElement('details')
@@ -253,7 +253,7 @@ function buildStaffDom(root: HTMLDivElement, access: VenueAccessDto): StaffRefs 
   )
   const photoPlaceholder = el('div', {
     className: 'venue-profile-photo-placeholder',
-    text: 'Фото можно добавить после создания карточки. Загрузка и публикация выполняются отдельно.'
+    text: 'Фото можно добавить после создания карточки. После загрузки оно сразу станет текущим; видимость карточки не изменится.'
   })
   const profileCreateButton = el('button', { text: 'Создать профиль' }) as HTMLButtonElement
   const profileCancelButton = el('button', { className: 'button-secondary', text: 'Отмена' }) as HTMLButtonElement
@@ -747,7 +747,7 @@ function renderProfileRow(
     info.appendChild(
       el('p', {
         className: 'venue-order-sub',
-        text: 'Только просмотр — карточкой управляет владелец.'
+        text: 'Данные карточки меняет владелец. Фотографией также может управлять менеджер.'
       })
     )
   }
@@ -1441,16 +1441,15 @@ export function renderVenueStaffScreen(options: VenueStaffOptions) {
           onShift: (target, status, isGuestVisible) => void updateTodayShift(target, status, isGuestVisible)
           }
         )
-      if (!profile.canManage && !profile.isSelf) { photoPanels.get(profile.id)?.panel.dispose(); photoPanels.delete(profile.id) }
+      const canViewPhotos = access.role === 'OWNER' || access.role === 'MANAGER' || profile.isSelf
+      if (!canViewPhotos) { photoPanels.get(profile.id)?.panel.dispose(); photoPanels.delete(profile.id) }
       const expanded = expandedProfiles.has(profile.id) || editingProfileId === profile.id
-      if (section === 'profiles' && expanded && (profile.canManage || profile.isSelf)) {
+      if (section === 'profiles' && expanded && canViewPhotos) {
         const identity = JSON.stringify([profile.linkedUserId, profile.linkageClass, profile.canManage, profile.isSelf])
         let entry = photoPanels.get(profile.id)
         if (entry && entry.identity !== identity) { entry.panel.dispose(); photoPanels.delete(profile.id); entry = undefined }
         if (!entry) { entry = { identity, panel: createStaffPhotoPanel(backendUrl, isDebug, venueId, profile.id, undefined, options.onPhotoChange) }; photoPanels.set(profile.id, entry) }
         row.querySelector('.venue-staff-info')?.appendChild(entry.panel.element)
-      } else if (!profile.canManage && !profile.isSelf) {
-        row.querySelector('.venue-staff-info')?.appendChild(el('p', { className: 'venue-order-sub', text: 'Фотографией защищённой карточки управляет владелец.' }))
       }
       const details = el('div', { className: 'venue-profile-details' })
       details.id = `staff-profile-details-${profile.id}`

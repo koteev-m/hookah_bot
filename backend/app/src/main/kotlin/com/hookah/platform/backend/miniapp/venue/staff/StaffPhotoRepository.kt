@@ -1,8 +1,8 @@
 package com.hookah.platform.backend.miniapp.venue.staff
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
-import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.StaffPhotoActionRetiredException
 import com.hookah.platform.backend.api.StaffPhotoConflictException
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenueRole
@@ -21,6 +21,7 @@ import java.util.UUID
 import javax.sql.DataSource
 
 const val STAFF_PHOTO_CONSENT_POLICY = "staff-photo-v1"
+const val STAFF_PHOTO_DIRECT_POLICY = "staff-photo-direct-v2"
 
 internal data class StaffPhotoRecord(
     val id: String,
@@ -78,7 +79,8 @@ class StaffPhotoRepository(
                 pointers.revision,
                 photos.find { it.id == pointers.currentId },
                 photos.find { it.id == pointers.candidateId },
-                a.canManage, a.isSelf, p.linkedUserId == null, role == VenueRole.OWNER,
+                role == VenueRole.OWNER || role == VenueRole.MANAGER,
+                a.isSelf, p.linkedUserId == null, role == VenueRole.OWNER,
                 photos.any { it.state == "DELETE_PENDING" }, photos.any { it.state == "UPLOADING" },
             )
         }
@@ -163,8 +165,9 @@ class StaffPhotoRepository(
                 throw StaffPhotoConflictException()
             }
             pointers.candidateId?.let { deleteRecord(c, it) }
-            setState(c, photo.id, "PENDING")
-            setPointers(c, p.id, pointers.copy(revision = pointers.revision + 1, candidateId = photo.id))
+            pointers.currentId?.let { deleteRecord(c, it) }
+            setState(c, photo.id, "APPROVED")
+            setPointers(c, p.id, StaffPhotoPointers(pointers.revision + 1, photo.id, null))
             appendAudit(c, photo.actorId, photo.venueId, p.id, photo.id, "STAFF_PHOTO_UPLOADED")
         }
     }
@@ -193,19 +196,13 @@ class StaffPhotoRepository(
         photoId: String?,
         expectedRevision: Long,
         action: String,
-        confirmed: Boolean,
     ) {
-        val management = action in setOf("publish", "hide", "delete")
-        profiles.photoTransaction(venueId, profileId, actorId, management, action == "publish") { c, p, access, role ->
+        profiles.photoTransaction(venueId, profileId, actorId, true) { c, p, _, _ ->
+            // Keep legacy routes explicit, but never record consent or activate old candidates.
+            if (action in setOf("consent", "publish", "revoke")) throw StaffPhotoActionRetiredException()
             val pointers = pointers(c, profileId)
             if (pointers.revision != expectedRevision) throw StaffPhotoConflictException()
             ensurePointers(c, venueId, profileId)
-            if (action == "revoke") {
-                if (!access.isSelf) throw ForbiddenException()
-                invalidateStaffPhotoIdentity(c, venueId, profileId)
-                appendAudit(c, actorId, venueId, profileId, null, "STAFF_PHOTO_CONSENT_REVOKED")
-                return@photoTransaction
-            }
             if (action == "delete") {
                 invalidateStaffPhotoIdentity(c, venueId, profileId)
                 appendAudit(c, actorId, venueId, profileId, null, "STAFF_PHOTO_DELETED")
@@ -220,50 +217,8 @@ class StaffPhotoRepository(
                 throw NotFoundException()
             }
             if (photo.state !in setOf("PENDING", "APPROVED", "HIDDEN")) throw StaffPhotoConflictException()
-            var next = pointers.copy(revision = pointers.revision + 1)
+            val next = pointers.copy(revision = pointers.revision + 1)
             when (action) {
-                "consent" -> {
-                    if (!confirmed ||
-                        !(
-                            access.isSelf ||
-                                p.linkedUserId == null &&
-                                role == VenueRole.OWNER
-                        )
-                    ) {
-                        throw ForbiddenException()
-                    }
-                    c.prepareStatement(
-                        """
-                        UPDATE staff_profile_photos SET consent_kind=?, consent_actor_id=?, consent_at=?,
-                        consent_policy=?, updated_at=? WHERE id=?
-                        """.trimIndent(),
-                    ).use {
-                            s ->
-                        s.setString(1, if (access.isSelf) "SELF" else "OWNER_RECORDED")
-                        s.setLong(2, actorId)
-                        s.setTimestamp(3, Timestamp.from(clock.instant()))
-                        s.setString(4, STAFF_PHOTO_CONSENT_POLICY)
-                        s.setTimestamp(5, Timestamp.from(clock.instant()))
-                        s.setString(6, photoId)
-                        s.executeUpdate()
-                    }
-                }
-                "publish" -> {
-                    if (!validConsent(
-                            photo,
-                            p.linkedUserId,
-                        )
-                    ) {
-                        throw ForbiddenException("Сначала необходимо согласие на показ именно этой фотографии.")
-                    }
-                    if (pointers.currentId != photoId) pointers.currentId?.let { deleteRecord(c, it) }
-                    setState(c, photoId, "APPROVED")
-                    next =
-                        next.copy(
-                            currentId = photoId,
-                            candidateId = if (pointers.candidateId == photoId) null else pointers.candidateId,
-                        )
-                }
                 "hide" -> setState(c, photoId, "HIDDEN")
                 else -> throw StaffPhotoConflictException()
             }
@@ -293,7 +248,7 @@ class StaffPhotoRepository(
                         null
                     } else {
                         rs.photo().takeIf {
-                            validConsent(it, rs.getObject("current_link", java.lang.Long::class.java)?.toLong())
+                            it.linkedUserId == rs.getObject("current_link", java.lang.Long::class.java)?.toLong()
                         }
                     }
                 }
@@ -371,17 +326,6 @@ class StaffPhotoRepository(
             }
             Unit
         }
-
-    private fun validConsent(
-        photo: StaffPhotoRecord,
-        linkedUserId: Long?,
-    ): Boolean =
-        photo.linkedUserId == linkedUserId && photo.consentAt != null &&
-            when (photo.consentKind) {
-                "SELF" -> linkedUserId != null && photo.consentActorId == linkedUserId
-                "OWNER_RECORDED" -> linkedUserId == null
-                else -> false
-            }
 
     private fun pointers(
         c: Connection,

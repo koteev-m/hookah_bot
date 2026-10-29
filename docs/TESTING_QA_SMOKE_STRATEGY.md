@@ -4569,43 +4569,48 @@ Synthetic consumer PASS is not operational producer evidence or deployment permi
 
 ## UX08 E staff-photo validation
 
-`StaffPhotoLifecycleH2Test` and `StaffPhotoLifecyclePostgresTest` share the lifecycle/RBAC/failure
-contract. PostgreSQL must execute without skips. `StaffPhotoConcurrencyPostgresTest` observes a
-real lock waiter at finalization commit; cleanup must recheck its predicate and preserve the new
-candidate. `StaffPhotoRoutesPostgresTest` exercises authenticated routes, authoritative visibility,
-module-disabled revoke and privacy limits independent of upload exhaustion. Image tests use only
-synthetic pixels/EXIF; SDK tests use a loopback S3 server with synthetic credentials, not R2.
+Current contract: `HT-UX08-STAFF-PHOTO-DIRECT-MANAGEMENT-01` supersedes the earlier consent/
+separate-publication UX08 model. The old `HT-UX08-STAFF-UI-CONSENT-FIX-01` report is historical
+consent-flow evidence, not the current acceptance contract.
 
-Run photo suites plus affected Staff/Invite/Platform membership/Guest/RBAC regression suites,
-compileKotlin and ktlintCheck. Mini App: TypeScript, production build, focused `R2 photos` and UX08,
-then full Playwright smoke. Photo screenshots cover Owner, Manager allowed/protected, Staff own,
-selected preview, completed upload, Guest visible, hidden and deleted at 390×844, 390×568, 1280×900.
-Verify lost-response idempotency, no automatic retry, stale GET suppression, retained Back/pending
-session, role/linkage changes, non-photo drafts and error placeholders. Browser results cannot
-establish real iPhone Telegram photo-picker conversion or Cloudflare connectivity.
+`StaffPhotoLifecycleH2Test` and `StaffPhotoLifecyclePostgresTest` share direct lifecycle/RBAC/
+failure tests. PostgreSQL must execute with zero skips. Verify OWNER and MANAGER upload, replace
+and delete display-only, STAFF-, MANAGER- and OWNER-linked cards within their venue, without
+widening protected profile/account/linkage rights. STAFF own preview remains; every photo action
+and legacy self-edit of photoRef is denied. Foreign actors are denied before bytes are read.
 
-Separate staging smoke/configuration and production backup/privacy blockers are in
-`MEDIA_STORAGE_UPLOAD.md`; no live R2 PUT/DELETE or staging migration is authorized by local checks.
+Success must return current APPROVED photo, no candidate and no fabricated consent fields.
+Legacy current APPROVED survives; old PENDING/HIDDEN candidates and hidden current photos never
+activate on read/retry/upgrade. Retired consent/publish/revoke returns 410 to authorized managers
+and 403 to STAFF/outsiders, with unchanged revision/audit/data. New upload must not publish a hidden
+card or change Guest settings, MANUAL/SCHEDULE selection or Today visibility.
 
+Cover failed/ambiguous PUT, DB-finalization rollback, actor demotion during PUT, same-key replay,
+changed body/revision, competing replacement, delete during upload and stale post-delete replay.
+Old photo remains available until successful atomic replacement; delete immediately denies both
+private and Guest delivery. `StaffPhotoConcurrencyPostgresTest` observes a real lock waiter at
+finalization commit: cleanup rechecks its predicate and preserves the new current photo. Failed
+cleanup retries, expired leases, late PUT tombstones and profile/venue deletion keep durable
+ownership. Image tests use synthetic pixels/EXIF; SDK tests use loopback S3 and synthetic credentials.
 
-### UX08 staff UI and cross-account consent follow-up
+`StaffPhotoRoutesPostgresTest` exercises authenticated direct management across Owner/Manager
+sessions, protected photo rights, legacy-client denials, byte headers, exact MANUAL/SCHEDULE and
+card/Guest visibility, and module-disabled management deletion despite upload quota exhaustion.
+Run photo plus Staff/Invite/Platform membership/Guest/Preview/RBAC regression suites, compileKotlin
+and ktlintCheck; require zero skipped PostgreSQL tests. Migration files must remain unchanged.
 
-`HT-UX08-STAFF-UI-CONSENT-FIX-01`: exercise exclusive Accounts/Team sections, 1/10 collapsed
-rows, lazy private reads and no re-fetch of card 1 when opening card 2. Owner/Manager/Staff
-boundaries, Manager own entry and empty/module-disabled state use existing permissions.
-File selection sends exactly one private upload; hold responses to check progress and Back guards.
-Unknown-response retry retains key/file/revision; changed revision must reject rather than rebase.
-Picker return after storage disables or the panel is disposed must not leave an invisible pending
-selection. Inspect 390×844, 390×568 and desktop screenshots; browser results are not real iPhone evidence.
+Mini App: TypeScript, production build, focused `R2 photos` and UX08, then full Playwright smoke.
+Exercise one automatic upload after selection with no consent/publish requests, Manager protected
+card photo CRUD without card-edit controls, STAFF read-only own/legacy preview, hidden-card upload,
+lost-response exact-key/file/revision recovery, stale GET suppression, pending Back/Forward,
+changed linkage, multi-card and cross-venue retained selection, preserved non-photo drafts,
+invalid/cancelled picker and truthful errors. Open panels refresh on app return; collapsed cards
+perform no private reads. Inspect Owner/Manager/Staff/Guest states at 390×844, 390×568 and desktop.
 
-`StaffPhotoRoutesPostgresTest` uses distinct authenticated Owner/Manager accounts with one exact
-venue/profile/photo, checks DB SELF consent linkage, Owner refreshed revision, stale publication
-conflict and replacement requiring new consent. The browser two-session fixture checks refresh on
-return and separate publication; mocked sessions are not real Telegram account-switch evidence.
-Run photo + affected Staff/Invite/RBAC/Guest/Preview/membership suites, Kotlin compile/ktlint,
-TypeScript/build, focused and full Playwright with zero skipped PostgreSQL tests. Staging and
-real iPhone acceptance remain a separately authorized step; never infer the live incident cause
-from the local regression alone.
+Local results do not establish Cloudflare connectivity, staging acceptance or iPhone Telegram
+picker conversion. Publication, exact-release CI, separately authorized staging deploy and manual
+iPhone acceptance remain required. No live R2 PUT/DELETE, deploy or staging migration is authorized
+by these local checks; see `MEDIA_STORAGE_UPLOAD.md` for the later checklist.
 
 ### UX08 migration head and historical V126 regression boundary
 

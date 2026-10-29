@@ -37,7 +37,7 @@ Canonical dependencies:
 | Stop-list | Fast operational availability toggles. | Item/option availability parity is documented for current Staff/Manager/Owner paths; shift-check mass changes use an OWNER/MANAGER-only local draft and one batch confirmation. | Per-venue `staff_stoplist_enabled` and audit completeness outside shift check remain future/partial. |
 | Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
 | Staff / invites | Membership, roles, pending invite lifecycle and team cards. | `STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`; Platform Owner OWNER invite/revoke remains smoke-closed. | Keep Manager Staff-only authority, protected cards, invite revocation and identity privacy in regression. |
-| Staff profiles / today shift | Guest-visible opt-in staff profiles and the configured Today source. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. Slice B keeps MANUAL publication or derives current SCHEDULE presence through the shared resolver; both Preview modes use the same filters. | Tips and safe consent-based photo upload remain future. |
+| Staff profiles / today shift | Guest-visible opt-in staff profiles and the configured Today source. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. Slice B keeps MANUAL publication or derives current SCHEDULE presence through the shared resolver; both Preview modes use the same filters. | Tips remain future; direct photo management is local-only pending separate staging/iPhone acceptance. |
 | Staff schedule | Optional venue-local planning of one shift per profile/start-date. | `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; `CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`; `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`. | Keep schedule, restore/bulk, CAS, timezone, module guards, Guest source parity and RBAC/privacy in regression. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Feedback | Internal post-visit feedback from completed Guest History. | DONE / MVP / staging-smoke-passed: Owner/Manager read own-venue aggregate/list and can manually open exact `VENUE_CHAT` follow-up for ratings `1..3`; Staff denied. | Platform feedback analytics dashboard and automated prompts remain future. |
@@ -147,7 +147,8 @@ Staff profile name, collapsed daily schedule and nested form/confirmation naviga
 [staff canonical contract](STAFF_PROFILES_SHIFTS_TIPS.md#ux08-local-profile-schedule-and-navigation-contract).
 The previous UX07 iPhone 19/19 PASS is user-supplied history, not UX08 device or HT70 deployment
 evidence. UX08 browser screenshots at 390px/390×568/desktop and local tests do not establish staging
-or real Telegram acceptance. Photos are decision-only; see the bounded UX08 R2 proposal in
+or real Telegram acceptance. Direct OWNER/MANAGER photo management is implemented locally; the
+new approved model supersedes prior per-image consent and separate publication. See the contract in
 [MEDIA_STORAGE_UPLOAD.md](MEDIA_STORAGE_UPLOAD.md).
 
 ## Orders Queue
@@ -516,14 +517,14 @@ Staff Profiles + Today Shift Phase 1 implementation
   display-only/active-Staff-linked cards.
 - A profile may be linked to a venue member or display-only.
 - Staff may edit only their own linked draft fields where policy allows and cannot self-publish;
-  Mini App photo upload remains future.
+  Direct OWNER/MANAGER photo management is a later local UX08 slice; STAFF photo mutation is denied.
 - In `MANUAL`, Owner/Manager may persist Guest Today visibility; Manager is limited to
   active/completed/canceled. In `SCHEDULE`, the manual control is unavailable and direct mutation
   returns the typed safe conflict.
 - Guest sees only public visible profiles and shifts.
 - Venue Mode section is `Карточки сотрудников`: profiles are optional, create form is collapsed by
   default, existing cards are compact, `Другое` requires `Название роли`, raw User ID / Photo ref
-  are not manual owner inputs, and photo upload remains future.
+  are not manual owner inputs. Direct photo management follows the local UX08 media contract.
 - Guest `Сегодня работают` appears below main venue information/actions and shows public display
   name, role/custom role, bio/tags and safe placeholder/photo only.
 - No staff tips or payments are implemented in Phase 1.
@@ -591,7 +592,7 @@ Staff Operations Slice B staging-closed runtime:
 Future outside Schedule Phase 1 / Slice B:
 - staff availability, shift swaps, recurring templates, reminders and attendance;
 - personal Telegram shift confirmations/sign-up, with Venue Mode schedule as source of truth;
-- photo upload/media picker with consent, moderation and safe storage;
+- live acceptance of the separately implemented direct photo upload/media picker and private R2 storage;
 - separate staff communication chat/forum topics only after an explicit product decision;
 - external staff tip link + `staff_tip_intent`, where money does not touch the platform;
 - provider/direct payout only after legal/product decision;
@@ -677,7 +678,7 @@ Current status from the 2026-07-29 code audit:
 - Venue/Public Card Media Management: **PARTIAL / BOT-FIRST**.
 - Venue Mini App Media Upload: **MISSING / FUTURE**.
 - Structured Menu Item Media Management: **MISSING / FUTURE**.
-- Staff Profile Photo Upload: **FUTURE** and separate from venue/menu media.
+- Staff Profile Photo Upload: **LOCAL IMPLEMENTATION / STAGING ACCEPTANCE OPEN**, separate from venue/menu media.
 
 | Surface | Bot current | Venue Mini App current | Guest display | Target |
 | --- | --- | --- | --- | --- |
@@ -685,7 +686,7 @@ Current status from the 2026-07-29 code audit:
 | Public card info-section PDF | OWNER/MANAGER can add PDF documents, delete an attachment and hide/show the whole section. PDF detection is MIME/filename based; no direct replace or per-attachment hide. | No upload/manage flow. Guest Preview is view-only; private mode uses the same scoped authenticated delivery boundary. | Guest Mini App and `PUBLISHED_PUBLIC` expose `Открыть PDF` through the guarded Guest proxy; `PRIVATE_DRAFT` uses the authenticated preview proxy. | PDF only on explicitly allowed surfaces, with server-side MIME/type/size validation, ownership/venue scoping, replace/delete/audit and safe delivery. |
 | Structured menu item photo / description / thumbnail | No current item-photo/thumbnail CRUD. The DB has a legacy `menu_items.description` column, but current Bot/menu repository flow does not read or write it. Option/flavor media is absent. | Current item CRUD covers name, price, type, availability, order and options; no item photo, description, thumbnail or option/flavor media fields/actions. | Current structured Guest menu DTO/rendering shows no item photo, description, thumbnail or option/flavor media. | Item-safe media/description contract after storage/proxy design; no raw provider/storage refs in Guest DTOs. |
 | Photo/PDF menu | Uses the `section_type=menu` info-section flow. OWNER/MANAGER add images/PDFs, delete attachments and hide/show the flat section. It is view-only and separate from the order menu. | No authoring/manage flow. Both preview modes can view only visible saved media through their respective guarded/scoped proxy; neither DTO returns raw refs. | Guest pre-QR `ℹ️ Информация` shows the flat `📖 Фото-меню`; it cannot create an order without matching structured items. | Keep view-only semantics; add Mini App management only through the shared media foundation. |
-| Staff profile photo | No supported Bot photo upload/manage flow was found. | UI explicitly shows `Фото сотрудника — позже`; no file picker/upload. The data model has nullable `photo_ref`, but raw manual input is hidden. | Guest UI renders an initials placeholder; Guest DTOs and both preview modes omit raw `photoRef`. | Separate consent-based upload with employee consent, moderation, replacement/deletion and approved guest-safe delivery. |
+| Staff profile photo | No supported Bot photo upload/manage flow was found. | Local OWNER/MANAGER direct JPEG/PNG upload/replace/delete, including protected cards; STAFF own preview only. No consent or publish step. | Existing card/Guest/Today rules gate the current photo through authenticated delivery; raw `photoRef` is never a capability. | Live R2/staging/iPhone acceptance and production backup/privacy admission; see MEDIA_STORAGE_UPLOAD.md. |
 
 The current `menu_category_images` table/repository is test/seed-oriented and has no owner CRUD or
 active Guest/Venue Mini App consumer; it is not evidence of structured menu-item photo support.
@@ -700,7 +701,7 @@ Minimum scope:
 - audit for upload/replace/delete;
 - no raw Telegram `file_id` or storage key in public DTOs;
 - Bot and Mini App use one media source of truth or a compatible bridge;
-- employee consent for staff photos remains a separate mandatory rule.
+- staff-photo authorization follows the approved direct OWNER/MANAGER contract in MEDIA_STORAGE_UPLOAD.md; prior consent/approval requirements are superseded.
 
 The canonical analysis is now `docs/MEDIA_STORAGE_UPLOAD.md`. Its verdict is
 **STOP_FOR_MEDIA_STORAGE_DECISION**: the recommendation is a hybrid ledger with legacy

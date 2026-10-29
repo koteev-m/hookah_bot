@@ -38,7 +38,7 @@ data class StaffPhotoStateDto(
     val guestVisible: Boolean,
     val cleanupPending: Boolean,
     val uploading: Boolean,
-    val consentPolicy: String = STAFF_PHOTO_CONSENT_POLICY,
+    val consentPolicy: String = STAFF_PHOTO_DIRECT_POLICY,
 )
 
 @Serializable
@@ -75,7 +75,7 @@ class StaffPhotoService(
             )
         return StaffPhotoStateDto(
             storage.available, snapshot.revision, snapshot.current?.dto(), snapshot.candidate?.dto(),
-            snapshot.canManage, snapshot.isSelf || snapshot.displayOnly && snapshot.owner, snapshot.isSelf,
+            snapshot.canManage, false, snapshot.isSelf,
             snapshot.displayOnly, guestVisible, snapshot.cleanupPending, snapshot.uploading,
         )
     }
@@ -140,9 +140,8 @@ class StaffPhotoService(
         photoId: String?,
         revision: Long,
         action: String,
-        confirmed: Boolean,
     ): StaffPhotoStateDto {
-        repository.mutate(venueId, profileId, actorId, photoId, revision, action, confirmed)
+        repository.mutate(venueId, profileId, actorId, photoId, revision, action)
         return state(venueId, profileId, actorId)
     }
 

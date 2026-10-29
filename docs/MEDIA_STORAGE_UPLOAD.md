@@ -1,6 +1,6 @@
 # Venue Media Storage And Upload
 
-Дата актуализации: 2026-10-28 (bounded UX08 staff-photo implementation).
+Дата актуализации: 2026-10-29 (direct staff-photo management; local implementation).
 
 Статус: **CANONICAL SPEC / STAFF PHOTOS LOCAL IMPLEMENTATION / OTHER UPLOAD RUNTIME FUTURE**.
 
@@ -21,6 +21,21 @@ Existing staging bucket: **`hookah-tootah-media-staging-eu`**. User testimony re
 bucket on 2026-10-28; the account/bucket was not inspected by this implementation. Actual default
 class, jurisdiction, public access, credentials and backup remain unverified. The `-eu` name does
 not establish jurisdiction. No production bucket is approved. No Cloudflare writes were performed.
+
+### Approved contract change — 2026-10-29
+
+`HT-UX08-STAFF-PHOTO-DIRECT-MANAGEMENT-01` explicitly supersedes the original UX08 per-image
+consent and separate publication model, including `HT-UX08-STAFF-UI-CONSENT-FIX-01`'s consent UI.
+The product owner now requires equal OWNER/MANAGER photo management, including protected linked
+cards, automatic current-photo activation after successful upload, and no employee-consent step
+or owner attestation. This is an intentional product-contract change, not a claim that the old
+implementation met the new requirement. Historical consent evidence is not new authorization.
+
+No schema/data migration or bulk photo conversion is needed. Existing current `APPROVED` photos
+remain active under unchanged card/Guest/Today visibility. Existing `PENDING`/`HIDDEN` candidates
+remain private and never promote on read, retry or upgrade; a fresh explicit upload is required.
+New records leave all consent fields NULL. No actor action is presented as employee consent.
+Historical consent fields remain compatibility/history fields, not a delivery prerequisite.
 
 ### Implemented contract
 
@@ -43,28 +58,31 @@ not establish jurisdiction. No production bucket is approved. No Cloudflare writ
   plus input digest and expected revision prevent duplicate PUT after a lost response. Reservation
   increments revision; finalization rechecks live RBAC, identity, row state and revision. It locks the
   photo record against cleanup. A failed replacement leaves the current approved photo intact.
-- New candidates are private. Linked employees explicitly consent to each exact image themselves;
-  OWNER cannot substitute consent. For display-only cards, OWNER attests to obtained offline consent.
-  Policy `staff-photo-v1`, actor, timestamp and opaque image/audit identity record the attestation;
-  no consent documents, identity documents or extra personal data are collected. This is not an
-  independent consent verification or a legal production-readiness assertion.
-- OWNER and allowed MANAGER perform separate human approval/publication. Manager is limited to
-  display-only and STAFF-linked manageable profiles; protected OWNER/MANAGER cards remain denied.
-  STAFF has only own-image preview/consent/revoke through “Моя карточка”; no upload/publication or
-  administration rights. Self-revoke works with the team module disabled. Deleted venues are denied.
-- Guest bytes require current consent, approved exact photo ID and the existing authoritative venue,
-  subscription, profile and MANUAL/SCHEDULE visibility resolver, checked before and after storage
-  reads. Delivery is authenticated, `image/jpeg`, `nosniff`, `no-store, private`; no permanent bearer URL.
-- Replacement is a separate candidate until approved. Publication swaps the current pointer and
-  tombstones its predecessor. Hide retains private bytes. Delete/revoke immediately clear delivery
-  pointers/consent and queue cleanup. Link changes, membership removal and role transitions invalidate
-  all affected photos. Ledger ownership survives hard profile/venue deletion for eventual cleanup.
+- OWNER and MANAGER have equal own-venue photo upload/replace/delete rights for display-only,
+  STAFF-, MANAGER- and OWNER-linked cards. Photo authorization is independent of general profile
+  `canManage`; it grants no role/account/linkage/finance or card-publication rights. STAFF may view
+  only their own card/photos and cannot upload, approve, consent, publish, hide, revoke or delete.
+  Legacy STAFF self-edit of `photoRef` is denied too; bio/tags self-edit remains unchanged.
+- Successful PUT is followed by one transaction: recheck RBAC/identity/revision, set the new row
+  `APPROVED`, switch `current_id`, clear `candidate_id`, tombstone the previous current and any
+  legacy candidate, and audit `STAFF_PHOTO_UPLOADED`. `APPROVED` now means active/current photo,
+  not human approval or consent. Failed PUT/finalization preserves the previous pointers and queues
+  the attempted object for durable cleanup. New upload still requires the team module enabled;
+  reads and management deletion remain possible when disabled. Deleted venues are denied.
+- Guest bytes require exact current `APPROVED` photo ID and matching linked identity, plus existing
+  authoritative venue, subscription, card and MANUAL/SCHEDULE visibility, checked before and after
+  storage reads. Hidden/unpublished cards never become public merely by uploading a photo.
+  Delivery is authenticated, `image/jpeg`, `nosniff`, `no-store, private`; no permanent bearer URL.
+- Delete immediately clears both pointers and queues cleanup. Legacy `/hide` remains a one-way
+  private-hide action for OWNER/MANAGER only, omitted from the new UI; reactivation requires a new
+  upload. Relink, membership removal and role transitions still invalidate affected photos.
+  Ledger ownership survives hard profile/venue deletion for eventual cleanup.
 - Cleanup is a small bounded batch (10/minute), gated by the existing autonomous-write maintenance
   policy. Expired 10-minute upload leases and DELETE_PENDING rows are retried. Only acknowledged
   DELETE becomes DELETED; a failed delete remains pending. Tombstones are retained and reconciled
   daily to catch an exceptionally late PUT. Cleanup success means provider acknowledgement, not backup
-  erasure. No recovery window is promised: deleted bytes require a fresh upload and fresh consent.
-- Upload quota: global 120/10min, actor+venue 30/10min. Privacy revoke/hide/delete use a separate
+  erasure. No recovery window is promised: deleted bytes require a fresh upload.
+- Upload quota: global 120/10min, actor+venue 30/10min. Legacy revoke/hide and management delete use a separate
   actor 60/minute quota; reads global 1200/minute, actor 240/minute and 16 concurrent storage reads.
   No automatic UI retries. Selection/pending state survives noncancelable same-document Back only
   in memory, scoped to user/venue/role/permissions. Refresh never silently rebases a selected image.
@@ -75,11 +93,13 @@ Authenticated routes under `/api`:
 
 | Method/path | Meaning |
 | --- | --- |
-| GET `/venue/{v}/staff/photos/me` | Own linked profiles and photo state, including module-disabled revoke access |
-| GET `/venue/{v}/staff/profiles/{p}/photos` | Authorized current/candidate, revision, consent and actual visibility |
-| POST same path | Raw JPEG/PNG, `Idempotency-Key` UUID and `X-Photo-Revision`; private candidate only |
-| POST same path + `/consent`, `/publish`, `/hide`, `/delete`, `/revoke` | Revision-checked action; consent also requires image ID, confirmed=true and policy version |
-| GET same path + `/{photoId}/content` | Current/candidate private preview within existing profile RBAC |
+| GET `/venue/{v}/staff/photos/me` | Own linked profiles and photo state; STAFF read-only, OWNER/MANAGER photo management |
+| GET `/venue/{v}/staff/profiles/{p}/photos` | Authorized current/legacy candidate, revision and visibility; canConsent=false, consentPolicy=staff-photo-direct-v2 |
+| POST same path | Raw JPEG/PNG, `Idempotency-Key` UUID and `X-Photo-Revision`; atomically becomes current after successful PUT |
+| POST same path + `/delete` | OWNER/MANAGER only; revision-checked immediate delivery removal and cleanup |
+| POST same path + `/hide` | Legacy OWNER/MANAGER-only revision-checked private hide; no new UI control |
+| POST same path + `/consent`, `/publish`, `/revoke` | Retired: after same-venue photo RBAC, 410 `STAFF_PHOTO_ACTION_RETIRED` for OWNER/MANAGER, 403 for STAFF/outsiders; no writes, consent or candidate promotion |
+| GET same path + `/{photoId}/content` | Current/legacy candidate private preview: own-venue OWNER/MANAGER or linked self |
 | GET `/guest/venue/{v}/staff/{p}/photos/{photoId}` | Exact currently eligible Guest image |
 
 Server-only configuration: `STAFF_PHOTOS_R2_ENABLED` (default false),
@@ -121,9 +141,10 @@ These are prerequisites for a later authorized task, not permission for external
    reduce usage. No paid Workers/CDN/image service or billing change is part of this slice.
 5. With separate live-write permission and exact release acceptance, upload a synthetic JPEG/PNG;
    inspect actual object Standard class, dimensions, metadata stripping, authenticated preview,
-   consent/publication, all visibility toggles, replacement and restart durability. Test real
+   direct activation with no consent/publish request, protected-card Manager rights, legacy-route
+   denial, all visibility toggles, replacement and restart durability. Test real
    iPhone Telegram picker/cancel/HEIC error/orientation, short viewport and desktop.
-6. Revoke/delete, verify immediate Guest/private denial, durable pending state under simulated
+6. Delete, verify immediate Guest/private denial, durable pending state under simulated
    delete failure, then actual R2 HEAD absence after acknowledged cleanup. No secrets/object keys
    should appear in public artifacts. Do not claim deletion before that observation.
 7. Agree backup destination, encryption, operator, retention and RPO/RTO before production. In an
@@ -181,8 +202,8 @@ It does not include:
 - AI image processing;
 - public galleries or social features.
 
-Staff profile photos remain consent-bound to the employee profile domain. They require employee
-consent, moderation, guest-visibility and deletion policy and must not be added as a side effect of
+Staff profile photos remain bound to the employee profile domain. Their direct OWNER/MANAGER
+management, guest-visibility and deletion policy are specified above; they must not be added as a side effect of
 venue media work.
 
 ## Future Surfaces
@@ -192,7 +213,7 @@ After the first slice is release-closed, later specs may evaluate:
 - structured menu-item description/photo/thumbnail using the structured menu domain;
 - option/flavor media only after its Guest ordering value is proven;
 - promotion/banner migration from its existing Telegram-specific table;
-- staff profile photos only through `docs/STAFF_PROFILES_SHIFTS_TIPS.md` consent/moderation rules.
+- staff profile photos only through the direct-management rules in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`.
 
 These surfaces may reuse the approved private storage adapter and safe delivery primitives. They do
 not automatically share one asset row, lifecycle or authorization policy, and none is part of the
@@ -224,7 +245,7 @@ first implementation prompt.
   part of the first slice.
 - `backend/app/src/main/resources/db/migration/postgresql/V117__staff_profiles_today_shifts.sql`
   contains nullable untyped `staff_profiles.photo_ref`, which is not delivery authority. The separate
-  consent-bound staff-photo ledger and R2 runtime are described in the UX08 E section above.
+  staff-photo ledger and R2 runtime are described in the UX08 E section above.
 
 ### Telegram Upload And Storage
 
