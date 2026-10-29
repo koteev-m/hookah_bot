@@ -756,7 +756,7 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'subscription':
         return currentRole === 'OWNER'
       case 'my-profile':
-        return currentRole === 'STAFF' && hasPermission('STAFF_PROFILE_EDIT_OWN')
+        return (currentRole === 'STAFF' || currentRole === 'MANAGER') && hasPermission('STAFF_PROFILE_EDIT_OWN')
       case 'staff':
         return currentRole !== 'STAFF'
       case 'shifts':
@@ -1111,6 +1111,7 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   let currentDispose: (() => void) | null = null
   let currentRoute = resolveRoute()
+  let ownProfileOrigin: 'staff' | 'more' = 'more'
   let ownerSectionOrigin = ['ownership', 'stats', 'feedback', 'subscription', 'support'].includes(currentRoute.name) ? 'more'
     : ['staff', 'chat'].includes(currentRoute.name) ? 'settings/team'
       : ['menu', 'tables', 'promotions'].includes(currentRoute.name) ? 'settings' : 'dashboard'
@@ -1125,6 +1126,10 @@ export function mountVenueApp(options: VenueAppOptions) {
     navigate,
     back: () => {
       if (currentSchedule?.controller.back()) return
+      if (currentRoute.name === 'my-profile') {
+        navigate(canAccessRoute(ownProfileOrigin) ? `#/${ownProfileOrigin}` : '#/more')
+        return
+      }
       if (currentRoute.name === 'order') {
         navigate(canAccessRoute('orders') ? '#/orders' : '#/dashboard')
         return
@@ -1157,6 +1162,9 @@ export function mountVenueApp(options: VenueAppOptions) {
     const route = resolveRoute()
     const previousRoute = currentRoute
     currentRoute = route
+    if (route.name === 'my-profile' && previousRoute.name !== 'my-profile') {
+      ownProfileOrigin = previousRoute.name === 'staff' ? 'staff' : 'more'
+    }
     renderedUrl = window.location.href
     updateNav(refs.navButtons, route.name === 'order' ? 'orders' : route.name)
     const owner = currentRole !== null
@@ -1172,7 +1180,7 @@ export function mountVenueApp(options: VenueAppOptions) {
       refs.navButtons.dashboard.setAttribute('aria-current', 'page')
       refs.navButtons.dashboard.dataset.active = 'true'
     }
-    const moreActive = ['more', 'ownership', 'stats', 'feedback', 'subscription', 'support'].includes(route.name) || (currentRole === 'STAFF' && ['my-profile', 'tables', 'settings', 'chat'].includes(route.name))
+    const moreActive = ['more', 'my-profile', 'ownership', 'stats', 'feedback', 'subscription', 'support'].includes(route.name) || (currentRole === 'STAFF' && ['my-profile', 'tables', 'settings', 'chat'].includes(route.name))
     refs.moreButton.dataset.active = String(moreActive)
     if (moreActive) refs.moreButton.setAttribute('aria-current', 'page')
     else refs.moreButton.removeAttribute('aria-current')

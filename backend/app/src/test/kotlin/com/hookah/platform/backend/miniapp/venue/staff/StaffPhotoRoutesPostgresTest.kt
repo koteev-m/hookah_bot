@@ -22,6 +22,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -30,8 +31,105 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 
 class StaffPhotoRoutesPostgresTest {
+    @Test fun `owner observes manager self consent for the exact photo across sessions`() =
+        testApplication {
+            val database = PostgresTestEnv.createDatabase()
+            val config = PostgresTestEnv.buildConfig(database)
+            environment { this.config = config }
+            application { moduleWithOverrides(ModuleOverrides(staffPhotoStorage = FakeStaffPhotoStorage())) }
+            client.get("/health")
+            PostgresTestEnv.createDataSource(database, false).use { ds ->
+                val f = PhotoFixture(ds)
+                val tokens = SessionTokenService(SessionTokenConfig.from(config, "test"))
+                val owner = tokens.issueToken(101).token
+                val manager = tokens.issueToken(105).token
+                val path = "/api/venue/${f.venue}/staff/profiles/${f.protected}/photos"
+
+                suspend fun state(token: String): JsonObject {
+                    val response = client.get(path) { bearerAuth(token) }
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    return Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                }
+
+                suspend fun upload(revision: Int): JsonObject {
+                    val response =
+                        client.post(path) {
+                            bearerAuth(owner)
+                            contentType(ContentType.Image.PNG)
+                            header("Idempotency-Key", UUID.randomUUID().toString())
+                            header("X-Photo-Revision", revision)
+                            setBody(syntheticPhoto())
+                        }
+                    assertEquals(HttpStatusCode.OK, response.status)
+                    return Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                }
+
+                suspend fun action(
+                    token: String,
+                    action: String,
+                    photo: String,
+                    revision: Int,
+                ): HttpResponse =
+                    client.post("$path/$action") {
+                        bearerAuth(token)
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            buildJsonObject {
+                                put("revision", revision)
+                                put("photoId", photo)
+                                put("confirmed", true)
+                                put("policy", STAFF_PHOTO_CONSENT_POLICY)
+                            }.toString(),
+                        )
+                    }
+                val uploaded = upload(0)
+                val photoId = uploaded["candidate"]!!.jsonObject["id"]!!.jsonPrimitive.content
+                assertEquals("2", uploaded["revision"]!!.jsonPrimitive.content)
+                val ownResponse = client.get("/api/venue/${f.venue}/staff/photos/me") { bearerAuth(manager) }
+                assertEquals(HttpStatusCode.OK, ownResponse.status)
+                val own = Json.parseToJsonElement(ownResponse.bodyAsText()).jsonArray.single().jsonObject
+                assertEquals(f.protected.toString(), own["profileId"]!!.jsonPrimitive.content)
+                val ownPhoto = own["photo"]!!.jsonObject
+                assertEquals(photoId, ownPhoto["candidate"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+                assertEquals("true", ownPhoto["isSelf"]!!.jsonPrimitive.content)
+                assertEquals("true", ownPhoto["canConsent"]!!.jsonPrimitive.content)
+                assertEquals("false", ownPhoto["canManage"]!!.jsonPrimitive.content)
+                val otherManagerResponse = client.get(path) { bearerAuth(tokens.issueToken(102).token) }
+                assertEquals(HttpStatusCode.Forbidden, otherManagerResponse.status)
+                assertEquals(HttpStatusCode.Forbidden, action(owner, "consent", photoId, 2).status)
+                assertEquals(HttpStatusCode.Forbidden, action(owner, "publish", photoId, 2).status)
+                assertEquals(HttpStatusCode.OK, action(manager, "consent", photoId, 2).status)
+                assertEquals(
+                    1L,
+                    f.count(
+                        """
+                        SELECT count(*) FROM staff_profile_photos WHERE venue_id=${f.venue}
+                        AND profile_id=${f.protected} AND id='$photoId' AND linked_user_id=105
+                        AND consent_actor_id=105 AND consent_kind='SELF'
+                        """.trimIndent(),
+                    ),
+                )
+                val refreshed = state(owner)
+                assertEquals("3", refreshed["revision"]!!.jsonPrimitive.content)
+                assertEquals(photoId, refreshed["candidate"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+                assertEquals("SELF", refreshed["candidate"]!!.jsonObject["consent"]!!.jsonPrimitive.content)
+                // Other same-name profiles must not acquire the consent.
+                assertEquals(0L, f.count("SELECT count(*) FROM staff_profile_photos WHERE profile_id=${f.display}"))
+                assertEquals(HttpStatusCode.Conflict, action(owner, "publish", photoId, 2).status)
+                assertEquals(HttpStatusCode.Forbidden, action(manager, "publish", photoId, 3).status)
+                assertEquals(HttpStatusCode.OK, action(owner, "publish", photoId, 3).status)
+                assertEquals(photoId, state(owner)["current"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+                val replacement = upload(4)["candidate"]!!.jsonObject
+                val replacementId = replacement["id"]!!.jsonPrimitive.content
+                assertNotEquals(photoId, replacementId)
+                assertEquals("NONE", replacement["consent"]!!.jsonPrimitive.content)
+                assertEquals(HttpStatusCode.Forbidden, action(owner, "publish", replacementId, 6).status)
+            }
+        }
+
     @Test fun `authenticated photo API publication visibility privacy and safe failures`() =
         testApplication {
             val database = PostgresTestEnv.createDatabase()

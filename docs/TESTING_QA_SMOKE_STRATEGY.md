@@ -4588,6 +4588,25 @@ Separate staging smoke/configuration and production backup/privacy blockers are 
 `MEDIA_STORAGE_UPLOAD.md`; no live R2 PUT/DELETE or staging migration is authorized by local checks.
 
 
+### UX08 staff UI and cross-account consent follow-up
+
+`HT-UX08-STAFF-UI-CONSENT-FIX-01`: exercise exclusive Accounts/Team sections, 1/10 collapsed
+rows, lazy private reads and no re-fetch of card 1 when opening card 2. Owner/Manager/Staff
+boundaries, Manager own entry and empty/module-disabled state use existing permissions.
+File selection sends exactly one private upload; hold responses to check progress and Back guards.
+Unknown-response retry retains key/file/revision; changed revision must reject rather than rebase.
+Picker return after storage disables or the panel is disposed must not leave an invisible pending
+selection. Inspect 390×844, 390×568 and desktop screenshots; browser results are not real iPhone evidence.
+
+`StaffPhotoRoutesPostgresTest` uses distinct authenticated Owner/Manager accounts with one exact
+venue/profile/photo, checks DB SELF consent linkage, Owner refreshed revision, stale publication
+conflict and replacement requiring new consent. The browser two-session fixture checks refresh on
+return and separate publication; mocked sessions are not real Telegram account-switch evidence.
+Run photo + affected Staff/Invite/RBAC/Guest/Preview/membership suites, Kotlin compile/ktlint,
+TypeScript/build, focused and full Playwright with zero skipped PostgreSQL tests. Staging and
+real iPhone acceptance remain a separately authorized step; never infer the live incident cause
+from the local regression alone.
+
 ### UX08 migration head and historical V126 regression boundary
 
 Cursor migration tests retain PostgreSQL V126/H2 V127 as exact historical targets, including
