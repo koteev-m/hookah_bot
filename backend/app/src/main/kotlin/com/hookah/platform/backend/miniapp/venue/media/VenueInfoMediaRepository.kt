@@ -347,7 +347,7 @@ class VenueInfoMediaRepository(
             AND NOT EXISTS (SELECT 1 FROM venue_info_section_media m
             WHERE m.public_id=venue_info_media_cleanup.public_id AND m.status='READY')""",
             ).use { s ->
-                s.setTimestamp(1, Timestamp.from(clock.instant()))
+                s.setTimestamp(1, Timestamp.from(clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS)))
                 s.setString(2, id)
                 s.executeUpdate()
             }

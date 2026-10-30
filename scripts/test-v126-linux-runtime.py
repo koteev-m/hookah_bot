@@ -48,6 +48,8 @@ TRUSTSTORE_PASSWORD = 'synthetic-fixture'
 V126_RUNTIME_SOURCE = '919abbb813cbbb724d628bdabeef8e905e6a1c42'
 V126_MIGRATION_TREE = '765956602de896b4498a956753272a6bc2d2971e'
 MIGRATION_PATH = 'backend/app/src/main/resources/db/migration'
+V128_SCRIPT = 'V128__venue_info_media_objects.sql'
+V128_SHA256 = '153579d56223a9cadd5f988081b86853cdc7394275e160b968c6200cff5fdaf9'
 V127_SCRIPT = 'V127__staff_profile_photos.sql'
 V127_SHA256 = '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846'
 sys.dont_write_bytecode = True
@@ -72,9 +74,10 @@ def verify_historical_history(rows):
 
 def verify_forward_history(before, after):
     verify_historical_history(before)
-    require(len(after) == 127 and after[:126] == before, 'forward migration changed historical Flyway rows')
-    require(after[-1]['version'] == '127' and after[-1]['script'] == V127_SCRIPT
-            and after[-1]['success'] and after[-1]['type'] == 'SQL', 'unexpected forward migration')
+    require(len(after) == 128 and after[:126] == before, 'forward migration changed historical Flyway rows')
+    for row, version, script in zip(after[126:], ('127', '128'), (V127_SCRIPT, V128_SCRIPT)):
+        require(row['version'] == version and row['script'] == script
+                and row['success'] and row['type'] == 'SQL', 'unexpected forward migration')
 
 
 def hosted_only():
@@ -725,6 +728,8 @@ class Integration:
         verify_historical_history(before)
         photo = ROOT / MIGRATION_PATH / 'postgresql' / V127_SCRIPT
         require(hashlib.sha256(photo.read_bytes()).hexdigest() == V127_SHA256, 'unreviewed current migration bytes')
+        media = ROOT / MIGRATION_PATH / 'postgresql' / V128_SCRIPT
+        require(hashlib.sha256(media.read_bytes()).hexdigest() == V128_SHA256, 'unreviewed media migration bytes')
         self.release = self.current_release
         self.image = 'ht-v127-runtime-fixture:' + self.token
         self.build_image(ROOT, self.root / 'current-lib')
@@ -734,20 +739,20 @@ class Integration:
         cid = self.cid('backend')
         self.start_once(cid)
         result, output, _ = self.observe(cid)
-        require(result.returncode == 0 and b'READINESS=READY' in output, 'current JVM did not become ready after V127')
+        require(result.returncode == 0 and b'READINESS=READY' in output, 'current JVM did not become ready after V128')
         self.check_starts(cid)
         after = self.history()
         verify_forward_history(before, after)
         # The current image's real Flyway validates every checksum and absence of pending SQL.
         self.run(['docker', 'exec', cid, 'java', '-cp', '/app/app/lib/*:/fixture',
-                  'V126RuntimeFixture', 'validate127'], timeout=60)
+                  'V126RuntimeFixture', 'validate128'], timeout=60)
         require(self.sql("SELECT count(*) FROM information_schema.tables WHERE table_schema='public' "
                          "AND table_name IN ('staff_profile_photos','staff_profile_photo_state');") == b'2\n',
                 'photo schema missing after current JVM migration')
         rejected = self.shell('remote_compose() { command docker compose --env-file .env --file docker-compose.yml "$@"; }\n'
                               'remote_assert_schema_v126\n', env={'BACKEND_IMAGE': self.image}, check=False)
         require(rejected.returncode == 3, 'historical V126 schema guard accepted forward schema')
-        self.events.append({'checkpoint': 'ACTUAL_CURRENT_JVM_V126_TO_V127', 'source_commit': self.release,
+        self.events.append({'checkpoint': 'ACTUAL_CURRENT_JVM_V126_TO_V128', 'source_commit': self.release,
                             'image_id': self.image_id, 'historical_rows_unchanged': 126,
                             'history_sha256': hashlib.sha256(json.dumps(after, sort_keys=True).encode()).hexdigest(),
                             'forward_version': after[-1]['version'], 'forward_checksum': after[-1]['checksum'],
@@ -1010,7 +1015,8 @@ class MigrationRuntimeTest(unittest.TestCase):
         before = [dict(version=str(v), script='V' + str(v) + '__fixture.sql', checksum=v,
                        success=True, type='SQL', installed_rank=v) for v in range(1, 127)]
         tail = dict(version='127', script=V127_SCRIPT, checksum=127, success=True, type='SQL', installed_rank=127)
-        after = before + [tail]
+        media_tail = dict(version='128', script=V128_SCRIPT, checksum=128, success=True, type='SQL', installed_rank=128)
+        after = before + [tail, media_tail]
         verify_forward_history(before, after)
         for key, value in (('checksum', -1), ('script', 'changed.sql'), ('success', False), ('installed_rank', 999)):
             changed = [dict(row) for row in after]
@@ -1019,8 +1025,11 @@ class MigrationRuntimeTest(unittest.TestCase):
                 verify_forward_history(before, changed)
         for key, value in (('version', '128'), ('script', 'unknown.sql'), ('success', False), ('type', 'BASELINE')):
             with self.subTest(tail=key), self.assertRaises(FixtureAssertionError):
-                verify_forward_history(before, before + [dict(tail, **{key: value})])
-        for changed in (before, after + [tail], after[1:]):
+                verify_forward_history(before, before + [dict(tail, **{key: value}), media_tail])
+        for key, value in (('version', '129'), ('script', 'unknown.sql'), ('success', False), ('type', 'BASELINE')):
+            with self.subTest(media_tail=key), self.assertRaises(FixtureAssertionError):
+                verify_forward_history(before, before + [tail, dict(media_tail, **{key: value})])
+        for changed in (before, before + [tail], after + [tail], after[1:]):
             with self.assertRaises(FixtureAssertionError):
                 verify_forward_history(before, changed)
         with self.assertRaises(FixtureAssertionError):

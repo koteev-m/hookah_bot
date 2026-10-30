@@ -44,7 +44,11 @@ class SupportThreadReadCursorMigrationH2Test {
             location = "classpath:db/migration/h2",
             previousVersion = "126",
             expectedVersion = "127",
-            expectedFollowingMigrations = mapOf("128" to "V128__staff_profile_photos.sql"),
+            expectedFollowingMigrations =
+                mapOf(
+                    "128" to "V128__staff_profile_photos.sql",
+                    "129" to "V129__venue_info_media_objects.sql",
+                ),
             ddlFailureContract = MigrationDdlFailureContract.NON_TRANSACTIONAL,
         )
 }

@@ -37,7 +37,11 @@ class SupportThreadReadCursorMigrationPostgresTest {
             location = "classpath:db/migration/postgresql",
             previousVersion = "125",
             expectedVersion = "126",
-            expectedFollowingMigrations = mapOf("127" to "V127__staff_profile_photos.sql"),
+            expectedFollowingMigrations =
+                mapOf(
+                    "127" to "V127__staff_profile_photos.sql",
+                    "128" to "V128__venue_info_media_objects.sql",
+                ),
             ddlFailureContract = MigrationDdlFailureContract.TRANSACTIONAL,
             close = dataSource::close,
         )

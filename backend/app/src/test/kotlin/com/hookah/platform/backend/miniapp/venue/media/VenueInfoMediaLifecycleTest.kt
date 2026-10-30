@@ -299,9 +299,14 @@ open class VenueInfoMediaLifecycleH2Test {
 
     @Test fun `membership revocation during put prevents activation and leaves durable cleanup`() =
         check { f ->
+            // H2 rounds persisted timestamps to microseconds; an immediate cleanup must not be scheduled in the future.
+            f.clock.now = java.time.Instant.parse("2030-01-01T00:00:00.123456789Z")
             f.storage.afterPut = { f.sql("DELETE FROM venue_members WHERE venue_id=${f.venue} AND user_id=101") }
             assertFailsWith<ForbiddenException> { f.upload() }
             assertEquals(0L, f.count("SELECT COUNT(*) FROM venue_info_section_media WHERE status='READY'"))
+            assertEquals(1L, f.count("SELECT COUNT(*) FROM venue_info_section_media WHERE status='FAILED'"))
+            assertEquals(1L, f.count("SELECT COUNT(*) FROM venue_info_media_cleanup WHERE due_at IS NOT NULL"))
+            assertEquals(1, f.storage.objects.size)
             f.service.cleanup()
             assertTrue(f.storage.objects.isEmpty())
         }

@@ -1,5 +1,45 @@
 # Project Status
 
+## HT-VENUE-MEDIA-PR236-CI-FAILURES-FIX-01 — local CI corrections (2026-10-31)
+
+**LOCAL_CI_FAILURES_FIXED_READY_FOR_REVIEW / NO_COMMIT_OR_PUSH_AUTHORIZATION**.
+Identity PASS after explicit clarification: starting HEAD
+797d6025a4ba48a3a5b36bbb4e7eba717e6fa137; sole direct parent/base
+bf3abc23a5109e097bf00cd2ed342729a086d653; primary Hookah checkout, branch
+codex/ht-venue-media-r2-pdf-worker-01. Original push 41130642065 and PR 41130679378
+are both completed/failure; their results are not replaced by local test evidence.
+
+Four diagnosed boundaries: cursor migration tests omitted reviewed H2 V129/PG V128
+from their exact pending maps; H2 rounds a nanosecond due-now timestamp upward and a
+frozen test clock then misses immediate failed-upload cleanup; connected runtime fixture
+expected only V127; cutover fixture's exact current SQL inventory omitted media SQL.
+Pending maps now include both reviewed tails. Failed-upload due-now timestamps truncate
+to SQL microseconds; deterministic fractional-time revocation regression retains Forbidden,
+zero READY, committed FAILED/journal and actual cleanup assertions on H2 and PostgreSQL.
+Runtime checks exact V1–V126 preservation plus V127/V128 and validates current Flyway head;
+cutover permits only exact reviewed tail paths/hashes, with missing/changed/extra/type
+negative controls. Historical SQL/authority/fencing/recovery and worker isolation are unchanged.
+
+Local checks: backend 152/152, zero skips/errors/failures (full 127-test migration-sanity
+selector, H2/PG lifecycle 12 each, real nonempty PG V127→V128 preservation upgrade 1).
+Compile/ktlint PASS; runtime diagnostics/contract self-tests 17/17; extracted exact cutover
+lineage validator 8/8 positive/negative cases; HT70 65/65; PDF-worker contracts 8/8;
+Java runtime fixture compilation, shell syntax and diff-check PASS. All migration bytes
+and four scripts/dev SQL helpers match the pre-task SHA256 inventory. H2 failure was
+reproduced before the fix with .123456789 seconds, with XML and SQL-rounding evidence.
+Full route selector was unnecessary after deterministic isolated reproduction; Mini App
+and Playwright were not rerun because their sources and dependencies are unaffected.
+
+Evidence: /private/tmp/HT-VENUE-MEDIA-PR236-CI-FAILURES-FIX-01/ (original CI logs,
+backend-xml, backend-results.json, red regression, timestamp-probe and lineage-proof).
+Limitation: the full connected runtime requires disposable GitHub-hosted Linux; full
+cutover also executes Linux/SSH consumers. Neither full harness was rerun on this Mac.
+Targeted local fixture proofs do not substitute for a new exact published-SHA CI run.
+No unfinished local test operation, commit/push/PR mutation/rerun/SSH/deploy/live DB/R2.
+Next: review local diff, then separately authorize corrective commit/push and new CI;
+merge and real iPhone/R2/staging acceptance remain unauthorized/unproven.
+
+
 ## HT-VENUE-PDF-WORKER-CI-PERMISSIONS-FIX-01 — probe permissions verified (2026-10-30)
 
 **CI_PDF_PROBE_PERMISSIONS_FIXED_READY_FOR_REVIEW / NO_COMMIT_OR_RELEASE_AUTHORIZATION**.

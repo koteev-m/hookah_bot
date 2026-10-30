@@ -8250,9 +8250,14 @@ for entry in entries.split(b'\0'):
         if mode != '100644' or kind != 'blob':
             raise SystemExit('unexpected historical migration object')
         historical[name.decode()] = oid
-extra = {'postgresql/V127__staff_profile_photos.sql', 'h2/V128__staff_profile_photos.sql'}
+extra = {
+    'postgresql/V127__staff_profile_photos.sql': '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846',
+    'h2/V128__staff_profile_photos.sql': '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846',
+    'postgresql/V128__venue_info_media_objects.sql': '153579d56223a9cadd5f988081b86853cdc7394275e160b968c6200cff5fdaf9',
+    'h2/V129__venue_info_media_objects.sql': '153579d56223a9cadd5f988081b86853cdc7394275e160b968c6200cff5fdaf9',
+}
 paths = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if not p.is_dir() or p.is_symlink()}
-if set(paths) != set(historical) | extra:
+if set(paths) != set(historical) | set(extra):
     raise SystemExit('migration inventory drift')
 for name, path in paths.items():
     if not stat.S_ISREG(path.lstat().st_mode) or path.is_symlink() or path.lstat().st_mode & 0o111:
@@ -8262,8 +8267,8 @@ for name, path in paths.items():
         oid = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
         if oid != historical[name]:
             raise SystemExit('historical migration drift')
-    elif hashlib.sha256(raw).hexdigest() != '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846':
-        raise SystemExit('staff photo migration drift')
+    elif hashlib.sha256(raw).hexdigest() != extra[name]:
+        raise SystemExit('reviewed migration drift')
 PYLINEAGE
 }
 
@@ -8328,7 +8333,13 @@ PY
     verify_current_migration_lineage "${fixture}"
   rm "${fixture}/postgresql/V128__unreviewed.sql"
   printf '\n-- forbidden tail drift\n' >> "${fixture}/postgresql/V127__staff_profile_photos.sql"
-  expect_failure 'changed reviewed tail SQL rejects current lineage' 'staff photo migration drift' \
+  expect_failure 'changed reviewed tail SQL rejects current lineage' 'reviewed migration drift' \
+    verify_current_migration_lineage "${fixture}"
+
+  cp "${REPO_ROOT}/${migration_root}/postgresql/V127__staff_profile_photos.sql" \
+    "${fixture}/postgresql/V127__staff_profile_photos.sql"
+  printf '\n-- forbidden media tail drift\n' >> "${fixture}/postgresql/V128__venue_info_media_objects.sql"
+  expect_failure 'changed reviewed media SQL rejects current lineage' 'reviewed migration drift' \
     verify_current_migration_lineage "${fixture}"
 
   # Execute the unmodified production migration guard block with real Git objects,
