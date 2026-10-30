@@ -32,6 +32,7 @@ fun Route.venueGuestPreviewRoutes(
     venueInfoSectionsRepository: VenueInfoSectionsRepository,
     venueInfoSectionMediaRepository: VenueInfoSectionMediaRepository,
     telegramFileDownloader: (suspend (String) -> TelegramDownloadedFile?)? = null,
+    mediaService: com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaService? = null,
 ) {
     route("/venue/{venueId}/guest-preview") {
         get {
@@ -56,24 +57,39 @@ fun Route.venueGuestPreviewRoutes(
             val venueId = call.requireVenueId()
             requireGuestPreviewAccess(venueAccessRepository, userId, venueId)
             val sectionId = call.requirePreviewLongParameter("sectionId")
-            val mediaId = call.requirePreviewLongParameter("mediaId")
+            val mediaRef = call.parameters["mediaId"] ?: throw InvalidInputException()
             val section =
                 venueInfoSectionsRepository
                     .findSectionById(venueId = venueId, sectionId = sectionId)
                     ?.takeIf { it.isVisible }
                     ?: throw NotFoundException(GUEST_PREVIEW_UNAVAILABLE_MESSAGE)
             val media =
-                venueInfoSectionMediaRepository.findById(sectionId = section.id, mediaId = mediaId)
+                venueInfoSectionMediaRepository.findByReference(section.id, mediaRef)
                     ?: throw NotFoundException(GUEST_PREVIEW_UNAVAILABLE_MESSAGE)
-            val downloader = telegramFileDownloader ?: throw ConfigException("Media proxy is not configured")
             val downloaded =
-                downloader(media.telegramFileId)
-                    ?: throw NotFoundException(GUEST_PREVIEW_UNAVAILABLE_MESSAGE)
+                (
+                    if (mediaService != null) {
+                        mediaService.bytes(media, telegramFileDownloader)
+                    } else {
+                        val downloader =
+                            telegramFileDownloader ?: throw ConfigException("Media proxy is not configured")
+                        downloader(media.telegramFileId)
+                    }
+                ) ?: throw NotFoundException(GUEST_PREVIEW_UNAVAILABLE_MESSAGE)
+            requireGuestPreviewAccess(venueAccessRepository, userId, venueId)
+            val freshSection = venueInfoSectionsRepository.findSectionById(venueId, sectionId)
+            val freshMedia = venueInfoSectionMediaRepository.findByReference(sectionId, mediaRef)
+            if (freshSection?.isVisible != true || freshMedia?.id != media.id) {
+                throw NotFoundException(
+                    GUEST_PREVIEW_UNAVAILABLE_MESSAGE,
+                )
+            }
+            call.response.header("X-Content-Type-Options", "nosniff")
             val contentType = downloaded.contentType.toGuestPreviewMediaContentType(media.mediaType)
             if (media.mediaType.equals("pdf", ignoreCase = true)) {
                 call.response.headers.append(
                     HttpHeaders.ContentDisposition,
-                    "inline; filename=\"venue-info-$mediaId.pdf\"",
+                    "inline; filename=\"venue-info-${media.publicId ?: media.id}.pdf\"",
                 )
             }
             call.respondBytes(

@@ -30,6 +30,9 @@ class TelegramOutboxWorker(
     private val nowProvider: () -> Instant = Instant::now,
     private val metrics: AppMetrics? = null,
     private val recipientLocks: TelegramRecipientLockRegistry = TelegramRecipientLockRegistry(),
+    private val venueInfoDispatch: (
+        suspend (TelegramOutboxMessage, JsonElement, TelegramApiClient) -> TelegramCallResult
+    )? = null,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramOutboxWorker::class.java)
 
@@ -89,7 +92,7 @@ class TelegramOutboxWorker(
             scheduleRetry(message, "Telegram API client unavailable", null)
             return
         }
-        if (message.method == "sendMessage") {
+        if (message.method == "sendMessage" || message.method == "venueInfo") {
             rateLimiter.awaitPermit(message.chatId)
         }
         if (!repository.isRecipientAuthorized(message.chatId, message.staffLiveOrderId)) {
@@ -99,7 +102,11 @@ class TelegramOutboxWorker(
 
         val result =
             try {
-                apiClient.dispatchOutbox(message.chatId, message.method, payload)
+                if (message.method == "venueInfo") {
+                    venueInfoDispatch?.invoke(message, payload, apiClient) ?: TelegramCallResult.TrafficDenied
+                } else {
+                    apiClient.dispatchOutbox(message.chatId, message.method, payload)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {

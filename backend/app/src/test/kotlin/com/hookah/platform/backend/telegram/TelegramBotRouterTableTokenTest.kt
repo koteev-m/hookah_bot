@@ -243,6 +243,8 @@ import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueShort
 import com.hookah.platform.backend.telegram.db.VenueStatsReport
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
+import io.ktor.client.engine.mock.respond
+import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.config.MapApplicationConfig
 import io.mockk.clearMocks
 import io.mockk.coEvery
@@ -336,6 +338,7 @@ class TelegramBotRouterTableTokenTest {
     private val secondBotGiftCallbackTag = "gift00000002"
     private val platformGuestQrCallbackTagSequence = AtomicLong()
     private var platformGuestQrNow = Instant.parse("2026-08-04T10:00:00Z")
+    private val infoJson = Json { ignoreUnknownKeys = true }
     private val router = routerWithWebAppPublicUrl(null)
 
     private fun routerWithWebAppPublicUrl(
@@ -349,8 +352,11 @@ class TelegramBotRouterTableTokenTest {
         venueMenuRepositoryOverride: VenueMenuRepository = venueMenuRepository,
         trafficPolicyOverride: TelegramTrafficPolicy = TelegramTrafficPolicy.unrestricted(),
         miniAppAbuseProtectionOverride: MiniAppAbuseProtection = MiniAppAbuseProtection(),
+        infoMediaServiceOverride: com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaService? = null,
+        outboxOverride: TelegramOutboxEnqueuer = outboxEnqueuer,
     ): TelegramBotRouter =
         TelegramBotRouter(
+            venueInfoMediaService = infoMediaServiceOverride,
             trafficPolicy = trafficPolicyOverride,
             miniAppAbuseProtection = miniAppAbuseProtectionOverride,
             config =
@@ -369,7 +375,7 @@ class TelegramBotRouterTableTokenTest {
                     botUsername = botUsername,
                 ),
             apiClient = apiClient,
-            outboxEnqueuer = outboxEnqueuer,
+            outboxEnqueuer = outboxOverride,
             idempotencyRepository = idempotencyRepository,
             userRepository = userRepository,
             tableTokenRepository = tableTokenRepository,
@@ -14233,11 +14239,21 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
+            coVerify { outboxEnqueuer.enqueueVenueInfo(100, 10, 202, null, true) }
+            coEvery { apiClient.dispatchOutbox(any(), any(), any()) } returns TelegramCallResult.Success(null)
+            router.dispatchVenueInfo(
+                com.hookah.platform.backend.telegram.db.TelegramOutboxMessage(1, 100, "venueInfo", "", 1),
+                infoJson.encodeToJsonElement(VenueInfoDelivery.serializer(), VenueInfoDelivery(10, 202, null, true)),
+                apiClient,
+            )
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
+                apiClient.dispatchOutbox(
                     100,
-                    "ℹ️ FAQ\n\nРаздел пока не заполнен.",
-                    match { it is InlineKeyboardMarkup },
+                    "sendMessage",
+                    match {
+                        it.toString().contains("FAQ") && it.toString().contains("Раздел пока не заполнен.") &&
+                            it.toString().contains("reply_markup")
+                    },
                 )
             }
         }
@@ -14338,34 +14354,256 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
+            coVerify { outboxEnqueuer.enqueueVenueInfo(100, 10, 201, null, false) }
+            coVerify { outboxEnqueuer.enqueueVenueInfo(100, 10, 201, 1, false) }
+            coVerify { outboxEnqueuer.enqueueVenueInfo(100, 10, 201, 2, true) }
+            coEvery { apiClient.dispatchOutbox(any(), any(), any()) } returns TelegramCallResult.Success(null)
+            coEvery { venueInfoSectionMediaRepository.findById(201, 1) } returns
+                VenueInfoSectionMediaAttachment(1, 201, "image", "photo-file-id", 0)
+            coEvery { venueInfoSectionMediaRepository.findById(201, 2) } returns
+                VenueInfoSectionMediaAttachment(2, 201, "pdf", "pdf-file-id", 1)
+            for (id in listOf(null, 1L, 2L)) router.dispatchVenueInfo(
+                com.hookah.platform.backend.telegram.db.TelegramOutboxMessage(1, 100, "venueInfo", "", 1),
+                infoJson.encodeToJsonElement(VenueInfoDelivery.serializer(), VenueInfoDelivery(10, 201, id, id == 2L)),
+                apiClient,
+            )
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
+                apiClient.dispatchOutbox(
                     100,
-                    "ℹ️ Правила посещения\n\nБез собственной еды.",
-                    null,
+                    "sendMessage",
+                    match { it.toString().contains("Без собственной еды.") },
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueSendPhoto(
-                    100,
-                    "photo-file-id",
-                    null,
-                    null,
-                )
+                apiClient.dispatchOutbox(100, "sendPhoto", match { it.toString().contains("photo-file-id") })
             }
             coVerify {
-                outboxEnqueuer.enqueueSendDocument(
+                apiClient.dispatchOutbox(
                     100,
-                    "pdf-file-id",
-                    null,
+                    "sendDocument",
                     match {
-                        it is InlineKeyboardMarkup &&
-                            it.inlineKeyboard.flatten().any { button ->
-                                button.text == "⬅️ К разделам" &&
-                                    button.callbackData == "bot_catalog_venue_about:10"
-                            }
+                        it.toString().contains("pdf-file-id") && it.toString().contains("bot_catalog_venue_about:10")
                     },
                 )
+            }
+        }
+
+    @Test
+    fun `venue info R2 sends bounded documents with safe names and preserves Telegram attachment delivery`() =
+        runBlocking {
+            val service = mockk<com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaService>()
+            val media =
+                listOf("image/jpeg", "image/png", "application/pdf").mapIndexed { index, mime ->
+                    VenueInfoSectionMediaAttachment(
+                        (index + 1).toLong(),
+                        201,
+                        if (index == 2) "pdf" else "image",
+                        "",
+                        index,
+                        publicId = java.util.UUID.randomUUID().toString(),
+                        sourceType = "OBJECT_STORAGE",
+                        mimeType = mime,
+                    )
+                }
+            val legacy = VenueInfoSectionMediaAttachment(4, 201, "pdf", "legacy-file", 3)
+            coEvery { venueInfoSectionMediaRepository.findById(201, 4) } returns legacy
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10) } returns
+                CatalogVenueShort(10, "Venue", "City", "Address")
+            coEvery {
+                venueInfoSectionsRepository.findSectionById(10, 201)
+            } returns VenueInfoSection(201, 10, "Rules", "rules", 1, true, "Text")
+            coEvery { venueInfoSectionMediaRepository.listBySectionId(201) } returns media + legacy
+            for (row in media) {
+                coEvery { venueInfoSectionMediaRepository.findById(201, row.id) } returns row
+                coEvery {
+                    service.bytes(row, null)
+                } returns TelegramDownloadedFile("safe".toByteArray(), io.ktor.http.ContentType.parse(row.mimeType!!))
+            }
+            coEvery { apiClient.sendDocumentBytes(any(), any(), any(), any(), any()) } returns
+                TelegramCallResult.Success(null)
+            val mediaRouter = routerWithWebAppPublicUrl(null, infoMediaServiceOverride = service)
+            mediaRouter.process(
+                TelegramUpdate(
+                    777001,
+                    callbackQuery =
+                        CallbackQuery(
+                            "r2-docs",
+                            User(200),
+                            Message(1, Chat(100, "private")),
+                            "bot_catalog_venue_about_section:10:201",
+                        ),
+                ),
+            )
+            coVerify(exactly = 0) { apiClient.sendDocumentBytes(any(), any(), any(), any(), any()) }
+            coEvery { apiClient.dispatchOutbox(any(), any(), any()) } returns TelegramCallResult.Success(null)
+            for (row in media + legacy) {
+                coVerify(exactly = 1) { outboxEnqueuer.enqueueVenueInfo(100, 10, 201, row.id, row == legacy) }
+                mediaRouter.dispatchVenueInfo(
+                    com.hookah.platform.backend.telegram.db.TelegramOutboxMessage(row.id, 100, "venueInfo", "", 1),
+                    infoJson.encodeToJsonElement(
+                        VenueInfoDelivery.serializer(),
+                        VenueInfoDelivery(10, 201, row.id, false),
+                    ),
+                    apiClient,
+                )
+            }
+            for (extension in listOf("jpg", "png", "pdf")) coVerify(exactly = 1) {
+                apiClient.sendDocumentBytes(100, any(), "venue-material.$extension", any(), any())
+            }
+            coVerify(exactly = 1) { apiClient.dispatchOutbox(100, "sendDocument", any()) }
+        }
+
+    @Test
+    fun `venue info R2 visibility revoked during storage read prevents Telegram delivery`() =
+        runBlocking {
+            val service = mockk<com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaService>()
+            val row =
+                VenueInfoSectionMediaAttachment(
+                    1,
+                    201,
+                    "pdf",
+                    "",
+                    0,
+                    publicId = java.util.UUID.randomUUID().toString(),
+                    sourceType = "OBJECT_STORAGE",
+                    mimeType = "application/pdf",
+                )
+            val section = VenueInfoSection(201, 10, "Rules", "rules", 1, true, "Text")
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10) } returns
+                CatalogVenueShort(10, "Venue", "City", "Address")
+            coEvery {
+                venueInfoSectionsRepository.findSectionById(10, 201)
+            } returnsMany listOf(section, section, section.copy(isVisible = false))
+            coEvery { venueInfoSectionMediaRepository.listBySectionId(201) } returns listOf(row)
+            coEvery { venueInfoSectionMediaRepository.findById(201, 1) } returns row
+            coEvery {
+                service.bytes(row, null)
+            } returns TelegramDownloadedFile("safe".toByteArray(), io.ktor.http.ContentType.Application.Pdf)
+            val mediaRouter = routerWithWebAppPublicUrl(null, infoMediaServiceOverride = service)
+            mediaRouter.process(
+                TelegramUpdate(
+                    777002,
+                    callbackQuery =
+                        CallbackQuery(
+                            "r2-hidden",
+                            User(200),
+                            Message(1, Chat(100, "private")),
+                            "bot_catalog_venue_about_section:10:201",
+                        ),
+                ),
+            )
+            assertEquals(
+                TelegramCallResult.TrafficDenied,
+                mediaRouter.dispatchVenueInfo(
+                    com.hookah.platform.backend.telegram.db.TelegramOutboxMessage(1, 100, "venueInfo", "", 1),
+                    infoJson.encodeToJsonElement(VenueInfoDelivery.serializer(), VenueInfoDelivery(10, 201, 1, true)),
+                    apiClient,
+                ),
+            )
+            coVerify(exactly = 1) { service.bytes(row, null) }
+            coVerify(exactly = 0) { apiClient.sendDocumentBytes(any(), any(), any(), any(), any()) }
+        }
+
+    @Test fun `venue info delayed outbox sends text legacy and R2 in exact order with retry`() =
+        runBlocking {
+            val database = com.hookah.platform.backend.test.PostgresTestEnv.createDatabase()
+            com.hookah.platform.backend.test.PostgresTestEnv.createDataSource(database).use { ds ->
+                val policy = TelegramTrafficPolicy.unrestricted()
+                val repository = com.hookah.platform.backend.telegram.db.TelegramOutboxRepository(ds, policy)
+                val queue = TelegramOutboxEnqueuer(repository, infoJson, policy)
+                val service = mockk<com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaService>()
+                val legacy = VenueInfoSectionMediaAttachment(1, 201, "image", "legacy-first", 0)
+                val stored =
+                    VenueInfoSectionMediaAttachment(
+                        2,
+                        201,
+                        "pdf",
+                        "",
+                        1,
+                        publicId = java.util.UUID.randomUUID().toString(),
+                        sourceType = "OBJECT_STORAGE",
+                    )
+                coEvery { venueRepository.findCatalogVenueByIdForGuest(10) } returns
+                    CatalogVenueShort(10, "Venue", "City", "Address")
+                coEvery {
+                    venueInfoSectionsRepository.findSectionById(10, 201)
+                } returns VenueInfoSection(201, 10, "Rules", "rules", 1, true, "Ordered text")
+                coEvery { venueInfoSectionMediaRepository.listBySectionId(201) } returns listOf(legacy, stored)
+                coEvery { venueInfoSectionMediaRepository.findById(201, 1) } returns legacy
+                coEvery { venueInfoSectionMediaRepository.findById(201, 2) } returns stored
+                coEvery {
+                    service.bytes(stored, null)
+                } returns TelegramDownloadedFile("safe-pdf".toByteArray(), io.ktor.http.ContentType.Application.Pdf)
+                val routed = routerWithWebAppPublicUrl(null, infoMediaServiceOverride = service, outboxOverride = queue)
+                routed.process(
+                    TelegramUpdate(
+                        777003,
+                        callbackQuery =
+                            CallbackQuery(
+                                "ordered",
+                                User(200),
+                                Message(1, Chat(100, "private")),
+                                "bot_catalog_venue_about_section:10:201",
+                            ),
+                    ),
+                )
+                val received = mutableListOf<String>()
+                var failText = true
+                val engine =
+                    io.ktor.client.engine.mock.MockEngine { request ->
+                        val method = request.url.encodedPath.substringAfterLast('/')
+                        if (method == "sendMessage" && failText) {
+                            failText = false
+                            respond(
+                                "{\"ok\":false,\"error_code\":429,\"parameters\":{\"retry_after\":1}}",
+                                headers = io.ktor.http.headersOf("Content-Type", "application/json"),
+                            )
+                        } else {
+                            if (method.startsWith("send")) received.add(method)
+                            respond(
+                                (
+                                    "{\"ok\":true,\"result\":{\"message_id\":1," +
+                                        "\"chat\":{\"id\":100,\"type\":\"private\"}}}"
+                                ),
+                                headers = io.ktor.http.headersOf("Content-Type", "application/json"),
+                            )
+                        }
+                    }
+                val http =
+                    io.ktor.client.HttpClient(engine) {
+                        install(io.ktor.client.plugins.contentnegotiation.ContentNegotiation) {
+                            json(infoJson)
+                        }
+                    }
+                val client = TelegramApiClient("test", http, infoJson, policy)
+                var now = java.time.Instant.now().plusSeconds(10)
+                var permits = 0
+                val worker =
+                    TelegramOutboxWorker(
+                        repository,
+                        { client },
+                        infoJson,
+                        object : TelegramRateLimiter {
+                            override suspend fun awaitPermit(chatId: Long) {
+                                permits++
+                            }
+                        },
+                        TelegramOutboxConfig(),
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO),
+                        nowProvider = { now },
+                        venueInfoDispatch = routed::dispatchVenueInfo,
+                    )
+                try {
+                    assertTrue(received.isEmpty()) // Enqueue has no synchronous file side channel.
+                    repeat(6) {
+                        worker.processOnce()
+                        now = now.plusSeconds(60)
+                    }
+                    assertEquals(listOf("sendMessage", "sendPhoto", "sendDocument"), received)
+                    assertEquals(4, permits)
+                } finally {
+                    client.close()
+                }
             }
         }
 

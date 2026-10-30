@@ -1,21 +1,226 @@
 # Venue Media Storage And Upload
 
-Дата актуализации: 2026-10-29 (direct staff-photo management; local implementation).
+Дата актуализации: 2026-10-30 (HT-VENUE-PDF-ISOLATED-WORKER-01; local isolated PDF validation).
 
-Статус: **CANONICAL SPEC / STAFF PHOTOS LOCAL IMPLEMENTATION / OTHER UPLOAD RUNTIME FUTURE**.
+Статус: **CANONICAL SPEC / STAFF PHOTOS AND VENUE INFO MEDIA LOCAL IMPLEMENTATION / LIVE ACCEPTANCE OPEN**.
 
-Live R2/staging and production storage admission remain unverified.
+Staff-photo iPhone upload has partial owner-confirmed acceptance below. The product owner selects
+existing private staging R2 bucket `hookah-tootah-media-staging-eu` for venue information media.
+`STOP_FOR_MEDIA_STORAGE_DECISION` no longer blocks this staging slice. Production admission,
+backup/restore, actual R2 permissions/configuration and real-device acceptance remain open.
 
 This document is the canonical source of truth for venue-owned media storage, upload, delivery,
 lifecycle and Bot/Mini App compatibility. It covers the foundation needed by public-card
 info-section media and the flat Photo/PDF menu. Structured menu-item media and staff profile photos
 remain separate product slices; staff-photo local implementation is specified below.
 
+## PDF isolation — HT-VENUE-PDF-ISOLATED-WORKER-01
+
+The architecture decision supersedes the FIX-01 decision blocker. REVIEW-01 F1 (xref allocation)
+and F2 (unbounded graph/Prev traversal) are contained by a separate OS-limited `pdf-worker`
+service. Local verification and independent review are required; this is not release permission.
+The primary backend never constructs OpenPDF `PdfReader`: it runs only the bounded lexical
+preflight and a Unix-socket client. `PdfParserMain` is the sole caller of `PdfStructureValidator`;
+both demand Linux OS admission before parsing. There is no local-parser fallback or automatic retry.
+
+The worker uses the exact admitted immutable backend image, entrypoint `/app/app/bin/pdf-worker`,
+with a clean environment and no DB/R2/Telegram credentials. It has no network or published port,
+Docker socket or host bind mount; it is UID/GID 10001, rootfs read-only, all capabilities dropped,
+no-new-privileges, default seccomp enforced and private PID/IPC namespaces. One project-owned local
+**tmpfs** volume `pdf_ipc` (12 MiB, UID/GID 10001, mode 0700) contains only a mode-0600 socket at
+`/run/hookah-pdf/worker.sock`; backend mounts this same volume read-only. No PDF is written to it.
+Rootfs writes, JVM crash/core/heap dumps are disabled; core soft/hard ulimits are zero. Docker daemon
+administrators remain trusted; project naming is not protection against a hostile Docker administrator.
+
+Mandatory cgroup v2 limits are 384 MiB memory, zero swap, one CPU (`100000/100000`) and 64 PIDs
+including threads. Worker startup, health probe and every parser invocation verify actual cgroup,
+identity, seccomp, privilege, rootfs and network state; absent or unenforced limits refuse startup.
+HT70 additionally verifies exact Docker limits, image/environment, mounts and volume ownership.
+Supervisor heap is 48 MiB; each job uses a fresh 96 MiB child JVM, 512 KiB stack, 8 MiB direct-memory,
+64 MiB metaspace and 32 MiB code-cache caps. JVM flags supplement the OS boundary.
+
+At most **one** child parses at a time, with a 5-second wall deadline, forced kill and wait/reap
+(up to 2 seconds); the bounded input writer must terminate within another second or the service
+halts and Docker restarts it. Request-body admission is 2 seconds, response write 1 second, backend
+whole IPC deadline 9 seconds. Unix nonblocking I/O transfers at most 8 KiB per call, preventing JDK
+heap-buffer I/O from allocating a temporary direct buffer proportional to the whole document.
+Backlog is one. Backend permits one outstanding PDF validation, releases its general upload slot
+before waiting, and retains independent JPEG/PNG and Staff Photos processing.
+
+IPC v1: six magic/version bytes `48 54 50 44 46 01`, one operation byte (0 ping or 1 validate),
+four-byte signed big-endian length, then exactly that many bytes and write-EOF. Ping length is zero;
+validate length is 1..10 MiB. Reply is exactly six magic bytes plus status 0 accepted / 1 invalid /
+2 unavailable, then EOF. Extra, partial, unknown, oversized and stalled frames fail closed; no key,
+filename, document details or parser exception crosses IPC. Crash/OOM/timeout/missing worker denies
+new PDF uploads with honest temporary-unavailability guidance and preserves previous attachments.
+Existing PDF reads, legacy Telegram, JPEG/PNG and Staff Photos do not require the worker.
+
+Preflight remains defense in depth: all PDF whitespace and escaped names, checked numeric/xref
+ranges/counts/offsets, no repeated offsets, 100000-token and depth-40 budgets. Incremental `/Prev`,
+hybrid `/XRefStm`, object/xref streams, indirect stream lengths and encryption are unsupported.
+Full OpenPDF graph processing occurs only in the disposable child; preflight alone is not the
+security boundary. Supported ordinary PDFs have 1..200 pages and at most 20000 xref entries.
+Unsupported or resource-heavy valid PDFs may be refused; export a flat PDF or use JPEG/PNG.
+Successful structural parsing is **not antivirus scanning** or a guarantee of viewer safety.
+
+Local Linux arm64/Docker cgroup-v2 evidence is in
+`/private/tmp/HT-VENUE-PDF-ISOLATED-WORKER-01/`. Normal 1/200-page and 8 MiB-stream PDFs passed
+in 0.58/0.65/0.76 seconds including client-container startup; cumulative worker memory peak through
+normal cases was 168.7 MiB. Final adversarial/concurrent/health activity peaked at 201.0 MiB and
+43 PIDs, without worker OOM (earlier candidate peak 256.5 MiB / 43 PIDs). These measurements support the 384 MiB/64-PID limits with headroom;
+limits are not a promise to accept every 10 MiB PDF. A stopped parser was killed/reaped and returned
+unavailable in 5.13 seconds; the next queued/normal request succeeded. Separate trusted resource
+probes under the same cgroups demonstrated memory OOM-kill only of their own disposable container,
+PIDs refusal (EAGAIN), and CPU throttling. No hostile PDF was parsed in the Mac/backend test JVM.
+The mandatory CI image guard repeats this proof on the exact reproduced Linux image before
+release-artifact admission; local runtime fixture measurements do not establish GitHub CI or VPS state.
+
+REVIEW-01 P2-3: text and both attachment sources now use one `venueInfo` method in the existing
+outbox. Payloads contain only venue/section/media IDs; no keys, file IDs or bytes. A pending earlier
+information row for the same recipient blocks later information rows, including during backoff.
+Dispatch rechecks live public availability or the existing authenticated Bot preview context,
+section ownership/visibility and attachment state; R2 reads are followed by a second check.
+Attachments retain sort order and final navigation markup. Standard outbox at-least-once delivery
+still applies if Telegram's acknowledgement or the local mark-sent result is lost.
+
+P2-4/P2-5: pending files/keys participate in in-memory Settings retention across history traversal.
+`GET /api/venue/{v}/info-sections/{s}/media-operations/{request}` is actor/venue/section scoped,
+no-store, and returns UNKNOWN / FAILED / SUCCESS. UPLOADING or missing operations remain UNKNOWN;
+READY and subsequently DELETED operations report SUCCESS without resurrecting a file. Refresh
+never silently rebases UNKNOWN. Confirmed FAILED permits an explicit new key/current revision;
+SUCCESS needs no repeat. Definitive input rejection is terminal without storage reservation.
+Canceling unstarted remaining files must retain a submitted UNKNOWN operation until checked or
+safely retried. Files are not stored in browser storage; reload/closing WebView may lose them.
+
+## Venue Information Media — Direct Mini App Staging Slice (2026-10-30)
+
+`HT-VENUE-CARD-R2-DIRECT-UPLOAD-01` authorizes local implementation, not live R2 operations,
+configuration changes, release or deployment. No new provider/bucket, credential rotation, public
+access, extra R2 permissions, media volume or paid service is introduced. Existing connection
+settings are reused only after the separately enabled staging configuration below is admitted.
+
+### Management and delivery
+
+OWNER/MANAGER: Settings → Card → Photos and PDF → expand editor. List existing default/custom
+sections and attachments; select several JPEG/PNG/PDF files, replace one file, hide/show one
+attachment or its entire section, or delete. Every operation saves immediately, independently of
+the card text draft. Text changes still require their own Save before Preview or leaving for Bot.
+The Bot navigation guide remains a fallback, including creating a custom section. STAFF and
+foreign memberships are denied by the server, including direct API routes. No action publishes
+a venue. Photo-menu remains informational, outside the structured order menu.
+
+- `GET /api/venue/{v}/info-media`: authenticated management list, enabled flag, section revision,
+  safe attachment ID/type/source/status/size/visibility/order. Never object keys or Telegram refs.
+- `POST /api/venue/{v}/info-sections/{s}/media`: one raw file; `Idempotency-Key` UUID,
+  `X-Media-Revision`; optional `X-Replaces-Media` identifies the old attachment. Several selected
+  files are sequential explicit uploads; each next operation uses the returned revision.
+- `POST .../{s}/media-actions`: bounded JSON `{revision, mediaId?, action}`; `show`, `hide`,
+  `delete`. An absent mediaId changes section visibility. No section-delete API is added.
+- `GET .../{s}/media/{id}/content`: own-venue OWNER/MANAGER download, including hidden attachments;
+  authenticated no-store delivery, generated filename, nosniff, never raw provider URLs.
+- Guest/Published Preview retain lifecycle/subscription + section/attachment visibility checks.
+  Draft Preview retains authenticated OWNER/MANAGER scope even before publication. Existing proxy
+  paths accept opaque UUIDs for new objects and numeric legacy references. Visibility and access
+  are rechecked after storage reads. Images/PDF keep their MIME; PDFs open only by explicit action.
+- Bot keeps legacy Telegram `file_id` sending. New R2 files are sent as bounded documents with
+  generated JPEG/PNG/PDF filenames after public scope recheck; failure asks to open the Mini App
+  or retry explicitly. No object URL, bytes or credentials enter the outbox/database payload.
+
+### Single registry and concurrent lifecycle
+
+PostgreSQL V128 / H2 V129 only add columns/indexes and a technical cleanup journal. All old
+IDs, `telegram_file_id` bytes, section links, sort order and visibility remain. Existing rows default
+`TELEGRAM_FILE/READY/visible`; new `OBJECT_STORAGE` rows keep the old column empty and use a
+random immutable `venue-info/<uuid>.jpg|png|pdf` key and separate opaque public UUID. Staff-photo
+tables are not used. No bulk byte migration or destructive data conversion occurs.
+
+`venue_info_section_media` remains the only attachment registry. The separate
+`venue_info_media_cleanup` is a durable deletion journal, not a second list for users. It is
+reserved before PUT and survives venue/section FK cascades. New states are UPLOADING, READY,
+FAILED and DELETED, with independent per-attachment visibility. Section revision plus live role,
+venue, section and row checks protect reserve/finalize/mutations. Bot adds/deletes and section
+visibility changes invalidate stale revisions too. Replacement inherits position/visibility and
+only tombstones the old row in the successful atomic swap. Failure preserves the previous file.
+
+Same actor/section/request UUID + exact input digest/revision/replacement/MIME returns the
+already completed operation without another PUT. In-flight, failed, changed-input and stale
+requests conflict safely; they never create a duplicate. After a lost response the UI retains the
+same file/key in memory for explicit retry. Refresh does not silently rebase that operation.
+Cancel remaining files and reselect only after checking the list if a terminal failure requires
+a new operation. Navigation is blocked while a write or retained retry is outstanding; app
+close/reload cannot promise draft/file persistence. No automatic network retries are introduced
+by the UI (the bounded S3 client retains its SDK retry behavior).
+
+Logical deletion immediately denies Guest/Preview/Bot delivery. Normal replacement/deletion
+schedules R2 cleanup after 7 days; there is no restore UI. Failed/expired 10-minute uploads and
+cascaded orphans are cleaned without that recovery window. Cleanup claims at most 10/minute,
+respects maintenance autonomous-write admission, retries durably, performs DELETE then HEAD,
+and records acknowledged absence in the journal. Daily tombstone reconciliation catches late PUTs.
+Telegram deletion removes the platform reference only; physical Telegram erasure is unsupported.
+Deletion confirmation distinguishes those sources and warns that already received copies are not revoked.
+Confirmed R2 absence is not backup erasure. No live deletion is claimed by local tests.
+
+### Validation and runtime prerequisites
+
+JPEG/PNG/PDF input and normalized output ≤10 MiB; image dimensions ≤8192/side and 32 MP;
+maximum 10 active/in-flight attachments per section (over-limit legacy sections stay readable).
+A file provider with empty/octet-stream MIME may use its JPEG/PNG/PDF extension as a client
+hint; the server still determines content type from bytes and performs the same validation.
+Images undergo signature/MIME, PNG CRC/animation or JPEG completeness, actual decode, EXIF
+orientation and metadata removal, retaining JPEG/PNG semantics and PNG transparency. Original filenames
+are not sent to or stored by the backend; only generated safe download names are exposed.
+
+PDF structural validation runs exclusively inside the isolated worker described above.
+It uses existing [OpenPDF 1.3.39 PdfReader](https://github.com/LibrePDF/OpenPDF/blob/1.3.39/openpdf/src/main/java/com/lowagie/text/pdf/PdfReader.java) structural parsing: ordinary classic-xref unencrypted PDFs,
+1–200 pages, bounded object IDs/xref size. Compressed object/xref streams, repaired/truncated
+files, JavaScript/actions, links, forms, embedded files and active media are rejected; users should
+export a flat PDF. This conservative subset may reject otherwise valid modern PDFs. Structural
+validation is not antivirus certification. PDFs are never automatically embedded. Signature,
+MIME and byte limits reject executable/HTML/archive masquerades. No new dependency is added.
+
+Upload starts: 5 actor+venue/minute and 120 global/10 minutes; two general in-flight body/image/
+upload slots, plus at most one PDF-worker wait (also at most two per actor), 30-second absolute body deadline, bounded storage
+GETs, 1200 global reads/minute and 16 concurrent object reads. Authenticated management reads
+are 240/actor/minute; visibility/delete actions 60/actor/minute. These quotas are independent
+of upload and Staff Photos quotas.
+The S3 client uses the existing explicit static-credential, auto-region, path-style, timeout,
+required-checksum and STANDARD-class approach. The bucket remains private.
+
+Optional `VENUE_INFO_MEDIA_R2_ENABLED=true` selects this slice independently of staff-photo
+activation. It defaults false and is disabled in prod/production. It requires the existing complete
+validated `STAFF_PHOTOS_R2_*` staging connection block (including an explicit staff enabled flag,
+which may remain false); no new connection secrets. HT70 validates/passes/observes the new flag,
+preserves old config/Compose hashes when absent, and still requires explicit `--apply-config`
+for runtime changes. Do not edit generated Compose or configure the VPS in this task.
+
+Before release: exact V127→V128 packaged manifest compatibility review, verified backup and
+existing HT70 migration admission; no old-schema rollback. After creating R2 rows, rollback
+requires a media-aware compatible binary. Confirm existing bucket-scoped credentials already
+permit `venue-info/` PUT/GET/HEAD/DELETE; expanded permissions require a separate decision.
+Actual endpoint/jurisdiction, disabled public access, live class/limits, cost/operator ownership,
+iPhone PDF/image picker + Bot roundtrip and physical deletion remain separately unverified.
+Production bucket/admission, backup destination/encryption/retention, RPO/RTO and restore/deletion
+reconciliation remain open. Local fake/loopback/PostgreSQL results do not close these gates.
+
 ## UX08 Staff Photos — Local R2 Implementation (2026-10-28)
 
+### Owner-confirmed iPhone acceptance — 2026-10-30
+
+Recorded by `HT-VENUE-CARD-MEDIA-RESTORE-01` from the owner's task testimony, not from new live
+operations in this task: photo upload succeeds on iPhone; OWNER/MANAGER work; STAFF mutations are
+denied; no consent or separate publish step is present. **PARTIAL ACCEPTANCE**, not full UX08
+closure. Guest photo display was not tested because the venue is unpublished. Physical object
+deletion in R2 after cleanup remains unverified. This testimony does not establish replacement,
+all lifecycle/visibility cases, backup/restore or production admission.
+
+The preserved local `HT-UX08-STAFF-PHOTO-DIRECT-RELEASE-01` checkpoint reports technical staging
+PASS for merge `bf3abc23a5109e097bf00cd2ed342729a086d653`; that historical report was not independently
+rerun here. The earlier statements below describe the original local implementation evidence;
+the owner confirmation above supersedes only its upload/iPhone/RBAC/consent acceptance gap.
+
 Task `HT-UX08-STAFF-PHOTOS-R2-IMPLEMENT-01` authorizes the bounded staff-photo runtime below.
-It supersedes the previous UX08 E storage-decision blocker. Venue info-section/menu upload remains
-future work; this does not approve a shared-media rewrite or production storage admission.
+It supersedes the previous UX08 E storage-decision blocker. Venue info-section/menu upload is the separate direct staging slice above; this does not approve
+a shared-media rewrite or production storage admission.
 
 Existing staging bucket: **`hookah-tootah-media-staging-eu`**. User testimony reports an empty
 bucket on 2026-10-28; the account/bucket was not inspected by this implementation. Actual default
@@ -219,7 +424,11 @@ These surfaces may reuse the approved private storage adapter and safe delivery 
 not automatically share one asset row, lifecycle or authorization policy, and none is part of the
 first implementation prompt.
 
-## Current Architecture Evidence
+## Historical Baseline Architecture Evidence (before direct information media)
+
+This bounded audit describes commit `0a913c0` before V128/direct-upload changes. Its old
+Telegram-only capability statements and gaps are historical evidence, superseded by the local
+implementation at the top of this document. They are not current staging runtime claims.
 
 ### Schema And Repositories
 
@@ -248,6 +457,36 @@ first implementation prompt.
   staff-photo ledger and R2 runtime are described in the UX08 E section above.
 
 ### Telegram Upload And Storage
+
+#### Verified navigation and Mini App entry — 2026-10-30
+
+Local source audit at `0a913c09026940336e854d2db2948bc70e83fb5a` (the source tree also included in
+the supplied merge `bf3abc23a5109e097bf00cd2ed342729a086d653`):
+
+- In this bot's private chat, `/menu` or `/start` without a payload restores role-aware navigation.
+  OWNER: `🏢 Мои заведения` → explicitly select the venue → `⚙️ Настройка заведения` →
+  `🏢 Профиль / карточка`. MANAGER: `🔄 Сменить заведение` → explicitly select the venue →
+  `🏢 Заведение`. The shared next action is `ℹ️ О заведении / Правила`.
+- Default sections: `О заведении`, `Правила посещения`, `Пробковый сбор`, `FAQ`, `📖 Фото-меню`
+  (stored type `menu`). `➕ Добавить свой раздел` asks for a custom title; it is not a nested menu.
+  Open a section → `🖼 Добавить медиа` → send multiple photos as photos and PDFs as documents →
+  `✅ Готово`. Each successful message appends a row; cancellation/back does not undo saved files.
+- Section actions include text editing, individual attachment deletion and `🙈 Скрыть раздел` /
+  `👁 Показать раздел`. Deletion removes the platform row, not provable Telegram byte erasure.
+- `hasVenueAdminOrOwner` rechecks live OWNER/MANAGER (legacy ADMIN alias) membership and rejects
+  deleted venues; STAFF/foreign actors cannot author. Callback venue/section ownership is checked
+  with `findSectionById(venueId, sectionId)`, upload dialog retains venue/section, deletion matches
+  section/media. Bot venue selection is independent of Mini App selection.
+- `handleStartCommand` supports staff invites and table tokens, not an info-editor payload.
+  No safe venue-scoped direct link exists. Venue Settings → `Карточка заведения` now contains
+  `Фотографии и PDF` with a native expandable instruction, available only to OWNER/MANAGER.
+  It opens no bot/URL/picker, submits nothing, preserves the active form and warns to save before
+  switching to chat. Check venue name/city in both surfaces. Return via the existing Mini App or
+  `📱 Открыть панель заведения`; reopen Guest Preview to read saved attachments. Closing/reloading
+  the app does not promise persistence of an unsaved draft.
+
+The `HT-VENUE-CARD-MEDIA-RESTORE-01` instruction-only checkpoint is historical. The direct
+editor above supersedes its MISSING/FUTURE status locally; the guide remains a fallback.
 
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/telegram/TelegramModels.kt` receives
   Telegram `PhotoSize` and `Document` metadata, including `file_id`, optional `file_unique_id`,
@@ -322,7 +561,7 @@ file links are valid for at least one hour, and original filename/MIME may not s
 - The generic `audit_log` and `AuditLogRepository` exist, but current info-section upload,
   section-visibility and attachment deletion do not append media audit events.
 
-### Current Flow Map
+### Baseline Flow Map
 
 ```text
 OWNER/MANAGER Telegram message
@@ -336,7 +575,7 @@ OWNER/MANAGER Telegram message
        -> Draft Preview: authenticated private media proxy, no raw ref/public Guest URL
 ```
 
-### Current Source Of Truth By Surface
+### Baseline Source Of Truth By Surface
 
 | Surface | Platform metadata/link truth | Byte/delivery truth | Current status |
 | --- | --- | --- | --- |
@@ -347,9 +586,9 @@ OWNER/MANAGER Telegram message
 | Structured menu item | `menu_items` has legacy description column, but active read/write DTOs omit description/photo/thumbnail | No runtime byte source or delivery | `MISSING / FUTURE` |
 | Legacy category image seed | `menu_category_images.image_url` for named test venues | External placeholder URL when seeded; no active Guest/Venue consumer | Test/seed-oriented, not item media |
 | Promotion banner | Separate `venue_promotion_media` row | Telegram `file_id`, Bot-oriented | Adjacent existing model; out of first slice |
-| Staff profile photo | Photo ledger + revision/current/candidate state; legacy photo_ref is not authority | Private R2 adapter + guarded backend bytes | Local implementation; live R2 unverified |
+| Staff profile photo | Photo ledger + revision/current/candidate state; legacy photo_ref is not authority | Private R2 adapter + guarded backend bytes | Partial owner-confirmed iPhone acceptance; Guest and physical R2 cleanup deletion unverified |
 
-## Current Architecture Answers
+## Baseline Architecture Answers
 
 | Question | Evidence-backed answer |
 | --- | --- |
@@ -381,10 +620,29 @@ OWNER/MANAGER Telegram message
 
 ## Recommendation And Required Decision
 
-This section applies only to future info-section/menu uploads. The authorized staff-photo R2
-slice above is excluded from this provider decision gate.
+The owner has selected existing private staging R2 for the information-media slice above.
+The alternatives below are historical design context and apply to future/production decisions,
+not an unresolved provider choice for that selected staging slice. Staff-photo admission is separate.
 
-Recommended architecture, pending approval:
+### Historical candidate — staging selection superseded by direct slice above (2026-10-30)
+
+Use the existing `venue_info_section_media` ledger and section-to-venue join, with two byte read
+adapters: legacy `TELEGRAM_FILE` retains every historical `telegram_file_id`; `OBJECT_STORAGE`
+holds new JPEG/PNG/PDF privately. No legacy byte backfill or second media list is required.
+Implement only the management routes, validation/limits, lifecycle and safe delivery contract
+specified below: one authenticated file per upload, server-side OWNER/MANAGER own-venue checks,
+content validation, idempotency, atomic replacement, logical deletion and durable cleanup retries.
+Bot must deliver both sources from these same rows; Guest/Published Preview share guarded
+delivery and Draft retains authenticated scoped bytes. File picker is added only with this backend.
+
+The former instruction-only task did not authorize a provider or runtime. The product owner now
+explicitly selects the existing private staging R2 bucket for JPEG/PNG/PDF information materials.
+The bounded local implementation above adds V128/V129 and management/delivery APIs; it does not
+change live credentials, bucket configuration or billing. Existing credential scope must be
+confirmed before rollout; any extra permission/cost needs a separate decision. Production,
+backup/restore RPO/RTO, retention and deletion reconciliation remain separately open.
+
+Historical recommendation, now selected for this staging slice only:
 
 **D. Hybrid migration with C. private S3-compatible object storage for new Mini App uploads.**
 
@@ -414,9 +672,16 @@ Choose exactly one:
 
 The decision record must include storage owner, staging/production separation, credentials owner,
 RPO, RTO, retention/versioning, physical deletion behavior, monthly budget boundary and incident
-contact. Until then the verdict remains `STOP_FOR_MEDIA_STORAGE_DECISION`.
+contact. For unapproved future/production storage, `STOP_FOR_MEDIA_STORAGE_DECISION` remains;
+it does not block the selected staging R2 implementation above.
 
 ## Target Source-Of-Truth Model
+
+The following original target design remains a reference, not a claim that every field/route is
+implemented. The selected staging variant above is authoritative for this local slice: raw single
+file bodies, no original filename collection, technical-journal cleanup acknowledgement, and
+opaque IDs in existing scoped routes with numeric legacy compatibility. Other media surfaces and
+production expansion remain future.
 
 ### Extend The Existing Table
 
@@ -732,7 +997,8 @@ Mini App:
 - `miniapp/src/style.css`;
 - `miniapp/e2e/guest-smoke.spec.ts`.
 
-This is a plan, not authorization to implement before the storage decision.
+This target plan is not blanket authorization for other media surfaces or production.
+The selected staging information-media implementation follows the bounded contract above.
 
 ## Required Automated Tests
 

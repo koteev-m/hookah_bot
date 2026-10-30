@@ -423,6 +423,17 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(doc['services']['backend']['ports'], ['127.0.0.1:8080:8080'])
             self.assertNotIn('external', json.dumps(doc)); self.assertNotIn('8081', json.dumps(doc))
             self.assertEqual(doc['services']['backend']['environment']['TELEGRAM_BOT_ENABLED'], 'false')
+    def test_info_media_r2_opt_in_reuses_validated_staging_connection_only(self):
+        old = config(); before = copy.deepcopy(old); s.validate_config(old); self.assertEqual(old, before)
+        c = config(); c['runtime']['VENUE_INFO_MEDIA_R2_ENABLED'] = 'true'
+        with self.assertRaisesRegex(s.Refused, 'R2_CONFIG_INCOMPLETE'): s.validate_config(c)
+        c['runtime'].update({'STAFF_PHOTOS_R2_ENABLED': 'false', 'STAFF_PHOTOS_R2_ENDPOINT': 'https://' + 'a'*32 + '.eu.r2.cloudflarestorage.com',
+                             'STAFF_PHOTOS_R2_BUCKET': 'hookah-tootah-media-staging-eu', 'STAFF_PHOTOS_R2_ACCESS_KEY': 'a'*32,
+                             'STAFF_PHOTOS_R2_SECRET_KEY': 'b'*64, 'STAFF_PHOTOS_R2_REGION': 'auto', 'STAFF_PHOTOS_R2_JURISDICTION': 'eu'})
+        s.validate_config(c)
+        c['runtime']['VENUE_INFO_MEDIA_R2_ENABLED'] = 'maybe'
+        with self.assertRaisesRegex(s.Refused, 'INFO_MEDIA_FLAG_INVALID'): s.validate_config(c)
+
     def test_bad_configs_refused(self):
         for key, value in [('postgres_image', 'postgres:17'), ('postgres_password', 'change-me'), ('architecture', 'unknown')]:
             c = config(); c[key] = value
@@ -434,12 +445,13 @@ class ContractTests(unittest.TestCase):
         self.assertEqual([r['version'] for r in rows], list(range(1, 127)))
         self.assertEqual(rows[-1]['script'], 'V126__support_thread_read_message_cursor.sql')
 
-    def test_current_manifest_is_exact_append_only_v127(self):
+    def test_current_manifest_is_exact_append_only_v128(self):
         historical, current = real_manifest(True), real_manifest()
         self.assertEqual(current[:126], historical)
-        self.assertEqual([r['version'] for r in current], list(range(1, 128)))
-        self.assertEqual(current[-1]['script'], 'V127__staff_profile_photos.sql')
-        self.assertEqual(current[-1]['sha256'], '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846')
+        self.assertEqual([r['version'] for r in current], list(range(1, 129)))
+        self.assertEqual(current[-2]['script'], 'V127__staff_profile_photos.sql')
+        self.assertEqual(current[-1]['script'], 'V128__venue_info_media_objects.sql')
+        self.assertEqual(current[-2]['sha256'], '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846')
         review = dict(from_manifest=s.digest(historical), to_manifest=s.digest(current),
                       backward_compatible=True, reason='Synthetic test review of additive staff photo tables; not staging approval.')
         with self.assertRaisesRegex(s.Refused, 'EXACT_COMPATIBILITY_REVIEW'): s.compatibility(historical, current)
@@ -458,7 +470,7 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(runtime.apply('install', record(bootstrap))['schema'], 126)
             with self.assertRaisesRegex(s.Refused, 'REVIEW'): runtime.apply('deploy', record(target))
             self.assertEqual(runtime.history(), s.history_for(historical))
-            self.assertEqual(runtime.apply('deploy', record(target), review)['schema'], 127)
+            self.assertEqual(runtime.apply('deploy', record(target), review)['schema'], 128)
             self.assertEqual(runtime.history(), s.history_for(current))
             self.assertEqual(len(runtime.backups), 1)
             with self.assertRaisesRegex(s.Refused, 'SCHEMA_ROLLBACK'): runtime.apply('rollback')

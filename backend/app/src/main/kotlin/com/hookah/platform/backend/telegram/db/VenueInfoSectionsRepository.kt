@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.SQLException
@@ -32,7 +33,10 @@ class VenueInfoSectionsRepository(private val dataSource: DataSource?) {
             DefaultSection(type = "menu", title = "Меню", sortOrder = 50),
         )
 
-    suspend fun ensureDefaultSections(venueId: Long): Boolean {
+    suspend fun ensureDefaultSections(
+        venueId: Long,
+        actorUserId: Long? = null,
+    ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -46,7 +50,7 @@ class VenueInfoSectionsRepository(private val dataSource: DataSource?) {
                                 SELECT 1
                                 FROM venues
                                 WHERE id = ?
-                                LIMIT 1
+                                FOR UPDATE
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setLong(1, venueId)
@@ -55,6 +59,21 @@ class VenueInfoSectionsRepository(private val dataSource: DataSource?) {
                         if (!venueExists) {
                             connection.rollback()
                             return@withContext false
+                        }
+                        if (actorUserId != null) {
+                            val allowed =
+                                connection.prepareStatement(
+                                    """SELECT vm.role FROM venue_members vm JOIN venues v ON v.id=vm.venue_id
+                                WHERE vm.venue_id=? AND vm.user_id=? AND v.status IN
+                                ('DRAFT','PUBLISHED','HIDDEN','PAUSED','SUSPENDED') FOR UPDATE""",
+                                ).use { statement ->
+                                    statement.setLong(1, venueId)
+                                    statement.setLong(2, actorUserId)
+                                    statement.executeQuery().use { rs ->
+                                        rs.next() && rs.getString(1) in setOf("OWNER", "MANAGER", "ADMIN")
+                                    }
+                                }
+                            if (!allowed) throw ForbiddenException()
                         }
                         val existingTypes =
                             connection.prepareStatement(
@@ -99,7 +118,7 @@ class VenueInfoSectionsRepository(private val dataSource: DataSource?) {
                             }
                         connection.commit()
                         true
-                    } catch (e: SQLException) {
+                    } catch (e: Exception) {
                         runCatching { connection.rollback() }
                         throw e
                     } finally {
@@ -303,6 +322,7 @@ class VenueInfoSectionsRepository(private val dataSource: DataSource?) {
                             """
                             UPDATE venue_info_sections
                             SET is_visible = CASE WHEN is_visible THEN FALSE ELSE TRUE END,
+                                media_revision = media_revision + 1,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE venue_id = ? AND id = ?
                             """.trimIndent(),

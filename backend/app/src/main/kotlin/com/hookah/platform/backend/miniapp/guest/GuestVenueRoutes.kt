@@ -33,6 +33,7 @@ import com.hookah.platform.backend.telegram.db.VenueInfoSectionsRepository
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.server.application.call
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.Route
@@ -111,13 +112,14 @@ fun Route.guestVenueInfoMediaRoutes(
     venueInfoSectionMediaRepository: VenueInfoSectionMediaRepository,
     subscriptionRepository: SubscriptionRepository,
     telegramFileDownloader: (suspend (String) -> TelegramDownloadedFile?)? = null,
+    mediaService: com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaService? = null,
     maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
 ) {
     get("/venue/{id}/info-sections/{sectionId}/media/{mediaId}") {
         if (maintenancePolicy.active) throw MaintenanceUnavailableException()
         val venueId = call.requireLongParameter("id")
         val sectionId = call.requireLongParameter("sectionId")
-        val mediaId = call.requireLongParameter("mediaId")
+        val mediaRef = call.parameters["mediaId"] ?: throw InvalidInputException()
         ensureGuestBrowseAvailable(venueId, guestVenueRepository, subscriptionRepository)
 
         val section =
@@ -126,17 +128,30 @@ fun Route.guestVenueInfoMediaRoutes(
                 ?.takeIf { it.isVisible }
                 ?: throw NotFoundException()
         val media =
-            venueInfoSectionMediaRepository.findById(sectionId = section.id, mediaId = mediaId)
+            venueInfoSectionMediaRepository.findByReference(section.id, mediaRef)
                 ?: throw NotFoundException()
-        val downloader = telegramFileDownloader ?: throw ConfigException("Media proxy is not configured")
-        val downloaded = downloader(media.telegramFileId) ?: throw NotFoundException()
+        val downloaded =
+            (
+                if (mediaService != null) {
+                    mediaService.bytes(media, telegramFileDownloader)
+                } else {
+                    val downloader = telegramFileDownloader ?: throw ConfigException("Media proxy is not configured")
+                    downloader(media.telegramFileId)
+                }
+            ) ?: throw NotFoundException()
+        ensureGuestBrowseAvailable(venueId, guestVenueRepository, subscriptionRepository)
+        val freshSection = venueInfoSectionsRepository.findSectionById(venueId, sectionId)
+        val freshMedia = venueInfoSectionMediaRepository.findByReference(sectionId, mediaRef)
+        if (freshSection?.isVisible != true || freshMedia?.id != media.id) throw NotFoundException()
         val contentType = downloaded.contentType.toGuestMediaContentType(media.mediaType)
         if (media.mediaType.equals("pdf", ignoreCase = true)) {
             call.response.headers.append(
                 HttpHeaders.ContentDisposition,
-                "inline; filename=\"venue-info-$mediaId.pdf\"",
+                "inline; filename=\"venue-info-${media.publicId ?: media.id}.pdf\"",
             )
         }
+        call.response.header(HttpHeaders.CacheControl, "no-store, private")
+        call.response.header("X-Content-Type-Options", "nosniff")
         call.respondBytes(
             bytes = downloaded.bytes,
             contentType = contentType,

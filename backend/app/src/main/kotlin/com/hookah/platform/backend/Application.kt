@@ -84,6 +84,9 @@ import com.hookah.platform.backend.miniapp.venue.bookings.venueBookingRoutes
 import com.hookah.platform.backend.miniapp.venue.feedback.venueFeedbackRoutes
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationProvider
 import com.hookah.platform.backend.miniapp.venue.location.createVenueLocationProvider
+import com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaRepository
+import com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaService
+import com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorage
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.miniapp.venue.menu.venueMenuRoutes
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
@@ -104,6 +107,7 @@ import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
 import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
 import com.hookah.platform.backend.miniapp.venue.venueBillingRoutes
 import com.hookah.platform.backend.miniapp.venue.venueGuestPreviewRoutes
+import com.hookah.platform.backend.miniapp.venue.venueInfoMediaRoutes
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffCallRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffModuleSettingsRoutes
@@ -299,6 +303,8 @@ internal data class ModuleOverrides(
     val venueLocationProvider: VenueLocationProvider? = null,
     val staffScheduleClock: Clock? = null,
     val staffPhotoStorage: StaffPhotoStorage? = null,
+    val venueInfoMediaStorage: VenueInfoMediaStorage? = null,
+    val venueInfoPdfValidator: ((ByteArray) -> Unit)? = null,
     val afterPlatformGuestTeardown: (suspend (chatId: Long, actorUserId: Long) -> Unit)? = null,
     val guestOrderContextCheckpoint: (GuestOrderContextCheckpoint) -> Unit = {},
     val guestOrderWriteCheckpoint: (GuestOrderWriteCheckpoint) -> Unit = {},
@@ -752,6 +758,17 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val staffPhotoStorage = overrides.staffPhotoStorage ?: staffPhotoConfig.createStorage()
     val staffPhotoRepository =
         StaffPhotoRepository(dataSource, venueStaffProfileRepository, auditLogRepository, staffOperationsClock)
+    val infoMediaConfig = StaffPhotoStorageConfig.from(appConfig, appEnv, "venue.infoMedia.enabled")
+    val infoMediaStorage = overrides.venueInfoMediaStorage ?: infoMediaConfig.createVenueInfoStorage()
+    val infoMediaRepository = VenueInfoMediaRepository(dataSource, auditLogRepository, staffOperationsClock)
+    val infoMediaService =
+        VenueInfoMediaService(
+            infoMediaRepository,
+            venueInfoSectionsRepository,
+            infoMediaStorage,
+            overrides.venueInfoPdfValidator ?: com.hookah.platform.backend.miniapp.venue.media.pdf.PdfWorkerClient()
+                ::validate,
+        )
     val guestTodayStaffResolver = GuestTodayStaffResolver(venueStaffProfileRepository, staffPhotoRepository)
     val guestVenueReadService =
         GuestVenueReadService(
@@ -845,6 +862,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             )
         telegramRouter =
             TelegramBotRouter(
+                venueInfoMediaService = infoMediaService,
                 config = telegramConfig,
                 apiClient = telegramApiClient,
                 outboxEnqueuer = telegramOutboxEnqueuer,
@@ -969,6 +987,10 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     scope = telegramOutboxWorkerScope!!,
                     metrics = appMetrics,
                     recipientLocks = telegramRecipientLocks,
+                    venueInfoDispatch = { message, payload, client ->
+                        telegramRouter?.dispatchVenueInfo(message, payload, client)
+                            ?: com.hookah.platform.backend.telegram.TelegramCallResult.TrafficDenied
+                    },
                 )
             telegramOutboxWorkerJob = outboxWorker.start()
         } else {
@@ -979,12 +1001,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     monitor.subscribe(ApplicationStarted) {
         if (dataSource != null) {
             if (stagingMaintenancePolicy.allowsAutonomousWrites) {
-                if (staffPhotoStorage.available && appEnv != "test") {
+                if ((staffPhotoStorage.available || infoMediaStorage.available) && appEnv != "test") {
                     staffPhotoJob =
                         staffPhotoScope.launch {
                             while (isActive) {
                                 try {
                                     staffPhotoService.cleanup()
+                                    infoMediaService.cleanup()
                                 } catch (
                                     e: CancellationException,
                                 ) {
@@ -1042,6 +1065,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         staffPhotoJob?.cancel()
         staffPhotoScope.cancel()
         staffPhotoStorage.close()
+        infoMediaStorage.close()
         subscriptionBillingJob.stop()
         tableSessionCleanupJob?.cancel()
         bookingExpiryJob?.cancel()
@@ -1076,6 +1100,9 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         allowMethod(HttpMethod.Delete)
         allowHeader(HttpHeaders.ContentType)
         allowHeader(HttpHeaders.Authorization)
+        allowHeader("Idempotency-Key")
+        allowHeader("X-Media-Revision")
+        allowHeader("X-Replaces-Media")
         appConfig.corsAllowedHosts().forEach { spec ->
             allowHost(spec.host, schemes = spec.schemes)
         }
@@ -1299,6 +1326,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
                     subscriptionRepository = subscriptionRepository,
                     telegramFileDownloader = guestInfoMediaDownloader,
+                    mediaService = infoMediaService,
                     maintenancePolicy = stagingMaintenancePolicy,
                 )
             }
@@ -1439,6 +1467,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueInfoSectionsRepository = venueInfoSectionsRepository,
                     venueInfoSectionMediaRepository = venueInfoSectionMediaRepository,
                     telegramFileDownloader = guestInfoMediaDownloader,
+                    mediaService = infoMediaService,
                 )
                 venueRoutes(
                     venueAccessRepository = venueAccessRepository,
@@ -1463,6 +1492,13 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     auditLogRepository = auditLogRepository,
                 )
                 venueStaffPhotoRoutes(staffPhotoService, venueAccessRepository, miniAppAbuseProtection)
+                venueInfoMediaRoutes(
+                    infoMediaService,
+                    infoMediaRepository,
+                    venueInfoSectionMediaRepository,
+                    miniAppAbuseProtection,
+                    guestInfoMediaDownloader,
+                )
                 venueStaffRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueStaffRepository = venueStaffRepository,

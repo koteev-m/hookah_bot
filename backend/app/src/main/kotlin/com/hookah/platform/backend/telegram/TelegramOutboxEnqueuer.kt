@@ -150,6 +150,24 @@ class TelegramOutboxEnqueuer(
             ).toEnqueueOutcome()
     }
 
+    suspend fun enqueueVenueInfo(
+        chatId: Long,
+        venueId: Long,
+        sectionId: Long,
+        mediaId: Long?,
+        last: Boolean,
+    ): TelegramOutboxEnqueueOutcome {
+        if (!allowsOutboundChat(chatId) || chatId <= 0) return TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY
+        return repository.enqueue(
+            chatId,
+            "venueInfo",
+            json.encodeToString(
+                VenueInfoDelivery.serializer(),
+                VenueInfoDelivery(venueId, sectionId, mediaId, last),
+            ),
+        ).toEnqueueOutcome()
+    }
+
     suspend fun enqueueSendPhoto(
         chatId: Long,
         photo: String,
@@ -248,3 +266,6 @@ class TelegramOutboxEnqueuer(
     private fun allowsOutboundChat(chatId: Long): Boolean =
         trafficPolicy.allowsOutboundChat(chatId) && maintenancePolicy.allowsOutboundChat(chatId)
 }
+
+@kotlinx.serialization.Serializable
+internal data class VenueInfoDelivery(val venueId: Long, val sectionId: Long, val mediaId: Long?, val last: Boolean)

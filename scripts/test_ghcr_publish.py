@@ -243,6 +243,7 @@ class PublicationTests(unittest.TestCase):
             return b''
 
         runtime = staging.Staging.__new__(staging.Staging)
+        runtime.config = {'runtime': {}}  # Historical two-service candidate, PDF opt-in absent.
         runtime.run, runtime.project = runner, 'fixture'
         inspected = {'Id': IMAGE_ID, 'Config': self.config['config']}
         with patch.object(staging.urllib.request.HTTPSHandler, 'https_open', side_effect=http), \

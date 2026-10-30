@@ -1,5 +1,392 @@
 # Project Status
 
+## HT-VENUE-MEDIA-PR236-CI-FAILURES-FIX-01 — local CI corrections (2026-10-31)
+
+**LOCAL_CI_FAILURES_FIXED_READY_FOR_REVIEW / NO_COMMIT_OR_PUSH_AUTHORIZATION**.
+Identity PASS after explicit clarification: starting HEAD
+797d6025a4ba48a3a5b36bbb4e7eba717e6fa137; sole direct parent/base
+bf3abc23a5109e097bf00cd2ed342729a086d653; primary Hookah checkout, branch
+codex/ht-venue-media-r2-pdf-worker-01. Original push 41130642065 and PR 41130679378
+are both completed/failure; their results are not replaced by local test evidence.
+
+Four diagnosed boundaries: cursor migration tests omitted reviewed H2 V129/PG V128
+from their exact pending maps; H2 rounds a nanosecond due-now timestamp upward and a
+frozen test clock then misses immediate failed-upload cleanup; connected runtime fixture
+expected only V127; cutover fixture's exact current SQL inventory omitted media SQL.
+Pending maps now include both reviewed tails. Failed-upload due-now timestamps truncate
+to SQL microseconds; deterministic fractional-time revocation regression retains Forbidden,
+zero READY, committed FAILED/journal and actual cleanup assertions on H2 and PostgreSQL.
+Runtime checks exact V1–V126 preservation plus V127/V128 and validates current Flyway head;
+cutover permits only exact reviewed tail paths/hashes, with missing/changed/extra/type
+negative controls. Historical SQL/authority/fencing/recovery and worker isolation are unchanged.
+
+Local checks: backend 152/152, zero skips/errors/failures (full 127-test migration-sanity
+selector, H2/PG lifecycle 12 each, real nonempty PG V127→V128 preservation upgrade 1).
+Compile/ktlint PASS; runtime diagnostics/contract self-tests 17/17; extracted exact cutover
+lineage validator 8/8 positive/negative cases; HT70 65/65; PDF-worker contracts 8/8;
+Java runtime fixture compilation, shell syntax and diff-check PASS. All migration bytes
+and four scripts/dev SQL helpers match the pre-task SHA256 inventory. H2 failure was
+reproduced before the fix with .123456789 seconds, with XML and SQL-rounding evidence.
+Full route selector was unnecessary after deterministic isolated reproduction; Mini App
+and Playwright were not rerun because their sources and dependencies are unaffected.
+
+Evidence: /private/tmp/HT-VENUE-MEDIA-PR236-CI-FAILURES-FIX-01/ (original CI logs,
+backend-xml, backend-results.json, red regression, timestamp-probe and lineage-proof).
+Limitation: the full connected runtime requires disposable GitHub-hosted Linux; full
+cutover also executes Linux/SSH consumers. Neither full harness was rerun on this Mac.
+Targeted local fixture proofs do not substitute for a new exact published-SHA CI run.
+No unfinished local test operation, commit/push/PR mutation/rerun/SSH/deploy/live DB/R2.
+Next: review local diff, then separately authorize corrective commit/push and new CI;
+merge and real iPhone/R2/staging acceptance remain unauthorized/unproven.
+
+
+## HT-VENUE-PDF-WORKER-CI-PERMISSIONS-FIX-01 — probe permissions verified (2026-10-30)
+
+**CI_PDF_PROBE_PERMISSIONS_FIXED_READY_FOR_REVIEW / NO_COMMIT_OR_RELEASE_AUTHORIZATION**.
+Goal: close the independent review's remaining P1: javac output unreadable by Docker UID 10001
+when the mandatory image guard inherits umask 077. Identity PASS: Hookah_Tootah / hookah_bot_ANT,
+primary physical root/Git dir/common/index and origin github.com/koteev-m/hookah_bot verified;
+HEAD exactly 0a913c09026940336e854d2db2948bc70e83fb5a, branch unchanged
+codex/ht-ux08-staff-photo-direct-management-01. Base/branch/parent constraints NOT_SUPPLIED.
+
+Both probe call sites use one disposable-fixture helper: compile with unchanged umask, chmod only
+the exact generated .class to 0644 and its temporary directory to 0755. No recursive chmod;
+source/other-file permissions, parser/runtime, HT70/Compose/security policy and prior P2/R2 work
+are preserved. Two real-javac regressions cover both probes, unchanged umask, cleanup and a private
+0600 sentinel. Contract suite 8/8 and existing simple-staging suite 65/65 PASS; Python syntax PASS.
+
+Fresh local Linux arm64/cgroup-v2 proof PASS under umask 077: 24 PDF/recovery cases, seven malformed
+IPC cases, single parser, timeout kill/reap (5.134s), automatic crash restart, admission refusal,
+network/rootfs/secret isolation and memory OOM-kill/PIDs EAGAIN/CPU throttling. Both probes also
+execute under actual UID/GID 10001 with read-only mounts. A separate Linux tmpfs owned by UID 10002
+proves 0600 denies both classes and 0644 admits them without root; Docker Desktop bind ownership
+remapping alone would hide that negative case. All 128 image runtime JAR/launcher hashes match
+current installDist/launcher; prior runtime source hashes are unchanged.
+
+Executed the unchanged mandatory CI proof command block with set -Eeuo pipefail and umask 077:
+exit 0 on success; deliberately corrupted disposable .class gives ClassFormatError/exit 1 and
+cannot reach the synthetic artifact-admission sentinel or write PASS results. No image-build,
+artifact publication or live CI operation was performed. Evidence, task-only diff and final status:
+/private/tmp/HT-VENUE-PDF-WORKER-CI-PERMISSIONS-FIX-01/.
+Local image sha256:2df3c357b7bb07fdeb9105c441fd6a5eb482fbf0a92a7d67d1a4bdd1d1e26957 remains a
+fixture, not the future exact linux/amd64 GHCR release image. That release proof stays open.
+No unfinished containers/volumes, stage/commit/push/PR/SSH/deploy/live DB/R2 operations;
+scripts/dev/ untouched. No staging deploy is needed for this fixture-only fix. Next: independent
+re-review of this exact fix and evidence; release authorization remains separate.
+
+## HT-VENUE-PDF-ISOLATED-WORKER-01 — OS-isolated PDF worker locally verified (2026-10-30)
+
+**PDF_WORKER_LOCAL_READY_FOR_INDEPENDENT_REVIEW / NO_COMMIT_OR_RELEASE_AUTHORIZATION**.
+Goal: contain REVIEW-01 F1/F2 P1 allocation/hang failures outside the primary backend JVM.
+The owner approved one same-VPS Compose worker and one minimal IPC resource. Architecture preflight
+confirmed a precise HT70 extension; no provider, external service, Docker control from backend,
+neighbor changes or abandonment of existing release guarantees is required.
+
+Identity PASS: Hookah_Tootah / hookah_bot_ANT; primary physical root and Git dir/common/index,
+origin github.com/koteev-m/hookah_bot, instruction origins and redirects checked. HEAD remains
+0a913c09026940336e854d2db2948bc70e83fb5a; branch unchanged
+codex/ht-ux08-staff-photo-direct-management-01. Local supplied historical main
+bf3abc23a5109e097bf00cd2ed342729a086d653 has the same tree. Base/branch/parent NOT_SUPPLIED.
+No fetch, Git repair, stage/commit, refs/worktree or configuration changes.
+
+F1/F2 local boundary: primary backend runs bounded preflight plus strict nonblocking Unix IPC;
+only PdfParserMain calls the OpenPDF validator, and both require actual Linux isolation admission.
+One parser child per worker, 5s wall deadline, forced kill/wait/reap, bounded writer cleanup;
+backend IPC ends within 9s and never falls back/retries in-process. Worker absent/crash/OOM/timeout
+refuses new PDFs and preserves old attachments; JPEG/PNG slots and Staff Photos remain independent.
+OS cgroup v2: memory 384 MiB, zero swap, CPU 1, PIDs 64; UID/GID 10001, no network/ports/secrets/
+Docker socket, read-only root, no capabilities, no-new-privileges/seccomp, zero core ulimit,
+no JVM dump files. Exactly one 12 MiB project-owned tmpfs socket volume; backend RO / worker RW.
+Protocol accepts only ping or 1..10 MiB validation frames, exact lengths/EOF, seven-byte response;
+partial/stalled/extra/invalid frames fail closed. Preflight remains defense in depth, not isolation.
+
+HT70: optional default-off VENUE_INFO_PDF_WORKER_ENABLED, exact capability/image/env/limits and
+service/mount/volume allowlists; absent flag preserves the historical document/hash byte-identically.
+Transition needs explicit deploy --apply-config, no pre-existing IPC resource, durable intent,
+worker health before backend, exact final observation. PostgreSQL binding, backup/migration,
+network/port, runtime/Compose hashes, shared lock, CI/PRODUCT and neighbor guards retained.
+Topology removal/old-image rollback requires separate review. No additional SQL migration.
+
+Checks PASS: backend aggregate 107/107 XML, zero errors/failures/skips (106-method broad run plus
+final affected client 3/3 replacing earlier two-method report); includes 16 actual media PostgreSQL
+methods and nonempty V127→V128 upgrade, H2, cleanup/RBAC/Guest/Preview, Bot ordering/outbox and
+StaffPhotoStorage. JUnit return type corrected so the independent PNG-slot regression truly runs.
+Final compile/installDist/ktlint PASS. TypeScript/Vite PASS (existing bundle-size advisory);
+Playwright focused 19/19 and full 469/469 PASS. HT70 historical 65/65 + new PDF contracts 6/6;
+GHCR publication contracts 11/11 with exact CI PyYAML dependency, image-guard self-tests PASS.
+CI explicitly selects nine media/client classes and enforces XML minima/zero skips/errors/failures;
+exact reproduced image must pass Linux Docker isolation before artifact admission/publication.
+
+Final Linux arm64 Docker proof: 24 PDF/recovery cases, seven malformed-IPC cases, single active
+parser under concurrency, timeout kill/reap/no zombies, actual supervisor crash→automatic Docker
+restart, unavailable unbounded entrypoint, forbidden network/rootfs/credential/DB/R2/Docker access.
+Normal 1/200-page and 8 MiB-stream PDFs passed in 0.58/0.65/0.76s; cumulative normal peak 168.7 MiB.
+Final adversarial/concurrent/health peak 201.0 MiB, 43 PIDs, no worker OOM. Frozen child returned
+unavailable in 5.13s, next request succeeded. Separate bounded trusted probes prove memory cgroup
+OOM-kill of their own disposable container only, PIDs EAGAIN and CPU throttling (~2.03 CPU seconds
+in 2.17 wall seconds). No hostile OpenPDF ran on Mac/in the main Gradle JVM. Core/heap dump denied.
+Local image 2df3c357b7bb07fdeb9105c441fd6a5eb482fbf0a92a7d67d1a4bdd1d1e26957 uses exact installDist
+and actual pinned runtime-stage bytes, synthetic fixture revision; it is not a CI/release image.
+Real disposable HT70 Compose transition retained exact PG binding and sentinel, refused implicit
+transition and CPU drift; baseline was synthetic current-schema history, not V126 enrollment.
+
+Evidence: /private/tmp/HT-VENUE-PDF-ISOLATED-WORKER-01/ (docker-verified, topology-verified,
+backend-final-xml, backend-verified-results.json, ci-selectors-proof.json, logs, hashes/manifests).
+All original 39 paths and prior 46-file work survive; P2 source/UI hashes unchanged and fresh
+regressions pass. Old SQL and V128/V129 additions unchanged. Full checkpoint history retained below.
+Working set: 33 modified tracked + 31 new files (64), plus pre-existing untracked scripts/dev/,
+which was not touched. This task changes 33 paths relative to its preserved initial inputs.
+No unfinished external operation, server/credentials/R2/live DB changes, SSH, deploy, commit/push/PR.
+Open: independent re-review; exact release CI/Linux-amd64 image proof; separately authorized real
+staging capacity/cgroup/config/migration-backup admission and acceptance; real iPhone, R2 and
+production. Structural success is not antivirus/viewer-safety proof. Next: independent review of
+this exact diff/evidence, then a separate release decision. No publication authorization is claimed.
+
+## HT-VENUE-CARD-R2-DIRECT-UPLOAD-FIX-01 — P2 fixed locally; PDF security decision required (2026-10-30)
+
+**SECURITY_FIX_DECISION_REQUIRED / NO_COMMIT_OR_RELEASE_AUTHORIZATION**.
+Goal: address REVIEW-01 findings F1/F2 (P1 PDF resources), F3 (P2 mixed delivery order),
+F4 (P2 history retention), F5 (P2 terminal retry), without expanding the editor/product.
+Identity PASS: Hookah_Tootah / hookah_bot_ANT; primary physical root, Git dir/common/index and
+origin github.com/koteev-m/hookah_bot verified; global AGENTS empty, no narrower active rules or
+Git redirects. HEAD 0a913c09026940336e854d2db2948bc70e83fb5a; branch unchanged
+codex/ht-ux08-staff-photo-direct-management-01. Supplied bf3abc23a5109e097bf00cd2ed342729a086d653
+is local with the same tree 0dd6b203be72dce1a6abba820337661c9f47af16. Base/branch/parent constraints
+NOT_SUPPLIED. No fetch, stage/commit, refs/worktree or Git configuration changes.
+
+F1/F2 PARTIAL: bounded token preflight before OpenPDF checks whitespace, numeric overflow,
+xref ranges/counts/offsets, duplicate offsets, token/depth budgets and rejects Prev/hybrid/object
+streams. Known attacks reject in an isolated test JVM (64 MiB heap, 5s wall deadline, kill/reap).
+This does NOT bound all OpenPDF graph traversal/allocations/time in the main JVM. P1 remain open;
+production parser isolation is an architectural/deployment decision, not implemented here.
+Static residual evidence: OpenPDF PageRefs.iteratePages recursively follows cyclic indirect Kids
+without a visited/depth budget; lexical depth alone cannot protect it. Not dynamically executed.
+Proposed choice and remaining contract: docs/MEDIA_STORAGE_UPLOAD.md security-fix boundary.
+No heap increase/catch(Throwable)/dependency swap is used as the security fix.
+
+F3 implemented: text/legacy/R2 use the existing durable outbox, ID-only payloads, ordered claim
+across retries, live scope/visibility checks at dispatch and after storage GET, safe filenames and
+final navigation markup; existing per-chat limiter retained. F4: pending file/key participates in
+in-memory Settings retention across non-cancelable History Back/Forward. F5: actor/venue/section
+operation status UNKNOWN/FAILED/SUCCESS, safe same-key replay, explicit new operation only after
+confirmed failure; submitted UNKNOWN cannot be discarded into an automatic new-key retry.
+No private file browser persistence; reload/close limitation is explained. No legacy resurrection.
+
+Checks: targeted 20/20; broader backend 104/104 XML with zero failures/errors/skips, including
+16 media PostgreSQL methods (V127-to-V128 upgrade, lifecycle/routes/concurrency), Guest/Preview,
+StaffPhotoStorage, Telegram API and outbox. Then affected final delta 27/27 PASS after retaining
+per-chat rate limits, plus Kotlin compile/ktlint PASS. Reused unaffected backend inputs after hash
+comparison; the broader run's lint-only assertion-format issue is fixed by the final delta.
+Playwright focused final 19/19 and full final 469/469 PASS; TypeScript/Vite build PASS (existing
+bundle-size advisory). HT70 contracts 65/65 PASS. Git diff --check and new-file whitespace sanity
+PASS. CI explicitly selects eight media classes and verifies XML minima with zero skips/errors/
+failures; existing required gates retained. These are local fixtures, not GitHub CI or iPhone/live
+R2 acceptance. Backend test commands use the existing Docker API compatibility option 1.44.
+
+All 39 original paths survive; initial byte-exact backups/hashes and final evidence are in
+/private/tmp/HT-VENUE-CARD-R2-DIRECT-UPLOAD-FIX-01/ (commands.txt, XML, logs, change manifests).
+Old SQL and the original V128/V129 additions are unchanged. Staff Photo implementation, credentials,
+bucket/runtime/deploy configuration and scripts/dev/ unchanged from task start. All preceding
+checkpoint history is preserved below. Combined working set: 30 modified tracked + 16 new files
+(46), plus the pre-existing untracked scripts/dev/. Staged empty. No unfinished external operation,
+live DB/R2 mutation, SSH, deploy, commit/push/PR/merge or new operational infrastructure.
+Next: decide/admit OS-bounded PDF worker isolation (or a fully bounded replacement parser), then
+finish P1 and obtain independent re-review. No commit/deploy readiness is claimed. Future runtime
+release still needs exact CI/migration/backup/config admission and authorized staging acceptance.
+
+## HT-VENUE-CARD-R2-DIRECT-UPLOAD-01 — local implementation verified; independent review next (2026-10-30)
+
+**LOCAL_VERIFIED / READY_FOR_INDEPENDENT_REVIEW / STAGING_R2_SELECTED / LIVE_ACCEPTANCE_OPEN**.
+Goal: direct OWNER/MANAGER JPEG/PNG/PDF information-media management in Settings/card,
+with existing Telegram attachments and Guest/Published/Private Preview preserved.
+
+Identity gate PASS: expected/observed `Hookah_Tootah / hookah_bot_ANT`, exact task above;
+physical cwd/root `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, Git dir/common
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT/.git`, checkout-owned `.git/index`, origin
+`github.com/koteev-m/hookah_bot`; only registered checkout. No identity-affecting GIT overrides,
+config includes/worktree/hooks/object-store redirects or foreign active instructions. Inherited
+instructions match root AGENTS.md; global AGENTS.md empty, no narrower applicable rules.
+Branch unchanged `codex/ht-ux08-staff-photo-direct-management-01`; supplied starting HEAD equals
+`0a913c09026940336e854d2db2948bc70e83fb5a`. Supplied historical main merge `bf3abc23a5109e097bf00cd2ed342729a086d653`
+exists locally with identical tree `0dd6b203be72dce1a6abba820337661c9f47af16`. Expected base/branch/
+parent: NOT_SUPPLIED. No fetch, Git repair or branch/worktree change.
+
+Owner selects existing private staging R2 bucket `hookah-tootah-media-staging-eu` and separate
+`venue-info/` keys. This supersedes the prior instruction-only storage-decision blocker for this
+staging slice only. No new provider/bucket, live credentials/configuration or billing change.
+Production, backup/restore and real R2 admission remain open. See MEDIA_STORAGE_UPLOAD.md.
+
+PostgreSQL V128 / H2 V129 add fields/indexes/checks to the existing `venue_info_section_media`
+registry and a technical cleanup journal that survives FK cascades; no old migration changes or
+legacy conversion. All old IDs, Telegram file_id values, order, sections and visibility survive.
+New immutable private object keys + opaque public UUIDs, server MIME/signature/CRC/decode/EXIF
+and conservative PDF validation, 10 MiB/8192-side/32 MP/10-attachment limits, quotas and bounded
+body/storage work. No Staff Photo ledger reuse, consent or JPEG-only/PDF-incompatible contract.
+
+Reservation before PUT, section revision and live role/scope checks, idempotent lost-response
+retry, atomic replacement retaining order/visibility, immediate logical denial and durable cleanup.
+DELETE then HEAD absence acknowledgement; normal cleanup after seven days, failed/expired uploads
+and cascaded orphans without recovery window; daily late-PUT reconciliation. Maintenance admission
+still governs cleanup. Transactional audit excludes filenames, keys, provider payloads and secrets.
+
+OWNER/MANAGER direct editor lists saved sections and files, uploads multiple selected files,
+replaces/deletes, controls section/attachment visibility, and offers explicit retry/status/errors.
+Retained selections and in-flight writes block navigation; card text remains a separate unsaved
+draft, never auto-saved by media actions. The Bot-first guide remains a fallback, including custom
+section creation. Source-specific deletion copy distinguishes Telegram reference removal from R2
+cleanup and discloses that received copies cannot be revoked. STAFF/direct/foreign access denied.
+Guest/Preview use guarded scoped bytes; new UUID routes coexist with numeric legacy references,
+private Preview works before publication, and visibility/access are rechecked after storage reads.
+Bot retains legacy file_id delivery and sends new bounded R2 documents with safe generated names.
+
+Checks: TypeScript/Vite build PASS (existing advisory >500 kB chunk warning).
+Final focused `MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --grep 'direct venue info media|venue card media' --workers=2`
+PASS 16/16; full same smoke without grep PASS 466/466. Mobile 390x568 editor screenshots inspected;
+no horizontal overflow. File-provider unknown MIME, no text autosave, retry and legacy-delete cancel
+are covered. These are Chromium/mock checks, not live iPhone/Telegram/PDF-reader acceptance.
+Kotlin compile + ktlintCheck PASS. Backend 72 selected media/H2/PostgreSQL/Guest/Preview/Bot/SDK tests
+PASS; then one additional PostgreSQL cleanup-waits-on-finalize-commit race PASS (73 total,
+0 failures/errors/skips). The 72-test input hashes remain identical after the extra test; production
+compile UP-TO-DATE and ktlint PASS. Real PostgreSQL: 15 methods, none skipped. Existing local Docker
+29/Testcontainers compatibility requires `_JAVA_OPTIONS='-Xmx4g -Dapi.version=1.44'`; initial skipped
+Docker discovery was an environment failure, resolved before final results. H2 uses the existing
+explicit V36/V38 historical fixture repair; no fresh unmodified H2 baseline rollout is claimed.
+`python3 -B scripts/test_simple_staging.py` PASS 65/65: optional runtime validation/observation,
+old config hashes, exact append-only V128 manifest and release/rollback boundaries. `git diff --check`
+PASS; new documentation relative links valid. Eleven missing historical artifact links were already
+present in the preserved checkpoint and are not new implementation evidence.
+
+Runtime prerequisite: optional `VENUE_INFO_MEDIA_R2_ENABLED=true` with the complete existing
+validated private `STAFF_PHOTOS_R2_*` connection block; staff enabled flag may remain false.
+Old HT70 configs stay valid/disabled and byte-identical; runtime changes still need a separately
+authorized `deploy --apply-config`. No VPS configuration was applied. Confirm existing credential
+scope already permits venue-info PUT/GET/HEAD/DELETE; extra rights/cost need a separate decision.
+Before release require exact V127→V128 compatibility/backup/CI admission, then separately authorized
+staging deploy + real iPhone/Guest/Bot/physical deletion acceptance. No old-schema rollback; new R2
+rows require a media-aware compatible rollback binary. PDF encrypted/active/form/object-stream
+variants are intentionally rejected; structural parsing is not antivirus certification.
+
+Evidence: `/private/tmp/HT-VENUE-CARD-R2-DIRECT-UPLOAD-01/` contains initial eight-file backups/hashes,
+73-test XML summary and XML, compile/lint logs, final build/Playwright/HT70 logs, screenshots, changed
+file manifest and final hashes. The entire initial PROJECT_STATUS.md content is preserved below;
+initial SHA256 `bbb6a7649cd72db4f61f0043252e6a76f8027b46cd9689b126f496b4f782e2b6`.
+Final diff: 25 modified tracked files + 14 new files, including the eight pre-existing reviewed
+changes; STAFF_PROFILES_SHIFTS_TIPS.md remains byte-identical to task start. Staged empty; pre-existing
+`?? scripts/dev/` untouched. No commit/push/PR/merge, SSH/deploy, live R2 or live SQL mutation.
+Next: independent review of this local diff; any publication/configuration/deployment requires
+separate authorization. Production admission and backup/restore stay open.
+
+## HT-VENUE-CARD-MEDIA-RESTORE-01 — local verified; Bot-first entry, UX08 partial acceptance (2026-10-30)
+
+**LOCAL_VERIFIED / BOT_FIRST_DISCOVERY_RESTORED / STORAGE_DECISION_OPEN / UX08_PARTIAL**.
+Goal: restore discovery of existing public-card image/PDF management, verify Guest/Preview,
+record owner-confirmed iPhone UX08 results and specify the future browser-upload boundary.
+
+Identity gate PASS: expected/observed `Hookah_Tootah / hookah_bot_ANT`, exact task above;
+physical cwd/root `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, Git dir/common
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT/.git`, checkout-owned `.git/index`, origin
+`github.com/koteev-m/hookah_bot` all match. Only registered checkout; no identity-changing GIT
+overrides, config includes/worktree/hooks/object-store redirects or foreign active instructions.
+Inherited user instructions match repo AGENTS.md; global AGENTS.md is empty, no narrower rules.
+Branch `codex/ht-ux08-staff-photo-direct-management-01`, starting/unchanged HEAD
+`0a913c09026940336e854d2db2948bc70e83fb5a`; supplied historical main merge
+`bf3abc23a5109e097bf00cd2ed342729a086d653` exists locally, contains HEAD and has the identical
+tree. EXPECTED_HEAD/base/branch/parent constraints: `NOT_SUPPLIED`. No fetch or branch change.
+
+Existing Bot flow confirmed in source and focused tests: OWNER chooses My Venues → exact venue →
+Setup → Profile/card; MANAGER chooses Change venue → exact venue → Venue; both use
+`ℹ️ О заведении / Правила` → default/custom section or `📖 Фото-меню` → `🖼 Добавить медиа` →
+multiple photos/PDFs → `✅ Готово`. Individual row deletion and whole-section visibility exist.
+Membership and venue/section/media scoping are server-side; STAFF cannot author. Source refs remain
+unchanged. Bot selection is independent of Mini App selection; no editor deep link is supported.
+
+Settings/card now provides OWNER/MANAGER a collapsed `Фотографии и PDF` guide with exact paths,
+venue-selection check, save-before-chat/close warning and return/Preview instructions. It makes no
+API writes, opens no URL/bot/picker and keeps the form/draft mounted. STAFF has no entry and direct
+route is denied. Guest information/photo menu, Published Preview and authenticated Draft render
+saved images/PDFs. No additional display regression found within local source/mock/proxy coverage;
+no live Bot, published venue or iPhone roundtrip was exercised by this task.
+
+UX08 owner testimony: successful iPhone photo upload; OWNER/MANAGER work; STAFF mutations denied;
+no consent/publish. **Partial acceptance only**: Guest display untested because venue unpublished;
+physical R2 deletion after cleanup unverified. No new live CRUD/storage inspection or complete UX08
+closure claimed. Existing release checkpoint below is preserved as historical evidence.
+
+Future candidate in MEDIA_STORAGE_UPLOAD.md: evolve the existing metadata ledger, retain legacy
+TELEGRAM_FILE reads, use private object storage for new JPEG/PNG/PDF, guarded delivery in all
+surfaces, atomic replacement and durable cleanup. `STOP_FOR_MEDIA_STORAGE_DECISION` remains:
+provider/R2 applicability, private environment/credential scope, deletion/retention, backup/restore
+RPO/RTO, operator and budget require a separate owner decision. No schema/config/storage runtime
+or financial change. Updated only relevant media, venue, staff, product and QA canonical sections.
+
+Checks: `npm --prefix miniapp run build` PASS (TypeScript + Vite; advisory chunk-size warning).
+`MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --grep 'venue card media|pre-QR guest card shows info|published guest preview|saved draft previews|settings preview blocks' --workers=2`
+PASS 12/12. Full `MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --workers=2`
+PASS 456/456. After strengthening only the STAFF test's readiness/explicit-denial/Back assertions,
+final `--grep 'venue card media' --workers=2` PASS 6/6; production source unchanged. Mobile
+390×568 expanded guide screenshots inspected; no horizontal overflow. Full suite includes existing
+desktop settings/draft/venue-switch checks. Backend audit validation: `./gradlew --no-daemon
+--max-workers=1 :backend:app:test --tests '*GuestVenueRoutesTest' --tests '*VenueGuestPreviewRoutesTest'
+--tests '*VenueDraftPreviewRoutesTest' --tests '*TelegramBotRouterTableTokenTest.owner venue description*'
+--tests '*TelegramBotRouterTableTokenTest.owner venue photo menu*' --console=plain` PASS 35 tests,
+0 failures/errors/skips. No standalone VenueDraftPreviewRoutesTest exists; private cases actually
+execute in VenueGuestPreviewRoutesTest (no separate class PASS claimed). Initial sandbox blocked
+loopback and Gradle cache; approved local reruns passed. `git diff --check` PASS.
+
+Evidence: `/private/tmp/HT-VENUE-CARD-MEDIA-RESTORE-01/` contains full/final media Playwright logs,
+backend XML summary, mobile screenshots and byte-exact initial PROJECT_STATUS.md backup. Existing
+local checkpoint content preserved; initial SHA256
+`dd8c06a22bd952679f36a984df5d8880a3fa51f0f49d7cb10c902bdfbb4f956b`.
+Final tracked changes: this checkpoint, five canonical docs, venueSettings.ts and guest-smoke.spec.ts;
+pre-existing untracked `scripts/dev/` untouched. No unfinished operations, stage/commit/push/PR,
+SSH/deploy or live mutation. Staging deployment/manual Telegram smoke is needed for release of
+the new UI, outside this local-only authorization. Next: review the local diff; authorize release
+and actual Bot/return smoke separately, and decide storage before browser-upload implementation.
+
+## HT-UX08-STAFF-PHOTO-DIRECT-RELEASE-01 — staging technical PASS, iPhone open (2026-10-29)
+
+**HT_UX08_DIRECT_PHOTO_STAGING_TECHNICAL_PASS_IPHONE_PENDING**.
+Identity PASS: `Hookah_Tootah`, primary Hookah root/common/index and origin. Initial checkout
+`0256e62b21862ecef0de72b6eea3081ba789f2c6`; verified main base
+`a96a3c9088540083952788577c651a73a724de96` had the identical tree. Local branch
+`codex/ht-ux08-staff-photo-direct-management-01`, source commit
+`0a913c09026940336e854d2db2948bc70e83fb5a`: exactly 22 approved files, unchanged source hashes,
+one ordinary push, no corrective source iterations. Existing refs/stash and four SQL helpers preserved.
+[PR235](https://github.com/koteev-m/hookah_bot/pull/235) merged normally at
+`bf3abc23a5109e097bf00cd2ed342729a086d653`; exact parents and source tree verified locally.
+No branch-rule changes, bypass, additional PR, worktree or direct main push.
+
+Exact-source [push CI648](https://github.com/koteev-m/hookah_bot/actions/runs/40872865567) and
+[PR CI649](https://github.com/koteev-m/hookah_bot/actions/runs/40872921816) PASS (15 mandatory
+jobs; expected feature/PR publish skip). Exact-merge
+[main CI650](https://github.com/koteev-m/hookah_bot/actions/runs/40876194560), attempt 1,
+PASS 16/16 including publish-ghcr. Bounded monitoring: PR five reads, main six, roughly five-minute
+intervals; mandatory candidate/deploy admission independently reverified completed CI. No rerun,
+cancel or dispatch. Prior local 62 photo/189 regression/38 focused/450 full tests reused after
+SHA256/XML/log/freshness verification, with no new local suite execution.
+
+Artifact `ghcr-candidate-bf3abc23a5109e097bf00cd2ed342729a086d653-1`, ID `12899218282`,
+ZIP SHA256 and candidate/build metadata verified. Installed immutable image:
+`ghcr.io/koteev-m/hookah_bot/backend@sha256:b4508dd3b17f54f0f9c25b8ad9fd33ad3ac364f592f8070feb8e2fbc6a36a178`.
+Pinned Hookah SSH/SCP, trusted tool hash, shared Docker lock, OCI source/revision, amd64,
+unchanged packaged SQL manifest and runtime admitted. Exactly one standard HT70 deploy without
+extra flags: operation `f7a3aedcbf134e9bb4737d3892903707` **SUCCESS**.
+
+Read-only technical smoke PASS: loopback and HTTPS exact `/version`, health/DB health/Mini App,
+expected unauthenticated Staff Photo API 401, JS/CSS equal packaged files, changed direct-photo JS,
+startup ERROR/FATAL 0 (41 examined lines), no polling conflict. PostgreSQL 17.11 not restarted;
+system ID `7699566393539428389`, volume/network/binding and all 127 successful Flyway rows unchanged.
+Private config/R2 runtime, Clubs containers/images/mounts/ports/networks/start times and Caddyfile
+unchanged. Existing historical V126 backup matches its off-VPS copy by checksum/size; no fresh
+backup or restore was performed. R2 provider connectivity and live photo CRUD were not exercised.
+
+Evidence: `/private/tmp/HT-UX08-STAFF-PHOTO-DIRECT-RELEASE-01/release-report.json`, `commands.json`,
+CI snapshots, candidate metadata and safe server preflight/inspect/deploy/post-smoke JSON.
+No unfinished operations; one deploy permission consumed, no recovery/retry performed. This local
+checkpoint is not an additional source commit/push. scripts/dev/ untouched. Production readiness
+and manual Telegram iPhone acceptance are not claimed. Next: separately authorized manual iPhone
+Owner/Manager/Staff photo acceptance; real upload/replace/delete remains outside technical smoke.
+
 ## HT-UX08-STAFF-PHOTO-DIRECT-MANAGEMENT-01 — ready for local review, acceptance open (2026-10-29)
 
 **LOCAL_VERIFIED / READY_FOR_REVIEW / STAGING_ACCEPTANCE_OPEN**.

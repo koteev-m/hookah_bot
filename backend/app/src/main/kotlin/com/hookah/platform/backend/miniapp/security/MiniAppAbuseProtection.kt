@@ -55,6 +55,16 @@ internal class MiniAppAbuseProtection(
     digestKey: ByteArray = randomDigestKey(),
 ) {
     private sealed interface BucketKey {
+        data class InfoMediaUploadActor(val actorId: Long, val venueId: Long) : BucketKey
+
+        data object InfoMediaUploadGlobal : BucketKey
+
+        data class InfoMediaPrivacyActor(val actorId: Long) : BucketKey
+
+        data class InfoMediaReadActor(val actorId: Long) : BucketKey
+
+        data object InfoMediaReadGlobal : BucketKey
+
         data object StaffPhotoUploadGlobal : BucketKey
 
         data class StaffPhotoUploadActor(val actorId: Long, val venueId: Long) : BucketKey
@@ -164,6 +174,41 @@ internal class MiniAppAbuseProtection(
             ),
         )
     }
+
+    fun tryInfoMediaUpload(
+        actor: Long,
+        venue: Long,
+    ): MiniAppRateLimitDecision =
+        acquire(
+            listOf(
+                Requirement(BucketKey.InfoMediaUploadGlobal, MiniAppRateLimitPolicy(120, Duration.ofMinutes(10))),
+                Requirement(
+                    BucketKey.InfoMediaUploadActor(actor, venue),
+                    MiniAppRateLimitPolicy(5, Duration.ofMinutes(1)),
+                ),
+            ),
+        )
+
+    fun tryInfoMediaPrivacy(actor: Long): MiniAppRateLimitDecision =
+        acquire(
+            listOf(
+                Requirement(BucketKey.InfoMediaPrivacyActor(actor), MiniAppRateLimitPolicy(60, Duration.ofMinutes(1))),
+            ),
+        )
+
+    fun tryInfoMediaRead(actor: Long): MiniAppRateLimitDecision =
+        acquire(
+            listOf(
+                Requirement(BucketKey.InfoMediaReadActor(actor), MiniAppRateLimitPolicy(240, Duration.ofMinutes(1))),
+            ),
+        )
+
+    fun tryInfoMediaPublicRead(): MiniAppRateLimitDecision =
+        acquire(
+            listOf(
+                Requirement(BucketKey.InfoMediaReadGlobal, MiniAppRateLimitPolicy(1200, Duration.ofMinutes(1))),
+            ),
+        )
 
     fun tryStaffPhotoUpload(
         actorId: Long,

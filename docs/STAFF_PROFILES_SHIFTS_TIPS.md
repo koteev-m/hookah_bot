@@ -15,7 +15,8 @@ STAGING-SMOKE-PASSED`.
 Green GitHub Actions, staging deploy, PostgreSQL V121 rollout and the bounded manual smoke described
 below are complete for Slice B and the previously closed Staff slices.
 `STAFF_TIP` and staff shift sign-up/chat workflows remain future. Staff photo upload/picker is
-implemented locally in the separate UX08 E task; live R2/staging acceptance remains pending. Phase 2 may create staff tip intents with external staff tip links, but the platform
+implemented in the separate UX08 E task; partial owner-confirmed iPhone acceptance is recorded
+under Staff Photos below, with Guest display and R2 cleanup still unverified. Phase 2 may create staff tip intents with external staff tip links, but the platform
 must not collect guest order payments or staff tips in MVP.
 
 ## Current Release Closure / 2026-08-04
@@ -1163,6 +1164,12 @@ Current recommendation: do not add a second group in Schedule Phase 1. Reconside
 notifications only in a later bounded slice after the Venue Mode runtime is implemented and smoked.
 
 ## Staff Photos — Local R2 Slice
+
+2026-10-30 (`HT-VENUE-CARD-MEDIA-RESTORE-01`): owner-confirmed iPhone photo upload,
+OWNER/MANAGER operation, STAFF mutation denial and no consent/publish step are **PARTIAL
+ACCEPTANCE**. Guest display was not tested because the venue is unpublished; physical deletion
+from R2 after cleanup remains unverified. This does not close full UX08 or production/backup
+admission. Evidence source is the owner's task confirmation, not new live operations in this task.
 
 `HT-UX08-STAFF-PHOTO-DIRECT-MANAGEMENT-01` supersedes the former UX08 consent/approval model
 by explicit product-owner instruction. JPEG/PNG upload becomes the current photo immediately

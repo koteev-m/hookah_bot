@@ -37,8 +37,12 @@ BASE_RUNTIME_KEYS = RUNTIME_SECRETS | {'TELEGRAM_BOT_ENABLED', 'TELEGRAM_BOT_TOK
                                        'PLATFORM_OWNER_TELEGRAM_ID'}
 R2_CONNECTION_KEYS = {'STAFF_PHOTOS_R2_' + suffix for suffix in
                       ('ENDPOINT', 'BUCKET', 'ACCESS_KEY', 'SECRET_KEY', 'REGION', 'JURISDICTION')}
-PHOTO_RUNTIME_KEYS = R2_CONNECTION_KEYS | {'STAFF_PHOTOS_R2_ENABLED', 'STAFF_PHOTOS_MAX_INPUT_BYTES'}
-RUNTIME_KEYS = BASE_RUNTIME_KEYS | PHOTO_RUNTIME_KEYS
+PHOTO_RUNTIME_KEYS = R2_CONNECTION_KEYS | {'STAFF_PHOTOS_R2_ENABLED', 'STAFF_PHOTOS_MAX_INPUT_BYTES', 'VENUE_INFO_MEDIA_R2_ENABLED'}
+PDF_FLAG = "VENUE_INFO_PDF_WORKER_ENABLED"
+PDF_IPC = "/run/hookah-pdf"
+PDF_MEMORY = 384 * 1024 * 1024
+PDF_VOLUME_OPTIONS = {"type": "tmpfs", "device": "tmpfs", "o": "size=12m,uid=10001,gid=10001,mode=0700"}
+RUNTIME_KEYS = BASE_RUNTIME_KEYS | PHOTO_RUNTIME_KEYS | {PDF_FLAG}
 REQUIRED_JOBS = {'backend-ktlint', 'backend-compile', 'backend-archive-reproducibility',
                  'backend-release-critical-routes', 'backend-venue-booking-rbac',
                  'backend-telegram-lightweight', 'backend-migration-sanity', 'backend',
@@ -271,9 +275,11 @@ def validate_config(c):
                 and re.fullmatch(r'[A-Za-z0-9_]+', e['TELEGRAM_BOT_USERNAME']), 'TELEGRAM_CONFIG_INVALID')
     else:
         require(e['TELEGRAM_BOT_TOKEN'] == '', 'DISABLED_TELEGRAM_TOKEN_MUST_BE_EMPTY')
+    require(e.get(PDF_FLAG, 'false') in ('true', 'false'), 'PDF_WORKER_FLAG_INVALID')
     # Do not insert defaults: old runtime/Compose hashes must remain unchanged.
     require(e.get('STAFF_PHOTOS_R2_ENABLED', 'false') in ('true', 'false'), 'R2_FLAG_INVALID')
-    if e.get('STAFF_PHOTOS_R2_ENABLED') == 'true' or R2_CONNECTION_KEYS & set(e):
+    require(e.get('VENUE_INFO_MEDIA_R2_ENABLED', 'false') in ('true', 'false'), 'INFO_MEDIA_FLAG_INVALID')
+    if e.get('STAFF_PHOTOS_R2_ENABLED') == 'true' or e.get('VENUE_INFO_MEDIA_R2_ENABLED') == 'true' or R2_CONNECTION_KEYS & set(e):
         require(R2_CONNECTION_KEYS | {'STAFF_PHOTOS_R2_ENABLED'} <= set(e), 'R2_CONFIG_INCOMPLETE')
         require(e['STAFF_PHOTOS_R2_BUCKET'] == 'hookah-tootah-media-staging-eu', 'R2_BUCKET_INVALID')
         require(e['STAFF_PHOTOS_R2_REGION'] == 'auto', 'R2_REGION_INVALID')
@@ -329,7 +335,7 @@ class Staging:
                    TELEGRAM_BOT_MODE='long_polling', TELEGRAM_WEBAPP_PUBLIC_URL='https://staging.hookahtootah.club/miniapp/',
                    MINIAPP_STATIC_DIR='/app/miniapp', MINIAPP_DEV_SERVER_URL='', MINIAPP_ENTRY_ENABLED='true',
                    CORS_ALLOWED_HOSTS='https://staging.hookahtootah.club', AI_ASSISTANT_ENABLED='false', BILLING_PROVIDER='fake')
-        return {'services': {
+        doc = {'services': {
             'postgres': {'image': c['postgres_image'], 'platform': 'linux/' + c['architecture'], 'restart': 'unless-stopped',
                          'environment': {'POSTGRES_DB': 'hookah', 'POSTGRES_USER': 'hookah', 'POSTGRES_PASSWORD': c['postgres_password']},
                          'volumes': ['pgdata:/var/lib/postgresql/data'],
@@ -338,6 +344,20 @@ class Staging:
                         'environment': env, 'ports': [f'127.0.0.1:{self.port}:8080'],
                         'depends_on': {'postgres': {'condition': 'service_healthy'}}}},
             'volumes': {'pgdata': {}}, 'networks': {'default': {}}}
+        if self.config['runtime'].get(PDF_FLAG) == 'true':
+            doc['volumes']['pdf_ipc'] = {'driver': 'local', 'driver_opts': PDF_VOLUME_OPTIONS}
+            doc['services']['backend']['volumes'] = [{'type': 'volume', 'source': 'pdf_ipc', 'target': PDF_IPC, 'read_only': True}]
+            doc['services']['pdf-worker'] = {
+                'image': image['image'], 'platform': 'linux/' + c['architecture'], 'restart': 'unless-stopped',
+                'user': '10001:10001', 'entrypoint': ['/app/app/bin/pdf-worker'], 'command': [],
+                'network_mode': 'none', 'read_only': True, 'cap_drop': ['ALL'],
+                'security_opt': ['no-new-privileges:true'], 'init': True,
+                'ulimits': {'core': {'soft': 0, 'hard': 0}},
+                'mem_limit': PDF_MEMORY, 'memswap_limit': PDF_MEMORY, 'cpus': 1.0, 'pids_limit': 64,
+                'volumes': [{'type': 'volume', 'source': 'pdf_ipc', 'target': PDF_IPC}],
+                'healthcheck': {'test': ['CMD', '/app/app/bin/pdf-worker', 'probe'],
+                                'interval': '10s', 'timeout': '3s', 'retries': 3, 'start_period': '5s'}}
+        return doc
 
     def inspect_image(self, ref, *, pull=True):
         if pull:
@@ -365,10 +385,19 @@ class Staging:
             with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
                 files = [m for m in archive if m.isfile()]
                 require(len(files) == 1 and files[0].size < 64 * 1024 * 1024, 'PACKAGED_JAR_INVALID')
-                rows = manifest(archive.extractfile(files[0]).read())
+                jar_bytes = archive.extractfile(files[0]).read()
+                rows = manifest(jar_bytes)
+                if self.config['runtime'].get(PDF_FLAG) == 'true':
+                    with zipfile.ZipFile(io.BytesIO(jar_bytes)) as jar:
+                        require('pdf-worker-protocol.txt' in jar.namelist()
+                                and jar.read('pdf-worker-protocol.txt') == b'HTPDF1\n', 'PDF_WORKER_IMAGE_CAPABILITY_REQUIRED')
         finally:
             self.run(['docker', 'rm', cid])
-        return dict(record, id=data['Id'], manifest=rows, ci=ci)
+        result = dict(record, id=data['Id'], manifest=rows, ci=ci)
+        if self.config['runtime'].get(PDF_FLAG) == 'true':
+            result['pdf_worker'] = 1
+            result['pdf_worker_env_hash'] = digest(sorted(data['Config'].get('Env', [])))
+        return result
 
     def containers(self):
         ids = self.run(['docker', 'ps', '-aq', '--filter', 'label=com.docker.compose.project=' + self.project]).decode().split()
@@ -387,7 +416,15 @@ class Staging:
 
     def binding(self):
         items = self.containers()
-        require(all(i['Config']['Labels'].get('com.docker.compose.service') in ('backend', 'postgres') for i in items), 'UNEXPECTED_PROJECT_SERVICE')
+        allowed = {'backend', 'postgres'} | ({'pdf-worker'} if self.config['runtime'].get(PDF_FLAG) == 'true' else set())
+        services = [i['Config']['Labels'].get('com.docker.compose.service') for i in items]
+        require(set(services) <= allowed and services.count('pdf-worker') <= 1, 'UNEXPECTED_PROJECT_SERVICE')
+        for worker in (i for i in items if i['Config']['Labels'].get('com.docker.compose.service') == 'pdf-worker'):
+            state = self.state() or {}
+            admitted = [candidate for candidate in (state.get('target'), state.get('previous'))
+                        if candidate and candidate.get('pdf_worker') == 1 and candidate.get('id') == worker['Image']]
+            require(admitted, 'PDF_WORKER_UNREGISTERED_IMAGE')
+            self.observe_pdf_worker(worker, admitted[0])
         pgs = [i for i in items if i['Config']['Labels'].get('com.docker.compose.service') == 'postgres']
         require(len(pgs) == 1, 'POSTGRES_IDENTITY_UNKNOWN')
         pg = pgs[0]
@@ -409,12 +446,69 @@ class Staging:
         app = apps[0]
         require(app['Image'] == image['id'] and app['State']['Running'], 'BACKEND_IMAGE_NOT_RUNNING')
         require(app['HostConfig']['PortBindings'] == {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(self.port)}]}
-                and not app['Mounts'] and set(app['NetworkSettings']['Networks']) == {self.project + '_default'}, 'BACKEND_ISOLATION_MISMATCH')
+                and set(app['NetworkSettings']['Networks']) == {self.project + '_default'}, 'BACKEND_ISOLATION_MISMATCH')
+        workers = [i for i in self.containers() if i['Config']['Labels'].get('com.docker.compose.service') == 'pdf-worker']
+        if self.config['runtime'].get(PDF_FLAG) == 'true':
+            require(image.get('pdf_worker') == 1 and len(workers) == 1, 'PDF_WORKER_IDENTITY_UNKNOWN')
+            self.pdf_host_mount(app['HostConfig'], writable=False)
+            self.pdf_mount(app['Mounts'], writable=False)
+            self.observe_pdf_worker(workers[0], image)
+        else:
+            require(not app['Mounts'] and not workers, 'BACKEND_ISOLATION_MISMATCH')
         actual = dict(x.split('=', 1) for x in app['Config']['Env'])
         require(all(actual.get(k) == v for k, v in self.document(image)['services']['backend']['environment'].items()), 'BACKEND_RUNTIME_CONFIG_MISMATCH')
-        require({k: v for k, v in actual.items() if k in PHOTO_RUNTIME_KEYS}
-                == {k: v for k, v in self.config['runtime'].items() if k in PHOTO_RUNTIME_KEYS},
+        require({k: v for k, v in actual.items() if k in PHOTO_RUNTIME_KEYS | {PDF_FLAG}}
+                == {k: v for k, v in self.config['runtime'].items() if k in PHOTO_RUNTIME_KEYS | {PDF_FLAG}},
                 'BACKEND_RUNTIME_CONFIG_MISMATCH')
+
+    def pdf_mount(self, mounts, *, writable):
+        require(len(mounts) == 1 and mounts[0].get('Type') == 'volume'
+                and mounts[0].get('Name') == self.project + '_pdf_ipc'
+                and mounts[0].get('Destination') == PDF_IPC and mounts[0].get('RW') is writable
+                and not mounts[0].get('SubPath'),
+                'PDF_IPC_MOUNT_MISMATCH')
+        volume = json.loads(self.run(['docker', 'volume', 'inspect', self.project + '_pdf_ipc']))[0]
+        require(volume.get('Driver') == 'local' and volume.get('Options') == PDF_VOLUME_OPTIONS
+                and volume.get('Labels', {}).get('com.docker.compose.project') == self.project
+                and volume.get('Labels', {}).get('com.docker.compose.volume') == 'pdf_ipc', 'PDF_IPC_VOLUME_MISMATCH')
+
+    def pdf_host_mount(self, host, *, writable):
+        # Compose may encode a named volume in Binds rather than HostConfig.Mounts.
+        # Accept only the exact project-owned volume/path/mode in either representation.
+        mounts = host.get('Mounts') or []
+        binds = host.get('Binds') or []
+        if binds:
+            mode = 'rw' if writable else 'ro'
+            require(not mounts and binds == [self.project + '_pdf_ipc:' + PDF_IPC + ':' + mode],
+                    'PDF_IPC_HOST_MOUNT_MISMATCH')
+        else:
+            require(len(mounts) == 1 and mounts[0].get('Type') == 'volume'
+                    and mounts[0].get('Source') == self.project + '_pdf_ipc'
+                    and mounts[0].get('Target') == PDF_IPC and bool(mounts[0].get('ReadOnly')) is not writable
+                    and not (mounts[0].get('VolumeOptions') or {}).get('Subpath'), 'PDF_IPC_HOST_MOUNT_MISMATCH')
+
+    def observe_pdf_worker(self, worker, image):
+        require(worker['Image'] == image['id'] and worker['State']['Running']
+                and worker['State'].get('Health', {}).get('Status') == 'healthy', 'PDF_WORKER_NOT_HEALTHY')
+        cfg, host = worker['Config'], worker['HostConfig']
+        require(cfg.get('User') == '10001:10001' and cfg.get('Entrypoint') == ['/app/app/bin/pdf-worker']
+                and not cfg.get('Cmd') and digest(sorted(cfg.get('Env', []))) == image.get('pdf_worker_env_hash'),
+                'PDF_WORKER_CONFIG_MISMATCH')
+        require(host.get('NetworkMode') == 'none' and set(worker['NetworkSettings']['Networks']) == {'none'}
+                and not host.get('PortBindings') and not host.get('PublishAllPorts')
+                and host.get('ReadonlyRootfs') is True and host.get('Privileged') is False
+                and host.get('CapDrop') == ['ALL'] and not host.get('CapAdd') and not host.get('Devices')
+                and host.get('SecurityOpt') == ['no-new-privileges:true'] and host.get('Init') is True
+                and host.get('Memory') == PDF_MEMORY and host.get('MemorySwap') == PDF_MEMORY
+                and host.get('NanoCpus') == 1000000000 and host.get('PidsLimit') == 64
+                and host.get('Ulimits') == [{'Name': 'core', 'Soft': 0, 'Hard': 0}]
+                and host.get('RestartPolicy') == {'Name': 'unless-stopped', 'MaximumRetryCount': 0}
+                and host.get('PidMode', '') == '' and host.get('IpcMode') == 'private'
+                and not host.get('Tmpfs'), 'PDF_WORKER_ISOLATION_MISMATCH')
+        self.pdf_host_mount(host, writable=True)
+        self.pdf_mount(worker['Mounts'], writable=True)
+        require(cfg.get('Labels', {}).get('com.docker.compose.project.working_dir') == str(self.root),
+                'COMPOSE_DIRECTORY_MISMATCH')
 
     def ready(self, image):
         deadline = time.monotonic() + self.readiness_seconds
@@ -522,6 +616,15 @@ class Staging:
                     require(name not in existing, 'INITIAL_RESOURCE_EXISTS')
                 pg = self.inspect_image(self.config['postgres_image'])
                 require('PG_MAJOR=17' in pg['Config']['Env'], 'POSTGRES_17_REQUIRED')
+        old_pdf = bool(state and self.compose_file.exists() and 'pdf-worker' in private_json(self.compose_file)['services'])
+        new_pdf = self.config['runtime'].get(PDF_FLAG) == 'true'
+        require(not old_pdf or new_pdf, 'PDF_WORKER_TOPOLOGY_DOWNGRADE_REQUIRES_REVIEW')
+        if new_pdf:
+            require(target.get('pdf_worker') == 1, 'PDF_WORKER_IMAGE_CAPABILITY_REQUIRED')
+        if new_pdf and not old_pdf:
+            require(action == 'deploy' and apply_config, 'PDF_WORKER_TOPOLOGY_ADMISSION_REQUIRED')
+            names = self.run(['docker', 'volume', 'ls', '--format', '{{.Name}}']).decode().splitlines()
+            require(self.project + '_pdf_ipc' not in names, 'PDF_IPC_RESOURCE_ALREADY_EXISTS')
         doc = self.document(target)
         operation = {'status': 'APPLYING', 'operation': uuid.uuid4().hex, 'action': action, 'target': target,
                      'previous': state['target'] if state else None,
@@ -541,6 +644,9 @@ class Staging:
                 # keep running; no down/volume/database operation is involved.
                 self.compose('stop', '--timeout', '30', 'backend')
                 operation['backup'] = self.backup(operation['binding']); self.save(operation)
+            if new_pdf:
+                self.compose('up', '-d', '--no-build', '--pull', 'never', '--no-deps', '--force-recreate',
+                             '--wait', '--wait-timeout', '30', 'pdf-worker')
             self.compose('up', '-d', '--no-build', '--pull', 'never', '--no-deps', '--force-recreate', 'backend')
             self.ready(target)
             self.observe(target, operation['binding'])

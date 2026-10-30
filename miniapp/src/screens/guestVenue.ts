@@ -824,10 +824,10 @@ function authenticatedPreviewMediaPath(
     const backend = new URL(backendUrl || window.location.origin, window.location.origin)
     const media = new URL(mediaUrl, backend)
     const privatePreviewPath = new RegExp(
-      `^/api/venue/${venueId}/guest-preview/info-sections/\\d+/media/\\d+$`
+      `^/api/venue/${venueId}/guest-preview/info-sections/\\d+/media/(?:\\d+|[a-f0-9-]{36})$`
     )
     const publishedPreviewPath = new RegExp(
-      `^/api/guest/venue/${venueId}/info-sections/\\d+/media/\\d+$`
+      `^/api/guest/venue/${venueId}/info-sections/\\d+/media/(?:\\d+|[a-f0-9-]{36})$`
     )
     if (media.origin !== backend.origin || !media.pathname.startsWith('/api/')) {
       return { path: null, blocked: false }

@@ -64,6 +64,16 @@ class StaffPhotoStorageConfig private constructor(
     private val secretKey: String?,
     val maxInputBytes: Int,
 ) {
+    fun createVenueInfoStorage(): com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorage =
+        if (!enabled) {
+            com.hookah.platform.backend.miniapp.venue.media.DisabledVenueInfoMediaStorage
+        } else {
+            com.hookah.platform.backend.miniapp.venue.media.R2VenueInfoMediaStorage(
+                privateR2Client(checkNotNull(endpoint), checkNotNull(accessKey), checkNotNull(secretKey)),
+                checkNotNull(bucket),
+            )
+        }
+
     fun createStorage(): StaffPhotoStorage =
         if (!enabled) {
             DisabledStaffPhotoStorage
@@ -82,6 +92,7 @@ class StaffPhotoStorageConfig private constructor(
         fun from(
             config: ApplicationConfig,
             appEnv: String,
+            enabledPath: String = "venue.staffPhotos.enabled",
         ): StaffPhotoStorageConfig {
             fun value(key: String) =
                 config.propertyOrNull("venue.staffPhotos.$key")?.getString()?.trim()?.takeIf { it.isNotEmpty() }
@@ -105,7 +116,8 @@ class StaffPhotoStorageConfig private constructor(
             val accessKey = value("accessKey")
             val secretKey = value("secretKey")
             val enabled =
-                value("enabled") == "true" && appEnv.lowercase() !in setOf("prod", "production") &&
+                config.propertyOrNull(enabledPath)?.getString() == "true" &&
+                    appEnv.lowercase() !in setOf("prod", "production") &&
                     validEndpoint && value("region") == "auto" && bucket == STAFF_PHOTO_STAGING_BUCKET &&
                     accessKey != null && secretKey != null
             return StaffPhotoStorageConfig(
@@ -127,27 +139,7 @@ class R2StaffPhotoStorage(
     accessKey: String,
     secretKey: String,
 ) : StaffPhotoStorage {
-    private val client =
-        S3Client.builder()
-            .endpointOverride(endpoint)
-            .region(Region.of("auto"))
-            .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretKey)))
-            .serviceConfiguration(
-                S3Configuration.builder().pathStyleAccessEnabled(true).chunkedEncodingEnabled(false).build(),
-            )
-            .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
-            .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
-            .httpClientBuilder(
-                UrlConnectionHttpClient.builder().connectionTimeout(
-                    Duration.ofSeconds(3),
-                ).socketTimeout(Duration.ofSeconds(10)),
-            )
-            .overrideConfiguration {
-                it.apiCallAttemptTimeout(
-                    Duration.ofSeconds(15),
-                ).apiCallTimeout(Duration.ofSeconds(20))
-            }
-            .build()
+    private val client = privateR2Client(endpoint, accessKey, secretKey)
 
     override val available = true
 
@@ -214,3 +206,29 @@ class R2StaffPhotoStorage(
             }
         }
 }
+
+internal fun privateR2Client(
+    endpoint: URI,
+    accessKey: String,
+    secretKey: String,
+): S3Client =
+    S3Client.builder()
+        .endpointOverride(endpoint)
+        .region(Region.of("auto"))
+        .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretKey)))
+        .serviceConfiguration(
+            S3Configuration.builder().pathStyleAccessEnabled(true).chunkedEncodingEnabled(false).build(),
+        )
+        .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+        .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
+        .httpClientBuilder(
+            UrlConnectionHttpClient.builder().connectionTimeout(
+                Duration.ofSeconds(3),
+            ).socketTimeout(Duration.ofSeconds(10)),
+        )
+        .overrideConfiguration {
+            it.apiCallAttemptTimeout(
+                Duration.ofSeconds(15),
+            ).apiCallTimeout(Duration.ofSeconds(20))
+        }
+        .build()

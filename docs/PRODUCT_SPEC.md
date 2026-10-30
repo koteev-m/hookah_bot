@@ -25,8 +25,13 @@ Menu/options/stop-list source of truth:
 Venue media storage/upload source of truth:
 - Canonical info-section media storage, upload, delivery, lifecycle, Bot/Mini App bridge and first
   bounded runtime slice are tracked in `docs/MEDIA_STORAGE_UPLOAD.md`.
-- Storage selection is `STOP_FOR_MEDIA_STORAGE_DECISION`; do not add a browser upload endpoint or
-  durable container-filesystem storage before that decision.
+- New PDF structural parsing runs only in the OS-limited `pdf-worker` from the same admitted image,
+  with fail-closed Unix IPC and no backend fallback; see `MEDIA_STORAGE_UPLOAD.md`
+  (`HT-VENUE-PDF-ISOLATED-WORKER-01`). Local proof requires independent review and staging admission.
+- Venue information JPEG/PNG/PDF direct Mini App upload is implemented locally for the owner-selected
+  private staging R2 bucket, using `venue-info/` and the existing metadata registry. Production
+  storage admission, backup/restore and actual R2/device acceptance remain open; no container
+  filesystem storage is authorized. See the bounded contract in `MEDIA_STORAGE_UPLOAD.md`.
 
 Security/RBAC source of truth:
 - Canonical roles, scopes, permissions, surface parity, dangerous actions and current-vs-target gaps are tracked in `docs/SECURITY_RBAC_MATRIX.md`.
@@ -66,8 +71,12 @@ Staff profiles, Today Shift, Staff Schedule and staff tips source of truth:
   cards; STAFF has own preview only. Successful upload atomically becomes current without consent
   or a publish request. Card/Guest/Today visibility and all non-photo permissions are unchanged.
   This supersedes the former UX08 consent model; old private candidates stay private and existing
-  active photos survive without a data migration. See `MEDIA_STORAGE_UPLOAD.md`; staging/iPhone
-  acceptance remains open.
+  active photos survive without a data migration. Owner-confirmed partial iPhone acceptance covers
+  successful upload, OWNER/MANAGER, STAFF mutation denial and no consent/publish. Guest display
+  (venue unpublished) and physical R2 cleanup deletion remain unverified; full UX08 is open.
+  See `MEDIA_STORAGE_UPLOAD.md`. Public-card PDF/images remain a separate Bot-first flow, now
+  editable directly in Settings/card under the separate selected staging R2 contract; the Bot-first
+  guide remains a fallback. This does not close live acceptance or production admission.
 
 Booking lifecycle source of truth:
 - Canonical booking flow, queue, status state machine, hold/deadline, reminders, booking chat, support routing, analytics and RBAC rules are tracked in `docs/BOOKING_LIFECYCLE.md`.

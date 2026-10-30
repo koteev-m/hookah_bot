@@ -4569,6 +4569,23 @@ Synthetic consumer PASS is not operational producer evidence or deployment permi
 
 ## UX08 E staff-photo validation
 
+2026-10-30, `HT-VENUE-CARD-MEDIA-RESTORE-01`: **PARTIAL IPHONE ACCEPTANCE**, recorded from
+the owner's confirmation: successful photo upload, working OWNER/MANAGER, STAFF mutation denial,
+no consent/publish step. Guest display was not tested because the venue is unpublished; physical
+R2 deletion after cleanup remains unverified. No full UX08 closure, backup/restore or production
+admission follows from this evidence. Remaining checks below still apply.
+
+Public-card media discovery is a separate frontend slice: OWNER/MANAGER see the Bot-first guide
+under Settings/card, STAFF has neither an entry nor a usable direct route. Test expansion without
+URL/popup/file picker/upload or automatic save, retained dirty description and Back guard, explicit
+save and return, honest close/reload warning, explicit Bot venue selection and return instructions.
+Exercise image and PDF MIME/link delivery in Guest, Published Preview and authenticated Draft,
+plus private foreign-media rejection and preview return. Browser fixtures establish rendering and
+transport contracts only, not actual Telegram/PDF reader behavior. Run build/TypeScript, focused
+`venue card media` plus existing preview cases, then full Playwright. A read-only audit of the
+legacy path may use GuestVenueRoutesTest, VenueGuestPreviewRoutesTest (including private saved
+state) and the Bot description/media selectors; no backend runtime is changed by the guide.
+
 Current contract: `HT-UX08-STAFF-PHOTO-DIRECT-MANAGEMENT-01` supersedes the earlier consent/
 separate-publication UX08 model. The old `HT-UX08-STAFF-UI-CONSENT-FIX-01` report is historical
 consent-flow evidence, not the current acceptance contract.
@@ -4607,10 +4624,11 @@ changed linkage, multi-card and cross-venue retained selection, preserved non-ph
 invalid/cancelled picker and truthful errors. Open panels refresh on app return; collapsed cards
 perform no private reads. Inspect Owner/Manager/Staff/Guest states at 390×844, 390×568 and desktop.
 
-Local results do not establish Cloudflare connectivity, staging acceptance or iPhone Telegram
-picker conversion. Publication, exact-release CI, separately authorized staging deploy and manual
-iPhone acceptance remain required. No live R2 PUT/DELETE, deploy or staging migration is authorized
-by these local checks; see `MEDIA_STORAGE_UPLOAD.md` for the later checklist.
+Local results alone do not establish Cloudflare connectivity, staging acceptance or iPhone Telegram
+picker conversion. The owner-confirmed subset above is separate manual evidence. New runtime
+changes still require publication, exact-release CI and separately authorized staging/manual smoke;
+remaining acceptance is open. No live R2 PUT/DELETE, deploy or staging migration is authorized by
+these local checks; see `MEDIA_STORAGE_UPLOAD.md` for the later checklist.
 
 ### UX08 migration head and historical V126 regression boundary
 
@@ -4659,3 +4677,89 @@ unchanged DB binding and neighbor/cleanup. CI transport is mocked at `verify_ci`
 suite verifies the real public-API contract. This fixture does not exercise real R2 connectivity
 or actual photo operations. Linux Caddy/systemd/owned-SSH/libpq gates remain separate; macOS or
 skipped fixtures are not their PASS. Frontend suites need no repeat for deployment-only edits.
+
+## HT-VENUE-CARD-R2-DIRECT-UPLOAD-01 — direct information media
+
+Validate OWNER/MANAGER own-venue list/upload/replace/delete/attachment and section visibility;
+STAFF/foreign/direct-route denial, legacy Telegram identity/order, and Guest/Published/Private
+Preview byte delivery with opaque IDs, visibility changes during GET and no raw refs. Exercise
+JPEG/PNG/PDF success, malformed/signature/MIME/dimension/size/active-PDF denial, 10-file cap,
+failed replacement, stale revisions, lost-response idempotency, concurrent reservation/expiry,
+membership revocation during PUT, cleanup failure/HEAD verification/late PUT and parent cascades.
+
+Run VenueInfoMedia*Test on actual PostgreSQL with zero skipped tests plus H2 fixtures, existing
+GuestVenueRoutesTest/VenueGuestPreviewRoutesTest, Bot media selectors and StaffPhotoStorageTest.
+On Docker 29 local Testcontainers needs `_JAVA_OPTIONS='-Xmx4g -Dapi.version=1.44'` (existing
+local environment workaround, not application configuration). Run Kotlin compile/ktlint,
+TypeScript/build, focused `direct venue info media|venue card media` then full Playwright.
+Run scripts/test_simple_staging.py for new flag validation, exact observed runtime, append-only
+V128 manifest and existing release/rollback gates. No live R2 is involved in these tests.
+
+Real iPhone file selection/cancel/orientation/PDF reader, app/chat return, published Guest and
+new-R2 Bot delivery, restart durability, private bucket admission and actual DELETE/HEAD absence
+require separately authorized staging acceptance. UX08 staff-photo partial acceptance remains
+separate; production and backup/restore are not established by these local checks.
+
+
+## HT-VENUE-CARD-R2-DIRECT-UPLOAD-FIX-01 — review regressions
+
+FIX-01's disposable host probe now tests only the bounded lexical preflight and fail-closed
+missing-worker behavior. It never calls OpenPDF. Full parser attack execution is exclusively in
+Linux Docker under the OS boundary documented below; JVM heap/timeouts alone are not containment.
+
+P2 delivery: exercise the actual PostgreSQL outbox with delayed consumption and a first-send 429;
+record successful HTTP transport order text → legacy photo → R2 document. Recheck visibility at
+dispatch and after R2 GET. P2 UX: lose a response, traverse History Back/Forward without the
+Navigation API, and verify identical file bytes/idempotency key; exercise FAILED → refresh →
+explicit new operation → success while the old attachment survives the failure. No browser file
+persistence or real iPhone acceptance follows from those mocked Chromium tests.
+
+The ordinary required `backend-release-critical-routes` job explicitly selects all eight
+VenueInfoMedia classes plus VenueInfoPdfClientTest (three methods, including independent PNG slots) and checks their XML minimum
+counts with zero failures/errors/skips. The existing Router class selection includes the delayed
+outbox regression. Existing required classes and gates are retained.
+
+
+## HT-VENUE-PDF-ISOLATED-WORKER-01 — mandatory OS proof
+
+Run `python3 -B -m unittest discover -s scripts -p test_pdf_worker_contract.py -v` plus all 65
+`test_simple_staging.py` contracts. Verify exact historical document hash, explicit topology
+admission/capability, PG/neighbor preservation, foreign/duplicate service and mount refusal,
+resource/network/identity/config drift refusal, and parser call-site confinement.
+
+`python3 -B scripts/test_pdf_worker_docker.py --image <exact-local-image-ID> --evidence-dir <new-dir>`
+is mandatory in the full-image reproducibility guard before artifact admission/publication. It
+requires Linux Docker/cgroup v2 and Java compiler for trusted IPC/resource fixtures; it cannot skip
+when enforcement is absent. Keep CI's `umask 077`: each probe is compiled in its own disposable
+directory, then only its generated `.class` is made `0644` and that directory `0755` for the
+read-only mount used by UID/GID 10001. Sources and other files retain their permissions; class
+loading failures must fail the proof before artifact admission. The contract suite compiles both
+probes under `umask 077` and checks this permission boundary.
+It uses only uniquely labelled disposable local containers/volume,
+with the same immutable image for worker and bounded byte clients. PDF bytes stay in memory.
+The primary/client JVM has no parser invocation. Never run hostile OpenPDF inputs in a Mac or
+ordinary Gradle JVM. Persistence/route tests inject an explicit transport fixture; they are not
+structural-parser evidence, and all actual PDF admission cases remain in mandatory Docker proof.
+
+Exercise alternative-whitespace xref bombs, actual/escaped Prev self-cycles, hybrid/encrypted,
+cyclic indirect Kids, graph amplification, deep/large structures, truncation, normal 1/200-page
+and large-stream PDFs, active/escaped JavaScript denial; strict malformed/partial/stalled IPC;
+one active parser under concurrency; forced child freeze → deadline → kill/reap → queued retry;
+worker supervisor crash → automatic Docker restart and unbounded-entrypoint refusal. Verify no zombies/parser processes,
+network connection or rootfs writes, no credentials/DB/R2/Docker mounts, exact cgroups/zero swap.
+Separate trusted resource probes intentionally hit their own container memory/PIDs/CPU limits;
+record OOMKilled/EAGAIN/throttling, never host OOM. Keep memory.peak/events, cpu.stat, pids.peak,
+per-case time and safe fixed-message logs; parser errors and document content are not logged.
+
+Optional local real-controller transition proof:
+`python3 -B scripts/test_pdf_worker_transition_docker.py --image <local-ID> --postgres <local-PG17> --evidence-dir <new-dir>`.
+It seeds only a synthetic managed historical current-schema state, retains a sentinel and exact
+PG binding through real Compose recreation, rejects implicit admission and worker CPU drift.
+CI/registry acquisition and host operator admission are fixtures; no claim of V126 bootstrap or VPS.
+
+Run backend media PostgreSQL (including nonempty V127→V128), cleanup/RBAC/Guest/Preview, Bot
+ordering/outbox, StaffPhotoStorage, all three PdfClient methods, Kotlin compile/ktlint, TypeScript
+build, focused and full Playwright. XML must show actual expected methods with zero skips/errors/
+failures (a non-void JUnit method can disappear without a skip). CI retains class selectors/XML
+minima and all existing gates. Real iPhone, live R2, production and future authorized staging
+resource/rollout acceptance remain separate and open. Structural success is not antivirus proof.

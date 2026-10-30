@@ -90,7 +90,10 @@ state is displayed. This supersedes the UX01 DRAFT setup home and grouped More n
   Operational shift viewing remains on Home; it is distinct from configuring the module.
 - The card form contains location, contacts, description, saved Guest Preview and the Owner-only
   external review URL. Feedback viewing lives in More and is separate from that URL setting.
-  Mini App photo/PDF authoring is still absent; no upload placeholder is added (see media gap below).
+  OWNER/MANAGER see `Фотографии и PDF` with a direct JPEG/PNG/PDF editor, attachment/section
+  visibility and replace/delete. Media saves independently of the card draft; save text before
+  Preview. An expandable Bot guide remains a fallback. See MEDIA_STORAGE_UPLOAD.md for selected
+  staging R2 configuration, limits and remaining live/production gates.
 - Owner hours show seven saved weekday summaries, including unconfigured, closed and 24-hour states.
   Only the selected day expands; `Сохранить день` writes the existing weekly endpoint. Overnight
   intervals and date/range exceptions retain their API contract. Collapsing a day, editing another,
@@ -673,20 +676,45 @@ Closed card-preview slice:
 
 ## Venue / Menu Media Status
 
-Current status from the 2026-07-29 code audit:
+Current status rechecked locally on 2026-10-30 (`HT-VENUE-CARD-MEDIA-RESTORE-01`, source
+`0a913c09026940336e854d2db2948bc70e83fb5a`, tree identical to supplied main merge `bf3abc23`):
 
-- Venue/Public Card Media Management: **PARTIAL / BOT-FIRST**.
-- Venue Mini App Media Upload: **MISSING / FUTURE**.
+- Venue/Public Card Media Management: **LOCAL DIRECT EDITOR + BOT COMPATIBILITY / LIVE ACCEPTANCE OPEN**.
+- Venue Mini App information-media upload: **LOCAL IMPLEMENTATION / SELECTED PRIVATE STAGING R2**.
+  OWNER/MANAGER may list/upload JPEG/PNG/PDF, replace/delete/hide individual attachments and
+  hide/show sections. STAFF is denied. New objects use `venue-info/`, old Telegram files remain.
+  Actual R2/device acceptance, production and backup/restore remain open.
 - Structured Menu Item Media Management: **MISSING / FUTURE**.
-- Staff Profile Photo Upload: **LOCAL IMPLEMENTATION / STAGING ACCEPTANCE OPEN**, separate from venue/menu media.
+- Staff Profile Photo Upload: **PARTIAL IPHONE ACCEPTANCE / GUEST AND R2 CLEANUP UNVERIFIED**,
+  separate from venue/menu media. Owner confirms upload, OWNER/MANAGER, STAFF mutation denial and
+  no consent/publish; unpublished venue prevented Guest checking. Full UX08 is not closed.
+
+Settings → `Карточка заведения` → `Фотографии и PDF` → `Как добавить через Telegram-бота`
+remains a fallback to the direct editor, including custom-section creation.
+In the same bot's private chat use `/menu`:
+
+- OWNER: `🏢 Мои заведения` → select the correct venue → `⚙️ Настройка заведения` →
+  `🏢 Профиль / карточка`.
+- MANAGER: `🔄 Сменить заведение` → select the correct venue → `🏢 Заведение`.
+- Both: `ℹ️ О заведении / Правила` → default/custom section (`➕ Добавить свой раздел` plus title)
+  or `📖 Фото-меню` → `🖼 Добавить медиа` → photos as photos, PDFs as documents, repeatedly →
+  `✅ Готово`. Section actions delete individual attachments or hide/show the entire section.
+
+STAFF cannot author. Bot and Mini App selections are independent: compare venue name/city before
+uploading. No supported editor deep-link parameter exists; no general bot URL substitutes for
+venue selection. The guide itself never leaves/saves the form; direct media operations save immediately. Save before switching to chat;
+unsaved drafts are not guaranteed across app close/reload. Return through the existing app or
+`📱 Открыть панель заведения`, then reopen saved Guest Preview. Guest `ℹ️ Информация` includes
+images and `Открыть PDF`; Published Preview uses the same Guest read model, Draft uses private
+authenticated media. Local browser/proxy tests are not live Telegram or published-venue acceptance.
 
 | Surface | Bot current | Venue Mini App current | Guest display | Target |
 | --- | --- | --- | --- | --- |
-| Public card info-section image | OWNER/MANAGER can add multiple Telegram photos, delete an attachment and hide/show the whole section. Stored as Telegram `file_id`; no direct replace or per-attachment hide. | No section authoring, file picker, upload or attachment management. Guest Preview is view-only; private mode fetches only scoped visible media through an authenticated Venue proxy. | Guest Mini App and `PUBLISHED_PUBLIC` load the image through the guarded Guest proxy; Guest Bot sends the Telegram photo. `PRIVATE_DRAFT` uses the authenticated preview proxy. Raw `file_id` is not exposed in either DTO. | Shared media source/compatible bridge, safe image upload, replace, section/attachment visibility policy, delete, audit and guest-safe delivery URL. |
-| Public card info-section PDF | OWNER/MANAGER can add PDF documents, delete an attachment and hide/show the whole section. PDF detection is MIME/filename based; no direct replace or per-attachment hide. | No upload/manage flow. Guest Preview is view-only; private mode uses the same scoped authenticated delivery boundary. | Guest Mini App and `PUBLISHED_PUBLIC` expose `Открыть PDF` through the guarded Guest proxy; `PRIVATE_DRAFT` uses the authenticated preview proxy. | PDF only on explicitly allowed surfaces, with server-side MIME/type/size validation, ownership/venue scoping, replace/delete/audit and safe delivery. |
+| Public card info-section image | OWNER/MANAGER can add multiple Telegram photos, delete an attachment and hide/show the whole section. Stored as Telegram `file_id`; no direct replace or per-attachment hide. | Local OWNER/MANAGER file picker, multi-file upload, replace/delete and attachment/section visibility. Preview remains view-only and scoped. Custom-section creation remains in Bot. | Guest Mini App and `PUBLISHED_PUBLIC` load the image through the guarded Guest proxy; Guest Bot sends legacy Telegram photos or bounded R2 documents. `PRIVATE_DRAFT` uses the authenticated preview proxy. Raw `file_id` is not exposed in either DTO. | Shared media source/compatible bridge, safe image upload, replace, section/attachment visibility policy, delete, audit and guest-safe delivery URL. |
+| Public card info-section PDF | OWNER/MANAGER can add PDF documents, delete an attachment and hide/show the whole section. PDF detection is MIME/filename based; no direct replace or per-attachment hide. | Local direct JPEG/PNG/PDF editor for OWNER/MANAGER; Preview stays view-only and guarded. | Guest Mini App and `PUBLISHED_PUBLIC` expose `Открыть PDF` through the guarded Guest proxy; `PRIVATE_DRAFT` uses the authenticated preview proxy. | PDF only on explicitly allowed surfaces, with server-side MIME/type/size validation, ownership/venue scoping, replace/delete/audit and safe delivery. |
 | Structured menu item photo / description / thumbnail | No current item-photo/thumbnail CRUD. The DB has a legacy `menu_items.description` column, but current Bot/menu repository flow does not read or write it. Option/flavor media is absent. | Current item CRUD covers name, price, type, availability, order and options; no item photo, description, thumbnail or option/flavor media fields/actions. | Current structured Guest menu DTO/rendering shows no item photo, description, thumbnail or option/flavor media. | Item-safe media/description contract after storage/proxy design; no raw provider/storage refs in Guest DTOs. |
-| Photo/PDF menu | Uses the `section_type=menu` info-section flow. OWNER/MANAGER add images/PDFs, delete attachments and hide/show the flat section. It is view-only and separate from the order menu. | No authoring/manage flow. Both preview modes can view only visible saved media through their respective guarded/scoped proxy; neither DTO returns raw refs. | Guest pre-QR `ℹ️ Информация` shows the flat `📖 Фото-меню`; it cannot create an order without matching structured items. | Keep view-only semantics; add Mini App management only through the shared media foundation. |
-| Staff profile photo | No supported Bot photo upload/manage flow was found. | Local OWNER/MANAGER direct JPEG/PNG upload/replace/delete, including protected cards; STAFF own preview only. No consent or publish step. | Existing card/Guest/Today rules gate the current photo through authenticated delivery; raw `photoRef` is never a capability. | Live R2/staging/iPhone acceptance and production backup/privacy admission; see MEDIA_STORAGE_UPLOAD.md. |
+| Photo/PDF menu | Uses the `section_type=menu` info-section flow. OWNER/MANAGER add images/PDFs, delete attachments and hide/show the flat section. It is view-only and separate from the order menu. | Local direct information-media editor; both preview modes retain visible saved media and guarded/scoped delivery without raw refs. | Guest pre-QR `ℹ️ Информация` shows the flat `📖 Фото-меню`; it cannot create an order without matching structured items. | Keep view-only semantics; direct management is local, with actual R2/device acceptance still open. |
+| Staff profile photo | No supported Bot photo upload/manage flow was found. | OWNER/MANAGER direct JPEG/PNG upload/replace/delete, including protected cards; STAFF own preview only. Owner-confirmed partial iPhone acceptance, no consent or publish step. | Existing card/Guest/Today rules gate the current photo through authenticated delivery; raw `photoRef` is never a capability. Guest display was not manually tested while unpublished. | R2 cleanup physical deletion verification, remaining live acceptance and production backup/privacy admission; see MEDIA_STORAGE_UPLOAD.md. |
 
 The current `menu_category_images` table/repository is test/seed-oriented and has no owner CRUD or
 active Guest/Venue Mini App consumer; it is not evidence of structured menu-item photo support.
@@ -751,7 +779,7 @@ Current vs target:
 | Staff invites | Bot invite acceptance exists. | Copy/share invite result smoke-closed. | No. | Keep role denial/last-owner protection in regression. | Regression |
 | Staff schedule | No Phase 1 flow. | `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`: Owner/Manager use bulk `График смен` plus explicit canceled restore; Staff uses read-only `Мои смены`. | No Phase 1 event/button. | Venue Mini App only; keep atomicity, conflict/CAS, effective-hours, bounded own-venue management/read and Today/Guest compatibility in regression. | Regression |
 | Staff-chat link/test | Bot link command exists. | M6 link/test/unlink smoke-closed. | Target group. | Personal notifications future. | Regression |
-| Settings / card preview | Bot and Mini App share the public review URL source; Bot remains richer in info-section/media authoring. | Backend-backed slices include Owner-only `Ссылка для отзывов` and one read-only `Предпросмотр для гостя` screen with server-selected `PUBLISHED_PUBLIC` / `PRIVATE_DRAFT`; preview is **DONE / MVP / STAGING-SMOKE-PASSED**. | No. | Keep exact Guest parity, saved-private allowlist, dirty-state guard, RBAC/privacy/media scope and lifecycle/stale-state boundaries in regression; media upload remains a separate future block. | Regression/P2 |
+| Settings / card preview | Bot and Mini App share the public review URL source; Bot remains richer in info-section/media authoring. | Backend-backed slices include Owner-only `Ссылка для отзывов` and one read-only `Предпросмотр для гостя` screen with server-selected `PUBLISHED_PUBLIC` / `PRIVATE_DRAFT`; preview is **DONE / MVP / STAGING-SMOKE-PASSED**. | No. | Keep exact Guest parity, saved-private allowlist, dirty-state guard, RBAC/privacy/media scope and lifecycle/stale-state boundaries in regression; direct information-media upload is a separate local staging slice, with live acceptance still open. | Regression/P2 |
 | Stats | Bot stats exist. | Read-only stats smoke-closed. | No. | Custom ranges/advanced analytics future. | P2 |
 
 ## Current Known Gaps
@@ -759,10 +787,10 @@ Current vs target:
 - Staff-call ACK/DONE and guest-visible `CANCELLED` are smoke-closed; manual cancel UI, row-level actor/timestamps and quick replies remain future.
 - Booking queue/lifecycle is smoke-closed for MVP; automatic expiry/no-show policy, preorder and broad reminder rollout remain future.
 - Full bill/display/order snapshots are smoke-closed for current paths; tab reopen, force-close reason/audit and all modifier variants need verification.
-- Settings are `PARTIAL`: closed slices are backend-backed, including Owner-only public review URL and the unified read-only Guest Preview with a no-auto-save dirty-form guard, while broader settings/media authoring, versioned snapshots and publish workflow remain future/partial.
-- Venue/public-card media management is `PARTIAL / BOT-FIRST`; Venue Mini App media upload is
-  `MISSING / FUTURE`. Structured menu-item media is separately `MISSING / FUTURE`; the working
-  Guest/Bot info-section rendering and view-only Photo/PDF menu must not be relabeled missing.
+- Settings are `PARTIAL`: closed slices are backend-backed, including Owner-only public review URL and the unified read-only Guest Preview with a no-auto-save dirty-form guard, while versioned snapshots and publish workflow remain future/partial. Direct information-media authoring is locally implemented under the selected staging R2 contract above.
+- Venue/public-card information-media management is `LOCAL DIRECT EDITOR + BOT COMPATIBILITY`;
+  actual R2/device acceptance and production remain open. Structured menu-item media stays
+  `MISSING / FUTURE`; the informational Photo/PDF menu does not create order items.
 - Shift check is **DONE / MVP / STAGING-SMOKE-PASSED** for OWNER/MANAGER atomic availability
   review. Existing Staff item/option stop-list parity is unchanged and per-venue
   `staff_stoplist_enabled` remains future.
