@@ -12,6 +12,12 @@ data class VenueInfoSectionMediaAttachment(
     val mediaType: String,
     val telegramFileId: String,
     val sortOrder: Int,
+    val publicId: String? = null,
+    val sourceType: String = "TELEGRAM_FILE",
+    val objectKey: String? = null,
+    val mimeType: String? = null,
+    val sizeBytes: Int? = null,
+    val checksum: String? = null,
 )
 
 class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
@@ -33,7 +39,7 @@ class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
                                 SELECT 1
                                 FROM venue_info_sections
                                 WHERE id = ?
-                                LIMIT 1
+                                FOR UPDATE
                                 """.trimIndent(),
                             ).use { statement ->
                                 statement.setLong(1, sectionId)
@@ -77,6 +83,12 @@ class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
                             connection.rollback()
                             return@withContext false
                         }
+                        connection.prepareStatement(
+                            "UPDATE venue_info_sections SET media_revision=media_revision+1 WHERE id=?",
+                        ).use {
+                            it.setLong(1, sectionId)
+                            it.executeUpdate()
+                        }
                         connection.commit()
                         true
                     } catch (e: SQLException) {
@@ -103,7 +115,7 @@ class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
                         """
                         SELECT section_id, COUNT(*) AS media_count
                         FROM venue_info_section_media
-                        WHERE section_id IN ($placeholders)
+                        WHERE status='READY' AND is_visible=TRUE AND section_id IN ($placeholders)
                         GROUP BY section_id
                         """.trimIndent(),
                     ).use { statement ->
@@ -134,7 +146,7 @@ class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
                         """
                         SELECT COUNT(*) AS media_count
                         FROM venue_info_section_media
-                        WHERE section_id = ?
+                        WHERE section_id = ? AND status='READY' AND is_visible=TRUE
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, sectionId)
@@ -156,9 +168,9 @@ class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT id, section_id, media_type, telegram_file_id, sort_order
+                        SELECT *
                         FROM venue_info_section_media
-                        WHERE section_id = ?
+                        WHERE section_id = ? AND status='READY' AND is_visible=TRUE
                         ORDER BY sort_order ASC, id ASC
                         """.trimIndent(),
                     ).use { statement ->
@@ -173,6 +185,10 @@ class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
                                         mediaType = rs.getString("media_type").orEmpty(),
                                         telegramFileId = rs.getString("telegram_file_id").orEmpty(),
                                         sortOrder = rs.getInt("sort_order"),
+                                        publicId = rs.getString("public_id"), sourceType = rs.getString("source_type"),
+                                        objectKey = rs.getString("object_key"), mimeType = rs.getString("mime_type"),
+                                        sizeBytes = rs.getObject("size_bytes")?.let { rs.getInt("size_bytes") },
+                                        checksum = rs.getString("checksum_sha256"),
                                     )
                             }
                             result
@@ -195,9 +211,9 @@ class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.prepareStatement(
                         """
-                        SELECT id, section_id, media_type, telegram_file_id, sort_order
+                        SELECT *
                         FROM venue_info_section_media
-                        WHERE section_id = ? AND id = ?
+                        WHERE section_id = ? AND id = ? AND status='READY' AND is_visible=TRUE
                         LIMIT 1
                         """.trimIndent(),
                     ).use { statement ->
@@ -213,6 +229,13 @@ class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
                                     mediaType = rs.getString("media_type").orEmpty(),
                                     telegramFileId = rs.getString("telegram_file_id").orEmpty(),
                                     sortOrder = rs.getInt("sort_order"),
+                                    publicId = rs.getString("public_id"), sourceType = rs.getString("source_type"),
+                                    objectKey = rs.getString("object_key"), mimeType = rs.getString("mime_type"),
+                                    sizeBytes =
+                                        rs.getObject(
+                                            "size_bytes",
+                                        )?.let { rs.getInt("size_bytes") },
+                                    checksum = rs.getString("checksum_sha256"),
                                 )
                             }
                         }
@@ -224,28 +247,145 @@ class VenueInfoSectionMediaRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun deleteAttachment(
+    suspend fun findByReference(
         sectionId: Long,
-        mediaId: Long,
-    ): Boolean {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
+        reference: String,
+    ): VenueInfoSectionMediaAttachment? {
+        reference.toLongOrNull()?.let { return findById(sectionId, it) }
+        return findManagedByReference(sectionId, reference)?.takeIf { row ->
+            listBySectionId(sectionId).any { it.id == row.id }
+        }
+    }
+
+    suspend fun findManagedByReference(
+        sectionId: Long,
+        reference: String,
+    ): VenueInfoSectionMediaAttachment? =
+        withContext(Dispatchers.IO) {
+            val ds = dataSource ?: throw DatabaseUnavailableException()
             try {
-                ds.connection.use { connection ->
-                    connection.prepareStatement(
+                ds.connection.use { c ->
+                    c.prepareStatement(
                         """
-                        DELETE FROM venue_info_section_media
-                        WHERE section_id = ? AND id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, sectionId)
-                        statement.setLong(2, mediaId)
-                        statement.executeUpdate() > 0
+                        SELECT *
+                        FROM venue_info_section_media
+                        WHERE section_id=?
+                        AND ${if (reference.toLongOrNull() != null) "id" else "public_id"}=?
+                        AND status='READY'
+                        """,
+                    ).use {
+                            s ->
+                        s.setLong(1, sectionId)
+                        if (reference.toLongOrNull() != null) {
+                            s.setLong(
+                                2,
+                                reference.toLong(),
+                            )
+                        } else {
+                            s.setString(2, reference)
+                        }
+                        s.executeQuery().use { rs ->
+                            if (!rs.next()) {
+                                null
+                            } else {
+                                VenueInfoSectionMediaAttachment(
+                                    rs.getLong(
+                                        "id",
+                                    ),
+                                    sectionId,
+                                    rs.getString(
+                                        "media_type",
+                                    ),
+                                    rs.getString(
+                                        "telegram_file_id",
+                                    ),
+                                    rs.getInt(
+                                        "sort_order",
+                                    ),
+                                    rs.getString(
+                                        "public_id",
+                                    ),
+                                    rs.getString(
+                                        "source_type",
+                                    ),
+                                    rs.getString("object_key"), rs.getString("mime_type"),
+                                    rs.getObject("size_bytes")?.let {
+                                        rs.getInt("size_bytes")
+                                    },
+                                    rs.getString("checksum_sha256"),
+                                )
+                            }
+                        }
                     }
                 }
             } catch (_: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
-    }
+
+    suspend fun deleteAttachment(
+        sectionId: Long,
+        mediaId: Long,
+    ): Boolean =
+        withContext(Dispatchers.IO) {
+            val ds = dataSource ?: throw DatabaseUnavailableException()
+            try {
+                ds.connection.use { c ->
+                    c.autoCommit = false
+                    try {
+                        c.prepareStatement("SELECT id FROM venue_info_sections WHERE id=? FOR UPDATE").use {
+                                s ->
+                            s.setLong(1, sectionId)
+                            s.executeQuery().close()
+                        }
+                        val deleted =
+                            c.prepareStatement(
+                                """
+                                UPDATE venue_info_section_media SET status='DELETED',deleted_at=CURRENT_TIMESTAMP
+                                WHERE section_id=?
+                                AND id=?
+                                AND status='READY'
+                                """,
+                            ).use {
+                                    s ->
+                                s.setLong(1, sectionId)
+                                s.setLong(2, mediaId)
+                                s.executeUpdate() > 0
+                            }
+                        if (deleted) {
+                            c.prepareStatement(
+                                "UPDATE venue_info_sections SET media_revision=media_revision+1 WHERE id=?",
+                            ).use {
+                                    s ->
+                                s.setLong(1, sectionId)
+                                s.executeUpdate()
+                            }
+                            c.prepareStatement(
+                                """
+                                UPDATE venue_info_media_cleanup SET due_at=?
+                                WHERE public_id IN (SELECT public_id
+                                FROM venue_info_section_media
+                                WHERE id=?)
+                                """,
+                            ).use {
+                                    s ->
+                                s.setTimestamp(
+                                    1,
+                                    java.sql.Timestamp.from(java.time.Instant.now().plusSeconds(7 * 86400)),
+                                )
+                                s.setLong(2, mediaId)
+                                s.executeUpdate()
+                            }
+                        }
+                        c.commit()
+                        deleted
+                    } catch (e: Exception) {
+                        c.rollback()
+                        throw e
+                    }
+                }
+            } catch (_: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
 }

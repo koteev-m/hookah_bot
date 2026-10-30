@@ -52,10 +52,12 @@ ENV MINIAPP_DEV_SERVER_URL=
 ENV MINIAPP_STATIC_DIR=/app/miniapp
 WORKDIR /app
 
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN groupadd -g 10001 appuser && useradd -u 10001 -g appuser appuser
 
 COPY --from=build /workspace/backend/app/build/install/app ./app
 COPY --from=miniapp-build /workspace/miniapp/dist ./miniapp
+
+COPY --chmod=755 backend/pdf-worker.sh /app/app/bin/pdf-worker
 
 USER appuser
 

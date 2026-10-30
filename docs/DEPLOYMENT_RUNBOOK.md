@@ -34,6 +34,13 @@ Current practice:
   [HT70 R2 procedure](STAGING_ORDINARY_RELEASE.md#ux08-staff-photos-optional-r2-runtime-в-ht70)
   covers server-only secrets, actual Cloudflare admission, combined V127 review/backup and
   separate live acceptance; legacy `.env` is not its configuration channel. V127 forbids old-schema rollback.
+- Venue information-media direct upload adds optional `VENUE_INFO_MEDIA_R2_ENABLED`, reusing the
+  validated staging R2 block under `venue-info/`; see the bounded HT70 procedure and
+  `MEDIA_STORAGE_UPLOAD.md`. Local implementation is not live config or deployment permission.
+- PDF parser isolation adds optional `VENUE_INFO_PDF_WORKER_ENABLED` and only the exact same-image
+  worker/tmpfs IPC topology admitted in `STAGING_ORDINARY_RELEASE.md`. New PDF uploads fail closed
+  without it; no backend parser fallback. Historical two-service hashes stay valid. Enabling it
+  requires explicit config/topology admission and real OS-limit proof, not only backend readiness.
 - Current HT70 SSH/SCP follows the [strict pinned Hookah profile](STAGING_ORDINARY_RELEASE.md#текущий-строгий-sshscp-профиль-hookah-ht70); historical ControlMaster examples are not its transport policy.
 - Ordinary V125 releases use [the staging release controller](STAGING_ORDINARY_RELEASE.md) only after the separately approved [protocol transition](STAGING_PROTOCOL_TRANSITION.md); the ControlMaster name forwards to the same entrypoint.
 - Production deploy automation, exact rollback commands and complete log command coverage remain **needs verification** unless a future task confirms them.

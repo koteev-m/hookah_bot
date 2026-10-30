@@ -320,6 +320,7 @@ class TelegramBotRouter internal constructor(
     private val venueOnboardingService: VenueOnboardingService =
         VenueOnboardingService(venueConnectionRequestRepository),
     private val scope: CoroutineScope,
+    private val venueInfoMediaService: com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaService? = null,
     private val venueInfoSectionsRepository: VenueInfoSectionsRepository = VenueInfoSectionsRepository(null),
     private val venueInfoSectionMediaRepository: VenueInfoSectionMediaRepository =
         VenueInfoSectionMediaRepository(null),
@@ -4036,36 +4037,106 @@ class TelegramBotRouter internal constructor(
             }
         val supportedMedia =
             mediaAttachments.filter { attachment ->
-                attachment.telegramFileId.isNotBlank() &&
+                (attachment.sourceType == "OBJECT_STORAGE" || attachment.telegramFileId.isNotBlank()) &&
                     (
                         attachment.mediaType.equals("image", ignoreCase = true) ||
                             attachment.mediaType.equals("pdf", ignoreCase = true)
                     )
             }
-        val sectionTitle = formatGuestVenueInfoSectionTitle(section)
-        val sectionText = section.textContent?.trim()?.takeIf { it.isNotBlank() } ?: "Раздел пока не заполнен."
         if (supportedMedia.isEmpty()) {
-            enqueueMessage(
-                chatId,
-                "ℹ️ $sectionTitle\n\n$sectionText",
-                TelegramKeyboards.inlineBotVenueAboutSectionActions(venue.id),
-            )
+            outboxEnqueuer.enqueueVenueInfo(chatId, venue.id, section.id, null, true)
             return
         }
-        enqueueMessage(chatId, "ℹ️ $sectionTitle\n\n$sectionText")
+        outboxEnqueuer.enqueueVenueInfo(chatId, venue.id, section.id, null, supportedMedia.isEmpty())
         supportedMedia.forEachIndexed { index, attachment ->
-            val replyMarkup =
-                if (index == supportedMedia.lastIndex) {
-                    TelegramKeyboards.inlineBotVenueAboutSectionActions(venue.id)
-                } else {
-                    null
-                }
-            if (attachment.mediaType.equals("image", ignoreCase = true)) {
-                enqueuePhoto(chatId, attachment.telegramFileId, caption = null, replyMarkup = replyMarkup)
-            } else {
-                enqueueDocument(chatId, attachment.telegramFileId, caption = null, replyMarkup = replyMarkup)
-            }
+            outboxEnqueuer.enqueueVenueInfo(
+                chatId,
+                venue.id,
+                section.id,
+                attachment.id,
+                index == supportedMedia.lastIndex,
+            )
         }
+    }
+
+    internal suspend fun dispatchVenueInfo(
+        message: com.hookah.platform.backend.telegram.db.TelegramOutboxMessage,
+        payload: kotlinx.serialization.json.JsonElement,
+        client: TelegramApiClient,
+    ): TelegramCallResult {
+        val delivery =
+            runCatching {
+                json.decodeFromJsonElement(VenueInfoDelivery.serializer(), payload)
+            }.getOrNull() ?: return TelegramCallResult.TrafficDenied
+        if (message.chatId <= 0) return TelegramCallResult.TrafficDenied
+
+        suspend fun section() =
+            if (loadCatalogVenueById(message.chatId, delivery.venueId) != null) {
+                venueInfoSectionsRepository.findSectionById(
+                    delivery.venueId,
+                    delivery.sectionId,
+                )?.takeIf { it.isVisible }
+            } else {
+                null
+            }
+        val current = section() ?: return TelegramCallResult.TrafficDenied
+        val markup = if (delivery.last) TelegramKeyboards.inlineBotVenueAboutSectionActions(delivery.venueId) else null
+        if (delivery.mediaId == null) {
+            val text = current.textContent?.trim()?.takeIf { it.isNotBlank() } ?: "Раздел пока не заполнен."
+            return client.dispatchOutbox(
+                message.chatId,
+                "sendMessage",
+                json.encodeToJsonElement(
+                    SendMessagePayload.serializer(),
+                    buildSendMessagePayload(
+                        json,
+                        message.chatId,
+                        "ℹ️ ${formatGuestVenueInfoSectionTitle(current)}\n\n$text",
+                        markup,
+                    ),
+                ),
+            )
+        }
+        val attachment =
+            venueInfoSectionMediaRepository.findById(current.id, delivery.mediaId)
+                ?: return TelegramCallResult.TrafficDenied
+        if (attachment.sourceType == "TELEGRAM_FILE") {
+            val method = if (attachment.mediaType == "image") "sendPhoto" else "sendDocument"
+            val body =
+                if (method == "sendPhoto") {
+                    json.encodeToJsonElement(
+                        SendPhotoPayload.serializer(),
+                        buildSendPhotoPayload(json, message.chatId, attachment.telegramFileId, null, markup),
+                    )
+                } else {
+                    json.encodeToJsonElement(
+                        SendDocumentPayload.serializer(),
+                        buildSendDocumentPayload(json, message.chatId, attachment.telegramFileId, null, markup),
+                    )
+                }
+            return client.dispatchOutbox(message.chatId, method, body)
+        }
+        val file =
+            venueInfoMediaService?.bytes(attachment, null)
+                ?: return TelegramCallResult.Failure(null, null, null)
+        if (section() == null || venueInfoSectionMediaRepository.findById(current.id, attachment.id) != attachment) {
+            return TelegramCallResult.TrafficDenied
+        }
+        val extension =
+            if (attachment.mediaType == "pdf") {
+                "pdf"
+            } else if (file.contentType == io.ktor.http.ContentType.Image.PNG) {
+                "png"
+            } else {
+                "jpg"
+            }
+        return client.sendDocumentBytes(
+            message.chatId,
+            file.bytes,
+            "venue-material.$extension",
+            file.contentType ?: io.ktor.http.ContentType.Application.OctetStream,
+            markup,
+        )
     }
 
     private suspend fun showBotVenueAddress(

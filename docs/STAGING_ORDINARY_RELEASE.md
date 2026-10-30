@@ -588,3 +588,70 @@ Docker fixture проверяет настоящий subprocess → Docker/Compo
 На macOS можно явно задать `HT_STAGING_FIXTURE_DOCKER_SOCKET=unix:///…/docker.sock`.
 Offline `plan`/`simulate --fixture … --state-dir …` остаются доступны с вымышленными
 observations; `SIMULATED_ACCEPTED` не является operational evidence.
+
+### Venue information media: optional reuse of staging R2 (HT-VENUE-CARD-R2-DIRECT-UPLOAD-01)
+
+Local direct information-media implementation adds optional `VENUE_INFO_MEDIA_R2_ENABLED`
+(`true`/`false`, absent means disabled). It reuses the complete validated existing
+`STAFF_PHOTOS_R2_*` connection block and staging bucket, with separate `venue-info/` keys;
+`STAFF_PHOTOS_R2_ENABLED` must be explicit when a connection block is supplied and may remain
+false. Existing configs remain byte-for-byte unchanged; do not inject a default into old runtime.
+Observe the new flag exactly like the other optional R2 runtime fields; drift fails closed.
+
+Enabling/configuration delivery still requires separately authorized `deploy --apply-config`;
+this local task does not configure the VPS, credentials, bucket or Caddy. Confirm existing keys
+already cover PUT/GET/HEAD/DELETE in `venue-info/`; expanded permissions require a new decision.
+Backend independently disables this slice for production or incomplete/unapproved connections.
+
+PostgreSQL V128 appends information-media metadata and the durable cleanup journal to V127;
+H2 counterpart V129. Historical migration contents/checksums are unchanged. A later release
+requires exact V127→V128 manifest compatibility review and existing backup/admission checks.
+No old-schema rollback; once R2 rows exist, rollback needs a media-aware compatible binary.
+Fresh install remains under the existing exact-V126 contract, followed by admitted migration;
+this addition does not relax release evidence, drift, PRODUCT, database or transport guards.
+Production admission, backup/restore and actual R2/device/deletion acceptance remain open.
+
+
+### PDF worker: exact opt-in HT70 topology (HT-VENUE-PDF-ISOLATED-WORKER-01)
+
+`VENUE_INFO_PDF_WORKER_ENABLED` is optional boolean text, absent/false disables new PDF admission.
+Absence preserves the historical two-service document and hashes exactly; no default is inserted
+into existing runtime. JPEG/PNG and existing Telegram/R2 delivery keep their existing contracts.
+True allows exactly one additional service `pdf-worker` and one `pdf_ipc` local tmpfs volume,
+not arbitrary services/mounts/networks. See `MEDIA_STORAGE_UPLOAD.md` for protocol and numeric limits.
+The worker runs the **same immutable image ID** as backend, with packaged `HTPDF1` capability
+marker and exact image-default environment hash; the entrypoint clears environment before Java.
+It receives no runtime secrets, networks, ports or Docker access. Backend's only admitted new mount
+is that exact project-owned volume at `/run/hookah-pdf` read-only; worker's mount is read-write.
+Both Docker representations (named-volume Binds or structured Mounts) are checked exactly; foreign
+volumes, path/mode/subpath changes, extra mounts, secrets or missing/drifted limits refuse observation.
+
+Future separately authorized admission must:
+
+1. Admit the compatible controller and exact CI-green immutable image with worker capability and
+   mandatory isolated Docker proof; verify real Linux cgroup v2, default seccomp and UID 10001.
+2. Verify historical managed state, unchanged Compose/runtime hashes and PostgreSQL binding under
+   the existing shared Docker lock. Confirm no pre-existing project `pdf_ipc` resource or foreign
+   container, and review the 384 MiB memory / one CPU / 64 PIDs host capacity alongside other apps.
+3. Review V127→V128 compatibility and backup/restore exactly as before if the release includes that
+   migration. Worker topology adds no schema migration and never restarts/recreates PostgreSQL.
+   Existing pre-migration backend quiescence, backup, no schema downgrade and DB binding remain.
+4. Explicitly set the flag and use `deploy --apply-config`. Ordinary implicit deploy refuses the
+   runtime/topology change. After durable intent, worker is recreated and health-checked before
+   backend; readiness and exact observation must pass before SUCCESS. Failure leaves UNKNOWN,
+   blocks blind replay and requires the existing reconcile/manual diagnosis process.
+5. Independently verify worker limits, unavailable-PDF/working-image behavior, no orphan parser,
+   network/credential isolation, Guest/Preview/Bot and real-device acceptance. Check existing R2
+   `venue-info/` permission admission separately; worker has no R2 connection.
+
+Historical two-service state stays observable with its old config. Once enabled, topology removal
+is refused pending reviewed decommission; automatic rollback to a non-worker image/config is not
+admitted. Same-schema rollback still requires unchanged runtime and a worker-capable matching image.
+Existing PostgreSQL, network/port, immutable image, CI/PRODUCT, backup, shared lock and neighbor
+scope checks are retained. No ClubsBot config/container is selected by this extension.
+
+Local proof: 65 historical HT70 contracts plus six PDF contracts; disposable real Compose transition
+from synthetic current-schema historical state to exactly three services retained PG container,
+system ID, configuration, volume/network binding and sentinel row. Implicit transition and CPU drift
+were refused. This is not initial V126 enrollment, live CI/provenance, Linux host/SSH admission or a
+server deploy. No local task output authorizes staging configuration or deployment.

@@ -103,6 +103,15 @@ jobs:
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
             ./gradlew --no-daemon --max-workers=1 :backend:app:test \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecycleH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaRoutesPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorageTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaValidationTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaPdfSecurityTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoPdfClientTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest" \
             --tests "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestVisitRoutesTest" \
@@ -157,6 +166,15 @@ jobs:
           report_dir = Path("backend/app/build/test-results/test")
           expected_classes = [
               "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecycleH2Test",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaRoutesPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorageTest",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaValidationTest",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaConcurrencyPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaPdfSecurityTest",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoPdfClientTest",
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest",
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest",
               "com.hookah.platform.backend.miniapp.guest.GuestVisitRoutesTest",
@@ -199,6 +217,15 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecycleH2Test": 12,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest": 12,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaRoutesPostgresTest": 2,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorageTest": 3,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaValidationTest": 4,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaConcurrencyPostgresTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaPdfSecurityTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoPdfClientTest": 3,
               "com.hookah.platform.backend.miniapp.guest.GuestTableResolveAvailabilityTest": 20,
               "com.hookah.platform.backend.miniapp.guest.GuestTableResolveAvailabilityPostgresTest": 20,
               "com.hookah.platform.backend.support.SupportTicketRoutesTest": 15,
@@ -1298,6 +1325,7 @@ jobs:
         run: |
           bash -n scripts/build-simple-staging-image.sh
           python3 -B -m unittest discover -s scripts -p test_simple_staging.py -v
+          python3 -B -m unittest discover -s scripts -p test_pdf_worker_contract.py -v
       - name: Validate GHCR publication contract
         run: |
           python3 -m venv "$RUNNER_TEMP/ghcr-contract-venv"
@@ -1797,6 +1825,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up Java for isolated IPC protocol fixtures
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+        with:
+          distribution: temurin
+          java-version: '21'
       - name: Validate full-image and Docker-save reproducibility guards
         run: |
           bash -n scripts/check-backend-image-reproducibility.sh

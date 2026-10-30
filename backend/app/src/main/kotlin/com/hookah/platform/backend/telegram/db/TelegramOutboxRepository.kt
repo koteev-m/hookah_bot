@@ -433,6 +433,12 @@ class TelegramOutboxRepository(
                                         AND earlier_guest_entry.status IN ('NEW', 'SENDING')
                                   )
                               )
+                              AND (o.method <> 'venueInfo' OR NOT EXISTS (
+                                  SELECT 1 FROM telegram_outbox earlier_info
+                                  WHERE earlier_info.chat_id = o.chat_id AND earlier_info.id < o.id
+                                    AND earlier_info.method = 'venueInfo'
+                                    AND earlier_info.status IN ('NEW', 'SENDING')
+                              ))
                               $chatEligibilitySql
                               $maintenanceEligibilitySql
                             ORDER BY o.created_at, o.id

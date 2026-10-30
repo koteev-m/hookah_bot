@@ -1,3 +1,4 @@
+import { createVenueInfoMediaEditor } from './venueInfoMedia'
 import type { VenueSettingsSection } from './venueSettingsCatalog'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
@@ -399,6 +400,27 @@ function buildDom(root: HTMLDivElement, compact = false): VenueSettingsRefs {
     publicCardPreviewHint
   )
   append(publicCard, publicTitle, publicDescription, publicNameLabel, publicName, publicCardForm)
+  const infoMedia = el('div')
+  infoMedia.dataset.testid = 'venue-card-info-media'
+  append(
+    infoMedia,
+    el('h4', { text: 'Фотографии и PDF' }),
+    el('p', {
+      text: 'Загружайте JPEG, PNG и PDF до 10 МБ в информационные разделы карточки. До 10 вложений в разделе. Это материалы для просмотра, отдельно от заказного меню и фотографий команды. Изменения материалов сохраняются сразу; гостям они доступны только при публикации заведения и разрешённой видимости.'
+    })
+  )
+  const mediaGuide = el('details')
+  const mediaSteps = el('ol')
+  for (const text of [
+    'Перед переходом в чат сохраните изменения карточки кнопкой «Сохранить». Открытие этой инструкции ничего не сохраняет и не закрывает Mini App. При закрытии или перезагрузке несохранённый черновик может потеряться.',
+    'В личном чате этого же бота отправьте /menu. Владелец: «🏢 Мои заведения» → нужное заведение → «⚙️ Настройка заведения» → «🏢 Профиль / карточка». Менеджер: «🔄 Сменить заведение» → нужное заведение → «🏢 Заведение». Сверьте название и город с карточкой в Mini App: выбор заведения в боте может отличаться.',
+    'Откройте «ℹ️ О заведении / Правила». Выберите раздел или «➕ Добавить свой раздел» и отправьте его название. Для плоского меню выберите «📖 Фото-меню».',
+    'Нажмите «🖼 Добавить медиа». Отправляйте фотографии как фото, а PDF как документ. Можно отправить несколько файлов подряд, затем нажмите «Готово». В разделе также можно удалить отдельное вложение или скрыть и снова показать весь раздел.',
+    'Вернитесь в Mini App: «Настройки» → «Карточка заведения» → «Предпросмотр для гостя». Если Mini App была закрыта, откройте её снова через «📱 Открыть панель заведения» в боте. Предпросмотр показывает сохранённые видимые материалы; до публикации карточка доступна только владельцу и менеджеру в закрытом предпросмотре.'
+  ]) mediaSteps.appendChild(el('li', { text }))
+  append(mediaGuide, el('summary', { text: 'Как добавить через Telegram-бота' }), mediaSteps)
+  append(infoMedia, mediaGuide)
+  publicCard.appendChild(infoMedia)
   if (compact) publicDescription.remove()
 
   const reviewLinkCard = el('section', { className: 'card' })
@@ -1117,6 +1139,13 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     }
   }
   const disposables: Array<() => void> = []
+  const mediaEditor = canManagePublicCard ? createVenueInfoMediaEditor(backendUrl,isDebug,venueId) : null
+  if (mediaEditor) {
+    const container = refs.publicCard.querySelector('[data-testid="venue-card-info-media"]')
+    container?.insertBefore(mediaEditor.element, container.querySelector('details'))
+    disposables.push(mediaEditor.dispose)
+  }
+
 
   let disposed = false
   let discarded = false
@@ -2312,11 +2341,15 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.status.textContent = message
     showToast(message)
   }
-  const isSaving = () => Boolean(publicCardSaving || reviewLinkSaving || scheduleSaving || bookingSaveAbort || extensionSaveAbort || staffModuleSaving)
+  const isSaving = () => Boolean(mediaEditor?.busy() || publicCardSaving || reviewLinkSaving || scheduleSaving || bookingSaveAbort || extensionSaveAbort || staffModuleSaving)
   const canLeave = () => {
     if (isSaving()) {
       refs.status.textContent = 'Дождитесь завершения сохранения.'
       showToast('Дождитесь завершения сохранения.')
+      return false
+    }
+    if (mediaEditor?.pending()) {
+      showToast('Остались файлы для повторной загрузки. Завершите или отмените их в редакторе материалов.')
       return false
     }
     if (hasUnsavedChanges()) {
@@ -2328,7 +2361,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     return true
   }
   options.setLeaveGuard?.(canLeave)
-  options.setDraftState?.({ hasUnsavedChanges, isSaving })
+  options.setDraftState?.({ hasUnsavedChanges: () => hasUnsavedChanges() || Boolean(mediaEditor?.pending()), isSaving })
   disposables.push(on(root, 'input', notifyDraftChange))
   disposables.push(on(root, 'change', notifyDraftChange))
   disposables.push(on(root, 'click', notifyDraftChange))

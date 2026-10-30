@@ -246,6 +246,10 @@ python3 "${COMPARATOR}" verify-metadata \
   "${EVIDENCE_DIR}/build-b.metadata.json" "${DOCKERFILE}" "${SOURCE_DATE_EPOCH}" \
   "${HEAD_SHA}" "${EXPECTED_SOURCE}" "${PUBLIC_URL}" "${MANIFEST_B}"
 
+# The exact reproduced image must pass OS-enforced PDF isolation before release artifact admission.
+python3 -B scripts/test_pdf_worker_docker.py --image "${IMAGE_ID_A}" \
+  --evidence-dir "${EVIDENCE_DIR}/pdf-worker-isolation"
+
 backend_release_artifact_run \
   "${TAG_A}" "${TAG_B}" "${IMAGE_ID_A}" "${EVIDENCE_DIR}/comparison.json" \
   "${EVIDENCE_DIR}" "${HEAD_SHA}" "${EXPECTED_SOURCE}" "${RELEASE_TAG}" \

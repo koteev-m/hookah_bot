@@ -26357,3 +26357,370 @@ test('UX08 picker return after storage disabled cannot create invisible pending 
   await clickTelegramBackButton(page)
   await expect(page).not.toHaveURL(/#\/staff$/)
 })
+
+for (const role of ['OWNER', 'MANAGER'] as const) {
+  test(`venue card media guide ${role} preserves drafts without opening Telegram or uploading`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 568 })
+    await installTelegramWebApp(page, 123456789)
+    await mockVenueShiftExtensionApi(page, { role, permissions: role === 'OWNER' ? ownerUxPermissions : [] })
+    const mutations: string[] = []
+    const popups: string[] = []
+    page.on('request', (request) => {
+      if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(request.method()) && !request.url().includes('/auth/')) mutations.push(request.url())
+    })
+    page.on('popup', (popup) => popups.push(popup.url()))
+    await page.goto('?mode=venue#/dashboard')
+    await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+    await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
+    const description = page.getByPlaceholder(/авторские чаши/)
+    await expect(description).toBeEnabled()
+    await description.fill('Несохранённая карточка с материалами')
+    const guide = page.getByTestId('venue-card-info-media')
+    await expect(guide).toContainText('Загружайте JPEG, PNG и PDF до 10 МБ')
+    await guide.getByText('Как добавить через Telegram-бота', { exact: true }).click()
+    await expect(guide).toContainText('🏢 Мои заведения')
+    await expect(guide).toContainText('🔄 Сменить заведение')
+    await expect(guide).toContainText('выбор заведения в боте может отличаться')
+    await expect(guide).toContainText('ℹ️ О заведении / Правила')
+    await expect(guide).toContainText('📖 Фото-меню')
+    await expect(guide).toContainText('Предпросмотр для гостя')
+    await expect(guide).toContainText('несохранённый черновик может потеряться')
+    await expect(guide.locator('a, button, input[type=file]')).toHaveCount(0)
+    await expect(page).toHaveURL(/#\/settings\/card$/)
+    await expect(description).toHaveValue('Несохранённая карточка с материалами')
+    await expectNoHorizontalOverflow(page)
+    await page.screenshot({ path: testInfo.outputPath(`media-guide-${role}.png`), fullPage: true })
+    await guide.getByText('Как добавить через Telegram-бота', { exact: true }).click()
+    await clickTelegramBackButton(page)
+    await expect(page).toHaveURL(/#\/settings\/card$/)
+    await expect(description).toHaveValue('Несохранённая карточка с материалами')
+    expect(mutations).toEqual([])
+    expect(popups).toEqual([])
+    const card = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) })
+    await card.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+    await clickTelegramBackButton(page)
+    await expect(page.locator('.venue-settings-catalog')).toBeVisible()
+    await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
+    await expect(description).toHaveValue('Несохранённая карточка с материалами')
+  })
+}
+
+test('venue card media guide STAFF has no settings entry or direct route', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'STAFF', permissions: [] })
+  await page.goto('?mode=venue#/dashboard')
+  await expect(page.locator('.venue-owner-home')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Настройки', exact: true })).toHaveCount(0)
+  await page.evaluate(() => { location.hash = '#/settings/card' })
+  await expect(page.getByRole('heading', { name: 'Недостаточно прав', exact: true })).toBeVisible()
+  await expect(page.getByTestId('venue-card-info-media')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Карточка заведения', exact: true })).toHaveCount(0)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/(more|dashboard)$/)
+})
+
+for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
+  test(`venue card media image and PDF delivery ${mode}`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const prefix = mode === 'PRIVATE_DRAFT' ? '/api/venue/1/guest-preview' : '/api/guest/venue/1'
+    const section: VenueGuestPreviewInfoSectionFixture = {
+      id: 10, type: 'menu', title: 'Меню', displayTitle: '📖 Фото-меню', text: 'Материалы для просмотра', mediaCount: 2,
+      media: [
+        { id: 100, mediaType: 'image', sortOrder: 0, url: `${prefix}/info-sections/10/media/100` },
+        { id: 101, mediaType: 'pdf', sortOrder: 1, url: `${prefix}/info-sections/10/media/101` }
+      ]
+    }
+    if (mode === 'guest') {
+      await mockGuestApi(page)
+      await page.route('**/api/guest/venue/1/info-sections', (route) => route.fulfill(jsonResponse({ venueId: 1, sections: [section] })))
+    } else {
+      const fixture = mode === 'PRIVATE_DRAFT' ? buildVenuePrivatePreviewFixture(1) : buildVenueGuestPreviewFixture(1)
+      await mockVenueGuestPreviewApi(page, { role: 'MANAGER', previews: { 1: { ...fixture, infoSections: [section] } } })
+    }
+    const requests: Array<{ method: string; authorization?: string }> = []
+    await page.route(`**${prefix}/info-sections/10/media/101`, async (route) => {
+      requests.push({ method: route.request().method(), authorization: route.request().headers().authorization })
+      await route.fulfill({ status: 200, contentType: 'application/pdf', body: '%PDF-1.4\n% synthetic transport fixture\n%%EOF' })
+    })
+    await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    if (mode === 'guest') await page.getByRole('button', { name: 'Открыть карточку' }).click()
+    else await openVenueSection(page, 'Предпросмотр для гостя')
+    const image = page.getByRole('img', { name: '📖 Фото-меню 1', exact: true })
+    await expect(image).toBeVisible()
+    await expect.poll(() => image.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+    const pdf = page.getByRole('link', { name: 'Открыть PDF', exact: true })
+    await expect(pdf).toHaveAttribute('target', '_blank')
+    await expect(pdf).toHaveAttribute('rel', 'noopener noreferrer')
+    await expect(pdf).toHaveAttribute('href', mode === 'guest' ? /\/api\/guest\/venue\/1\/info-sections\/10\/media\/101$/ : /^blob:/)
+    const contentType = await pdf.evaluate(async (link) => (await fetch((link as HTMLAnchorElement).href)).headers.get('content-type'))
+    expect(contentType).toBe('application/pdf')
+    expect(requests).toEqual([{ method: 'GET', authorization: mode === 'guest' ? undefined : 'Bearer e2e-session-token' }])
+    await expect(page.getByTestId('venue-card-info-media')).toHaveCount(0)
+    if (mode !== 'guest') {
+      await page.getByRole('button', { name: 'Вернуться в кабинет', exact: true }).click()
+      await expect(page).toHaveURL(/#\/dashboard$/)
+    }
+  })
+}
+
+async function mockDirectVenueInfoMedia(page: Page, options: { disabled?: boolean; loseFirstResponse?: boolean; failFirstTerminal?: boolean } = {}) {
+  const state = { enabled: !options.disabled, sections: [{ id: 10, title: 'О заведении', type: 'about', visible: true, revision: 0, media: [] as Array<{ id: string; type: string; visible: boolean; status: string; sortOrder: number; size: number; source: string }> }] }
+  const uploads: Array<{ key: string; revision: string; replace?: string; mime: string }> = []
+  const committed = new Set<string>()
+  let lost = false
+  const failed = new Set<string>()
+  await page.route('**/api/venue/1/info-media', (route) => route.fulfill(jsonResponse(state)))
+  await page.route('**/api/venue/1/info-sections/10/media-operations/*', (route) => {
+    const key = route.request().url().split('/').pop()!
+    return route.fulfill(jsonResponse({ status: failed.has(key) ? 'FAILED' : committed.has(key) ? 'SUCCESS' : 'UNKNOWN' }))
+  })
+  await page.route('**/api/venue/1/info-sections/10/media', async (route) => {
+    const headers = route.request().headers()
+    uploads.push({ key: headers['idempotency-key'], revision: headers['x-media-revision'], replace: headers['x-replaces-media'], mime: headers['content-type'] })
+    if (options.failFirstTerminal && uploads.length === 1) {
+      failed.add(headers['idempotency-key']); state.sections[0].revision++
+      await route.fulfill({ ...jsonResponse({ error: { message: 'Хранилище недоступно' } }), status: 503 }); return
+    }
+    if (!committed.has(headers['idempotency-key'])) {
+      expect(headers.authorization).toBe('Bearer e2e-session-token')
+      expect(headers['x-media-revision']).toBe(String(state.sections[0].revision))
+      const old = state.sections[0].media.find((m) => m.id === headers['x-replaces-media'])
+      const item = { id: `11111111-1111-4111-8111-${String(committed.size + 1).padStart(12, '0')}`, type: headers['content-type'] === 'application/pdf' ? 'pdf' : 'image', visible: old?.visible ?? true, status: 'READY', sortOrder: old?.sortOrder ?? state.sections[0].media.length, size: 100, source: 'OBJECT_STORAGE' }
+      state.sections[0].media = state.sections[0].media.filter((m) => m !== old)
+      state.sections[0].media.push(item); state.sections[0].revision++; committed.add(headers['idempotency-key'])
+    }
+    if (options.loseFirstResponse && !lost) { lost = true; await route.abort('failed'); return }
+    await route.fulfill(jsonResponse(state))
+  })
+  await page.route('**/api/venue/1/info-sections/10/media-actions', async (route) => {
+    const body = route.request().postDataJSON()
+    expect(body.revision).toBe(state.sections[0].revision)
+    if (body.mediaId) {
+      const item = state.sections[0].media.find((m) => m.id === body.mediaId)!
+      if (body.action === 'delete') state.sections[0].media = state.sections[0].media.filter((m) => m !== item)
+      else item.visible = body.action === 'show'
+    } else state.sections[0].visible = body.action === 'show'
+    state.sections[0].revision++
+    await route.fulfill(jsonResponse(state))
+  })
+  return { state, uploads }
+}
+for (const role of ['OWNER', 'MANAGER'] as const) {
+  test(`direct venue info media ${role} multiple files replace hide and delete on mobile`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 568 })
+    await installTelegramWebApp(page, 123456789)
+    const cardApi = await mockVenueShiftExtensionApi(page, { role, permissions: role === 'OWNER' ? ownerUxPermissions : [] })
+    const api = await mockDirectVenueInfoMedia(page)
+    await page.goto('?mode=venue#/dashboard')
+    await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+    await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
+    const description = page.getByPlaceholder(/авторские чаши/)
+    await description.fill('Черновик текста не связан с медиа')
+    await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+    const editor = page.locator('.venue-info-editor')
+    await expect(editor.getByText('Изменения материалов сохраняются сразу.', { exact: false })).toBeVisible()
+    await editor.getByLabel('Добавить файлы: О заведении', { exact: true }).setInputFiles([syntheticUpload, { name: 'menu.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n%%EOF') }])
+    await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(2)
+    expect(api.uploads.map((u) => u.mime)).toEqual(['image/png', 'application/pdf'])
+    await editor.getByRole('button', { name: 'Скрыть вложение', exact: true }).first().click()
+    await expect(editor.getByRole('button', { name: 'Показать вложение', exact: true })).toHaveCount(1)
+    await editor.getByLabel('Заменить вложение 1', { exact: true }).setInputFiles({ name: 'replacement.jpg', mimeType: 'image/jpeg', buffer: Buffer.from([255, 216, 255, 217]) })
+    await expect.poll(() => api.uploads.length).toBe(3)
+    expect(api.uploads[2].replace).toBeTruthy()
+    await expect(editor.getByRole('button', { name: 'Показать вложение', exact: true })).toHaveCount(1)
+    await editor.getByRole('button', { name: 'Скрыть раздел', exact: true }).click()
+    await expect(editor.getByRole('button', { name: 'Показать раздел', exact: true })).toBeEnabled()
+    await editor.getByRole('button', { name: 'Показать раздел', exact: true }).click()
+    await expect(editor.getByRole('button', { name: 'Скрыть раздел', exact: true })).toBeEnabled()
+    page.once('dialog', (dialog) => dialog.accept())
+    await editor.getByRole('button', { name: 'Удалить вложение', exact: true }).first().click()
+    await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(1)
+    await expect(description).toHaveValue('Черновик текста не связан с медиа')
+    expect(cardApi.getUpdatePublicCardSettingsCalls()).toBe(0)
+    await expectNoHorizontalOverflow(page)
+    await page.screenshot({ path: testInfo.outputPath(`direct-media-${role}.png`), fullPage: true })
+  })
+}
+
+test('direct venue info media lost response retries same operation without a duplicate', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789); await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
+  const api = await mockDirectVenueInfoMedia(page, { loseFirstResponse: true })
+  await page.goto('?mode=venue#/settings/card')
+  await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+  const editor = page.locator('.venue-info-editor')
+  await expect(editor.getByLabel('Добавить файлы: О заведении')).toBeEnabled()
+  await editor.getByLabel('Добавить файлы: О заведении').setInputFiles(syntheticUpload)
+  await expect(editor.getByRole('button', { name: 'Повторить загрузку', exact: true })).toBeEnabled()
+  await expect(editor.getByRole('status')).toContainText('тот же файл с тем же ключом')
+  await clickTelegramBackButton(page); await expect(page).toHaveURL(/#\/settings\/card$/)
+  await editor.getByRole('button', { name: 'Повторить загрузку', exact: true }).click()
+  await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(1)
+  expect(api.uploads).toHaveLength(2);expect(api.uploads[0]).toEqual(api.uploads[1]);expect(api.state.sections[0].media).toHaveLength(1)
+})
+
+test('direct venue info media disabled runtime and invalid file have actionable copy without upload', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789); await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  const api = await mockDirectVenueInfoMedia(page, { disabled: true })
+  await page.goto('?mode=venue#/settings/card');await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+  const editor = page.locator('.venue-info-editor')
+  await expect(editor.getByRole('status')).toContainText('инструкцию Telegram-бота')
+  await expect(editor.getByLabel('Добавить файлы: О заведении')).toBeDisabled()
+  api.state.enabled = true;await editor.getByRole('button', { name: 'Обновить список', exact: true }).click()
+  await expect(editor.getByLabel('Добавить файлы: О заведении')).toBeEnabled()
+  await editor.getByLabel('Добавить файлы: О заведении').setInputFiles({ name: 'bad.pdf', mimeType: 'application/x-msdownload', buffer: Buffer.from('MZ') })
+  await expect(editor.getByRole('status')).toContainText('Выберите JPEG, PNG или PDF')
+  expect(api.uploads).toHaveLength(0)
+})
+
+for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
+  test(`direct venue info media opaque delivery ${mode}`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const imageId = '12121212-1212-4121-8121-121212121212';const pdfId = '34343434-3434-4343-8343-343434343434'
+    const prefix = mode === 'PRIVATE_DRAFT' ? '/api/venue/1/guest-preview' : '/api/guest/venue/1'
+    const section: VenueGuestPreviewInfoSectionFixture = { id: 10, type: 'menu', title: 'Меню', displayTitle: '📖 Фото-меню', text: '', mediaCount: 2, media: [
+      { id: 100, mediaType: 'image', sortOrder: 0, url: `${prefix}/info-sections/10/media/${imageId}` },
+      { id: 101, mediaType: 'pdf', sortOrder: 1, url: `${prefix}/info-sections/10/media/${pdfId}` }
+    ] }
+    if (mode === 'guest') {
+      await mockGuestApi(page)
+      await page.route('**/api/guest/venue/1/info-sections', (route) => route.fulfill(jsonResponse({ venueId: 1, sections: [section] })))
+    } else {
+      const fixture = mode === 'PRIVATE_DRAFT' ? buildVenuePrivatePreviewFixture(1) : buildVenueGuestPreviewFixture(1)
+      await mockVenueGuestPreviewApi(page, { role: 'MANAGER', previews: { 1: { ...fixture, infoSections: [section] } } })
+    }
+    const reads: Array<{ authorization?: string; media: string }> = []
+    for (const id of [imageId, pdfId]) await page.route(`**${prefix}/info-sections/10/media/${id}`, async (route) => {
+      reads.push({ authorization: route.request().headers().authorization, media: id })
+      await route.fulfill({ status: 200, contentType: id === imageId ? 'image/png' : 'application/pdf', body: id === imageId ? syntheticStaffPng : Buffer.from('%PDF-1.4\n%%EOF') })
+    })
+    await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    if (mode === 'guest') await page.getByRole('button', { name: 'Открыть карточку' }).click()
+    else await openVenueSection(page, 'Предпросмотр для гостя')
+    const image = page.getByRole('img', { name: '📖 Фото-меню 1', exact: true })
+    await expect.poll(() => image.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+    const pdf = page.getByRole('link', { name: 'Открыть PDF', exact: true })
+    await expect(pdf).toHaveAttribute('href', mode === 'guest' ? new RegExp(`${pdfId}$`) : /^blob:/)
+    expect(await pdf.evaluate(async (link) => (await fetch((link as HTMLAnchorElement).href)).headers.get('content-type'))).toBe('application/pdf')
+    expect(reads).toHaveLength(2)
+    expect(reads.every((r) => r.authorization === (mode === 'guest' ? undefined : 'Bearer e2e-session-token'))).toBe(true)
+    await expect(page.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(0)
+  })
+}
+
+test('direct venue info media private preview refuses a foreign opaque attachment URL', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const id = '56565656-5656-4565-8565-565656565656'
+  const fixture = buildVenuePrivatePreviewFixture(1)
+  await mockVenueGuestPreviewApi(page, { role: 'MANAGER', previews: { 1: { ...fixture, infoSections: [{ id: 10, type: 'about', title: 'О заведении', displayTitle: 'О заведении', text: '', mediaCount: 1, media: [{ id: 100, mediaType: 'image', sortOrder: 0, url: `/api/venue/2/guest-preview/info-sections/10/media/${id}` }] }] } } })
+  let foreignReads = 0
+  await page.route(`**/api/venue/2/guest-preview/info-sections/10/media/${id}`, async (route) => { foreignReads++; await route.fulfill({ status: 200, contentType: 'image/png', body: syntheticStaffPng }) })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Предпросмотр для гостя')
+  await expect(page.getByRole('heading', { name: 'О заведении', exact: true })).toBeVisible()
+  await expect(page.getByText(/^Не удалось загрузить изображение/)).toBeVisible()
+  expect(foreignReads).toBe(0)
+})
+
+
+test('direct venue info media file provider without MIME uses server validation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
+  const api = await mockDirectVenueInfoMedia(page)
+  await page.goto('?mode=venue#/settings/card')
+  await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+  const editor = page.locator('.venue-info-editor')
+  await expect(editor.getByLabel('Добавить файлы: О заведении')).toBeEnabled()
+  await editor.getByLabel('Добавить файлы: О заведении').setInputFiles({ name: 'provider-image.png', mimeType: 'application/octet-stream', buffer: syntheticStaffPng })
+  await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(1)
+  expect(api.uploads).toHaveLength(1)
+  expect(api.uploads[0].mime).toBe('application/octet-stream')
+})
+
+
+test('direct venue info media legacy delete explains reference-only cleanup and cancellation preserves file', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
+  const api = await mockDirectVenueInfoMedia(page)
+  api.state.sections[0].media.push({ id: '99', type: 'pdf', visible: true, status: 'READY', sortOrder: 0, size: 0, source: 'TELEGRAM_FILE' })
+  await page.goto('?mode=venue#/settings/card')
+  await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+  const remove = page.locator('.venue-info-editor').getByRole('button', { name: 'Удалить вложение', exact: true })
+  await expect(remove).toBeEnabled()
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toContain('только ссылка в платформе')
+    expect(dialog.message()).toContain('физическое удаление Telegram-файла не поддерживается')
+    expect(dialog.message()).not.toContain('после 7 дней')
+    await dialog.dismiss()
+  })
+  await remove.click()
+  expect(api.state.sections[0].media).toHaveLength(1)
+  page.once('dialog', (dialog) => dialog.accept())
+  await remove.click()
+  await expect(remove).toHaveCount(0)
+  expect(api.state.sections[0].media).toHaveLength(0)
+})
+
+
+test('direct venue info media History Back retains unknown file and idempotency key', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(window, 'navigation', { value: undefined, configurable: true }))
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
+  const api = await mockDirectVenueInfoMedia(page, { loseFirstResponse: true })
+  const bodies: Buffer[] = []
+  page.on('request', (r) => { if (r.url().endsWith('/info-sections/10/media')) bodies.push(r.postDataBuffer()!) })
+  await page.goto('?mode=venue#/dashboard')
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
+  await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+  const editor = page.locator('.venue-info-editor')
+  await editor.getByLabel('Добавить файлы: О заведении').setInputFiles(syntheticUpload)
+  await expect(editor.getByRole('button', { name: 'Повторить загрузку', exact: true })).toBeEnabled()
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/settings$/)
+  await page.goForward()
+  await expect(editor.getByRole('button', { name: 'Повторить загрузку', exact: true })).toBeEnabled()
+  await editor.getByRole('button', { name: 'Повторить загрузку', exact: true }).click()
+  await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(1)
+  expect(api.uploads).toHaveLength(2); expect(api.uploads[0]).toEqual(api.uploads[1])
+  expect(bodies[0].equals(bodies[1])).toBe(true)
+})
+
+test('direct venue info media FAILED refresh explicit new operation succeeds and keeps old attachment', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
+  const api = await mockDirectVenueInfoMedia(page, { failFirstTerminal: true })
+  api.state.sections[0].media.push({ id: '99', type: 'image', visible: true, status: 'READY', sortOrder: 0, size: 100, source: 'TELEGRAM_FILE' })
+  await page.goto('?mode=venue#/settings/card')
+  await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+  const editor = page.locator('.venue-info-editor')
+  await editor.getByLabel('Заменить вложение 1', { exact: true }).setInputFiles(syntheticUpload)
+  await expect(editor.getByRole('button', { name: 'Повторить загрузку', exact: true })).toBeEnabled()
+  await editor.getByRole('button', { name: 'Обновить список', exact: true }).click()
+  await expect(editor.getByRole('status')).toContainText('окончательно не выполнена')
+  expect(api.uploads).toHaveLength(1); expect(api.state.sections[0].media[0].id).toBe('99')
+  await editor.getByRole('button', { name: 'Начать новую загрузку', exact: true }).click()
+  await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(1)
+  expect(api.uploads).toHaveLength(2); expect(api.uploads[1].key).not.toBe(api.uploads[0].key)
+  expect(api.uploads[1].replace).toBe('99')
+})
+
+
+test('direct venue info media UNKNOWN cannot discard its key and SUCCESS refresh needs no reupload', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
+  const api = await mockDirectVenueInfoMedia(page, { loseFirstResponse: true })
+  await page.goto('?mode=venue#/settings/card')
+  await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+  const editor = page.locator('.venue-info-editor')
+  await editor.getByLabel('Добавить файлы: О заведении').setInputFiles(syntheticUpload)
+  await expect(editor.getByRole('button', { name: 'Повторить загрузку', exact: true })).toBeEnabled()
+  await editor.getByRole('button', { name: 'Отменить оставшиеся файлы', exact: true }).click()
+  await expect(editor.getByRole('status')).toContainText('нужно проверить или безопасно повторить')
+  await expect(editor.getByLabel('Добавить файлы: О заведении')).toBeDisabled()
+  await editor.getByRole('button', { name: 'Обновить список', exact: true }).click()
+  await expect(editor.getByRole('status')).toContainText('Операция подтверждена')
+  await expect(editor.getByRole('button', { name: 'Повторить загрузку', exact: true })).toHaveCount(0)
+  await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(1)
+  expect(api.uploads).toHaveLength(1)
+})

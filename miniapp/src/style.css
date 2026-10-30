@@ -3733,3 +3733,13 @@ input[type="number"] {
 .venue-profile-summary-label > span { font-size: 12px; font-weight: normal; }
 .venue-profile-details { padding-top: 12px; }
 .venue-profile-details[hidden] { display: none; }
+
+.venue-info-editor { margin: 12px 0; }
+.venue-info-editor summary { cursor: pointer; padding: 8px 0; }
+.venue-info-section { border-top: 1px solid #dce1eb; padding: 12px 0; min-width: 0; }
+.venue-info-attachment { padding: 10px 0; border-top: 1px solid #edf0f5; }
+.venue-info-editor input[type=file] { display: block; width: 100%; max-width: 100%; margin: 10px 0; box-sizing: border-box; }
+.venue-info-editor button { margin: 4px; white-space: normal; max-width: 100%; }
+.venue-info-editor p { overflow-wrap: anywhere; }
+
+.venue-info-file-label { display: block; margin: 12px 0; font-size: 14px; }

@@ -363,8 +363,8 @@ private fun VenueInfoSectionMediaAttachment.toDto(
         url =
             when (visibility) {
                 GuestVenueReadVisibility.PUBLISHED_PUBLIC ->
-                    "/api/guest/venue/$venueId/info-sections/$sectionId/media/$id"
+                    "/api/guest/venue/$venueId/info-sections/$sectionId/media/${publicId ?: id}"
                 GuestVenueReadVisibility.PRIVATE_DRAFT ->
-                    "/api/venue/$venueId/guest-preview/info-sections/$sectionId/media/$id"
+                    "/api/venue/$venueId/guest-preview/info-sections/$sectionId/media/${publicId ?: id}"
             },
     )

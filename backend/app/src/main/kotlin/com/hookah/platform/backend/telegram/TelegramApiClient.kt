@@ -382,6 +382,7 @@ class TelegramApiClient(
         bytes: ByteArray,
         filename: String,
         contentType: ContentType,
+        replyMarkup: ReplyMarkup? = null,
     ): TelegramCallResult {
         if (chatId <= 0 || !trafficPolicy.allowsOutboundChat(chatId) || !maintenancePolicy.allowsOutboundChat(chatId)) {
             return TelegramCallResult.TrafficDenied
@@ -395,6 +396,9 @@ class TelegramApiClient(
                     formData =
                         formData {
                             append("chat_id", chatId.toString())
+                            buildReplyMarkupPayload(json, replyMarkup)?.let {
+                                append("reply_markup", json.encodeToString(JsonElement.serializer(), it))
+                            }
                             append(
                                 "document",
                                 bytes,
