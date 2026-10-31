@@ -1,3 +1,5 @@
+import { createInfoMediaPreview, type InfoMediaLoader } from '../shared/ui/infoMediaPreview'
+import { loadInfoMediaContent } from '../shared/api/infoMediaContent'
 import { requestBinary } from '../shared/api/request'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
@@ -26,10 +28,7 @@ import type {
   VenueInfoSectionsResponse,
   VenueTodayScheduleDto
 } from '../shared/api/guestDtos'
-import {
-  venueGetGuestPreview,
-  venueGetGuestPreviewMedia
-} from '../shared/api/venueApi'
+import { venueGetGuestPreview } from '../shared/api/venueApi'
 import type {
   VenueGuestPreviewMode,
   VenueGuestPreviewResponse
@@ -550,13 +549,7 @@ function formatStaffCallTime(epochSeconds: number | null | undefined) {
   })
 }
 
-function resolveInfoMediaUrl(backendUrl: string, mediaUrl: string) {
-  try {
-    return new URL(mediaUrl, backendUrl).toString()
-  } catch {
-    return mediaUrl
-  }
-}
+
 
 function formatTodaySchedule(schedule: VenueTodayScheduleDto | null | undefined): string {
   if (!schedule) return ''
@@ -685,114 +678,37 @@ function resolveInfoMediaCount(section: VenueInfoSectionDto, mediaItems: ReturnT
     : mediaItems.length
 }
 
-function isImageInfoMedia(mediaType: string) {
-  const normalized = mediaType.toLowerCase()
-  return normalized === 'image' || normalized === 'photo'
-}
-
-function isPdfInfoMedia(mediaType: string) {
-  const normalized = mediaType.toLowerCase()
-  return normalized === 'pdf' || normalized === 'application/pdf'
-}
-
-type InfoMediaUrlLoader = (mediaUrl: string) => Promise<string | null>
-
 function renderInfoSection(
   section: VenueInfoSectionDto,
-  backendUrl: string,
-  loadMediaUrl?: InfoMediaUrlLoader
+  loadMedia: (url: string) => InfoMediaLoader,
+  disposables: Array<() => void>
 ) {
   const sectionCard = el('section', { className: 'card venue-info-section' })
-  const title = el('h4', { text: section.displayTitle || section.title })
-  sectionCard.appendChild(title)
-
-  const text = section.text?.trim()
-  if (text) {
-    sectionCard.appendChild(el('p', { text }))
-  }
+  const title = section.displayTitle || section.title
+  sectionCard.appendChild(el('h4', { text: title }))
+  if (section.text?.trim()) sectionCard.appendChild(el('p', { text: section.text.trim() }))
   const mediaItems = normalizeInfoMedia(section)
-  const mediaCount = resolveInfoMediaCount(section, mediaItems)
-  if (mediaItems.length > 0) {
-    const mediaList = el('div', { className: 'venue-info-media-list' })
+  if (mediaItems.length) {
+    const list = el('div', { className: 'venue-info-media-list' })
     mediaItems.forEach((media, index) => {
-      const rawMediaUrl = media.url ?? ''
-      const mediaUrl = resolveInfoMediaUrl(backendUrl, rawMediaUrl)
-      const mediaType = media.mediaType ?? ''
-      if (isImageInfoMedia(mediaType)) {
-        const frame = el('div', { className: 'venue-info-media-image' })
-        const loading = el('p', { className: 'status', text: 'Загрузка изображения…' })
-        const image = el('img')
-        const displayIndex = typeof media.sortOrder === 'number' ? media.sortOrder + 1 : index + 1
-        image.alt = `${section.displayTitle || section.title} ${displayIndex}`
-        image.loading = 'lazy'
-        let settled = false
-        const failImage = () => {
-          if (settled) return
-          settled = true
-          frame.replaceChildren(
-            el('p', {
-              className: 'status',
-              text: 'Не удалось загрузить изображение. Файл можно открыть в Telegram-боте.'
-            })
-          )
-        }
-        const timeoutId = window.setTimeout(failImage, 12000)
-        image.addEventListener('load', () => {
-          if (settled) return
-          settled = true
-          window.clearTimeout(timeoutId)
-          loading.remove()
-        })
-        image.addEventListener('error', () => {
-          window.clearTimeout(timeoutId)
-          failImage()
-        })
-        frame.appendChild(loading)
-        frame.appendChild(image)
-        if (loadMediaUrl) {
-          void loadMediaUrl(rawMediaUrl).then((loadedUrl) => {
-            if (!loadedUrl) {
-              window.clearTimeout(timeoutId)
-              failImage()
-              return
-            }
-            image.src = loadedUrl
-          })
-        } else {
-          image.src = mediaUrl
-        }
-        mediaList.appendChild(frame)
+      const type = media.mediaType?.toLowerCase() ?? ''
+      const number = typeof media.sortOrder === 'number' ? media.sortOrder + 1 : index + 1
+      const pdf = type === 'pdf' || type === 'application/pdf'
+      if (!pdf && !['image', 'photo', 'image/jpeg', 'image/png'].includes(type)) {
+        list.appendChild(el('p', { className: 'status', text: 'Этот формат нельзя показать. Обратитесь к заведению.' }))
         return
       }
-
-      const link = el('a', {
-        className: 'button-small button-secondary',
-        text: isPdfInfoMedia(mediaType) ? 'Открыть PDF' : 'Открыть файл'
-      })
-      link.target = '_blank'
-      link.rel = 'noopener noreferrer'
-      if (loadMediaUrl) {
-        link.setAttribute('aria-disabled', 'true')
-        link.textContent = 'Загрузка файла…'
-        void loadMediaUrl(rawMediaUrl).then((loadedUrl) => {
-          if (!loadedUrl) {
-            link.textContent = 'Файл временно недоступен'
-            return
-          }
-          link.href = loadedUrl
-          link.removeAttribute('aria-disabled')
-          link.textContent = isPdfInfoMedia(mediaType) ? 'Открыть PDF' : 'Открыть файл'
-        })
-      } else {
-        link.href = mediaUrl
-      }
-      mediaList.appendChild(link)
+      const card = el('div', { className: 'venue-info-document' })
+      if (pdf) card.appendChild(el('p', { className: 'info-media-title', text: `PDF ${number}` }))
+      const preview = createInfoMediaPreview(pdf ? 'pdf' : 'image', `${title} ${number}`, loadMedia(media.url!))
+      disposables.push(preview.dispose)
+      card.appendChild(preview.element)
+      list.appendChild(card)
     })
-    sectionCard.appendChild(mediaList)
-  } else if (mediaCount > 0) {
+    sectionCard.appendChild(list)
+  } else if (resolveInfoMediaCount(section, mediaItems) > 0) {
     sectionCard.appendChild(el('p', { className: 'status', text: 'Медиа пока не удалось показать.' }))
   }
-
   return sectionCard
 }
 
@@ -812,10 +728,11 @@ function isValidVenueGuestPreviewEnvelope(
   )
 }
 
-function authenticatedPreviewMediaPath(
+function scopedInfoMediaPath(
   backendUrl: string,
   venueId: number | null,
-  mediaUrl: string
+  mediaUrl: string,
+  allowPrivate: boolean
 ): { path: string | null; blocked: boolean } {
   if (venueId == null || !Number.isSafeInteger(venueId) || venueId <= 0) {
     return { path: null, blocked: true }
@@ -830,9 +747,10 @@ function authenticatedPreviewMediaPath(
       `^/api/guest/venue/${venueId}/info-sections/\\d+/media/(?:\\d+|[a-f0-9-]{36})$`
     )
     if (media.origin !== backend.origin || !media.pathname.startsWith('/api/')) {
-      return { path: null, blocked: false }
+      return { path: null, blocked: true }
     }
-    if (!privatePreviewPath.test(media.pathname) && !publishedPreviewPath.test(media.pathname)) {
+    const expectedPath = allowPrivate ? privatePreviewPath : publishedPreviewPath
+    if (media.search || media.hash || media.username || media.password || !expectedPath.test(media.pathname)) {
       return { path: null, blocked: true }
     }
     return { path: media.pathname, blocked: false }
@@ -872,6 +790,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   if (!root) return () => undefined
 
   const readOnlyPreview = options.readOnlyPreview === true
+  let privateMedia = false
   const refs = buildVenueDom(root)
   refs.bookingButton.disabled = !venueId
   refs.questionButton.disabled = !venueId
@@ -899,7 +818,8 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   let staffOpenRequested = !readOnlyPreview && options.openStaffCall === true
   let latestStaffCall: StaffCallStatusDto | null = null
   let messageTimer: number | null = null
-  const previewMediaObjectUrls = new Set<string>()
+  let infoMediaDisposables: Array<() => void> = []
+  const clearInfoMedia = () => { infoMediaDisposables.forEach((dispose) => dispose()); infoMediaDisposables = [] }
   const staffPhotoUrls = new Set<string>()
   let staffPhotoAbort: AbortController | null = null
   const clearStaffPhotos = () => { staffPhotoAbort?.abort(); staffPhotoUrls.forEach((url) => URL.revokeObjectURL(url)); staffPhotoUrls.clear() }
@@ -964,32 +884,10 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     }
   }
 
-  const revokePreviewMediaObjectUrls = () => {
-    previewMediaObjectUrls.forEach((url) => URL.revokeObjectURL(url))
-    previewMediaObjectUrls.clear()
-  }
-
-  const loadPreviewMediaUrl = async (
-    mediaUrl: string,
-    signal: AbortSignal
-  ): Promise<string | null> => {
-    const authenticatedMedia = authenticatedPreviewMediaPath(backendUrl, venueId, mediaUrl)
-    if (authenticatedMedia.blocked) return null
-    if (!authenticatedMedia.path) {
-      return resolveInfoMediaUrl(backendUrl, mediaUrl)
-    }
-    const result = await venueGetGuestPreviewMedia(
-      backendUrl,
-      authenticatedMedia.path,
-      buildApiDeps(isDebug),
-      signal
-    )
-    if (!result.ok || disposed || signal.aborted) {
-      return null
-    }
-    const objectUrl = URL.createObjectURL(result.data.blob)
-    previewMediaObjectUrls.add(objectUrl)
-    return objectUrl
+  const loadInfoMedia = (mediaUrl: string): InfoMediaLoader => async (signal) => {
+    const target = scopedInfoMediaPath(backendUrl, venueId, mediaUrl, privateMedia)
+    if (disposed || target.blocked || !target.path) throw new Error('Media unavailable')
+    return loadInfoMediaContent(backendUrl, target.path, signal, readOnlyPreview)
   }
 
   const updateFavoriteButton = () => {
@@ -1373,9 +1271,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
   const renderPreQrInfo = (
     venue: VenueDto,
-    sections: VenueInfoSectionDto[],
-    loadMediaUrl?: InfoMediaUrlLoader
+    sections: VenueInfoSectionDto[]
   ) => {
+    clearInfoMedia()
     refs.menuBody.replaceChildren()
     itemRefs.clear()
     itemDisposables.forEach((dispose) => dispose())
@@ -1412,7 +1310,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       refs.menuBody.appendChild(el('p', { text: 'Информация пока не заполнена.' }))
     } else {
       sections.forEach((section) => {
-        refs.menuBody.appendChild(renderInfoSection(section, backendUrl, loadMediaUrl))
+        refs.menuBody.appendChild(renderInfoSection(section, loadInfoMedia, infoMediaDisposables))
       })
     }
   }
@@ -1595,6 +1493,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const renderMenu = (categories: MenuCategoryDto[]) => {
+    clearInfoMedia()
     refs.menuBody.replaceChildren()
     itemRefs.clear()
     itemDisposables.forEach((dispose) => dispose())
@@ -1805,7 +1704,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
   async function loadVenue() {
     if (disposed) return
-    revokePreviewMediaObjectUrls()
+    clearInfoMedia()
     refs.venueTitle.textContent = ''
     refs.venueLocation.textContent = ''
     refs.venueSchedule.textContent = ''
@@ -1889,13 +1788,13 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       setStatus('')
       try {
         const venue = previewResult.data.venue
+        privateMedia = previewResult.data.mode === 'PRIVATE_DRAFT'
         renderVenueInfo(venue)
         updateBookingButtonVisibility()
         renderedOrderMenuMode = false
         renderPreQrInfo(
           venue,
-          previewResult.data.infoSections,
-          (mediaUrl) => loadPreviewMediaUrl(mediaUrl, controller.signal)
+          previewResult.data.infoSections
         )
         options.onPreviewLoaded?.({
           mode: previewResult.data.mode,
@@ -2084,7 +1983,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   return () => {
     disposed = true
     clearStaffPhotos()
-    revokePreviewMediaObjectUrls()
+    clearInfoMedia()
     latestStaffCall = null
     dispatchStaffActionState()
     menuAbort?.abort()

@@ -4579,9 +4579,9 @@ Public-card media discovery is a separate frontend slice: OWNER/MANAGER see the 
 under Settings/card, STAFF has neither an entry nor a usable direct route. Test expansion without
 URL/popup/file picker/upload or automatic save, retained dirty description and Back guard, explicit
 save and return, honest close/reload warning, explicit Bot venue selection and return instructions.
-Exercise image and PDF MIME/link delivery in Guest, Published Preview and authenticated Draft,
+Exercise image/PDF MIME delivery and passive inline pages in Guest, Published Preview and authenticated Draft,
 plus private foreign-media rejection and preview return. Browser fixtures establish rendering and
-transport contracts only, not actual Telegram/PDF reader behavior. Run build/TypeScript, focused
+transport contracts only, not actual Telegram WebView behavior. Run build/TypeScript, focused
 `venue card media` plus existing preview cases, then full Playwright. A read-only audit of the
 legacy path may use GuestVenueRoutesTest, VenueGuestPreviewRoutesTest (including private saved
 state) and the Bot description/media selectors; no backend runtime is changed by the guide.
@@ -4763,3 +4763,77 @@ build, focused and full Playwright. XML must show actual expected methods with z
 failures (a non-void JUnit method can disappear without a skip). CI retains class selectors/XML
 minima and all existing gates. Real iPhone, live R2, production and future authorized staging
 resource/rollout acceptance remain separate and open. Structural success is not antivirus proof.
+
+
+## HT-VENUE-INFO-PDF-INLINE-UX-01 — passive pages and visible upload results
+
+Frontend-only validation: standalone TypeScript, production build, focused Playwright
+`PDF inline|direct venue info media|venue card media`, existing Guest/Preview regressions and full
+Mini App smoke. No backend, migration, R2 or isolated parser-worker change. Existing backend PDF
+admission/security gates are preserved; browser tests are not substitutes for them.
+
+Use real deterministic classic-xref PDFs with painted pages and text, not a MIME-only fake header.
+Assert actual canvas pixels change on page navigation; three documents keep independent counters;
+1/200-page documents render only a selected page. Cover 320/390 px and landscape, one/multiple
+uploads with delayed server responses, immediate saved-byte cards without Guest Preview, stable
+open section/scroll/card identity, progress/success/FAILED/UNKNOWN and unchanged same-key retry.
+Exercise 403/404/503, malformed PDF, 10 MiB/200-page limits, worker failure/recovery, foreign/private
+path and provider-URL refusal, no normal blob link/popup, and no execution of legacy PDF actions.
+Download fallback rechecks access and refuses a now-hidden document. Check worker termination,
+zero retained canvas pixels/object URLs after exit/pagehide, in-flight cancellation and repeated
+open/close. JPEG/PNG-only pages must not load the PDF renderer. Scroll lazy media into view before
+asserting decoded pixels. Full-screen browser screenshots are layout evidence, not iPhone proof.
+
+P2 regressions (`HT-VENUE-INFO-PDF-INLINE-UX-P2-FIX-01`, selector `PDF inline P2`) run against
+the production bundle in Chromium and WebKit. Inject three cancellations **after FontFace
+registration**, worker error, a silent dead worker and a rendering failure after SVG-filter
+creation. Count document-owned fonts/filters, not only workers/canvases/URLs; also cover normal
+completion, page change and in-flight route exit. Keep a second real PDF and an app FontFace
+registered to prove ownership isolation. Check `document.activeElement` after section/attachment
+hide/show, refresh and replacement; user focus movement (including subsequent blur) must win.
+Removed/disabled actions and a closed editor cannot receive restored focus; measure scroll caused
+by focus separately from normal layout/scroll anchoring when status copy changes.
+
+Optional production/WebKit local gate (same synthetic API routes, no staging calls):
+
+```bash
+miniapp/node_modules/.bin/tsc -p miniapp/tsconfig.json --noEmit
+VITE_BACKEND_PUBLIC_URL=http://127.0.0.1:5174 npm --prefix miniapp run build
+MINIAPP_E2E_PORT=5174 MINIAPP_E2E_PRODUCTION=true MINIAPP_E2E_WEBKIT=true npm --prefix miniapp run e2e:smoke -- --grep 'PDF inline|direct venue info media|venue card media' --workers=1
+MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
+
+The WebKit project is opt-in; default full smoke remains Chromium. Use its matching Playwright
+browser revision. Pin renderer and worker together, check emitted local assets in production as
+well as Vite dev, and record browser/version. Safari ≥16.4 is the pinned legacy build target, not
+a blanket Telegram WebView support guarantee. Older/unsupported clients must show an honest error
+and explicit fallback. Device memory pressure, app suspension, native file providers and iOS
+download dialogs require the manual gate below.
+
+### Manual iPhone scenario (separate staging authorization)
+
+1. Record exact deployed SHA, iPhone model, iOS/Telegram versions and venue publication mode.
+   OWNER and MANAGER each open Settings → Public Card → Photos/PDF; keep a text draft unsaved.
+2. Pick one ordinary two-page PDF from Files. Observe `Файл 1 из 1` and server-wait progress, then
+   `PDF загружен`, a saved PDF card and first-page content in the same open section. Text draft
+   and scroll stay intact. No Guest Preview or separate publish is required for confirmation.
+3. Select JPEG + PNG + PDF together, then put three PDFs in one section. Observe numbered
+   sequential progress, separate success/error rows and each saved card. Cancel the native picker;
+   retry a lost response through the existing same-key flow, without duplicate attachments.
+4. Open Private Draft Preview and then an already Published venue's Preview and normal Guest card.
+   Scroll to each PDF, inspect page 1, switch 1 → 2 → 1 independently, check text/image quality and
+   counters. JPEG/PNG still display. No blob navigation, new window or iOS dialog during viewing.
+5. Rotate portrait/landscape, scroll away/back, background Telegram, return, close/reopen the Mini
+   App three times. Check responsive controls, restored viewing, no blank/stale pages, freeze or
+   reload from memory pressure. A fresh screen may start at page 1; selected page survives suspension.
+6. Hide a document/section from a second authorized session and request its next page/reopen it:
+   expect access denial, no stale cached download. Turn connectivity off and retry; a visible error
+   must replace the pending state. Exercise a known malformed legacy fixture only in the authorized
+   test venue: Retry/download guidance, no blank screen or script/action execution.
+7. Only for an available document whose inline rendering fails, explicitly tap Download; verify
+   fresh access, useful file name and understandable iOS download behavior. Normal viewing must
+   never require this fallback. Verify legacy Telegram media still displays through platform routes.
+
+Record PASS/FAIL/NOT_PROVABLE per step. Real iPhone, live storage and staging acceptance remain
+open until executed; local WebKit is not Telegram on iPhone. No deployment is authorized by this
+scenario or by local READY_FOR_REVIEW.

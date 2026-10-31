@@ -1,5 +1,99 @@
 # Project Status
 
+## HT-VENUE-INFO-PDF-INLINE-UX-P2-FIX-01 — resource cleanup and focus (2026-10-31)
+
+**PDF_INLINE_UX_P2_FIXED_READY_FOR_TARGETED_REVIEW / LOCAL_ONLY / NO_PUBLICATION_AUTHORIZATION**.
+Scope: exactly the two P2 findings from `HT-VENUE-INFO-PDF-INLINE-UX-REVIEW-01`.
+Identity PASS: Hookah_Tootah / hookah_bot_ANT; primary physical root and Git common dir match
+the repo contract, origin fetch/push `github.com/koteev-m/hookah_bot`, instruction origins checked.
+Expected/actual HEAD `de2ae76c61a83503135145113c2de9e50d06a13b`; sole direct parent
+`797d6025a4ba48a3a5b36bbb4e7eba717e6fa137`; branch `codex/ht-venue-media-r2-pdf-worker-01`.
+EXPECTED_BASE NOT_SUPPLIED. Published main is context only; no fetch or Git repair.
+
+P2 resources: public PDF.js `ownerDocument` context tracks each render's FontFace registrations
+and SVG-filter DOM. Cancel stops rendering, starts destroy once, allows 250 ms acknowledgement,
+then terminates the worker and clears owned local resources even if it died. Closed ownership
+blocks late registration/re-attachment. No global font clearing, private PDF.js internals,
+concurrent document cleanup, version change or main-thread parser fallback. Existing limits stay.
+P2 focus: restore logical hide/show/refresh/replacement action with `preventScroll`; cancel the
+pending restoration on user focus/pointer/keyboard activity. Disabled/removed/hidden targets and
+closed/disposed editors are excluded. Upload UNKNOWN/FAILED/idempotency behavior is unchanged.
+
+Production RED: 10 expected failures / 6 passing negative controls, Chromium + WebKit; baseline
+build matches all 60 prior build hashes. Both browsers retain 1/2/3 fonts after three cancellations,
+then 4/5 after worker error/dead worker. Production GREEN: 16/16; all owned font/filter counts zero,
+second real PDF/app font and filter identities preserved. Covers normal render, repeated abort,
+forced worker/render errors, page change, in-flight route exit, focus and user-movement guards.
+Final TypeScript/build PASS; focused production 96/96 (48 Chromium + 48 WebKit); full Chromium
+smoke 498/498. Zero skipped/flaky/retries/errors in final JSON. All 162 tested input/build hashes
+match. Diff/whitespace/docs sanity PASS. Nonblocking >500 kB chunk warning remains; PDF stays lazy.
+
+Evidence: `/private/tmp/HT-VENUE-INFO-PDF-INLINE-UX-P2-FIX-01/`: `results.json`, `red-final.json`,
+`green-final.json`, browser-specific RED/GREEN font-count JSON, `focused-final.json`,
+`smoke-final.json`, matching logs, `tested-inputs.json`, baseline snapshots and identity record.
+Earlier diagnostic logs are superseded by final RED/GREEN. This task changes seven existing task
+files (renderer, editor, fixture/tests, two canonical docs and this checkpoint); the complete
+15-file PDF Inline UX work is retained. Package/lock, backend, SQL, server/Vite/Playwright configs
+and security/storage contracts are unchanged from the baseline. `scripts/dev/` untouched.
+No unfinished operation, commit/push/PR/merge/SSH/deploy or live R2/DB action. Real iPhone Telegram
+memory pressure, native picker/download and suspension acceptance remain open; WebKit is not
+device proof. Staging smoke is needed before release under separate authorization.
+Next: targeted review of these two fixes and their evidence; stop without publication.
+
+## HT-VENUE-INFO-PDF-INLINE-UX-01 — inline PDF and upload feedback (2026-10-31)
+
+**PDF_INLINE_UX_LOCAL_READY_FOR_REVIEW / LOCAL_ONLY / NO_RELEASE_AUTHORIZATION**.
+Goal: fix weak JPEG/PNG/PDF upload feedback and blob PDF opening reported on iPhone after staging.
+Identity PASS: Hookah_Tootah / hookah_bot_ANT / HT-VENUE-INFO-PDF-INLINE-UX-01;
+physical root `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, Git dir/common/index belong to
+that registered checkout; origin `github.com/koteev-m/hookah_bot`, instruction origins and redirects
+verified. Start/current HEAD/base `de2ae76c61a83503135145113c2de9e50d06a13b`, branch
+`codex/ht-venue-media-r2-pdf-worker-01`. EXPECTED_HEAD/BASE/branch/parent NOT_SUPPLIED.
+Owner-supplied remote release `4d894b435f52915a8370c76a14877daf0cea062d` is context only,
+not a local HEAD constraint or independently reverified remote/deployed state. No fetch/ref repair.
+Initial status was only `?? scripts/dev/`; that area was not inspected or changed.
+
+Editor keeps section/attachment DOM, visible N/M progress, persistent confirmed per-file success,
+and inline saved-byte cards. UNKNOWN/idempotency/explicit FAILED retry contracts remain intact.
+Guest, Published Preview and Private Draft share passive image/PDF rendering with separate scoped
+public/private reads; each PDF has its own first page and page counter/navigation. PDF.js 5.4.624
+legacy and matching local module worker are lazy loaded, with local fonts/CMaps/WASM and license;
+TypeScript 5.9.3 supports its declarations. No native PDF embed, content JavaScript/actions,
+annotation/form layer, CDN or ordinary PDF blob navigation. One render queue, streamed 10 MiB cap,
+200-page cap, bounded canvases/images, 20 s deadline, worker termination and offscreen/exit cleanup.
+Explicit rendering-error download rechecks access. Fix also reserves status/navigation height so
+image completion cannot move attachment controls (existing settings `:empty` rule was the conflict).
+
+Final checks: standalone TypeScript PASS; production build PASS (nonblocking >500 kB chunk
+advisory; renderer is a separate lazy chunk); production Chromium + WebKit 80/80 PASS; full
+Chromium Mini App smoke 490/490 PASS, zero skips/failures. Includes 21 new scenarios, real painted
+PDF pages/text, three independent PDFs, mobile 320/390 and landscape, editor progress/success/error,
+UNKNOWN/FAILED retry, saved-byte preview, malformed/hidden/unavailable files, byte/page/worker
+limits and recovery, active legacy PDF non-execution, no normal blob navigation, JPEG/PNG and
+worker/canvas/object-URL cleanup across exit/reopen/pagehide. Mobile screenshots inspected.
+Test fixture corrections: use actual mocked Telegram Back callbacks in production; observe original
+Blob bytes for WebKit retry checks; distinguish Vite's URL module from the real worker in failure
+injection; touch controls use taps on the iPhone WebKit project. All old scenarios still pass.
+Docs sanity, changed/new-file whitespace and `git diff --check` PASS. Final source/build hashes
+match the tested manifest. Backend tests were not rerun: backend, SQL and server-worker unchanged.
+
+Evidence: `/private/tmp/HT-VENUE-INFO-PDF-INLINE-UX-01/`: `typescript.log`, `build.log`,
+`production-final.log` (80), `smoke-final.log` (490), corresponding screenshot directories,
+`tested-inputs.json`, `results.json` and `final-status.txt`. Earlier diagnostic failures remain in
+separate logs; final logs supersede them. Commands/manual device scenario are in
+`docs/TESTING_QA_SMOKE_STRATEGY.md` → this task; passive-PDF policy in `MEDIA_STORAGE_UPLOAD.md`.
+Changed set: 15 task files (11 tracked edits + 4 new), plus pre-existing untracked scripts/dev/.
+No unfinished test process, stage/commit/push/PR/merge/deploy/SSH, live R2/DB/server mutation,
+new migration/bucket/schema/service, or Google journal write. Local npm/WebKit dependencies and
+ignored build/test artifacts were created for these checks.
+
+Limits/open evidence: Safari ≥16.4 is the pinned legacy build target, not real Telegram iPhone
+acceptance; browser canvas work has application bounds, not an OS memory guarantee. Full device
+memory-pressure/file-provider/suspension/download behavior and real staging are unverified.
+Staging smoke is needed before release because runtime changed; it is not authorized here.
+Next: review this local diff, then separately authorize staging/device verification using the
+recorded iPhone scenario. Stop after the local report; no publication or CI monitoring follows.
+
 ## HT-VENUE-MEDIA-PR236-CI-FAILURES-FIX-01 — local CI corrections (2026-10-31)
 
 **LOCAL_CI_FAILURES_FIXED_READY_FOR_REVIEW / NO_COMMIT_OR_PUSH_AUTHORIZATION**.
