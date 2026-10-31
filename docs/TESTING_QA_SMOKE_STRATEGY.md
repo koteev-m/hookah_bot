@@ -3804,8 +3804,9 @@ observations and receipts remain unchanged. The exact release contract now has 1
 11 non-Compose jobs, including all eight `backend` dependencies, are unchanged. `push` and
 `pull_request` triggers and `contents: read` remain unchanged.
 
-Three independent GitHub-hosted `ubuntu-latest` runners execute `compose-cutover`,
-`compose-prerequisite` and `compose-runtime` concurrently. Each retains the 60-minute job timeout,
+Three independent GitHub-hosted runners execute `compose-cutover`, `compose-prerequisite`
+and `compose-runtime` concurrently. Runtime is pinned to `ubuntu-26.04` for explicit CI #656
+compatibility coverage; the other two use `ubuntu-latest`. Each retains the 60-minute job timeout,
 full checkout history, Java 21, PostgreSQL17/18 and libpq18, SSH/Caddy preparation, endpoint guard
 self-test and tool-version recording. Setup is repeated deliberately: no artifact transfer, shared
 server, shared filesystem or cross-job state is introduced. Fixtures allocate their own temporary
@@ -3813,6 +3814,15 @@ roots and owned resources; endpoint confinement, signals, timeouts and cleanup c
 Process-sensitive checks remain serial within each worker. Runtime and closure evidence summaries
 stay with their producing steps, in the original order. Compose `.env` creation stays directly
 before config validation in `compose-cutover`.
+
+The ordinary lifecycle retains a closed first-failure record in its existing `result.json`:
+stage, consumer, reason category, exit/timeout, supervisor exit and children (`REAPED` or
+`UNKNOWN`). Only the existing identity/hash-verified supervisor result can attest child
+completion. Missing or malformed evidence stays UNKNOWN; later upload/cleanup errors cannot
+replace the first worker failure. No raw child output, exception text or traceback is published.
+`cleanup_quiescent` remains subject to the existing independent cleanup proof and a nonzero
+worker never becomes PASS. Portable ordinary regressions cover this pipeline; the hosted
+lifecycle also verifies it using its existing deliberate metadata refusal, without a retry.
 
 `compose` retains its original check name and directly needs all three workers. Both the job and its
 single local aggregation step use `always()`. Exact dependency names, `result=success`, and the

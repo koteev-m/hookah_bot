@@ -1,5 +1,31 @@
 # Project Status
 
+## HT-CI656-COMPOSE-RUNTIME-ROOT-FIX — ordinary first-failure coverage (2026-11-01)
+
+Identity PASS: Hookah_Tootah / hookah_bot_ANT, expected origin and primary Git common dir.
+Isolated worktree `/private/tmp/HT-CI656-COMPOSE-RUNTIME-ROOT-FIX/worktree`, branch
+`codex/ht-ci656-compose-runtime-root-fix`, exact starting/current remote main
+`4d894b435f52915a8370c76a14877daf0cea062d`. Primary feature HEAD remains
+`eab6a22025b5b532e852a92414d2d9bbcd451f57`; PDF Inline UX is excluded.
+
+Original failure cause UNKNOWN: CI #656 attempt 2 stopped after approved handoff and before
+first ordinary completion; private worker/supervisor records are absent from retained CI
+evidence (no artifacts). #657 at the same feature SHA completed both ordinary deployments
+with cleanup true. Runner/tool-version differences are correlation, not causality.
+Safe diagnostic code is narrowly ported from `2771cbcd5394cf8e52bfd58085034e5fbaec2f49`;
+upload failure no longer masks the worker record; the integration CLI retains exit 1 without
+exception text/traceback. Operational commands, supervisor, admission, ownership, deadlines,
+replay denial and cleanup rules are unchanged. The hosted negative case must verify actual
+worker-to-supervisor diagnostic propagation. Runtime alone is pinned to Ubuntu 26.04.
+
+Evidence: task-local `evidence/` beside the worktree (original private CI logs and local test
+results). Baseline ordinary 23/23 PASS; updated ordinary 30/30, binding 19/19 and release-CI
+contract 18/18 PASS; Python syntax and diff-check PASS. Exact published-SHA CI remains
+required before a verified verdict. Authorization: at most two commits/non-force publications,
+existing CI only; no manual reruns, PR #237/main mutation, merge, SSH or staging/production deploy.
+Next: complete local checks, publish the first commit, inspect its normal CI and only make a
+second correction if that run establishes a concrete cause. No release readiness claimed.
+
 ## HT-VENUE-MEDIA-PR236-CI-FAILURES-FIX-01 — local CI corrections (2026-10-31)
 
 **LOCAL_CI_FAILURES_FIXED_READY_FOR_REVIEW / NO_COMMIT_OR_PUSH_AUTHORIZATION**.
