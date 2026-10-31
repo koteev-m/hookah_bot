@@ -1,6 +1,6 @@
 # Venue Media Storage And Upload
 
-Дата актуализации: 2026-10-30 (HT-VENUE-PDF-ISOLATED-WORKER-01; local isolated PDF validation).
+Дата актуализации: 2026-10-31 (HT-VENUE-INFO-PDF-INLINE-UX-01; local inline-page UX, staging acceptance pending).
 
 Статус: **CANONICAL SPEC / STAFF PHOTOS AND VENUE INFO MEDIA LOCAL IMPLEMENTATION / LIVE ACCEPTANCE OPEN**.
 
@@ -13,6 +13,61 @@ This document is the canonical source of truth for venue-owned media storage, up
 lifecycle and Bot/Mini App compatibility. It covers the foundation needed by public-card
 info-section media and the flat Photo/PDF menu. Structured menu-item media and staff profile photos
 remain separate product slices; staff-photo local implementation is specified below.
+
+## Inline pages — HT-VENUE-INFO-PDF-INLINE-UX-01
+
+Local frontend change; no backend/parser-worker, PostgreSQL V128, bucket, storage schema or
+service change. Existing server validation, idempotency, authorization and delivery checks remain.
+This section supersedes the previous blanket prohibition on automatic PDF embedding **only for
+passive page rasterization**. PDF JavaScript, actions, forms, annotations and interactive content
+must not execute; native PDF iframe/object/embed viewers are not used.
+
+- OWNER/MANAGER: sequential uploads show `Файл N из M`, indeterminate progress while waiting for
+  the server, and persistent per-file `PDF загружен` / `Изображение загружено` only after confirmed
+  success. READY cards show type, order, saved/visibility status and the saved server bytes inline.
+  Section/card DOM survives list updates; no forced scrolling, section collapse or Guest Preview
+  transition. UNKNOWN and FAILED retain their existing same-key / explicit-new-operation rules.
+  P2 follow-up: logical action focus survives hide/show, refresh and replacement with `preventScroll`.
+  User focus/pointer/keyboard movement cancels restoration; disabled, removed and hidden controls
+  are never restoration targets.
+- Guest, Published Preview and Private Draft share the page component. Each PDF automatically
+  renders its first visible page and has independent previous/next controls with `1 из N`.
+  JPEG/PNG remain images. Offscreen media load on approach and release decoded resources when
+  leaving the viewport margin; returning reloads the selected page through the guarded endpoint.
+- `pdfjs-dist` **5.4.624 legacy**, pinned with matching local module worker; lazy renderer chunk,
+  local CMaps, fonts and WASM assets. No CDN or provider URL. This version keeps Node 20 CI
+  compatibility; TypeScript 5.9.3 is needed for its typed-array declarations. Vite preserves names
+  as required by PDF.js. See [versioned build targets](https://github.com/mozilla/pdf.js/blob/v5.4.624/gulpfile.mjs)
+  (Safari ≥16.4 target) and [official API](https://mozilla.github.io/pdf.js/api/draft/module-pdfjsLib.html).
+  The build target is not proof for every iOS/Telegram version; actual iPhone acceptance stays open.
+- Only scoped same-backend platform media paths are read. Published Guest remains anonymous;
+  Published Preview uses the same public path with the existing session; Private Draft uses only
+  the private path and session. Editor reads its authenticated management endpoint (including
+  hidden own-venue attachments). No raw keys, file IDs or R2 URLs enter the UI.
+- One shared fetch/decode/render queue; response streaming capped at 10 MiB even for legacy files;
+  1–200 pages, one selected page per visible document, ≤1.5 MP / 2048 px output canvas, ≤8 MP
+  decoded PDF image and ≤8 MP combined temporary canvases per task. No all-page render/cache.
+  A 20 s task deadline aborts transport and terminates the worker; explicit worker ports prevent
+  main-thread parser fallback. Canvas painting still uses the browser thread; these application
+  limits are not an OS memory/CPU guarantee for arbitrary legacy documents.
+- `isEvalSupported=false`, XFA disabled, `AnnotationMode.DISABLE`, no scripting manager, text/link
+  or form layers. `stopAtErrors` refuses unsupported rendering, including oversized PDF images.
+  Normal viewing never creates a PDF blob link or popup. On rendering failure, show an error,
+  Retry and an explicit download fallback with a **fresh access/visibility check**; iOS may show
+  a system dialog for that requested download. Access denial offers no cached-file download.
+- Page change, offscreen transition, screen dispose, pagehide and document visibility loss cancel
+  tasks and clear canvases/image URLs; each rendered page destroys its PDF document and worker.
+  P2 follow-up: cancellation stops rendering before destroy, with at most 250 ms for worker
+  acknowledgement before forced termination. A per-render public `ownerDocument` context owns
+  FontFace registrations and SVG-filter DOM, so local cleanup also works with a dead worker.
+  Its closed state prevents late registration/re-attachment; other PDFs/app fonts are untouched.
+  No `PDFDocumentProxy.cleanup()` is called during rendering and destroy is started only once.
+  Download URLs expire after 30 s and are revoked on exit. Reopening performs fresh reads; there
+  is no durable browser cache of private bytes. Downloaded copies cannot be revoked.
+
+Local browser fixtures do not establish real Telegram WebView/R2/staging behavior, antivirus
+safety or production readiness. Manual iPhone acceptance is specified in
+`TESTING_QA_SMOKE_STRATEGY.md` under this task ID.
 
 ## PDF isolation — HT-VENUE-PDF-ISOLATED-WORKER-01
 
@@ -121,7 +176,8 @@ a venue. Photo-menu remains informational, outside the structured order menu.
 - Guest/Published Preview retain lifecycle/subscription + section/attachment visibility checks.
   Draft Preview retains authenticated OWNER/MANAGER scope even before publication. Existing proxy
   paths accept opaque UUIDs for new objects and numeric legacy references. Visibility and access
-  are rechecked after storage reads. Images/PDF keep their MIME; PDFs open only by explicit action.
+  are rechecked after storage reads. Images/PDF keep their MIME; PDFs use passive inline pages
+  under the contract above.
 - Bot keeps legacy Telegram `file_id` sending. New R2 files are sent as bounded documents with
   generated JPEG/PNG/PDF filenames after public scope recheck; failure asks to open the Mini App
   or retry explicitly. No object URL, bytes or credentials enter the outbox/database payload.
@@ -175,8 +231,9 @@ It uses existing [OpenPDF 1.3.39 PdfReader](https://github.com/LibrePDF/OpenPDF/
 1–200 pages, bounded object IDs/xref size. Compressed object/xref streams, repaired/truncated
 files, JavaScript/actions, links, forms, embedded files and active media are rejected; users should
 export a flat PDF. This conservative subset may reject otherwise valid modern PDFs. Structural
-validation is not antivirus certification. PDFs are never automatically embedded. Signature,
-MIME and byte limits reject executable/HTML/archive masquerades. No new dependency is added.
+validation is not antivirus certification. Only passive PDF page rendering is permitted; active
+PDF embedding/execution is forbidden. Signature, MIME and byte limits reject executable/HTML/archive masquerades. The inline renderer adds no
+backend dependency or validation bypass.
 
 Upload starts: 5 actor+venue/minute and 120 global/10 minutes; two general in-flight body/image/
 upload slots, plus at most one PDF-worker wait (also at most two per actor), 30-second absolute body deadline, bounded storage
@@ -524,14 +581,14 @@ file links are valid for at least one hour, and original filename/MIME may not s
   `/api/guest/venue/{venueId}/info-sections/{sectionId}/media/{mediaId}`. It does not expose
   `telegram_file_id`.
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/guest/GuestVenueRoutes.kt`
-  registers that media URL without Bearer authentication so browser `<img>` and PDF links can load
+  registers that media URL without Bearer authentication so Guest image/PDF byte reads can load
   it. The route still checks exact Guest venue/subscription availability, venue-to-section
   ownership, section visibility and media-to-section ownership before asking Telegram for bytes.
 - The current proxy uses Telegram's returned image content type when it is an image; otherwise it
   falls back to JPEG. For a database media type of PDF it forces `application/pdf`. This is response
   typing, not upload-time content validation.
-- `miniapp/src/screens/guestVenue.ts` lazy-loads images through the platform URL and opens PDFs in a
-  new tab. It never constructs a Telegram file URL.
+- `miniapp/src/screens/guestVenue.ts` loads images and passive PDF pages through scoped platform URLs.
+  It never constructs a Telegram file URL or opens a PDF tab for normal viewing.
 - `backend/app/src/main/kotlin/com/hookah/platform/backend/miniapp/venue/VenueGuestPreviewRoutes.kt`
   reuses the exact Guest read model. Published Preview therefore uses the same platform media URLs
   and Guest availability rules.
@@ -755,9 +812,9 @@ object URLs may be considered later only if visibility/lifecycle revocation rema
 slice should prefer the guarded backend URL for parity with the working Guest path.
 
 Responses use stored normalized MIME, `X-Content-Type-Options: nosniff`, a safe generated
-`Content-Disposition` filename and bounded streaming/back-pressure. PDFs are opened only after an
-explicit Guest action and are never embedded in the main page. No provider header, source ref or
-secret may reach the response, redirect, error or log.
+`Content-Disposition` filename and bounded streaming/back-pressure. Passive PDF pages may appear
+inline under the bounded renderer contract above; active PDF content must not be embedded or run.
+No provider header, source ref or secret may reach the response, redirect, error or log.
 
 The old numeric route may remain as a temporary compatibility adapter during rollout, but new DTOs
 use `publicId`. It must call the same delivery service and keep the same guards.
@@ -866,9 +923,9 @@ especially while legacy delivery depends on Telegram's hosted Bot API.
 
 No antivirus/PDF scanner exists. It is not a first-MVP release blocker only while upload is limited
 to authenticated own-venue OWNER/MANAGER, formats remain JPEG/PNG/PDF, strict content/size parsing
-passes, PDF is never auto-embedded, delivery uses `nosniff` and safe filename, and the limitation is
-disclosed: structural validation does not prove a PDF malware-free. Scanning becomes mandatory
-before Guest/Staff upload, arbitrary documents, automatic PDF embedding/processing or an enterprise
+passes, automatic PDF display is limited to passive pages under the contract above, delivery uses
+`nosniff` and safe filename, and the limitation is disclosed: structural validation does not prove a PDF malware-free. Scanning becomes mandatory
+before Guest/Staff upload, arbitrary documents, active PDF embedding/processing or an enterprise
 policy that requires it. A scanner can later gate `UPLOADING -> READY` without changing the model.
 
 Use existing `audit_log` for upload started/ready/failed, replace, attachment hide/show, section
@@ -1043,7 +1100,7 @@ The future runtime slice requires green Actions, then:
 
 1. health, DB health and Mini App static checks;
 2. OWNER image upload; MANAGER PDF upload; STAFF/foreign direct denial;
-3. Guest image and explicit PDF open;
+3. Guest JPEG/PNG and inline PDF first page/navigation, plus explicit error/download fallback;
 4. Published exact Guest parity;
 5. Draft authenticated private delivery and Staff/foreign/public Guest denials;
 6. Bot display of one legacy Telegram and one new-source asset;
