@@ -3824,6 +3824,14 @@ replace the first worker failure. No raw child output, exception text or traceba
 worker never becomes PASS. Portable ordinary regressions cover this pipeline; the hosted
 lifecycle also verifies it using its existing deliberate metadata refusal, without a retry.
 
+Runtime fixture image builds explicitly use `--provenance=false`, matching the canonical
+release-image export contract. With a containerd image store, default BuildKit provenance
+can make the image identity an OCI index containing the platform manifest and an attestation.
+The existing ordinary archive verifier requires a single platform manifest and deliberately
+rejects that nested index. Preserve this rejection, exact image/tag/labels/layer checks and
+all operational admission rules; fix the fixture producer instead. Portable regressions cover
+the producer option, canonical archive success, nested-index refusal and wrong-image refusal.
+
 `compose` retains its original check name and directly needs all three workers. Both the job and its
 single local aggregation step use `always()`. Exact dependency names, `result=success`, and the
 string output `verified=true` from a final default-success-only worker step are mandatory. Missing,

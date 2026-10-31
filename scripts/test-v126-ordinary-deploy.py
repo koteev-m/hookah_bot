@@ -245,6 +245,39 @@ class OrdinaryTests(unittest.TestCase):
             require_worker_success(0, False, bindings, self.target, identity, self.target)
         require_worker_success(0, True, bindings, self.target, identity, self.target)
 
+    def test_real_archive_guard_rejects_nested_index_without_weakening_identity(self):
+        archive = ordinary.load_module(ROOT / 'scripts/docker-save-archive.py', 'ordinary_archive_regression')
+        path = self.target / 'image.tar'
+        image_id, _ = archive.build_fixture(path, 'valid', tag=IMAGE, revision='1' * 40, source=ordinary.SOURCE)
+        canonical = path.read_bytes()
+        with archive.tarfile.open(fileobj=io.BytesIO(canonical)) as source:
+            entries = [(m.name, source.extractfile(m).read(), None) for m in source.getmembers()]
+        index = json.loads(dict((name, raw) for name, raw, _ in entries)['index.json'])
+        # BuildKit's default provenance changes the top image identity from a
+        # platform manifest to an index. The operational verifier must refuse it.
+        nested = archive.canonical_json(dict(schemaVersion=2, mediaType='application/vnd.oci.image.index.v1+json',
+            manifests=[index['manifests'][0], dict(digest='sha256:' + 'f' * 64, size=1,
+                       annotations={'vnd.docker.reference.type': 'attestation-manifest'})]))
+        nested_id = archive.sha256_bytes(nested)
+        index['manifests'] = [dict(digest=nested_id, size=len(nested), mediaType='application/vnd.oci.image.index.v1+json')]
+        entries = [(name, archive.canonical_json(index) if name == 'index.json' else raw, kind)
+                   for name, raw, kind in entries]
+        entries.append(('blobs/sha256/' + nested_id.removeprefix('sha256:'), nested, None))
+        for raw, expected_id, accepted in [(canonical, image_id, True),
+                (archive.fixture_tar(entries), nested_id, False), (canonical, 'sha256:' + 'e' * 64, False)]:
+            with self.subTest(accepted=accepted, image_id=expected_id), tempfile.TemporaryFile() as saved:
+                saved.write(raw); saved.flush(); os.fchmod(saved.fileno(), 0o400)
+                def verify():
+                    return ordinary.shell_consumer(ROOT / 'scripts/v126-cutover.sh',
+                        'verify_saved_image_archive_fd "$1" "$2" "$3"', [saved.fileno(), IMAGE, expected_id],
+                        pass_fds=(saved.fileno(),))
+                if accepted:
+                    self.assertEqual(verify().strip().decode(), ordinary.sha(raw))
+                else:
+                    with self.assertRaises(ordinary.Refused) as caught:
+                        verify()
+                    self.assertEqual(caught.exception.ordinary_failure['exit_code'], 1)
+
     def write_start(self, identity, operation):
         path = self.target / (operation + '.start.json')
         ordinary.create(path, ordinary.canonical(dict(identity=identity)))
