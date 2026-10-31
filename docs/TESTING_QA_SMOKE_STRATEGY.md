@@ -4524,6 +4524,42 @@ survival is claimed. Final report delivery must pass its own exact12-job CI and 
 reviewed report blobs; implementation-run success is not inherited by a later commit.
 
 
+HT-CI656-FIRST-FAILURE-REPRO-01 adds bounded first-failure observation to the existing
+ordinary worker/runtime fixtures. `V126_ORDINARY_DIAGNOSTIC` carries closed stage,
+consumer and reason enums, nullable consumer exit/timeout, and UNKNOWN child completion.
+Only the existing hash-bound supervisor result can supply REAPED and supervisor exit;
+this diagnostic never authorizes replay, retirement, cleanup or success. The first
+integration failure survives subsequent cleanup failures. Private captures remain private.
+Build diagnostics redact the full stream before selecting the first Gradle error block,
+within the existing 4 KiB JSON excerpt bound; hashes/byte counts still identify the full
+stream. HT-CI656-SANITIZER-HARDENING-03 makes public excerpts explicitly
+`excerpt_format=safe-diagnostic-summary`: they contain a closed vocabulary of observed
+error/progress markers, redaction placeholders, and only bounded `exit`/closed `status`
+fields from fully parsed JSON or Python literal structures. Free-form messages, keys,
+dependency coordinates, credentials, URLs and paths are not copied to public output.
+Parsing is limited to 64 KiB per document, eight levels and 256 entries per container;
+malformed/ambiguous input contributes only fixed indicators or a withheld placeholder.
+No partial scalar parse or guessed path boundary is used. `truncated` also marks withheld
+unclassified fragments or nesting/entry-limit omissions; short recognized summaries
+without excerpt elision remain untruncated. This is a summary, not a verbatim cleaned log.
+Closed `reason_codes` retain UNRESOLVED_REFERENCE, ENOSPC and CONNECTION_RESET independently
+of excerpt selection. Network/metadata categories and reason codes are observed text
+indicators, not root-cause verdicts; untrusted text can imitate them. Novel errors may
+remain UNKNOWN and require separately authorized private evidence. Failed ordinary fixture builds
+include this same safe build record in their existing result summary.
+HT-CI656-BOUNDED-METADATA-SCAN-05 replaces repeated POM/metadata suffix scans with
+two bounded-token passes per line (O(n), constant auxiliary state for this indicator).
+Its regression compares median CPU scaling on 16–256 KiB inputs in a subprocess
+with a protective 60-second deadline; it imposes no fixed per-input speed threshold
+and changes no operational deadline. Public summaries and excerpt selection are unchanged.
+Focused checks: `python3 -B scripts/test-v126-ordinary-deploy.py`,
+`python3 -B scripts/test-v126-linux-runtime.py --diagnostics-self-test`,
+`python3 -B scripts/test-v126-bindings.py` and `python3 -B scripts/test-v126-release-ci.py`.
+Portable/bootstrap/loopback success cannot qualify the disposable hosted Linux lifecycle.
+An attempt-2 repro requires verified Ubuntu 26.04.1, Docker 29.4.2 and Compose 5.1.3,
+plus the existing root/disposable-host/endpoint admission; partial version matches are
+REPRO_BLOCKED. Do not use an existing daemon or relax these gates to obtain a repro.
+
 ### HT-QR-01 legacy genesis validation
 
 The existing Policy B CI entrypoints additionally run `test-v126-legacy-genesis.py`
