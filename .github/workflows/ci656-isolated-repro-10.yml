@@ -1,0 +1,80 @@
+name: HT CI656 tool version repro 10
+
+'on':
+  create:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    if: >-
+      github.event_name == 'create' &&
+      github.repository == 'koteev-m/hookah_bot' &&
+      github.event.ref_type == 'branch' &&
+      github.event.ref == 'codex/ht-ci656-tool-version-diag-10' &&
+      github.ref == 'refs/heads/codex/ht-ci656-tool-version-diag-10' &&
+      github.run_attempt == '1'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      REPRO_EVENT_NAME: ${{ github.event_name }}
+      REPRO_EVENT_SHA: ${{ github.sha }}
+      REPRO_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      REPRO_REF: ${{ github.ref }}
+      REPRO_EVENT_REF: ${{ github.event.ref }}
+      REPRO_REF_TYPE: ${{ github.event.ref_type }}
+      REPRO_REPOSITORY: ${{ github.repository }}
+      REPRO_RUN_ATTEMPT: ${{ github.run_attempt }}
+      REPRO_RUN_ID: ${{ github.run_id }}
+      REPRO_WORKFLOW_REF: ${{ github.workflow_ref }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout exact create event commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4, same pin as CI
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify identity and installed Docker versions before setup
+        shell: bash
+        run: python3 -B scripts/ci656-isolated-repro.py --check-preparation
+
+      - name: Set up Java for isolated backend runtime
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4, same pin as CI
+        with:
+          distribution: temurin
+          java-version: '21'
+          overwrite-settings: false
+
+      - name: Install isolated PG17 libpq18 and extract Caddy
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          umask 077
+          capture="$RUNNER_TEMP/ci656-dependencies-private.log"
+          # A separate bash preserves errexit inside the conditional. Never print
+          # apt/download output or upload this private installation capture.
+          if ! bash -euo pipefail >"$capture" 2>&1 <<'DEPENDENCIES'
+          sudo -n apt-get update
+          sudo -n apt-get install -y --no-install-recommends postgresql-common ca-certificates curl
+          sudo -n /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo -n apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 'libpq5=18.*'
+          mkdir -m 0700 "$RUNNER_TEMP/v126-caddy-package"
+          cd "$RUNNER_TEMP/v126-caddy-package"
+          apt-get download caddy
+          dpkg-deb -x ./caddy_*.deb runtime
+          DEPENDENCIES
+          then
+            printf '%s\n' 'HT_CI656_REPRO_RESULT {"status":"REPRO_BLOCKED","root_cause_CI656":"UNKNOWN","stage":"DEPENDENCY_SETUP","reason":"DEPENDENCY_SETUP_FAILED","lifecycle_invocations":0,"cleanup_quiescent":null}'
+            exit 2
+          fi
+
+      - name: Admit exact environment and invoke guarded fixture once
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/ci656-isolated-repro.py

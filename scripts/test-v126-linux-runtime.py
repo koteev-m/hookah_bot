@@ -115,14 +115,135 @@ class Diagnostics:
             variants.update(re.sub(r'%[0-9A-F]{2}', lambda match: match[0].lower(), value) for value in tuple(variants))
         for value in sorted(variants, key=len, reverse=True):
             text = text.replace(value, '[synthetic-secret-redacted]')
-        return text
+        return self.redact_json(text)
 
-    def stream(self, payload, include_text):
+    def redact_json(self, text, depth=0):
+        # Parse complete bounded documents, never a scalar prefix of an invalid value.
+        # Unparsed input contributes only closed indicators, not "mostly clean" text.
+        if depth >= 8:
+            return '[nested-json-redacted]'
+        stripped = text.strip()
+        if (len(text) <= 65536 and len(text.encode('utf-8', errors='replace')) <= 65536
+                and stripped.startswith(('{', '[', '"', "'"))):
+            try:
+                value = json.loads(stripped)
+            except (ValueError, RecursionError):
+                try:
+                    value = ast.literal_eval(stripped)
+                except (ValueError, SyntaxError, RecursionError, TypeError):
+                    return self.redact_plain(text)
+            return json.dumps(self.public_value(value, depth + 1), ensure_ascii=True)
+        if '\n' in text:
+            return '\n'.join(self.redact_json(line, depth) if line else '' for line in text.split('\n'))
+        return self.redact_plain(text)
+
+    def public_value(self, value, depth):
+        if depth >= 8:
+            return '[nested-json-redacted]'
+        if isinstance(value, dict):
+            result, details = {}, []
+            for key, child in list(value.items())[:256]:
+                normalized = re.sub('[^a-z0-9]', '', str(key).casefold())
+                if re.search('password|token|secret|pepper|authorization|apikey', normalized):
+                    result['credential'] = '[credential-redacted]'
+                elif key == 'status' and type(child) is str and child in {'FAILED', 'ERROR', 'UNKNOWN', 'PASSED'}:
+                    result['status'] = child
+                elif key == 'exit' and type(child) is int and -255 <= child <= 255:
+                    result['exit'] = child
+                else:
+                    # Arbitrary keys/strings may themselves be private data.
+                    details.append(self.public_value(child, depth + 1))
+            if len(value) > 256:
+                details.append('[nested-json-redacted]')
+            if details:
+                result['diagnostics'] = details
+            return result
+        if isinstance(value, (list, tuple)):
+            result = [self.public_value(child, depth + 1) for child in value[:256]]
+            return result + (['[nested-json-redacted]'] if len(value) > 256 else [])
+        if isinstance(value, str):
+            return self.redact_json(value, depth)
+        return '[diagnostic-text-withheld]'
+
+    @staticmethod
+    def metadata_positions(line):
+        # Two bounded-token scans preserve greedy suffix selection without
+        # rescanning the remaining line for every unsuccessful parse prefix.
+        last_end = 0
+        for match in re.finditer(r'POM|metadata', line, re.I):
+            last_end = match.end()
+        if not last_end:
+            return
+        for match in re.finditer(r'\b(?:could not|failed to) parse|(?P<invalid>\binvalid (?:POM|metadata))', line, re.I):
+            if match.group('invalid') is not None:
+                yield match.start()
+            elif match.end() < last_end:
+                yield match.start()
+                return  # The old greedy match consumed through the last suffix.
+
+    def redact_plain(self, text):
+        # No path/credential boundary guessing: all variable text is withheld.
+        # These are observed text indicators, never an inferred runtime root cause.
+        indicators = (
+            (r'\* What went wrong:', '* What went wrong:'),
+            (r'FAILURE: Build failed', 'FAILURE: Build failed'),
+            (r'\* Try:', '* Try:'),
+            (r'\bBuildKit START\b', 'BuildKit START'),
+            (r'\bBuildKit progress\b', 'BuildKit progress'),
+            (r'\bnpm ERR! (?:actual )?build failure\b', 'npm ERR! build failure'),
+            (r'\bCould not resolve\b', 'Could not resolve'),
+            (r'\bCould not find\b', 'Could not find'),
+            (r'\bCould not GET\b', 'Could not GET'),
+            (r'\bCould not HEAD\b', 'Could not HEAD'),
+            (r'\bUnknownHost\b', 'UnknownHost'),
+            (r'\btimed? out\b', 'timed out'),
+            (r'\bConnection reset\b', 'Connection reset'),
+            (r'\bConnection refused\b', 'Connection refused'),
+            (r'\bPKIX\b', 'PKIX'),
+            (r'\bSSLHandshake\b', 'SSLHandshake'),
+            (r'\bUnresolved reference\b', 'Unresolved reference'),
+            (r'\bENOSPC\b', 'ENOSPC'),
+            (r'\[synthetic-secret-redacted\]', '[synthetic-secret-redacted]'),
+        )
+        output = []
+        for line in text.split('\n'):
+            if not line:
+                output.append('')
+                continue
+            observed = [(match.start(), label) for pattern, label in indicators
+                        for match in re.finditer(pattern, line, re.I)]
+            observed.extend((position, 'Could not parse POM metadata') for position in self.metadata_positions(line))
+            for match in re.finditer(r'\bstatus code (429|5[0-9]{2})\b', line, re.I):
+                observed.append((match.start(), 'status code ' + match[1]))
+            for match in re.finditer(r'\bnpm ERR! code (E401|E403|E404|E429|ENOSPC|EACCES|ENOENT|ECONNRESET|ETIMEDOUT)\b', line):
+                observed.append((match.start(), 'npm ERR! code ' + match[1]))
+            output.append(' '.join(label for _, label in sorted(observed)) or '[diagnostic-text-withheld]')
+        return '\n'.join(output)
+
+    def stream(self, payload, include_text, *, build_failure=False):
         result = {'sha256': hashlib.sha256(payload).hexdigest(), 'bytes': len(payload)}
         if include_text:
             # Redact the entire stream first: a secret straddling the excerpt edge
             # must not become a surviving partial credential. Each stream gets4KiB.
             text = self.redact(payload.decode('utf-8', errors='replace'))
+            original = text
+            # Fixed vocabulary survives excerpt selection without publishing raw stderr.
+            reason_codes = [code for label, code in [('Unresolved reference', 'UNRESOLVED_REFERENCE'),
+                            ('ENOSPC', 'ENOSPC'), ('Connection reset', 'CONNECTION_RESET')] if label in text]
+            withheld = '[diagnostic-text-withheld]' in text or '[nested-json-redacted]' in text
+            selected_block = False
+            if build_failure:
+                # BuildKit progress can bury the cause between the old head/tail excerpts.
+                # Select only after whole-stream redaction, retaining the original hash/size.
+                match = re.search(r'(?m)^.*\* What went wrong:.*$', text)
+                if match is None:
+                    match = re.search(r'(?m)^.*FAILURE: Build failed.*$', text)
+                if match:
+                    selected_block = True
+                    text = text[match.start():]
+                    end = re.search(r'(?m)^.*\* Try:.*$', text)
+                    if end:
+                        text = text[:end.start()]
             budget = 4096
             truncated = len(json.dumps(text, ensure_ascii=True).encode()) > budget
             if truncated:
@@ -130,14 +251,33 @@ class Diagnostics:
                 lower, upper = 0, min(len(text), budget)
                 while lower < upper:
                     count = (lower + upper + 1) // 2
-                    candidate = text[:count // 2] + marker + text[-(count - count // 2):]
+                    candidate = (text[:count] if selected_block else
+                                 text[:count // 2] + marker + text[-(count - count // 2):])
                     if len(json.dumps(candidate, ensure_ascii=True).encode()) <= budget:
                         lower = count
                     else:
                         upper = count - 1
-                text = text[:lower // 2] + marker + text[-(lower - lower // 2):]
-            result.update(excerpt=text, truncated=truncated)
+                text = text[:lower] if selected_block else text[:lower // 2] + marker + text[-(lower - lower // 2):]
+            result.update(excerpt=text, truncated=truncated or text != original or withheld,
+                          excerpt_format='safe-diagnostic-summary', reason_codes=reason_codes)
         return result
+
+    def build_reason(self, payload, timed_out):
+        text = self.redact(payload.decode('utf-8', errors='replace'))
+        if timed_out:
+            return 'TIMEOUT'
+        if re.search(r'(?i)Could not (?:GET|HEAD)|UnknownHost|timed? out|connection (?:reset|refused)|'
+                     r'PKIX|SSLHandshake|status code (?:429|5\d\d)', text):
+            return 'NETWORK_INDICATOR'
+        if re.search(r'(?i)(?:could not|failed to) parse.*(?:POM|metadata)|invalid (?:POM|metadata)', text):
+            return 'METADATA_INDICATOR'
+        if re.search(r'Could not (?:resolve|find)', text):
+            return 'DEPENDENCY_RESOLUTION'
+        return 'UNKNOWN'
+
+    def first_build_failure(self):
+        return next((record for record in self.records
+                     if record.get('category') == 'build' and record.get('exit') != 0), None)
 
     def command(self, category, consumer, status, elapsed, deadline, stdout, stderr, *, timed_out=False):
         require(category in ('build', 'readiness', 'metadata'), 'invalid diagnostic category')
@@ -145,7 +285,9 @@ class Diagnostics:
                   'deadline_seconds': deadline, 'timed_out': timed_out, 'source_sha256': self.source_hash,
                   'harness_sha256': self.harness_hash,
                   'stdout': self.stream(stdout, category in ('build', 'readiness')),
-                  'stderr': self.stream(stderr, category in ('build', 'readiness'))}
+                  'stderr': self.stream(stderr, category in ('build', 'readiness'), build_failure=category == 'build' and status != 0)}
+        if category == 'build' and status != 0:
+            record['reason_category'] = self.build_reason(stderr, timed_out)
         return self.retain(record)
 
     def failure(self, phase, error):
@@ -160,6 +302,8 @@ class Diagnostics:
         record = {'category': 'failure', 'phase': phase, 'type': type(error).__name__,
                   'message': self.stream(str(error).encode(), isinstance(error, FixtureAssertionError)),
                   'locations': locations[-8:], 'source_sha256': self.source_hash, 'harness_sha256': self.harness_hash}
+        if hasattr(error, 'runtime_failure'):
+            record['consumer_failure'] = error.runtime_failure
         with self.lock:
             self.failures.append(record)
         self.retain(record)
@@ -376,7 +520,9 @@ class Integration:
                                                   124, elapsed, timeout, out, err, timed_out=True)
             self.events.append({'consumer': Path(str(argv[0])).name, 'exit': 124, 'seconds': round(elapsed, 3),
                                 'diagnostic': diagnostic})
-            raise FixtureAssertionError('test command deadline; remote mutation outcome is not inferred') from None
+            error = FixtureAssertionError('test command deadline; remote mutation outcome is not inferred')
+            error.runtime_failure = self.failure_context(diagnostic_category, 124, True)
+            raise error from None
         result = subprocess.CompletedProcess(argv, process.returncode, out, err)
         elapsed = time.monotonic() - before
         event = {'consumer': Path(str(argv[0])).name, 'exit': result.returncode, 'seconds': round(elapsed, 3)}
@@ -385,8 +531,16 @@ class Integration:
                                                           result.returncode, elapsed, timeout, out, err)
         self.events.append(event)
         if check and result.returncode:
-            raise FixtureAssertionError('integration consumer failed: ' + Path(str(argv[0])).name + ' exit ' + str(result.returncode))
+            error = FixtureAssertionError('integration consumer failed: ' + Path(str(argv[0])).name + ' exit ' + str(result.returncode))
+            error.runtime_failure = self.failure_context(diagnostic_category, result.returncode, False)
+            raise error
         return result
+
+    def failure_context(self, category, status, timed_out):
+        return dict(stage='BUILD' if category == 'build' else 'UNKNOWN',
+                    consumer=self.diagnostics.records[-1]['consumer'] if category == 'build' else 'UNKNOWN',
+                    reason_category=self.diagnostics.records[-1].get('reason_category', 'UNKNOWN'),
+                    exit_code=status, timed_out=timed_out, children='UNKNOWN', supervisor_exit_code=None)
 
     def compose(self, *args, **kwargs):
         return self.run(['docker', 'compose', '--env-file', '.env', '--file', 'docker-compose.yml', *args],
@@ -841,6 +995,324 @@ class DiagnosticsTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_metadata_scan_scaling_in_bounded_subprocess(self):
+        probe = '''
+import importlib.util, json, pathlib, sys, time
+spec = importlib.util.spec_from_file_location('metadata_scaling_probe', sys.argv[1])
+runtime = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runtime)
+diagnostics = runtime.Diagnostics(pathlib.Path(sys.argv[2]), 'a' * 64, lambda: {})
+diagnostics.stream(b'could not parse ', True, build_failure=True)
+measurements = []
+for kib in (16, 32, 64, 128, 256):
+    payload = b'could not parse ' * (kib * 1024 // 16)
+    samples = []
+    for _ in range(3):
+        start = time.process_time()
+        result = diagnostics.stream(payload, True, build_failure=True)
+        samples.append(time.process_time() - start)
+    seconds = sorted(samples)[1]
+    measurements.append({'kib': kib, 'cpu_seconds': seconds})
+    # Stop at a demonstrated bad slope rather than amplify a known regression.
+    if seconds > measurements[0]['cpu_seconds'] * (kib / 16) * 3:
+        break
+else:
+    diagnostics.command('build', 'docker', 1, .01, 1, b'', payload)
+print(json.dumps(measurements))
+'''
+        try:
+            result = subprocess.run([sys.executable, '-B', '-c', probe, str(Path(__file__).resolve()), str(self.evidence)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        except subprocess.TimeoutExpired:
+            self.fail('metadata scan exceeded the protective subprocess deadline')
+        self.assertEqual(result.returncode, 0, 'metadata scaling subprocess failed')
+        measurements = json.loads(result.stdout)
+        for row in measurements:
+            self.assertLessEqual(row['cpu_seconds'] / measurements[0]['cpu_seconds'], row['kib'] / 16 * 3,
+                                 'superlinear metadata scan: ' + json.dumps(measurements))
+        self.assertEqual([row['kib'] for row in measurements], [16, 32, 64, 128, 256])
+
+    def test_metadata_scan_long_lines_keep_only_closed_public_indicators(self):
+        repeated = 'could not parse ' * 16384
+        cases = [('no suffix', repeated, 'UNKNOWN', True),
+                 ('suffix before prefixes', 'POM metadata ' + repeated, 'UNKNOWN', True),
+                 ('early POM', 'Could not parse POM ' + repeated, 'METADATA_INDICATOR', False),
+                 ('early metadata', 'invalid metadata ' + repeated, 'METADATA_INDICATOR', False),
+                 ('late error', 'x ' * 131072 + 'failed to parse POM', 'METADATA_INDICATOR', False),
+                 ('single suffix', repeated + 'metadata', 'METADATA_INDICATOR', False),
+                 ('separate lines', 'could not parse\nPOM metadata', 'UNKNOWN', True),
+                 ('many lines', 'could not parse\n' * 1024 + 'invalid POM', 'METADATA_INDICATOR', True),
+                 ('unknown', 'unclassified error', 'UNKNOWN', True),
+                 ('Gradle POM', '* What went wrong:\nCould not resolve private:module:1\n'
+                  'Could not parse POM\n* Try:\n', 'METADATA_INDICATOR', True)]
+        canary = 'opaque-private-' + uuid.uuid4().hex
+        private = ' ' + canary + ' https://user:' + canary + '@private.invalid/a /private/' + canary
+        private += r' C:\private\config.xml \\host\share\config.xml file:///private/config.xml'
+        for label, text, reason, truncated in cases:
+            with self.subTest(case=label):
+                result = self.assert_isolated_public_clean((text + private).encode(),
+                            [canary, 'private.invalid', 'private:module:1', 'config.xml'])
+                self.assertEqual(result['reason_category'], reason)
+                self.assertEqual(result['stderr']['excerpt_format'], 'safe-diagnostic-summary')
+                self.assertEqual(result['stderr']['truncated'], truncated)
+                self.assertEqual(result['stderr']['reason_codes'], [])
+                if reason == 'METADATA_INDICATOR':
+                    self.assertEqual(result['stderr']['excerpt'].count('Could not parse POM metadata'), 1)
+
+    def assert_public_diagnostic_clean(self, payload, forbidden):
+        name = self.diagnostics.command('build', 'docker', 1, 1, 900, b'', payload)
+        self.diagnostics.failure('integration', FixtureAssertionError('synthetic build failed'))
+        public = io.StringIO()
+        with contextlib.redirect_stdout(public):
+            self.diagnostics.emit_failure()
+        stored = (self.evidence / name).read_text()
+        records = [json.loads(line.split(' ', 1)[1]) for line in public.getvalue().splitlines()]
+        build = next(record for record in reversed(records) if record.get('category') == 'build')
+        self.assertEqual(json.loads(stored), build)
+        self.assertEqual(build['stderr']['sha256'], hashlib.sha256(payload).hexdigest())
+        self.assertEqual(build['stderr']['bytes'], len(payload))
+        self.assertLessEqual(len(json.dumps(build['stderr']['excerpt'], ensure_ascii=True).encode()), 4096)
+        for value in forbidden:
+            variants = {value}
+            for _ in range(3):
+                variants.update(json.dumps(item, ensure_ascii=True)[1:-1] for item in tuple(variants))
+            for item in variants:
+                self.assertNotIn(item, self.diagnostics.redact(payload.decode('utf-8')))
+                self.assertNotIn(item, stored)
+                self.assertNotIn(item, public.getvalue())
+        return build
+
+    def test_json_credentials_are_redacted_through_stored_and_emitted_diagnostics(self):
+        for key in ['API_TOKEN', 'password', 'SeCrEt', 'api_key', 'apiKey', 'AUTHORIZATION',
+                    'client_secret', 'refresh_token', 'DB_PASSWORD', 'VENUE_STAFF_INVITE_SECRET_PEPPER']:
+            for spacing in [(',', ':'), (', ', ': ')]:
+                value = 'unknown-canary-quote"-slash\\-line\n-界'
+                document = json.dumps({key: value, 'status': 'FAILED', 'exit': 1}, separators=spacing)
+                for depth in range(3):
+                    with self.subTest(key=key, spacing=spacing, encoding_depth=depth):
+                        payload = ('* What went wrong:\nCould not resolve fixture:module:1\n' + document + '\n* Try:\n').encode()
+                        result = self.assert_public_diagnostic_clean(payload, [value, 'unknown-canary'])
+                        self.assertIn('FAILED', result['stderr']['excerpt'])
+                        self.assertIn('exit', result['stderr']['excerpt'])
+                    document = json.dumps(document)
+
+    def assert_isolated_public_clean(self, payload, forbidden):
+        previous_evidence, previous_diagnostics = self.evidence, self.diagnostics
+        with tempfile.TemporaryDirectory(dir=self.evidence) as directory:
+            self.evidence = Path(directory)
+            self.diagnostics = Diagnostics(self.evidence, previous_diagnostics.source_hash, lambda: self.values)
+            try:
+                return self.assert_public_diagnostic_clean(payload, forbidden)
+            finally:
+                self.evidence, self.diagnostics = previous_evidence, previous_diagnostics
+
+    def test_hardening_partial_scalar_credentials_fail_closed_at_public_boundary(self):
+        for prefix in ('true', 'false', 'null', '123', 'NaN'):
+            canary = 'opaque' + uuid.uuid4().hex
+            document = '{"password":' + prefix + canary + '}'
+            for padding in (0, 1900, 2050, 4090):
+                with self.subTest(prefix=prefix, padding=padding):
+                    payload = ('x' * padding + document + '\n' + 'BuildKit progress\n' * 400).encode()
+                    self.assert_isolated_public_clean(payload, [canary])
+
+    def test_hardening_single_quotes_and_damaged_serialization_fail_closed(self):
+        canary = 'opaque' + uuid.uuid4().hex
+        documents = ["{'password': '" + canary + "'}",
+                     "{'API_TOKEN': {'nested': ['" + canary + "']}}",
+                     "{'\\u0070assword': '" + canary + "'}",
+                     json.dumps('{"password" : "' + canary + '"}').replace(' ', r'\u0020')[:-1],
+                     '{"pass\x1b[0mword":"' + canary + '"}',
+                     'unclosed "\n{"token":"' + canary + '"}']
+        for index, document in enumerate(documents):
+            for depth in range(3):
+                with self.subTest(index=index, depth=depth):
+                    self.assert_isolated_public_clean(document.encode(), [canary])
+                document = json.dumps(document)
+
+    def test_hardening_path_punctuation_and_escaped_messages_do_not_leak(self):
+        canary = 'opaque' + uuid.uuid4().hex
+        for path in ['/@' + canary + '/config.xml', '/+' + canary + '/config.xml',
+                     "/private/parent's/" + canary + '/config.xml',
+                     'C:\\folder with spaces\\' + canary + '\\config.xml',
+                     '\\\\host\\share\\' + canary + '\\config.xml',
+                     'file:///private/' + canary + '/config.xml']:
+            message = 'error:' + path
+            document = json.dumps({'message': 'open failed at ' + message})
+            for index, text in enumerate([message, document, json.dumps(document),
+                                          document.replace('/', r'\/'), document.replace('/', r'\u002f')]):
+                with self.subTest(path_kind=path[:2], encoding=index):
+                    self.assert_isolated_public_clean(text.encode(), [canary, 'config.xml'])
+
+    def test_hardening_error_indicators_survive_ambiguous_paths(self):
+        canary = 'opaque' + uuid.uuid4().hex
+        for reason in ('Unresolved reference', 'ENOSPC', 'Connection reset'):
+            for message in ['error:/private/' + canary + '/file: ' + reason,
+                            'e: /@' + canary + '/Source.kt:12:13: ' + reason]:
+                for text in (message, json.dumps({'message': message})):
+                    with self.subTest(reason=reason, structured=text.startswith('{')):
+                        result = self.assert_isolated_public_clean(text.encode(), [canary])
+                        self.assertIn(reason, result['stderr']['excerpt'])
+                        if reason == 'Connection reset':
+                            self.assertEqual(result['reason_category'], 'NETWORK_INDICATOR')
+
+    def test_hardening_unclassified_text_is_not_published(self):
+        canary = uuid.uuid4().hex
+        for document in [canary, json.dumps({'message': canary}),
+                         json.dumps({'unexpected': [canary]}), '{broken ' + canary]:
+            with self.subTest(structured=document.startswith('{')):
+                result = self.assert_isolated_public_clean(document.encode(), [canary])
+                self.assertEqual(result['reason_category'], 'UNKNOWN')
+
+    def test_hardening_malformed_and_bounded_structures_cannot_break_capture(self):
+        canary = uuid.uuid4().hex
+        documents = ['{[]: "' + canary + '"}', '{"token": true' + canary + ',}',
+                     '[' * 2000 + json.dumps(canary) + ']' * 2000,
+                     json.dumps({'token': canary, 'extra': 'x' * 70000}),
+                     json.dumps({'token': canary, 'extra': '界' * 40000}, ensure_ascii=False),
+                     json.dumps({canary: canary}), json.dumps([canary] * 300)]
+        for index, document in enumerate(documents):
+            with self.subTest(index=index):
+                result = self.assert_isolated_public_clean(document.encode(), [canary])
+                self.assertEqual(result['stderr']['excerpt_format'], 'safe-diagnostic-summary')
+
+    def test_hardening_reason_codes_survive_excerpt_selection(self):
+        for reason, code in [('Unresolved reference', 'UNRESOLVED_REFERENCE'),
+                             ('ENOSPC', 'ENOSPC'), ('Connection reset', 'CONNECTION_RESET')]:
+            payload = ('* What went wrong:\n' + 'BuildKit progress\n' * 1000
+                       + reason + '\n* Try:\n').encode()
+            result = self.assert_isolated_public_clean(payload, [])
+            self.assertTrue(result['stderr']['truncated'])
+            self.assertNotIn(reason, result['stderr']['excerpt'])
+            self.assertIn(code, result['stderr']['reason_codes'])
+
+    def test_hardening_structured_credential_values_are_not_reason_evidence(self):
+        result = self.assert_isolated_public_clean(json.dumps({'token': 'Connection reset ENOSPC'}).encode(),
+                                                   ['Connection reset', 'ENOSPC'])
+        self.assertEqual(result['reason_category'], 'UNKNOWN')
+        self.assertEqual(result['stderr']['reason_codes'], [])
+
+    def test_sensitive_json_values_are_removed_conservatively_at_truncation_boundary(self):
+        secret = 'boundary-canary-' + 's' * 6000 + '"\\end'
+        documents = [json.dumps({'api_key': secret, 'status': 'FAILED'}),
+                     '{"\\u0070assword":' + json.dumps(secret) + ',"status":"FAILED"}',
+                     json.dumps({'token': {'nested': [secret]}, 'status': 'FAILED'}),
+                     '{"secret":' + json.dumps(secret)[:-1]]
+        for document in documents:
+            with self.subTest(document_kind=documents.index(document)):
+                payload = ('prelude\n* What went wrong:\nCould not resolve fixture:module:1\n' + 'safe ' * 380
+                           + document + '\n' + 'tail ' * 2000).encode()
+                result = self.assert_public_diagnostic_clean(payload, [secret, 'boundary-canary', 's' * 30])
+                self.assertTrue(result['stderr']['truncated'])
+
+    def test_absolute_paths_and_uris_after_colon_are_removed_from_public_diagnostics(self):
+        paths = ['/private/path-canary/config.xml', '/home/path-canary/config.xml',
+                 '/private/folder with path-canary/config.xml', r'C:\folder with path-canary\config.xml',
+                 r'C:\private\path-canary\config.xml', r'\\host\share\path-canary\config.xml',
+                 'file:/private/path-canary/config.xml', 'file:///private/path-canary/config.xml',
+                 'file://host/share/path-canary/config.xml']
+        for path in paths:
+            for text in ['error:' + path, json.dumps({'path': 'error:' + path}),
+                         json.dumps({'path': 'error:' + path}).replace('/', r'\/'),
+                         '{"path":"error:\\u002fprivate\\u002fpath-canary\\u002fconfig.xml"}']:
+                with self.subTest(path_kind=paths.index(path)):
+                    payload = ('* What went wrong:\nCould not parse POM metadata\n' + text + '\n* Try:\n').encode()
+                    result = self.assert_public_diagnostic_clean(payload, ['path-canary', 'config.xml'])
+                    self.assertIn('Could not parse POM metadata', result['stderr']['excerpt'])
+                    self.assertEqual(result['reason_category'], 'METADATA_INDICATOR')
+
+    def test_build_without_gradle_marker_preserves_clean_head_and_error_tail(self):
+        payload = ('BuildKit START\n' + 'BuildKit progress\n' * 3000
+                   + '{"API_TOKEN":"fallback-canary"}\nerror:/private/path-canary/config.xml\n'
+                   + 'npm ERR! code E404\nnpm ERR! actual build failure\n').encode()
+        result = self.assert_public_diagnostic_clean(payload, ['fallback-canary', 'path-canary', 'config.xml'])
+        excerpt = result['stderr']['excerpt']
+        self.assertIn('BuildKit START', excerpt)
+        self.assertIn('npm ERR! code E404', excerpt)
+        self.assertIn('npm ERR! build failure', excerpt)
+        self.assertNotIn('npm ERR! actual build failure', excerpt)
+        self.assertEqual(result['stderr']['excerpt_format'], 'safe-diagnostic-summary')
+        self.assertTrue(result['stderr']['truncated'])
+
+    def test_short_build_fallback_is_not_marked_truncated(self):
+        result = self.assert_public_diagnostic_clean(b'npm ERR! code E404\n', [])
+        self.assertEqual(result['stderr']['excerpt'], 'npm ERR! code E404\n')
+        self.assertFalse(result['stderr']['truncated'])
+
+    def test_ambiguous_and_deeply_encoded_credentials_are_removed_conservatively(self):
+        partial = json.dumps(json.dumps({'API_TOKEN': 'partial-canary'}))[:-1]
+        unicode_key = json.dumps('{\n"\\u0070assword"\n : "unicode-canary"\n}')[:-1]
+        deep = json.dumps({'api_key': 'deep-canary'})
+        for _ in range(7):
+            deep = json.dumps(deep)
+        for text, canary in [(partial, 'partial-canary'), (unicode_key, 'unicode-canary'), (deep, 'deep-canary'),
+                             ('API_KEY=' + json.dumps('plain-canary-"\\'), 'plain-canary')]:
+            with self.subTest(kind=canary):
+                self.assert_public_diagnostic_clean(('Could not resolve fixture:module:1\n' + text).encode(), [canary])
+
+    def test_build_middle_cause_survives_progress_and_redacts_before_selection(self):
+        payload = ('progress\n' * 2000 + '\n#27 * What went wrong:\n'
+                   '#27 Could not resolve example:library:1.0.\n'
+                   '#27 Could not GET https://unknown:credential@private.invalid/repository?token=private\n'
+                   '#27 Connection reset at /home/private-user/project/config.xml\n'
+                   '#27 DB_PASSWORD=' + self.values['DB_PASSWORD'] + '\n#27 * Try:\n' + 'tail\n' * 2000).encode()
+        name = self.diagnostics.command('build', 'docker', 1, 40, 900, b'', payload)
+        record = json.loads((self.evidence / name).read_bytes())
+        excerpt = record['stderr']['excerpt']
+        self.assertIn('Could not resolve', excerpt)
+        self.assertNotIn('example:library:1.0', excerpt)
+        self.assertEqual(record['stderr']['excerpt_format'], 'safe-diagnostic-summary')
+        self.assertIn('Connection reset', excerpt)
+        self.assertEqual(record['reason_category'], 'NETWORK_INDICATOR')
+        self.assertEqual(record['stderr']['sha256'], hashlib.sha256(payload).hexdigest())
+        self.assertEqual(record['stderr']['bytes'], len(payload))
+        self.assertTrue(record['stderr']['truncated'])
+        for secret in ['unknown:credential', 'private.invalid', 'private-user', 'config.xml', self.values['DB_PASSWORD']]:
+            self.assertNotIn(secret, excerpt)
+        self.assertLessEqual(len(json.dumps(excerpt, ensure_ascii=True).encode()), 4096)
+
+    def test_build_categories_are_indicators_and_unknown_is_preserved(self):
+        for text, expected in [('Could not resolve example:missing:1', 'DEPENDENCY_RESOLUTION'),
+                               ('Could not parse POM metadata', 'METADATA_INDICATOR'),
+                               ('UnknownHost repository', 'NETWORK_INDICATOR'),
+                               ('unclassified failure', 'UNKNOWN'),
+                               ('metadataSources { ... }', 'UNKNOWN')]:
+            with self.subTest(expected=expected):
+                self.assertEqual(self.diagnostics.build_reason(text.encode(), False), expected)
+        self.assertEqual(self.diagnostics.build_reason(b'Could not resolve example', True), 'TIMEOUT')
+
+    def test_unknown_url_credentials_paths_and_multibyte_excerpt_are_bounded(self):
+        for url in ['https://other:credential@private.invalid/a', 'https:\\/\\/other:credential@private.invalid/a',
+                    quote('https://other:credential@private.invalid/a', safe='')]:
+            text = url + ' "/private/path with spaces/key" C:\\private\\key API_TOKEN=unknown-secret Authorization: Bearer opaque-credential'
+            sanitized = self.diagnostics.redact(text)
+            for secret in ['other:credential', 'other%3Acredential', 'private.invalid', 'spaces', 'unknown-secret',
+                           'C:\\private', 'opaque-credential']:
+                self.assertNotIn(secret, sanitized)
+        payload = ('noise\n' * 5000 + '* What went wrong:\nCould not resolve ' + '界' * 10000).encode()
+        result = self.diagnostics.stream(payload, True, build_failure=True)
+        self.assertIn('Could not resolve', result['excerpt'])
+        self.assertLessEqual(len(json.dumps(result['excerpt'], ensure_ascii=True).encode()), 4096)
+
+    def test_build_failure_context_survives_later_cleanup(self):
+        fixture = Integration.__new__(Integration)
+        fixture.root, fixture.events, fixture.diagnostics = self.evidence, [], self.diagnostics
+        with patch.object(subprocess, 'Popen') as popen:
+            popen.return_value.communicate.return_value = (b'', b'* What went wrong:\nCould not resolve example:missing:1\n')
+            popen.return_value.returncode = 1
+            try:
+                fixture.run(['docker', 'build', '.'], diagnostic_category='build', timeout=900)
+            except FixtureAssertionError as error:
+                primary = error
+            else:
+                self.fail('failed build accepted')
+        self.assertEqual(primary.runtime_failure['stage'], 'BUILD')
+        self.assertEqual(primary.runtime_failure['exit_code'], 1)
+        with contextlib.redirect_stdout(io.StringIO()):
+            execute_fixture(self.fixture(primary_error=primary, cleanup_error=RuntimeError('private cleanup')))
+        result = json.loads((self.evidence / 'result.json').read_text())
+        self.assertEqual(result['first_failure']['consumer_failure'], primary.runtime_failure)
+        self.assertEqual(result['first_failure']['consumer_failure']['children'], 'UNKNOWN')
+
     def test_all_secret_keys_json_uri_variants_and_truststore_are_redacted(self):
         examples = []
         for secret in [*self.values.values(), TRUSTSTORE_PASSWORD]:
@@ -864,8 +1336,9 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertLessEqual(len(json.dumps(result['excerpt'], ensure_ascii=True).encode()), 4096)
         self.assertNotIn('private-', result['excerpt'])
         self.assertNotIn('s' * 20, result['excerpt'])
-        self.assertIn('tail', result['excerpt'])
-        record = {'excerpt': result['excerpt']}
+        self.assertNotIn('tail', result['excerpt'])
+        self.assertEqual(result['excerpt_format'], 'safe-diagnostic-summary')
+        record = {'excerpt': result['excerpt'], 'fixture_control_probe': '::error::\n::stop-commands::fixture'}
         self.diagnostics.records.append(record)
         self.diagnostics.failures.append({'phase': 'test'})
         output = io.StringIO()
@@ -963,11 +1436,13 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertEqual((status, result['status'], result['failure_count']), (1, 'FAILED_CLEANUP', 2))
         self.assertEqual(result['first_failure']['phase'], 'integration')
         self.assertEqual(result['first_failure']['message']['sha256'], hashlib.sha256(str(primary).encode()).hexdigest())
-        self.assertEqual(result['first_failure']['message']['excerpt'], 'first failure [synthetic-secret-redacted]')
+        self.assertEqual(result['first_failure']['message']['excerpt'], '[synthetic-secret-redacted]')
+        self.assertEqual(result['first_failure']['message']['excerpt_format'], 'safe-diagnostic-summary')
         self.assertEqual([item['phase'] for item in self.diagnostics.failures], ['integration', 'cleanup'])
         self.assertNotIn('excerpt', self.diagnostics.failures[1]['message'])
         self.assertNotIn(self.secret, output.getvalue())
-        self.assertIn('first failure [synthetic-secret-redacted]', output.getvalue())
+        self.assertIn('[synthetic-secret-redacted]', output.getvalue())
+        self.assertNotIn('first failure ', output.getvalue())
         self.assertTrue(all(line.startswith('V126_RUNTIME_DIAGNOSTIC ') for line in output.getvalue().splitlines()))
 
     def test_success_does_not_emit_expected_negative_observer_diagnostics(self):

@@ -1,5 +1,115 @@
 # Project Status
 
+## HT-CI656-BOUNDED-METADATA-SCAN-05 — linear metadata indicator scan (2026-10-31)
+
+READY_FOR_REVIEW / LOCAL_ONLY / CI656_ROOT_CAUSE_UNKNOWN.
+PROJECT_IDENTITY_OK: existing detached worktree
+`/private/tmp/HT-CI656-FIRST-FAILURE-REPRO-01/worktree`, base/HEAD
+`eab6a22025b5b532e852a92414d2d9bbcd451f57`, expected Hookah common dir/origin.
+Independent review's P2 was repeated greedy suffix scanning after each unsuccessful
+parse prefix. The new subprocess regression failed before implementation: 4x input
+caused 15.79x CPU time. Two bounded-token passes now preserve the previous indicator
+positions/order; 6,561 bounded equivalence cases pass. Parsers and excerpt selection
+are unchanged. Independent 16–256 KiB measurements scale from 2.4 to 36.4 ms CPU;
+the 256 KiB public JSON/emission path completes in about 111 ms. These are local
+measurements, not runtime timing guarantees or evidence of the CI #656 root cause.
+
+Checks: new regressions 2/2, ordinary 28/28, bindings 19/19, release-CI 18/18 PASS;
+runtime 33/37 PASS, four own-loopback tests BLOCKED by sandbox PermissionError.
+The unchanged non-loopback subset passes separately; no permissions were expanded.
+Independent public-output cases 32/32, syntax, AST invariants and diff checks PASS.
+Red/green results, probe source/measurements and pre-task state are retained in
+`/private/tmp/HT-CI656-BOUNDED-METADATA-SCAN-05/`.
+
+Only the metadata scan, two tests, QA note and this checkpoint changed. Five existing
+modified files remain; index empty. Operational worker/tests, supervisor, deadlines,
+ownership/admission, recovery, cutover, handoff and CI workflow remain unchanged.
+No publication, Docker daemon, SSH, lifecycle repro, staging/production, primary-checkout
+or scripts/dev/ changes. No operation remains running. Next: independent review of
+this bounded fix before any separately authorized isolated repro.
+
+## HT-CI656-SANITIZER-HARDENING-03 — bounded public diagnostic summaries (2026-10-31)
+
+READY_FOR_REVIEW / LOCAL_ONLY / CI656_ROOT_CAUSE_UNKNOWN.
+PROJECT_IDENTITY_OK: existing detached worktree
+`/private/tmp/HT-CI656-FIRST-FAILURE-REPRO-01/worktree`, base/HEAD
+`eab6a22025b5b532e852a92414d2d9bbcd451f57`, expected Hookah common dir/origin.
+The previous sanitizer checkpoint's completeness claim was disproved by independent
+review; this task closes its remaining credential/path cases and error-cause loss.
+
+Five new regression methods were confirmed failing before implementation. Public text
+now uses full bounded JSON/Python-literal parsing and closed diagnostic summaries;
+arbitrary strings/keys, malformed fragments, paths and credentials are withheld.
+Unresolved reference / ENOSPC / Connection reset survive as normalized indicators and
+closed reason codes, not a claim to preserve the original error text. Four existing
+tests now assert the stricter summary contract and non-disclosure of formerly copied
+text; hash/size, first-failure and workflow-command escaping checks remain.
+
+Checks PASS: ordinary 28/28, runtime diagnostics/transport/parser 35/35 (own loopback
+only), bindings 19/19, release-CI 18/18; 668 independent adversarial cases with no
+observed leakage/capture errors or hash/size/budget violations. Excerpt-selection AST
+is unchanged; operational worker/tests, deadlines, supervisor, ownership/admission,
+recovery, cutover, handoff and CI code are untouched by this task. Evidence, including
+red/green results and the exact pre-task diff, is in
+`/private/tmp/HT-CI656-SANITIZER-HARDENING-03/`.
+
+Only runtime sanitizer/tests, QA contract and this checkpoint changed; all five
+pre-existing modified files are preserved, index empty. No publication, Docker daemon,
+SSH, Linux lifecycle repro, staging/production or scripts/dev/ changes. No operation
+remains running. Unknown text is intentionally less detailed; indicators are not
+runtime proof. Next: independent review before any separately authorized repro.
+
+## HT-CI656-DIAGNOSTIC-SANITIZER-FIX-01 — targeted sanitizer corrections (2026-10-31)
+
+READY_FOR_REVIEW / LOCAL_ONLY / CI656_ROOT_CAUSE_UNKNOWN.
+PROJECT_IDENTITY_OK in the existing isolated worktree on
+`eab6a22025b5b532e852a92414d2d9bbcd451f57`; primary checkout and scripts/dev/ unchanged,
+index empty. This task changes only the runtime diagnostic sanitizer/tests and this checkpoint;
+the other existing diagnostic patch files are preserved.
+
+All three review findings fixed: JSON-aware credential removal handles unknown values,
+escaped keys/values and bounded nested serialization, with conservative malformed-input
+redaction; absolute paths/URIs after colons and paths containing spaces are removed;
+unrecognized build failures use bounded head/tail while recognized Gradle blocks retain
+their cleaned error excerpt. Original byte counts/hashes and the 4 KiB bound remain.
+Stored/emitted JSON regressions and 32 additional JSON probes show no canary/path leakage.
+Focused checks PASS: ordinary 28/28, diagnostics/transport/parser 27/27, bindings 19/19,
+release-CI contract 18/18; syntax, AST/invariant comparison and diff whitespace PASS.
+Every pre-existing test and all operational worker/supervisor/deadline/admission/ownership/
+recovery/cutover/handoff/CI code are unchanged. No Linux repro, Docker daemon, SSH,
+staging/production, workflow, commit or publication action. Next: independent review of
+these corrections before any separately authorized isolated GitHub repro.
+
+## HT-CI656-FIRST-FAILURE-REPRO-01 — safe first failure, local candidate (2026-10-31)
+
+LOCAL_DIAGNOSTICS_READY_FOR_REVIEW / REPRO_BLOCKED / NO_PUBLICATION.
+Identity gates PASS for Hookah_Tootah / hookah_bot_ANT and the isolated detached worktree
+`/private/tmp/HT-CI656-FIRST-FAILURE-REPRO-01/worktree`, sharing the primary Git common dir.
+Base/HEAD `eab6a22025b5b532e852a92414d2d9bbcd451f57`; source worktree/branch and scripts/dev/
+unchanged. No stage/commit/push/PR/CI rerun or remote operation authorized/executed.
+
+Ordinary failure observation now retains closed stage/consumer/reason metadata, nullable
+exit/timeout and separate supervisor exit. REAPED comes only from the existing validated
+result/log binding. First failure wins over cleanup; UNKNOWN/75 and resource retention
+remain unchanged. Existing runtime diagnostics select the first Gradle error block after
+whole-stream redaction (URLs/credentials/private paths), retaining the 4 KiB excerpt limit,
+full-stream hashes and byte counts. Failed ordinary fixture builds reuse that safe record.
+No PDF/product, supervisor, admission, handoff, recovery, deadline or CI matrix changes.
+
+Focused validation: ordinary 28/28, runtime diagnostics/transport/parser 21/21,
+bindings 19/19, release-CI contract 18/18 PASS; syntax and diff checks PASS.
+Operational worker AST (excluding observation checkpoints), command process-lifetime body,
+supervisor, workflow, cutover and handoff consumers match the base. Initial sandbox socket
+refusal was resolved only for the fixture's own loopback tests; no existing daemon accessed.
+
+REPRO_BLOCKED: host is Darwin 25.5.0 arm64; installed client versions Docker 29.8.1 and
+Compose 5.5.1 are not attempt-2's Ubuntu 26.04.1 / Docker 29.4.2 / Compose 5.1.3.
+No qualifying disposable Linux/root/systemd/PG17/Caddy endpoint is established. Zero
+ordinary Linux lifecycle repros executed. CI #656 causes remain UNKNOWN; prior diagnosis
+evidence is `/private/tmp/HT-CI656-COMPOSE-RUNTIME-DIAGNOSE-01/diagnosis.json`.
+Next: review the local diagnostic diff, then separately authorize one qualified isolated
+Linux repro. PR #237 merge remains BLOCKED on unexplained runtime failure evidence.
+
 ## HT-VENUE-INFO-PDF-INLINE-UX-P2-FIX-01 — resource cleanup and focus (2026-10-31)
 
 **PDF_INLINE_UX_P2_FIXED_READY_FOR_TARGETED_REVIEW / LOCAL_ONLY / NO_PUBLICATION_AUTHORIZATION**.

@@ -8,6 +8,7 @@ Protocol lock/history/result semantics come only from v126-operation-bindings.py
 import argparse
 import base64
 import contextlib
+import contextvars
 import datetime
 import hashlib
 import importlib.util
@@ -62,6 +63,80 @@ MAX_IMAGE = 8 * 1024 * 1024 * 1024
 
 class Refused(ValueError):
     pass
+
+
+FAILURE_STAGES = {'UNKNOWN', 'BUILD', 'ADMISSION', 'PAYLOAD', 'ARCHIVE', 'CANDIDATE', 'INSTALL',
+                  'IMAGE_LOAD', 'RECREATE', 'READINESS', 'POSTCONDITIONS', 'PROOF', 'CLEANUP'}
+FAILURE_CONSUMERS = {'UNKNOWN', 'docker', 'bash', 'python3', 'curl'}
+FAILURE_CATEGORIES = {'UNKNOWN', 'CONTRACT_REFUSED', 'CONSUMER_EXIT', 'TIMEOUT', 'OS_ERROR',
+                      'NETWORK_INDICATOR', 'METADATA_INDICATOR', 'DEPENDENCY_RESOLUTION'}
+FAILURE_PREFIX = b'V126_ORDINARY_DIAGNOSTIC '
+_failure_stage = contextvars.ContextVar('ordinary_failure_stage', default='UNKNOWN')
+
+
+def failure_record(error, *, stage=None, consumer=None):
+    """Closed metadata only: exception messages, argv and child output stay private."""
+    previous = getattr(error, 'ordinary_failure', getattr(error, 'runtime_failure', {}))
+    category = ('TIMEOUT' if isinstance(error, subprocess.TimeoutExpired) else
+                'OS_ERROR' if isinstance(error, OSError) else
+                'CONTRACT_REFUSED' if isinstance(error, Refused) else 'UNKNOWN')
+    record = dict(stage=stage or _failure_stage.get(), consumer=consumer or 'UNKNOWN',
+                  reason_category=category, exit_code=None,
+                  timed_out=True if category == 'TIMEOUT' else None, children='UNKNOWN', supervisor_exit_code=None)
+    record.update(previous)
+    if record['stage'] == 'UNKNOWN' and stage in FAILURE_STAGES:
+        record['stage'] = stage
+    return validate_failure(record)
+
+
+def validate_failure(record):
+    require(type(record) is dict and set(record) == {'stage', 'consumer', 'reason_category',
+            'exit_code', 'timed_out', 'children', 'supervisor_exit_code'}, 'diagnostic schema')
+    require(record['stage'] in FAILURE_STAGES and record['consumer'] in FAILURE_CONSUMERS and
+            record['reason_category'] in FAILURE_CATEGORIES and record['children'] in {'UNKNOWN', 'REAPED'} and
+            (record['exit_code'] is None or type(record['exit_code']) is int and -255 <= record['exit_code'] <= 255) and
+            (record['supervisor_exit_code'] is None or type(record['supervisor_exit_code']) is int and
+             0 <= record['supervisor_exit_code'] <= 255) and
+            (record['timed_out'] is None or type(record['timed_out']) is bool), 'diagnostic values')
+    return dict(record)
+
+
+def worker_failure(error):
+    # Diagnostic failure must never replace the original UNKNOWN/75 outcome.
+    with contextlib.suppress(Exception):
+        print((FAILURE_PREFIX + canonical(failure_record(error))).decode(), end='', flush=True)
+
+
+def integration_failure(current, error, *, stage=None):
+    if current is not None:
+        return current
+    try:
+        diagnostic = failure_record(error, stage=stage)
+    except Exception:
+        diagnostic = failure_record(RuntimeError())
+    return dict(reason='owned integration failed; safe diagnostic retained',
+                diagnostic=diagnostic)
+
+
+def retained_failure(bindings, registry, identity, target):
+    """Only a hash-verified supervisor result can attest REAPED, including on failure."""
+    unknown = dict(stage='UNKNOWN', consumer='UNKNOWN', reason_category='UNKNOWN',
+                   exit_code=None, timed_out=None, children='UNKNOWN', supervisor_exit_code=None)
+    try:
+        operation = sha(canonical(identity))
+        result = bindings.binding_result(registry / (operation + '.result.json'), identity, target)
+        unknown.update(children=result['children'], supervisor_exit_code=result['exit'])
+        with (registry / (operation + '.log')).open('rb') as handle:
+            raw = handle.read(8 * 1024 * 1024 + 1)
+        records = ([line[len(FAILURE_PREFIX):] for line in raw.splitlines() if line.startswith(FAILURE_PREFIX)]
+                   if len(raw) <= 8 * 1024 * 1024 else [])
+        if len(records) == 1 and len(records[0]) <= 1024:
+            record = validate_failure(structured(records[0] + b'\n'))
+            record.update(children=result['children'], supervisor_exit_code=result['exit'])
+            unknown = record
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return unknown
 
 
 def require(condition, reason):
@@ -193,7 +268,20 @@ def clean_environment():
     return {name: os.environ[name] for name in ('PATH', 'HOME') if name in os.environ}
 
 
-def command(argv, *, cwd=None, payload=None, stdin=None, output=None, output_limit=8 * 1024 * 1024, timeout=20, pass_fds=()):
+def command(argv, **kwargs):
+    try:
+        return _command(argv, **kwargs)
+    except BaseException as error:
+        with contextlib.suppress(Exception):
+            consumer = Path(str(argv[0])).name if argv else 'UNKNOWN'
+            record = failure_record(error, consumer=consumer if consumer in FAILURE_CONSUMERS else 'UNKNOWN')
+            if hasattr(error, 'consumer_exit'):
+                record.update(reason_category='CONSUMER_EXIT', exit_code=error.consumer_exit, timed_out=False)
+            error.ordinary_failure = validate_failure(record)
+        raise
+
+
+def _command(argv, *, cwd=None, payload=None, stdin=None, output=None, output_limit=8 * 1024 * 1024, timeout=20, pass_fds=()):
     require(payload is None or stdin is None, 'ambiguous command input')
     require(payload is None or len(payload) <= 4096, 'bounded command input')
     process = subprocess.Popen(argv, cwd=cwd, env=clean_environment(), stdin=stdin if stdin is not None else subprocess.PIPE,
@@ -242,7 +330,10 @@ def command(argv, *, cwd=None, payload=None, stdin=None, output=None, output_lim
             if handle is not None:
                 handle.close()
         raise
-    require(process.returncode == 0, 'bounded consumer failed; output remains private')
+    if process.returncode != 0:
+        error = Refused('bounded consumer failed; output remains private')
+        error.consumer_exit = process.returncode
+        raise error
     return bytes(output)
 
 
@@ -451,6 +542,18 @@ class Deployment:
 
 
 def worker(target, request_raw, bundle_raw, stream):
+    token = _failure_stage.set('ADMISSION')
+    try:
+        return deployment_worker(target, request_raw, bundle_raw, stream)
+    except BaseException as error:
+        with contextlib.suppress(Exception):
+            error.ordinary_failure = failure_record(error)
+        raise
+    finally:
+        _failure_stage.reset(token)
+
+
+def deployment_worker(target, request_raw, bundle_raw, stream):
     require(os.geteuid() == 0, 'root deployment identity required')
     doc = validate_descriptor(structured(request_raw), target)
     decoded = decode_bundle(bundle_raw, doc['owner']['script_sha256'])
@@ -483,6 +586,7 @@ def worker(target, request_raw, bundle_raw, stream):
     postgres_value = deploy.inspected(postgres)
     require(postgres_value['State']['Running'] is True, 'existing PostgreSQL must already run')
     original_postgres = deploy.stable_container(postgres_value)
+    _failure_stage.set('PAYLOAD')
     payload = {}
     for name in sorted(UPLOADS):
         raw = read_frame(stream, 4 * 1024 * 1024)
@@ -502,11 +606,13 @@ def worker(target, request_raw, bundle_raw, stream):
         archive.flush()
         os.fsync(archive.fileno())
         os.fchmod(archive.fileno(), 0o400)
+        _failure_stage.set('ARCHIVE')
         shell_consumer(deploy.sequencer, 'verify_saved_image_archive_fd "$1" "$2" "$3"',
                        [archive.fileno(), doc['backend_image'], doc['image_id']], timeout=180,
                        pass_fds=(archive.fileno(),))
         # Validate the future Compose from a private fixed .env before changing
         # any protected target file. Neither candidate nor descriptor includes secrets.
+        _failure_stage.set('CANDIDATE')
         candidate = work / 'candidate'
         candidate.mkdir(mode=0o700)
         create(candidate / '.env', (target / '.env').read_bytes(), 0o600)
@@ -524,10 +630,12 @@ def worker(target, request_raw, bundle_raw, stream):
             arguments = ['--profile', 'public-pilot', '--env-file', str(candidate / '.env'), '--compose-file', str(candidate / 'docker-compose.yml')] if name.startswith('validate') else [str(candidate / '.env')]
             command(['bash', str(work / 'source/scripts' / name), *arguments], cwd=candidate)
         deploy.fixed(doc['compose_before_sha256'])
+        _failure_stage.set('INSTALL')
         for name in sorted(payload):
             install_file(target, name, payload[name])
         deploy.fixed(doc['compose_sha256'])
         archive.seek(0)
+        _failure_stage.set('IMAGE_LOAD')
         command(['docker', 'load'], stdin=archive, timeout=180)
     deploy.image()
     deploy.fixed(doc['compose_sha256'])
@@ -535,11 +643,14 @@ def worker(target, request_raw, bundle_raw, stream):
     # PostgreSQL is an existing authority, never an ordinary-deploy mutation.
     require(deploy.ids('postgres') == postgres and deploy.stable_container(deploy.inspected(postgres)) == original_postgres,
             'PostgreSQL changed before backend recreate')
+    _failure_stage.set('RECREATE')
     command(['docker', 'compose', '--env-file', str(target / '.env'), '--file', str(target / 'docker-compose.yml'),
              'up', '-d', '--no-build', '--pull', 'never', '--no-deps', '--force-recreate', 'backend'],
             cwd=target, timeout=90)
     backend = deploy.ids('backend')
+    _failure_stage.set('READINESS')
     deploy.readiness(backend)
+    _failure_stage.set('POSTCONDITIONS')
     deploy.image()
     deploy.fixed(doc['compose_sha256'])
     deploy.database()
@@ -548,6 +659,7 @@ def worker(target, request_raw, bundle_raw, stream):
     require(deploy.ids('postgres') == postgres and deploy.stable_container(deploy.inspected(postgres)) == original_postgres,
             'PostgreSQL changed during ordinary deploy')
     deploy.backend(backend)
+    _failure_stage.set('PROOF')
     proof = dict(format_version=1, identity=identity, target_sha256=doc['target_sha256'],
                  request_sha256=sha(request_raw), environment_sha256=doc['environment_sha256'],
                  compose_sha256=doc['compose_sha256'], image_id=doc['image_id'], backend_container_id=backend,
@@ -569,7 +681,8 @@ try:
  scope={'__name__':'ordinary_worker','__file__':context['file']}
  exec(base64.b64decode(context['source']),scope)
  scope['worker'](scope['Path'](context['target']),base64.b64decode(context['request']),base64.b64decode(context['bundle']),sys.stdin.buffer)
-except BaseException:
+except BaseException as error:
+ if 'scope' in locals() and 'worker_failure' in scope:scope['worker_failure'](error)
  print('ORDINARY_DEPLOY=UNKNOWN retry_allowed=false; private evidence retained',file=sys.stderr)
  raise SystemExit(75) from None
 """
