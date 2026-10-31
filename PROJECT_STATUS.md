@@ -1,5 +1,35 @@
 # Project Status
 
+## HT-CI659-PLAYWRIGHT-UBUNTU26-FIX — local compatibility checks passed (2026-11-01)
+
+Identity PASS after explicit worktree-root confirmation: Hookah_Tootah / hookah_bot_ANT,
+`/private/tmp/HT-CI656-COMPOSE-RUNTIME-ROOT-FIX/worktree`, branch
+`codex/ht-ci656-compose-runtime-root-fix`, exact starting HEAD
+`177c325539b999a304f8b9113fdc2d0a8c47a979`; expected origin, common dir and checkout index
+ownership verified; starting worktree clean. Base/parent constraints NOT_SUPPLIED.
+
+CI #659 (`41249503093`, attempt 1) is completed: 14/15 required jobs passed; only
+miniapp-e2e-smoke failed at Chromium installation because Playwright 1.60.0 does not support
+ubuntu26.04-x64. Prior compose-runtime PASS includes two ordinary completions and cleanup true.
+Exact Playwright 1.61.1 supports Ubuntu 26.04. Only @playwright/test, playwright and
+playwright-core lock entries change; TypeScript 5.6.3, Vite 5.4.8 and application sources stay
+unchanged. E2E alone is pinned to ubuntu-26.04 and logs its Playwright version; Node 20,
+npm ci, Chromium --with-deps, full smoke, JSON reporter and every existing report guard remain.
+The preceding provenance fix, diagnostics, V126 verifier/security/deployment contracts remain.
+
+Local PASS: npm ci; actual Playwright 1.61.1 / Chromium 149.0.7827.55 launch; TypeScript/Vite
+build; full browser smoke 469/469, zero unexpected/flaky/skipped/runner errors/failed attempts;
+unchanged CI JSON assertion; release-CI contracts 18/18; YAML syntax/structure and diff-check.
+Browser evidence is macOS arm64 / Node 24.14.0, not Ubuntu/Node 20 proof. Task evidence:
+`/private/tmp/HT-CI659-PLAYWRIGHT-UBUNTU26-FIX/`. Read-only three-way package merge against
+PR #237 HEAD `eab6a22025b5b532e852a92414d2d9bbcd451f57` finds one conflict in each package
+file: adjacent Playwright change versus that PR's TypeScript 5.9.3 update. No merge was applied.
+
+Authorization: one commit and one ordinary non-force push for this task, then inspect the
+automatically started normal CI. No rerun, second push, new PR, main/PR #237 mutation or deploy.
+Next: verify all 15 required jobs on the published SHA, actual Ubuntu 26.04 browser execution,
+ordinary completion and cleanup; stop at success or report the concrete next failure.
+
 ## HT-CI656-COMPOSE-RUNTIME-ROOT-FIX — ordinary first-failure coverage (2026-11-01)
 
 Identity PASS: Hookah_Tootah / hookah_bot_ANT, expected origin and primary Git common dir.

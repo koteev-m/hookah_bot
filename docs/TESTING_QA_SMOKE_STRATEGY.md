@@ -3799,6 +3799,13 @@ Current CI jobs:
 
 ### HT-CI-01 parallel Compose contract
 
+`miniapp-e2e-smoke` also explicitly runs on `ubuntu-26.04`, with Node 20 and exact
+`@playwright/test` 1.61.1 ([Ubuntu 26.04 support starts in Playwright 1.61](https://playwright.dev/docs/release-notes#version-161)).
+It records the installed Playwright version, installs real Chromium with system dependencies,
+and runs the complete existing smoke with JSON reporting. The 216-test floor, mandatory spec
+inventory and zero failures/flaky/skipped/runner-errors/failed-attempts requirements are unchanged.
+Browser platform overrides and fallback to an unsupported browser are not part of this contract.
+
 This topology supersedes earlier references to the current twelve-job layout; historical CI
 observations and receipts remain unchanged. The exact release contract now has 15 jobs. The original
 11 non-Compose jobs, including all eight `backend` dependencies, are unchanged. `push` and
