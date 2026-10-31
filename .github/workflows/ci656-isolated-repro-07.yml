@@ -1,0 +1,45 @@
+name: HT CI656 isolated repro 07
+
+'on':
+  create:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    if: >-
+      github.event_name == 'create' &&
+      github.repository == 'koteev-m/hookah_bot' &&
+      github.event.ref_type == 'branch' &&
+      github.event.ref == 'codex/ht-ci656-isolated-github-repro-07' &&
+      github.ref == 'refs/heads/codex/ht-ci656-isolated-github-repro-07' &&
+      github.run_attempt == '1'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact create event commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4, same pin as CI
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Admit exact environment and invoke guarded fixture once
+        shell: bash
+        env:
+          REPRO_EVENT_NAME: ${{ github.event_name }}
+          REPRO_EVENT_SHA: ${{ github.sha }}
+          REPRO_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          REPRO_REF: ${{ github.ref }}
+          REPRO_EVENT_REF: ${{ github.event.ref }}
+          REPRO_REF_TYPE: ${{ github.event.ref_type }}
+          REPRO_REPOSITORY: ${{ github.repository }}
+          REPRO_RUN_ATTEMPT: ${{ github.run_attempt }}
+          REPRO_RUN_ID: ${{ github.run_id }}
+          REPRO_WORKFLOW_REF: ${{ github.workflow_ref }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/ci656-isolated-repro.py
