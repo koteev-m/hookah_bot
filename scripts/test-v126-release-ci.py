@@ -237,7 +237,8 @@ class ReleaseCiTest(unittest.TestCase):
         for name in COMPOSE_GROUPS:
             body = jobs[name]
             header = body.split('    steps:\n', 1)[0]
-            self.assertIn('    runs-on: ubuntu-latest\n', header)
+            runner = 'ubuntu-26.04' if name == 'compose-runtime' else 'ubuntu-latest'
+            self.assertIn(f'    runs-on: {runner}\n', header)
             self.assertIn('    timeout-minutes: 60\n', header)
             self.assertNotRegex(header, r'(?m)^    (?:needs|if|environment|container|services|strategy):')
             self.assertIn('          fetch-depth: 0\n', body)

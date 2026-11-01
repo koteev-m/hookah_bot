@@ -1,5 +1,75 @@
 # Project Status
 
+## HT-CI659-PLAYWRIGHT-UBUNTU26-FIX — local compatibility checks passed (2026-11-01)
+
+Identity PASS after explicit worktree-root confirmation: Hookah_Tootah / hookah_bot_ANT,
+`/private/tmp/HT-CI656-COMPOSE-RUNTIME-ROOT-FIX/worktree`, branch
+`codex/ht-ci656-compose-runtime-root-fix`, exact starting HEAD
+`177c325539b999a304f8b9113fdc2d0a8c47a979`; expected origin, common dir and checkout index
+ownership verified; starting worktree clean. Base/parent constraints NOT_SUPPLIED.
+
+CI #659 (`41249503093`, attempt 1) is completed: 14/15 required jobs passed; only
+miniapp-e2e-smoke failed at Chromium installation because Playwright 1.60.0 does not support
+ubuntu26.04-x64. Prior compose-runtime PASS includes two ordinary completions and cleanup true.
+Exact Playwright 1.61.1 supports Ubuntu 26.04. Only @playwright/test, playwright and
+playwright-core lock entries change; TypeScript 5.6.3, Vite 5.4.8 and application sources stay
+unchanged. E2E alone is pinned to ubuntu-26.04 and logs its Playwright version; Node 20,
+npm ci, Chromium --with-deps, full smoke, JSON reporter and every existing report guard remain.
+The preceding provenance fix, diagnostics, V126 verifier/security/deployment contracts remain.
+
+Local PASS: npm ci; actual Playwright 1.61.1 / Chromium 149.0.7827.55 launch; TypeScript/Vite
+build; full browser smoke 469/469, zero unexpected/flaky/skipped/runner errors/failed attempts;
+unchanged CI JSON assertion; release-CI contracts 18/18; YAML syntax/structure and diff-check.
+Browser evidence is macOS arm64 / Node 24.14.0, not Ubuntu/Node 20 proof. Task evidence:
+`/private/tmp/HT-CI659-PLAYWRIGHT-UBUNTU26-FIX/`. Read-only three-way package merge against
+PR #237 HEAD `eab6a22025b5b532e852a92414d2d9bbcd451f57` finds one conflict in each package
+file: adjacent Playwright change versus that PR's TypeScript 5.9.3 update. No merge was applied.
+
+Authorization: one commit and one ordinary non-force push for this task, then inspect the
+automatically started normal CI. No rerun, second push, new PR, main/PR #237 mutation or deploy.
+Next: verify all 15 required jobs on the published SHA, actual Ubuntu 26.04 browser execution,
+ordinary completion and cleanup; stop at success or report the concrete next failure.
+
+## HT-CI656-COMPOSE-RUNTIME-ROOT-FIX — ordinary first-failure coverage (2026-11-01)
+
+Identity PASS: Hookah_Tootah / hookah_bot_ANT, expected origin and primary Git common dir.
+Isolated worktree `/private/tmp/HT-CI656-COMPOSE-RUNTIME-ROOT-FIX/worktree`, branch
+`codex/ht-ci656-compose-runtime-root-fix`, exact starting/current remote main
+`4d894b435f52915a8370c76a14877daf0cea062d`. Primary feature HEAD remains
+`eab6a22025b5b532e852a92414d2d9bbcd451f57`; PDF Inline UX is excluded.
+
+CI #656 attempt 2 stopped after approved handoff and before first ordinary completion;
+its private archive/worker/supervisor records are absent (no artifacts). #657 at the same
+feature SHA completed both deployments with cleanup true. Original exact archive remains
+unavailable; version differences alone are not causal proof.
+Safe diagnostic code is narrowly ported from `2771cbcd5394cf8e52bfd58085034e5fbaec2f49`;
+upload failure no longer masks the worker record; the integration CLI retains exit 1 without
+exception text/traceback. Operational commands, supervisor, admission, ownership, deadlines,
+replay denial and cleanup rules are unchanged. The hosted negative case must verify actual
+worker-to-supervisor diagnostic propagation. Runtime alone is pinned to Ubuntu 26.04.
+
+First publication `71c3da64f7367e39b671e1543cae63dcca56010f`, normal CI #658
+`https://github.com/koteev-m/hookah_bot/actions/runs/41247821221`: Ubuntu 26.04.1,
+Docker 29.4.2, Compose 5.1.3; ordinary FAIL at ARCHIVE/bash, consumer exit 1, no timeout,
+supervisor exit 75, REAPED, cleanup false. This confirms the first-failure pipeline.
+Addressed fixture defect: default build provenance on containerd produces a nested OCI image
+index rejected by the unchanged ordinary archive verifier. Local Docker 29/containerd paired
+builds reproduce exit 1 with default provenance and exit 0 with `--provenance=false`.
+The only behavioral correction is that explicit option on the runtime fixture producer;
+operational verifier and worker execution semantics remain unchanged. The second exact-SHA
+hosted run is required to confirm this correction closes the observed ARCHIVE boundary.
+Independent #658 blocker: Mini App Chromium installation refuses ubuntu26.04-x64 with the
+current Playwright version. Other jobs/runners are outside this correction and unchanged.
+
+Evidence: task-local `evidence/` beside the worktree (original private CI logs and local test
+results). Baseline ordinary 23/23 PASS; updated ordinary 31/31, runtime diagnostics/transport
+18/18, binding 19/19 and release-CI contract 18/18 PASS; Python syntax and diff-check PASS.
+Runtime loopback fixtures require sandbox bind permission. Exact published-SHA CI remains
+required before a verified verdict. Authorization: at most two commits/non-force publications,
+existing CI only; no manual reruns, PR #237/main mutation, merge, SSH or staging/production deploy.
+Next: publish the second/final correction, inspect the normal CI, record actual ordinary and
+cleanup results. No further publication or release readiness is authorized or claimed.
+
 ## HT-VENUE-MEDIA-PR236-CI-FAILURES-FIX-01 — local CI corrections (2026-10-31)
 
 **LOCAL_CI_FAILURES_FIXED_READY_FOR_REVIEW / NO_COMMIT_OR_PUSH_AUTHORIZATION**.

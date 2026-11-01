@@ -3799,13 +3799,21 @@ Current CI jobs:
 
 ### HT-CI-01 parallel Compose contract
 
+`miniapp-e2e-smoke` also explicitly runs on `ubuntu-26.04`, with Node 20 and exact
+`@playwright/test` 1.61.1 ([Ubuntu 26.04 support starts in Playwright 1.61](https://playwright.dev/docs/release-notes#version-161)).
+It records the installed Playwright version, installs real Chromium with system dependencies,
+and runs the complete existing smoke with JSON reporting. The 216-test floor, mandatory spec
+inventory and zero failures/flaky/skipped/runner-errors/failed-attempts requirements are unchanged.
+Browser platform overrides and fallback to an unsupported browser are not part of this contract.
+
 This topology supersedes earlier references to the current twelve-job layout; historical CI
 observations and receipts remain unchanged. The exact release contract now has 15 jobs. The original
 11 non-Compose jobs, including all eight `backend` dependencies, are unchanged. `push` and
 `pull_request` triggers and `contents: read` remain unchanged.
 
-Three independent GitHub-hosted `ubuntu-latest` runners execute `compose-cutover`,
-`compose-prerequisite` and `compose-runtime` concurrently. Each retains the 60-minute job timeout,
+Three independent GitHub-hosted runners execute `compose-cutover`, `compose-prerequisite`
+and `compose-runtime` concurrently. Runtime is pinned to `ubuntu-26.04` for explicit CI #656
+compatibility coverage; the other two use `ubuntu-latest`. Each retains the 60-minute job timeout,
 full checkout history, Java 21, PostgreSQL17/18 and libpq18, SSH/Caddy preparation, endpoint guard
 self-test and tool-version recording. Setup is repeated deliberately: no artifact transfer, shared
 server, shared filesystem or cross-job state is introduced. Fixtures allocate their own temporary
@@ -3813,6 +3821,23 @@ roots and owned resources; endpoint confinement, signals, timeouts and cleanup c
 Process-sensitive checks remain serial within each worker. Runtime and closure evidence summaries
 stay with their producing steps, in the original order. Compose `.env` creation stays directly
 before config validation in `compose-cutover`.
+
+The ordinary lifecycle retains a closed first-failure record in its existing `result.json`:
+stage, consumer, reason category, exit/timeout, supervisor exit and children (`REAPED` or
+`UNKNOWN`). Only the existing identity/hash-verified supervisor result can attest child
+completion. Missing or malformed evidence stays UNKNOWN; later upload/cleanup errors cannot
+replace the first worker failure. No raw child output, exception text or traceback is published.
+`cleanup_quiescent` remains subject to the existing independent cleanup proof and a nonzero
+worker never becomes PASS. Portable ordinary regressions cover this pipeline; the hosted
+lifecycle also verifies it using its existing deliberate metadata refusal, without a retry.
+
+Runtime fixture image builds explicitly use `--provenance=false`, matching the canonical
+release-image export contract. With a containerd image store, default BuildKit provenance
+can make the image identity an OCI index containing the platform manifest and an attestation.
+The existing ordinary archive verifier requires a single platform manifest and deliberately
+rejects that nested index. Preserve this rejection, exact image/tag/labels/layer checks and
+all operational admission rules; fix the fixture producer instead. Portable regressions cover
+the producer option, canonical archive success, nested-index refusal and wrong-image refusal.
 
 `compose` retains its original check name and directly needs all three workers. Both the job and its
 single local aggregation step use `always()`. Exact dependency names, `result=success`, and the
