@@ -3,6 +3,7 @@ import { defineConfig, devices } from '@playwright/test'
 const port = Number(process.env.MINIAPP_E2E_PORT ?? 5173)
 const baseURL = `http://127.0.0.1:${port}/miniapp/`
 const reuseExistingServer = process.env.MINIAPP_E2E_REUSE_EXISTING === 'true' && !process.env.CI
+const production = process.env.MINIAPP_E2E_PRODUCTION === 'true'
 
 export default defineConfig({
   testDir: './e2e',
@@ -17,7 +18,7 @@ export default defineConfig({
     trace: 'retain-on-failure'
   },
   webServer: {
-    command: `VITE_BACKEND_PUBLIC_URL=http://127.0.0.1:${port} npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
+    command: `VITE_BACKEND_PUBLIC_URL=http://127.0.0.1:${port} npm run ${production ? 'preview' : 'dev'} -- --host 127.0.0.1 --port ${port} --strictPort`,
     url: baseURL,
     reuseExistingServer,
     timeout: 60_000
@@ -26,6 +27,7 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] }
-    }
+    },
+    ...(process.env.MINIAPP_E2E_WEBKIT === 'true' ? [{ name: 'webkit', use: { ...devices['iPhone 13'] } }] : [])
   ]
 })

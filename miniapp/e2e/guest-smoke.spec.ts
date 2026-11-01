@@ -1,3 +1,5 @@
+import { infoMediaPdf } from './fixtures/info-media'
+import { readFileSync } from 'node:fs'
 import { expect, type Locator, type Page, type Route, test } from '@playwright/test'
 import tableQrFixture from './fixtures/table-qr.json' with { type: 'json' }
 
@@ -1760,6 +1762,7 @@ async function installTelegramWebApp(page: Page, userId: number) {
         const nextUserId = Number.isFinite(storedUserId) && storedUserId > 0 ? storedUserId : defaultUserId;
         const nextInitData = window.localStorage.getItem('__e2e_telegram_init_data') || defaultInitData;
         const backCallbacks = [];
+        window.__e2eTelegramBackClick = () => [...backCallbacks].forEach((callback) => callback());
         window.__e2eTelegramBackButtonVisible = false;
         window.__e2eTelegramSendDataPayloads = [];
         window.__e2eTelegramOpenedLinks = [];
@@ -1863,7 +1866,9 @@ async function navigateVenueSection(page: Page, name: string) {
 
 async function clickTelegramBackButton(page: Page) {
   await page.evaluate(() => {
-    window.dispatchEvent(new Event('hookah:e2e-telegram-back'))
+    const click = (window as any).__e2eTelegramBackClick
+    if (click) click()
+    else window.dispatchEvent(new Event('hookah:e2e-telegram-back'))
   })
 }
 
@@ -15870,6 +15875,7 @@ test('venue owner opens the published guest preview with public read-only conten
 
   await expect(preview.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
   await expect(preview).toContainText('Ознакомительное меню в опубликованной карточке.')
+  await preview.locator('.venue-info-media-image').scrollIntoViewIfNeeded()
   await expect(preview.getByRole('img', { name: '📖 Фото-меню 1' })).toBeVisible()
 
   await expect(preview.getByRole('heading', { name: 'Сегодня работают', exact: true })).toBeVisible()
@@ -16059,6 +16065,7 @@ test('venue owner and manager open saved draft previews through the shared read-
   await expect(preview).toContainText('Анна')
   await expect(preview.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
   await expect(preview).toContainText('Чай в подарок')
+  await preview.locator('.venue-info-media-image').first().scrollIntoViewIfNeeded()
   await expect(preview.getByRole('img', { name: 'О заведении 1' })).toBeVisible()
   await expect(preview.getByRole('button', { name: /Забронировать|В избранное|Задать вопрос|Вызвать персонал/ })).toHaveCount(0)
   await expect(preview.getByRole('button', { name: /Сохранить|Опубликовать|Удалить/ })).toHaveCount(0)
@@ -26441,20 +26448,20 @@ for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
     const requests: Array<{ method: string; authorization?: string }> = []
     await page.route(`**${prefix}/info-sections/10/media/101`, async (route) => {
       requests.push({ method: route.request().method(), authorization: route.request().headers().authorization })
-      await route.fulfill({ status: 200, contentType: 'application/pdf', body: '%PDF-1.4\n% synthetic transport fixture\n%%EOF' })
+      await route.fulfill({ status: 200, contentType: 'application/pdf', body: infoMediaPdf() })
     })
     await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
     if (mode === 'guest') await page.getByRole('button', { name: 'Открыть карточку' }).click()
     else await openVenueSection(page, 'Предпросмотр для гостя')
+    await page.locator('.venue-info-media-image').scrollIntoViewIfNeeded()
     const image = page.getByRole('img', { name: '📖 Фото-меню 1', exact: true })
     await expect(image).toBeVisible()
     await expect.poll(() => image.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
-    const pdf = page.getByRole('link', { name: 'Открыть PDF', exact: true })
-    await expect(pdf).toHaveAttribute('target', '_blank')
-    await expect(pdf).toHaveAttribute('rel', 'noopener noreferrer')
-    await expect(pdf).toHaveAttribute('href', mode === 'guest' ? /\/api\/guest\/venue\/1\/info-sections\/10\/media\/101$/ : /^blob:/)
-    const contentType = await pdf.evaluate(async (link) => (await fetch((link as HTMLAnchorElement).href)).headers.get('content-type'))
-    expect(contentType).toBe('application/pdf')
+    const pdf = page.locator('.venue-info-media-pdf')
+    await pdf.scrollIntoViewIfNeeded()
+    await expect(pdf).toHaveAttribute('data-state', 'ready')
+    await expect(pdf.getByRole('img')).toHaveAttribute('aria-label', '📖 Фото-меню 2 · страница 1 из 2')
+    await expect(page.locator('a[href^="blob:"]')).toHaveCount(0)
     expect(requests).toEqual([{ method: 'GET', authorization: mode === 'guest' ? undefined : 'Bearer e2e-session-token' }])
     await expect(page.getByTestId('venue-card-info-media')).toHaveCount(0)
     if (mode !== 'guest') {
@@ -26471,6 +26478,12 @@ async function mockDirectVenueInfoMedia(page: Page, options: { disabled?: boolea
   let lost = false
   const failed = new Set<string>()
   await page.route('**/api/venue/1/info-media', (route) => route.fulfill(jsonResponse(state)))
+  await page.route('**/api/venue/1/info-sections/10/media/*/content', async (route) => {
+    expect(route.request().headers().authorization).toBe('Bearer e2e-session-token')
+    const id = route.request().url().split('/').at(-2)
+    const item = state.sections[0].media.find((media) => media.id === id)
+    await route.fulfill(item ? { status: 200, contentType: item.type === 'pdf' ? 'application/pdf' : 'image/png', body: item.type === 'pdf' ? infoMediaPdf() : syntheticStaffPng } : { status: 404 })
+  })
   await page.route('**/api/venue/1/info-sections/10/media-operations/*', (route) => {
     const key = route.request().url().split('/').pop()!
     return route.fulfill(jsonResponse({ status: failed.has(key) ? 'FAILED' : committed.has(key) ? 'SUCCESS' : 'UNKNOWN' }))
@@ -26520,10 +26533,12 @@ for (const role of ['OWNER', 'MANAGER'] as const) {
     await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
     const editor = page.locator('.venue-info-editor')
     await expect(editor.getByText('Изменения материалов сохраняются сразу.', { exact: false })).toBeVisible()
-    await editor.getByLabel('Добавить файлы: О заведении', { exact: true }).setInputFiles([syntheticUpload, { name: 'menu.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n%%EOF') }])
+    await editor.getByLabel('Добавить файлы: О заведении', { exact: true }).setInputFiles([syntheticUpload, { name: 'menu.pdf', mimeType: 'application/pdf', buffer: infoMediaPdf() }])
     await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(2)
     expect(api.uploads.map((u) => u.mime)).toEqual(['image/png', 'application/pdf'])
-    await editor.getByRole('button', { name: 'Скрыть вложение', exact: true }).first().click()
+    const hideAttachment = editor.getByRole('button', { name: 'Скрыть вложение', exact: true }).first()
+    if (testInfo.project.use.hasTouch) await hideAttachment.tap()
+    else await hideAttachment.click()
     await expect(editor.getByRole('button', { name: 'Показать вложение', exact: true })).toHaveCount(1)
     await editor.getByLabel('Заменить вложение 1', { exact: true }).setInputFiles({ name: 'replacement.jpg', mimeType: 'image/jpeg', buffer: Buffer.from([255, 216, 255, 217]) })
     await expect.poll(() => api.uploads.length).toBe(3)
@@ -26592,16 +26607,18 @@ for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
     const reads: Array<{ authorization?: string; media: string }> = []
     for (const id of [imageId, pdfId]) await page.route(`**${prefix}/info-sections/10/media/${id}`, async (route) => {
       reads.push({ authorization: route.request().headers().authorization, media: id })
-      await route.fulfill({ status: 200, contentType: id === imageId ? 'image/png' : 'application/pdf', body: id === imageId ? syntheticStaffPng : Buffer.from('%PDF-1.4\n%%EOF') })
+      await route.fulfill({ status: 200, contentType: id === imageId ? 'image/png' : 'application/pdf', body: id === imageId ? syntheticStaffPng : infoMediaPdf() })
     })
     await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
     if (mode === 'guest') await page.getByRole('button', { name: 'Открыть карточку' }).click()
     else await openVenueSection(page, 'Предпросмотр для гостя')
+    await page.locator('.venue-info-media-image').scrollIntoViewIfNeeded()
     const image = page.getByRole('img', { name: '📖 Фото-меню 1', exact: true })
     await expect.poll(() => image.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
-    const pdf = page.getByRole('link', { name: 'Открыть PDF', exact: true })
-    await expect(pdf).toHaveAttribute('href', mode === 'guest' ? new RegExp(`${pdfId}$`) : /^blob:/)
-    expect(await pdf.evaluate(async (link) => (await fetch((link as HTMLAnchorElement).href)).headers.get('content-type'))).toBe('application/pdf')
+    const pdf = page.locator('.venue-info-media-pdf')
+    await pdf.scrollIntoViewIfNeeded()
+    await expect(pdf).toHaveAttribute('data-state', 'ready')
+    await expect(page.locator('a[href^="blob:"]')).toHaveCount(0)
     expect(reads).toHaveLength(2)
     expect(reads.every((r) => r.authorization === (mode === 'guest' ? undefined : 'Bearer e2e-session-token'))).toBe(true)
     await expect(page.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(0)
@@ -26618,6 +26635,7 @@ test('direct venue info media private preview refuses a foreign opaque attachmen
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Предпросмотр для гостя')
   await expect(page.getByRole('heading', { name: 'О заведении', exact: true })).toBeVisible()
+  await page.locator('.venue-info-media-image').scrollIntoViewIfNeeded()
   await expect(page.getByText(/^Не удалось загрузить изображение/)).toBeVisible()
   expect(foreignReads).toBe(0)
 })
@@ -26667,8 +26685,16 @@ test('direct venue info media History Back retains unknown file and idempotency 
   await installTelegramWebApp(page, 123456789)
   await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
   const api = await mockDirectVenueInfoMedia(page, { loseFirstResponse: true })
-  const bodies: Buffer[] = []
-  page.on('request', (r) => { if (r.url().endsWith('/info-sections/10/media')) bodies.push(r.postDataBuffer()!) })
+  await page.addInitScript(() => {
+    const bodies: number[][] = []; (window as any).__mediaUploadBodies = bodies
+    const nativeFetch = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      if (String(input).endsWith('/info-sections/10/media') && init?.body instanceof Blob) {
+        bodies.push(Array.from(new Uint8Array(await init.body.arrayBuffer())))
+      }
+      return nativeFetch(input, init)
+    }
+  })
   await page.goto('?mode=venue#/dashboard')
   await page.getByRole('button', { name: 'Настройки', exact: true }).click()
   await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
@@ -26683,7 +26709,10 @@ test('direct venue info media History Back retains unknown file and idempotency 
   await editor.getByRole('button', { name: 'Повторить загрузку', exact: true }).click()
   await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(1)
   expect(api.uploads).toHaveLength(2); expect(api.uploads[0]).toEqual(api.uploads[1])
-  expect(bodies[0].equals(bodies[1])).toBe(true)
+  const bodies = await page.evaluate(() => (window as any).__mediaUploadBodies as number[][])
+  expect(bodies).toHaveLength(2)
+  expect(bodies[0]).toEqual(Array.from(syntheticUpload.buffer))
+  expect(bodies[0]).toEqual(bodies[1])
 })
 
 test('direct venue info media FAILED refresh explicit new operation succeeds and keeps old attachment', async ({ page }) => {
@@ -26723,4 +26752,633 @@ test('direct venue info media UNKNOWN cannot discard its key and SUCCESS refresh
   await expect(editor.getByRole('button', { name: 'Повторить загрузку', exact: true })).toHaveCount(0)
   await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(1)
   expect(api.uploads).toHaveLength(1)
+})
+
+async function mockInlinePdfPreview(page: Page, options: {
+  mode?: 'guest' | 'PRIVATE_DRAFT' | 'PUBLISHED_PUBLIC'; count?: number; pages?: number;
+  status?: number; body?: Buffer; urls?: string[]
+} = {}) {
+  const mode = options.mode ?? 'PRIVATE_DRAFT'
+  await installTelegramWebApp(page, 123456789)
+  const prefix = mode === 'PRIVATE_DRAFT' ? '/api/venue/1/guest-preview' : '/api/guest/venue/1'
+  const section: VenueGuestPreviewInfoSectionFixture = {
+    id: 10, type: 'about', title: 'О заведении', displayTitle: 'О заведении', text: '', mediaCount: options.count ?? 1,
+    media: Array.from({ length: options.count ?? 1 }, (_, index) => ({ id: index + 100, mediaType: 'pdf', sortOrder: index,
+      url: options.urls?.[index] ?? `${prefix}/info-sections/10/media/${index + 100}` }))
+  }
+  if (mode === 'guest') {
+    await mockGuestApi(page)
+    await page.route('**/api/guest/venue/1/info-sections', (route) => route.fulfill(jsonResponse({ venueId: 1, sections: [section] })))
+  } else {
+    const fixture = mode === 'PRIVATE_DRAFT' ? buildVenuePrivatePreviewFixture(1) : buildVenueGuestPreviewFixture(1)
+    await mockVenueGuestPreviewApi(page, { role: 'MANAGER', previews: { 1: { ...fixture, infoSections: [section] } } })
+  }
+  const reads: string[] = []
+  await page.route(`**${prefix}/info-sections/10/media/*`, async (route) => {
+    reads.push(route.request().url())
+    expect(route.request().headers().authorization).toBe(mode === 'guest' ? undefined : 'Bearer e2e-session-token')
+    await route.fulfill({ status: options.status ?? 200, contentType: 'application/pdf', body: options.body ?? infoMediaPdf(options.pages ?? 2) })
+  })
+  const open = async () => {
+    if (mode === 'guest') await page.getByRole('button', { name: 'Открыть карточку', exact: true }).click()
+    else await openVenueSection(page, 'Предпросмотр для гостя')
+  }
+  await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await open()
+  return { reads, open, prefix }
+}
+
+async function observeInlineMediaResources(page: Page) {
+  await page.addInitScript(() => {
+    const resources = { urls: new Set<string>(), workers: new Set<Worker>(), peakWorkers: 0, createdWorkers: 0, canvases: [] as HTMLCanvasElement[] }
+    ;(window as any).__inlineMedia = resources
+    const NativeWorker = window.Worker
+    window.Worker = class extends NativeWorker {
+      constructor(url: string | URL, options?: WorkerOptions) {
+        super(url, options)
+        resources.workers.add(this); resources.createdWorkers++
+        resources.peakWorkers = Math.max(resources.peakWorkers, resources.workers.size)
+      }
+      terminate() { resources.workers.delete(this); super.terminate() }
+    }
+    const create = URL.createObjectURL.bind(URL); const revoke = URL.revokeObjectURL.bind(URL)
+    URL.createObjectURL = (blob) => { const url = create(blob); resources.urls.add(url); return url }
+    URL.revokeObjectURL = (url) => { resources.urls.delete(url); revoke(url) }
+    const createElement = document.createElement.bind(document)
+    document.createElement = ((tag: string, options?: ElementCreationOptions) => {
+      const element = createElement(tag, options)
+      if (tag.toLowerCase() === 'canvas') resources.canvases.push(element as HTMLCanvasElement)
+      return element
+    }) as typeof document.createElement
+  })
+}
+
+async function inlineResourceCounts(page: Page) {
+  return page.evaluate(() => {
+    const resources = (window as any).__inlineMedia
+    return { workers: resources.workers.size, urls: resources.urls.size, peak: resources.peakWorkers,
+      created: resources.createdWorkers, pixels: resources.canvases.reduce((sum: number, canvas: HTMLCanvasElement) => sum + canvas.width * canvas.height, 0) }
+  })
+}
+
+for (const width of [320, 390]) {
+  test(`PDF inline first page and independent navigation of three documents at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 844 })
+    await observeInlineMediaResources(page)
+    const api = await mockInlinePdfPreview(page, { count: 3 })
+    const initialUrl = page.url()
+    const popups: Page[] = []; page.on('popup', (popup) => popups.push(popup))
+    const documents = page.locator('.venue-info-media-pdf')
+    await expect(documents).toHaveCount(3)
+    for (let index = 0; index < 3; index++) {
+      const document = documents.nth(index)
+      await document.scrollIntoViewIfNeeded()
+      await expect(document).toHaveAttribute('data-state', 'ready')
+      await expect(document.locator('.info-media-controls')).toContainText('1 из 2')
+      await expect(document.getByRole('button', { name: 'Предыдущая страница' })).toBeDisabled()
+      const canvas = document.locator('canvas')
+      const firstPixel = await canvas.evaluate((canvas) => Array.from(canvas.getContext('2d')!.getImageData(100, 100, 1, 1).data))
+      expect(firstPixel[0]).toBeGreaterThan(firstPixel[2])
+      await document.getByRole('button', { name: 'Следующая страница' }).click()
+      await expect(document).toHaveAttribute('data-state', 'ready')
+      await expect(document.locator('.info-media-controls')).toContainText('2 из 2')
+      await expect(document.getByRole('button', { name: 'Следующая страница' })).toBeDisabled()
+      const secondPixel = await canvas.evaluate((canvas) => Array.from(canvas.getContext('2d')!.getImageData(100, 100, 1, 1).data))
+      expect(secondPixel[2]).toBeGreaterThan(secondPixel[0])
+      expect(await canvas.evaluate((canvas) => canvas.width * canvas.height)).toBeLessThanOrEqual(1_500_000)
+      await expectNoHorizontalOverflow(page)
+    }
+    await expect(page.locator('a[href^="blob:"], iframe, embed, object')).toHaveCount(0)
+    expect(popups).toHaveLength(0); expect(page.url()).toBe(initialUrl)
+    expect(api.reads.length).toBeGreaterThanOrEqual(6)
+    await expect.poll(async () => (await inlineResourceCounts(page)).workers).toBe(0)
+    expect((await inlineResourceCounts(page)).peak).toBe(1)
+    await page.screenshot({ path: testInfo.outputPath(`pdf-inline-${width}.png`) })
+  })
+}
+
+for (const count of [1, 3]) {
+  test(`PDF inline editor confirms ${count} saved files with progress and stable cards`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
+    const api = await mockDirectVenueInfoMedia(page)
+    const releases: Array<() => void> = []
+    await page.route('**/api/venue/1/info-sections/10/media', async (route) => {
+      await new Promise<void>((resolve) => releases.push(resolve))
+      await route.fallback()
+    })
+    await page.goto('?mode=venue#/settings/card')
+    await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+    const editor = page.locator('.venue-info-editor')
+    const picker = editor.getByLabel('Добавить файлы: О заведении', { exact: true })
+    await expect(picker).toBeEnabled()
+    await picker.scrollIntoViewIfNeeded()
+    await picker.setInputFiles(Array.from({ length: count }, (_, index) => index === 1 ? syntheticUpload : { name: `file-${index}.pdf`, mimeType: 'application/pdf', buffer: infoMediaPdf() }))
+    for (let index = 0; index < count; index++) {
+      await expect.poll(() => releases.length).toBe(index + 1)
+      await expect(editor.getByRole('status')).toContainText(`Загружаем файл ${index + 1} из ${count}`)
+      await expect(editor.getByRole('progressbar')).toHaveAttribute('aria-label', `Загрузка файла ${index + 1} из ${count}`)
+      await expect(editor.locator('.venue-info-upload-file[data-state=success]')).toHaveCount(index)
+      await expect(editor.locator('.venue-info-attachment')).toHaveCount(index)
+      const scrollBefore = await page.evaluate(() => document.scrollingElement!.scrollTop)
+      releases[index]()
+      await expect(editor.locator('.venue-info-attachment')).toHaveCount(index + 1)
+      expect(Math.abs(await page.evaluate(() => document.scrollingElement!.scrollTop) - scrollBefore)).toBeLessThan(20)
+      await expect(editor).toHaveAttribute('open', '')
+    }
+    await expect(editor.getByRole('progressbar')).toHaveCount(0)
+    await expect(editor.getByRole('status')).toContainText(count === 1 ? 'PDF загружен' : 'Загружено файлов: 3 из 3')
+    const pdf = editor.locator('.venue-info-media-pdf').first()
+    await pdf.scrollIntoViewIfNeeded()
+    await expect(pdf).toHaveAttribute('data-state', 'ready')
+    const retained = await pdf.elementHandle()
+    await editor.getByRole('button', { name: 'Обновить список', exact: true }).click()
+    expect(await retained!.evaluate((node) => node.isConnected)).toBe(true)
+    await expect(editor.locator('.venue-info-upload-file[data-state=success]')).toHaveCount(count)
+    expect(api.uploads).toHaveLength(count)
+    await expect(page).toHaveURL(/#\/settings\/card$/)
+    await expectNoHorizontalOverflow(page)
+    await pdf.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: testInfo.outputPath(`pdf-upload-${count}.png`) })
+  })
+}
+
+for (const status of [400, 503]) {
+  test(`PDF inline editor ${status} does not announce success or create a saved card`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+    await mockDirectVenueInfoMedia(page)
+    await page.route('**/api/venue/1/info-sections/10/media', (route) => route.fulfill({ ...jsonResponse({ error: { message: 'Не удалось загрузить файл' } }), status }))
+    await page.goto('?mode=venue#/settings/card')
+    await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+    const editor = page.locator('.venue-info-editor')
+    await editor.getByLabel('Добавить файлы: О заведении').setInputFiles({ name: 'file.pdf', mimeType: 'application/pdf', buffer: infoMediaPdf() })
+    await expect(editor.locator(`.venue-info-upload-file[data-state=${status === 400 ? 'failed' : 'unknown'}]`)).toBeVisible()
+    await expect(editor.getByRole('status')).not.toContainText('PDF загружен')
+    await expect(editor.locator('.venue-info-attachment')).toHaveCount(0)
+    await expect(editor.getByRole('button', { name: status === 400 ? 'Начать новую загрузку' : 'Повторить загрузку', exact: true })).toBeEnabled()
+  })
+}
+
+for (const status of [403, 404, 503]) {
+  test(`PDF inline unavailable or hidden document ${status} has safe guidance`, async ({ page }) => {
+    await mockInlinePdfPreview(page, { status })
+    const pdf = page.locator('.venue-info-media-pdf')
+    await pdf.scrollIntoViewIfNeeded()
+    await expect(pdf).toHaveAttribute('data-state', 'error')
+    await expect(pdf).toContainText('PDF недоступен')
+    await expect(pdf.getByRole('button', { name: 'Повторить просмотр' })).toBeVisible()
+    await expect(pdf.getByRole('button', { name: 'Скачать файл' })).toBeHidden()
+    await expect(pdf.locator('canvas')).toBeHidden()
+    await expect(page.locator('a[href^="blob:"]')).toHaveCount(0)
+  })
+}
+
+test('PDF inline malformed document has explicit fallback with a fresh visibility check', async ({ page }) => {
+  const api = await mockInlinePdfPreview(page, { body: Buffer.from('%PDF-1.4\ninvalid\n%%EOF') })
+  const pdf = page.locator('.venue-info-media-pdf')
+  await pdf.scrollIntoViewIfNeeded()
+  await expect(pdf).toHaveAttribute('data-state', 'error')
+  await expect(pdf).toContainText('Не удалось показать файл')
+  await expect(pdf.getByRole('button', { name: 'Скачать файл' })).toBeVisible()
+  let checks = 0
+  await page.route(`**${api.prefix}/info-sections/10/media/*`, async (route) => { checks++; await route.fulfill({ status: 404 }) })
+  await pdf.getByRole('button', { name: 'Скачать файл' }).click()
+  await expect(pdf).toContainText('Файл недоступен. Обновите список')
+  expect(checks).toBe(1)
+  await expect(pdf.getByRole('button', { name: 'Скачать файл' })).toBeHidden()
+  await expect(page.locator('a[href^="blob:"]')).toHaveCount(0)
+})
+
+test('PDF inline frees workers canvases and URLs on exit and reopening', async ({ page }) => {
+  await observeInlineMediaResources(page)
+  const api = await mockInlinePdfPreview(page)
+  for (let cycle = 0; cycle < 3; cycle++) {
+    const pdf = page.locator('.venue-info-media-pdf')
+    await pdf.scrollIntoViewIfNeeded()
+    await expect(pdf).toHaveAttribute('data-state', 'ready')
+    await page.getByRole('button', { name: 'Вернуться в кабинет', exact: true }).click()
+    await expect(page).toHaveURL(/#\/dashboard$/)
+    await expect.poll(async () => await inlineResourceCounts(page)).toMatchObject({ workers: 0, urls: 0, pixels: 0, peak: 1 })
+    if (cycle < 2) await api.open()
+  }
+})
+
+test('PDF inline cancels an in-flight document on exit and can reopen', async ({ page }) => {
+  await observeInlineMediaResources(page)
+  const api = await mockInlinePdfPreview(page, { status: 503 })
+  const pdf = page.locator('.venue-info-media-pdf')
+  await pdf.scrollIntoViewIfNeeded()
+  await expect(pdf).toHaveAttribute('data-state', 'error')
+  let release: () => void = () => undefined
+  let started = false
+  await page.route(`**${api.prefix}/info-sections/10/media/*`, async (route) => {
+    started = true
+    await new Promise<void>((resolve) => { release = resolve })
+    await route.fulfill({ status: 200, contentType: 'application/pdf', body: infoMediaPdf() }).catch(() => undefined)
+  })
+  await pdf.getByRole('button', { name: 'Повторить просмотр' }).click()
+  await expect.poll(() => started).toBe(true)
+  await page.getByRole('button', { name: 'Вернуться в кабинет', exact: true }).click()
+  release()
+  await expect.poll(async () => await inlineResourceCounts(page)).toMatchObject({ workers: 0, urls: 0, pixels: 0 })
+  await page.route(`**${api.prefix}/info-sections/10/media/*`, (route) => route.fulfill({ status: 200, contentType: 'application/pdf', body: infoMediaPdf() }))
+  await api.open()
+  await pdf.scrollIntoViewIfNeeded()
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+})
+
+test('PDF inline does not execute active legacy content or render all 200 pages', async ({ page }) => {
+  await observeInlineMediaResources(page)
+  const dialogs: string[] = []
+  page.on('dialog', async (dialog) => { dialogs.push(dialog.message()); await dialog.dismiss() })
+  await mockInlinePdfPreview(page, { body: infoMediaPdf(200, true) })
+  const pdf = page.locator('.venue-info-media-pdf')
+  await pdf.scrollIntoViewIfNeeded()
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+  await expect(pdf.locator('.info-media-controls')).toContainText('1 из 200')
+  await expect(pdf.locator('canvas')).toHaveCount(1)
+  expect((await inlineResourceCounts(page)).created).toBe(1)
+  expect((await inlineResourceCounts(page)).pixels).toBeLessThanOrEqual(1_500_000)
+  expect(dialogs).toEqual([])
+  await expect(pdf.locator('a, input, iframe, embed, object')).toHaveCount(0)
+})
+
+test('PDF inline refuses foreign private routes and provider URLs before fetching', async ({ page }) => {
+  let foreign = 0
+  await page.route('https://foreign.example/**', async (route) => { foreign++; await route.fulfill({ status: 200 }) })
+  await page.route('**/api/venue/2/guest-preview/info-sections/**', async (route) => { foreign++; await route.fulfill({ status: 200 }) })
+  await mockInlinePdfPreview(page, { count: 2, urls: ['/api/venue/2/guest-preview/info-sections/10/media/100', 'https://foreign.example/document.pdf'] })
+  const documents = page.locator('.venue-info-media-pdf')
+  for (let index = 0; index < 2; index++) {
+    await documents.nth(index).scrollIntoViewIfNeeded()
+    await expect(documents.nth(index)).toHaveAttribute('data-state', 'error')
+  }
+  expect(foreign).toBe(0)
+})
+
+test('PDF inline pagehide clears resources and pageshow restores the selected page', async ({ page }) => {
+  await observeInlineMediaResources(page)
+  await mockInlinePdfPreview(page)
+  const pdf = page.locator('.venue-info-media-pdf')
+  await pdf.scrollIntoViewIfNeeded()
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+  await pdf.getByRole('button', { name: 'Следующая страница' }).click()
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')))
+  await expect.poll(async () => await inlineResourceCounts(page)).toMatchObject({ workers: 0, urls: 0, pixels: 0 })
+  await page.evaluate(() => window.dispatchEvent(new Event('pageshow')))
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+  await expect(pdf.locator('.info-media-controls')).toContainText('2 из 2')
+  await page.setViewportSize({ width: 844, height: 390 })
+  await pdf.scrollIntoViewIfNeeded()
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+  await expectNoHorizontalOverflow(page)
+})
+
+for (const boundary of ['bytes', 'pages', 'worker'] as const) {
+  test(`PDF inline ${boundary} limit shows an error and releases the queue`, async ({ page }) => {
+    await observeInlineMediaResources(page)
+    if (boundary === 'worker') await page.route('**/*pdf.worker*.mjs*', (route) =>
+      new URL(route.request().url()).searchParams.has('url') ? route.continue() : route.abort())
+    const api = await mockInlinePdfPreview(page, { body: boundary === 'bytes' ? Buffer.alloc(10 * 1024 * 1024 + 1, 32) : infoMediaPdf(boundary === 'pages' ? 201 : 2) })
+    const pdf = page.locator('.venue-info-media-pdf')
+    await pdf.scrollIntoViewIfNeeded()
+    await expect(pdf).toHaveAttribute('data-state', 'error', { timeout: 25000 })
+    await expect(pdf.getByRole('button', { name: 'Повторить просмотр' })).toBeVisible()
+    await expect.poll(async () => (await inlineResourceCounts(page)).workers).toBe(0)
+    expect((await inlineResourceCounts(page)).pixels).toBe(0)
+    if (boundary === 'worker') await page.unroute('**/*pdf.worker*.mjs*')
+    await page.route(`**${api.prefix}/info-sections/10/media/*`, (route) => route.fulfill({ status: 200, contentType: 'application/pdf', body: infoMediaPdf() }))
+    await pdf.getByRole('button', { name: 'Повторить просмотр' }).click()
+    await expect(pdf).toHaveAttribute('data-state', 'ready')
+  })
+}
+
+test('PDF inline preserves JPEG and PNG and does not load a renderer without PDFs', async ({ page }) => {
+  await observeInlineMediaResources(page)
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  const jpeg = Buffer.from(await page.evaluate(() => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 16
+    const context = canvas.getContext('2d')!; context.fillStyle = '#176fe0'; context.fillRect(0, 0, 16, 16)
+    return canvas.toDataURL('image/jpeg').split(',')[1]
+  }), 'base64')
+  await page.route('**/api/guest/venue/1/info-sections', (route) => route.fulfill(jsonResponse({ venueId: 1, sections: [{ id: 10, title: 'О заведении', displayTitle: 'О заведении', type: 'about', mediaCount: 2, media: [
+    { id: 100, mediaType: 'image', sortOrder: 0, url: '/api/guest/venue/1/info-sections/10/media/100' },
+    { id: 101, mediaType: 'image', sortOrder: 1, url: '/api/guest/venue/1/info-sections/10/media/101' }
+  ] }] })))
+  await page.route('**/api/guest/venue/1/info-sections/10/media/*', (route) => route.fulfill({ status: 200,
+    contentType: route.request().url().endsWith('/100') ? 'image/jpeg' : 'image/png',
+    body: route.request().url().endsWith('/100') ? jpeg : syntheticStaffPng }))
+  const rendererRequests: string[] = []
+  page.on('request', (request) => { if (/pdfPageRenderer|pdf.worker/.test(request.url())) rendererRequests.push(request.url()) })
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть карточку', exact: true }).click()
+  const images = page.locator('.venue-info-media-image')
+  for (let index = 0; index < 2; index++) {
+    await images.nth(index).scrollIntoViewIfNeeded()
+    await expect(images.nth(index)).toHaveAttribute('data-state', 'ready')
+    expect(await images.nth(index).locator('img').evaluate((image) => image.naturalWidth)).toBeGreaterThan(0)
+  }
+  expect(rendererRequests).toEqual([])
+  expect((await inlineResourceCounts(page)).created).toBe(0)
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')))
+  expect((await inlineResourceCounts(page)).urls).toBe(0)
+})
+
+for (const type of ['image', 'pdf']) {
+  test(`PDF inline saved ${type} card controls do not move when rendering completes`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 568 })
+    await installTelegramWebApp(page, 123456789)
+    await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
+    const api = await mockDirectVenueInfoMedia(page)
+    api.state.sections[0].media.push({ id: '99', type, visible: true, status: 'READY', sortOrder: 0, size: 1000, source: 'TELEGRAM_FILE' })
+    let release: (() => void) | undefined
+    await page.route('**/api/venue/1/info-sections/10/media/99/content', async (route) => {
+      if (!release) await new Promise<void>((resolve) => { release = resolve })
+      await route.fallback()
+    })
+    await page.goto('?mode=venue#/settings/card')
+    await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+    const card = page.locator('[data-media-id="99"]')
+    const preview = card.locator('.info-media-preview')
+    await preview.scrollIntoViewIfNeeded()
+    const button = card.getByRole('button', { name: 'Скрыть вложение', exact: true })
+    await expect.poll(() => Boolean(release)).toBe(true)
+    const before = await button.boundingBox()
+    release!()
+    await expect(preview).toHaveAttribute('data-state', 'ready')
+    const after = await button.boundingBox()
+    expect(Math.abs(after!.y - before!.y)).toBeLessThan(2)
+    if (testInfo.project.use.hasTouch) await button.tap()
+    else await button.click()
+    await expect(card.getByRole('button', { name: 'Показать вложение', exact: true })).toBeVisible()
+  })
+}
+
+// Faults fire after an actual PDF FontFace registration, not during byte fetching.
+async function installPdfCleanupProbe(page: Page) {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.addInitScript(() => {
+    const probe = { fault: '', registrations: 0, filterFaults: 0, workers: new Set<Worker>(), heldFonts: [] as FontFace[], heldFilters: [] as Element[] }
+    ;(window as any).__pdfCleanup = probe
+    const NativeWorker = window.Worker
+    window.Worker = class extends NativeWorker {
+      constructor(url: string | URL, options?: WorkerOptions) {
+        super(url, options)
+        if (options?.name === 'venue-info-pdf') probe.workers.add(this)
+      }
+      terminate() { probe.workers.delete(this); super.terminate() }
+    }
+    const fail = () => {
+      const fault = probe.fault; probe.fault = ''
+      if (fault !== 'abort') {
+        for (const worker of [...probe.workers]) {
+          if (fault !== 'stalled') worker.dispatchEvent(new Event('error'))
+          worker.terminate() // No Terminate acknowledgement can arrive from this worker.
+        }
+      }
+      if (fault === 'abort' || fault === 'stalled') window.dispatchEvent(new Event('pagehide'))
+    }
+    const add = document.fonts.add.bind(document.fonts)
+    document.fonts.add = (font) => {
+      const result = add(font)
+      probe.registrations++
+      if (probe.fault && probe.fault !== 'filter') queueMicrotask(fail)
+      return result
+    }
+    const fillText = CanvasRenderingContext2D.prototype.fillText
+    CanvasRenderingContext2D.prototype.fillText = function (...args: Parameters<typeof fillText>) {
+      if (probe.fault === 'filter' && document.querySelectorAll('filter').length > probe.heldFilters.length) {
+        probe.filterFaults++
+        fail()
+        throw new Error('Synthetic canvas failure after PDF filter creation')
+      }
+      return fillText.apply(this, args)
+    }
+  })
+  // A second real PDF document stays open independently of the application's serial renderer.
+  for (const file of ['pdf.mjs', 'pdf.worker.mjs']) await page.route(`**/__pdf_probe__/${file}`, (route) => route.fulfill({
+    contentType: 'text/javascript', body: readFileSync(new URL(`../node_modules/pdfjs-dist/legacy/build/${file}`, import.meta.url))
+  }))
+  await page.route('**/__pdf_probe__/fonts/*', (route) => route.fulfill({
+    body: readFileSync(new URL(`../node_modules/pdfjs-dist/standard_fonts/${new URL(route.request().url()).pathname.split('/').pop()}`, import.meta.url))
+  }))
+  return errors
+}
+
+async function holdOtherPdfResources(page: Page) {
+  await page.evaluate(async (bytes) => {
+    const probe = (window as any).__pdfCleanup
+    const libraryUrl = '/__pdf_probe__/pdf.mjs'
+    const pdfjs = await import(/* @vite-ignore */ libraryUrl)
+    const port = new Worker('/__pdf_probe__/pdf.worker.mjs', { type: 'module' })
+    const worker = pdfjs.PDFWorker.create({ port })
+    const loading = pdfjs.getDocument({ data: new Uint8Array(bytes), worker, isEvalSupported: false,
+      useSystemFonts: false, standardFontDataUrl: `${location.origin}/__pdf_probe__/fonts/` })
+    const pdf = await loading.promise
+    const pdfPage = await pdf.getPage(1)
+    const canvas = document.createElement('canvas')
+    const viewport = pdfPage.getViewport({ scale: 1 })
+    canvas.width = viewport.width; canvas.height = viewport.height
+    await pdfPage.render({ canvas, viewport }).promise
+    const appFont = new FontFace('app-cleanup-sentinel', 'local(Arial)')
+    document.fonts.add(appFont)
+    probe.heldFonts = [...document.fonts]
+    probe.heldFilters = [...document.querySelectorAll('filter')]
+    probe.release = async () => { await loading.destroy(); worker.destroy(); port.terminate(); document.fonts.delete(appFont); canvas.width = canvas.height = 0 }
+  }, [...infoMediaPdf(1, false, true)])
+  expect(await page.evaluate(() => (window as any).__pdfCleanup.heldFonts.length)).toBeGreaterThanOrEqual(2)
+  expect(await page.evaluate(() => (window as any).__pdfCleanup.heldFilters.length)).toBeGreaterThan(0)
+}
+
+async function pdfCleanupCounts(page: Page) {
+  return page.evaluate(() => {
+    const probe = (window as any).__pdfCleanup
+    return { extraFonts: [...document.fonts].filter((font) => !probe.heldFonts.includes(font)).length,
+      extraFilters: [...document.querySelectorAll('filter')].filter((filter) => !probe.heldFilters.includes(filter)).length,
+      heldFontsPresent: probe.heldFonts.every((font: FontFace) => document.fonts.has(font)),
+      heldFiltersPresent: probe.heldFilters.every((filter: Element) => filter.isConnected),
+      workers: probe.workers.size, registrations: probe.registrations, filterFaults: probe.filterFaults }
+  })
+}
+
+test('PDF inline P2 cleanup after font registration preserves another PDF and app fonts', async ({ page }, testInfo) => {
+  const errors = await installPdfCleanupProbe(page)
+  const api = await mockInlinePdfPreview(page)
+  const pdf = page.locator('.venue-info-media-pdf')
+  await pdf.scrollIntoViewIfNeeded()
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+  expect(await page.evaluate(() => document.fonts.size)).toBe(0)
+  await holdOtherPdfResources(page)
+  const evidence: unknown[] = []
+  for (const fault of ['abort', 'abort', 'abort', 'workerError', 'stalled']) {
+    await page.evaluate(() => window.dispatchEvent(new Event('pagehide')))
+    const before = (await pdfCleanupCounts(page)).registrations
+    const started = Date.now()
+    await page.evaluate((fault) => { (window as any).__pdfCleanup.fault = fault; window.dispatchEvent(new Event('pageshow')) }, fault)
+    await expect.poll(async () => (await pdfCleanupCounts(page)).registrations).toBeGreaterThan(before)
+    await expect.poll(async () => (await pdfCleanupCounts(page)).workers).toBe(0)
+    await expect(pdf).toHaveAttribute('data-state', fault === 'workerError' ? 'error' : 'idle')
+    // Allow the bounded destroy grace period; assert fonts, not just worker termination.
+    await expect.configure({ soft: true }).poll(async () => (await pdfCleanupCounts(page)).extraFonts, { timeout: 1500 }).toBe(0)
+    const counts = await pdfCleanupCounts(page)
+    evidence.push({ fault, elapsedMs: Date.now() - started, ...counts })
+    expect.soft(counts).toMatchObject({ extraFonts: 0, extraFilters: 0, heldFontsPresent: true, heldFiltersPresent: true })
+  }
+  await page.evaluate(() => window.dispatchEvent(new Event('pageshow')))
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+  await pdf.getByRole('button', { name: 'Следующая страница' }).click()
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+  await expect(pdf.locator('.info-media-controls')).toContainText('2 из 2')
+  expect.soft(await pdfCleanupCounts(page)).toMatchObject({ extraFonts: 0, heldFontsPresent: true, heldFiltersPresent: true })
+  // Exit during a real render, immediately after the next PDF font is registered.
+  await page.evaluate(() => {
+    const add = document.fonts.add.bind(document.fonts)
+    document.fonts.add = (font) => {
+      const result = add(font)
+      queueMicrotask(() => [...document.querySelectorAll('button')].find((button) => button.textContent === 'Вернуться в кабинет')?.click())
+      return result
+    }
+  })
+  await pdf.getByRole('button', { name: 'Предыдущая страница' }).click()
+  await expect(page).toHaveURL(/#\/dashboard$/)
+  await expect.configure({ soft: true }).poll(async () => (await pdfCleanupCounts(page)).extraFonts, { timeout: 1500 }).toBe(0)
+  expect.soft(await pdfCleanupCounts(page)).toMatchObject({ workers: 0, heldFontsPresent: true, heldFiltersPresent: true })
+  await testInfo.attach('pdf-cleanup-counts', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' })
+  await page.evaluate(() => (window as any).__pdfCleanup.release())
+  expect(errors).toEqual([])
+  expect(api.reads.length).toBeGreaterThanOrEqual(8)
+})
+
+test('PDF inline P2 forced worker error releases already created SVG filters and fonts', async ({ page }) => {
+  const errors = await installPdfCleanupProbe(page)
+  await mockInlinePdfPreview(page, { body: infoMediaPdf(2, false, true) })
+  const pdf = page.locator('.venue-info-media-pdf')
+  await pdf.scrollIntoViewIfNeeded()
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+  await holdOtherPdfResources(page)
+  await page.evaluate(() => { (window as any).__pdfCleanup.fault = 'filter' })
+  await pdf.getByRole('button', { name: 'Следующая страница' }).click()
+  await expect(pdf).toHaveAttribute('data-state', 'error')
+  await expect.poll(async () => (await pdfCleanupCounts(page)).workers).toBe(0)
+  await expect.poll(async () => (await pdfCleanupCounts(page)).extraFonts).toBe(0)
+  expect(await pdfCleanupCounts(page)).toMatchObject({ extraFilters: 0, heldFontsPresent: true, heldFiltersPresent: true, filterFaults: 1 })
+  await pdf.getByRole('button', { name: 'Повторить просмотр' }).click()
+  await expect(pdf).toHaveAttribute('data-state', 'ready')
+  expect(await pdfCleanupCounts(page)).toMatchObject({ extraFonts: 0, extraFilters: 0 })
+  await page.evaluate(() => (window as any).__pdfCleanup.release())
+  expect(errors).toEqual([])
+})
+
+async function openP2FocusEditor(page: Page) {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
+  const api = await mockDirectVenueInfoMedia(page)
+  api.state.sections[0].media.push({ id: '99', type: 'image', visible: true, status: 'READY', sortOrder: 0, size: 100, source: 'TELEGRAM_FILE' })
+  await page.goto('?mode=venue#/settings/card')
+  await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+  const editor = page.locator('.venue-info-editor')
+  await expect(editor.getByRole('button', { name: 'Скрыть раздел', exact: true })).toBeEnabled()
+  return { api, editor }
+}
+
+for (const scope of ['раздел', 'вложение']) {
+  test(`PDF inline P2 focus follows ${scope} hide and show without focus-induced scrolling`, async ({ page }) => {
+    const { editor } = await openP2FocusEditor(page)
+    for (const [before, after] of [['Скрыть', 'Показать'], ['Показать', 'Скрыть']]) {
+      const button = editor.getByRole('button', { name: `${before} ${scope}`, exact: true })
+      await button.scrollIntoViewIfNeeded(); await button.focus()
+      await page.evaluate(() => {
+        const focus = HTMLElement.prototype.focus
+        ;(window as any).__p2FocusScroll = []
+        HTMLElement.prototype.focus = function (options) {
+          const before = window.scrollY
+          focus.call(this, options)
+          ;(window as any).__p2FocusScroll.push({ before, after: window.scrollY })
+        }
+      })
+      await page.keyboard.press('Enter')
+      const updated = editor.getByRole('button', { name: `${after} ${scope}`, exact: true })
+      await expect(updated).toBeEnabled()
+      await expect(updated).toBeFocused()
+      const focusScroll = await page.evaluate(() => (window as any).__p2FocusScroll as Array<{ before: number; after: number }>)
+      expect(focusScroll.length).toBeGreaterThan(0)
+      expect(focusScroll.every(({ before, after }) => Math.abs(after - before) < 2)).toBe(true)
+      await expect(editor).toHaveAttribute('open', '')
+    }
+  })
+}
+
+for (const leaveFocus of [false, true]) {
+  test(`PDF inline P2 focus does not override user movement during request blur=${leaveFocus}`, async ({ page }) => {
+    const { editor } = await openP2FocusEditor(page)
+    let release: () => void = () => undefined
+    let started = false
+    await page.route('**/api/venue/1/info-sections/10/media-actions', async (route) => {
+      started = true; await new Promise<void>((resolve) => { release = resolve }); await route.fallback()
+    })
+    const button = editor.getByRole('button', { name: 'Скрыть раздел', exact: true })
+    await button.focus(); await page.keyboard.press('Enter')
+    await expect.poll(() => started).toBe(true)
+    const summary = editor.locator('summary')
+    await summary.focus()
+    if (leaveFocus) await summary.evaluate((node) => node.blur())
+    release()
+    await expect(editor.getByRole('button', { name: 'Показать раздел', exact: true })).toBeEnabled()
+    if (leaveFocus) expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true)
+    else await expect(summary).toBeFocused()
+  })
+}
+
+test('PDF inline P2 focus refresh replacement deletion and closed editor', async ({ page }) => {
+  const { editor } = await openP2FocusEditor(page)
+  const refresh = editor.getByRole('button', { name: 'Обновить список', exact: true })
+  await refresh.focus(); await page.keyboard.press('Enter')
+  await expect(refresh).toBeEnabled(); await expect(refresh).toBeFocused()
+  const replacement = editor.getByLabel('Заменить вложение 1', { exact: true })
+  await replacement.focus(); await replacement.setInputFiles(syntheticUpload)
+  await expect(editor.locator('[data-media-id="99"]')).toHaveCount(0)
+  await expect(replacement).toBeEnabled(); await expect(replacement).toBeFocused()
+  const remove = editor.getByRole('button', { name: 'Удалить вложение', exact: true })
+  page.once('dialog', (dialog) => dialog.accept())
+  await remove.focus(); await page.keyboard.press('Enter')
+  await expect(remove).toHaveCount(0)
+  expect(await page.evaluate(() => document.activeElement?.isConnected)).toBe(true)
+  let release: () => void = () => undefined
+  let started = false
+  await page.route('**/api/venue/1/info-sections/10/media-actions', async (route) => {
+    started = true; await new Promise<void>((resolve) => { release = resolve }); await route.fallback()
+  })
+  await editor.getByRole('button', { name: 'Скрыть раздел', exact: true }).focus(); await page.keyboard.press('Enter')
+  await expect.poll(() => started).toBe(true)
+  await editor.evaluate((node) => { (node as HTMLDetailsElement).open = false })
+  release()
+  await expect(editor.getByRole('button', { name: 'Показать раздел', exact: true, includeHidden: true })).toBeEnabled()
+  expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('BUTTON')
+})
+
+test('PDF inline P2 focus refuses disabled and removed actions', async ({ page }) => {
+  const { api, editor } = await openP2FocusEditor(page)
+  await page.route('**/api/venue/1/info-sections/10/media-actions', (route) => route.fulfill({
+    ...jsonResponse({ error: { message: 'Ответ не получен' } }), status: 503 }))
+  const hide = editor.getByRole('button', { name: 'Скрыть вложение', exact: true })
+  await hide.focus(); await page.keyboard.press('Enter')
+  await expect(editor.getByRole('status')).toContainText('Обновите список')
+  await expect(hide).toBeDisabled(); await expect(hide).not.toBeFocused()
+  await editor.getByRole('button', { name: 'Обновить список', exact: true }).click()
+  await expect(hide).toBeEnabled()
+  api.state.sections[0].media.push({ ...api.state.sections[0].media[0], id: '100', sortOrder: 1 })
+  await editor.getByRole('button', { name: 'Обновить список', exact: true }).click()
+  await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(2)
+  const oldDelete = editor.locator('[data-media-id="99"]').getByRole('button', { name: 'Удалить вложение', exact: true })
+  await oldDelete.focus()
+  api.state.sections[0].media = api.state.sections[0].media.filter((media) => media.id !== '99')
+  // A refresh removes the focused action. Do not map it to a different attachment.
+  await editor.getByRole('button', { name: 'Обновить список', exact: true }).evaluate((button) => button.click())
+  await expect(oldDelete).toHaveCount(0)
+  await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).not.toBeFocused()
 })

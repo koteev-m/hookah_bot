@@ -1,16 +1,19 @@
 import { clearSession, getAccessToken } from '../shared/api/auth'
-import { requestApi, requestBinary } from '../shared/api/request'
+import { requestApi } from '../shared/api/request'
+import { loadInfoMediaContent } from '../shared/api/infoMediaContent'
+import { createInfoMediaPreview } from '../shared/ui/infoMediaPreview'
 import { append, el } from '../shared/ui/dom'
 
 type Media = { id: string; type: string; visible: boolean; status: string; sortOrder: number; size: number | null; source: string }
 type Section = { id: number; title: string; type: string; visible: boolean; revision: number; media: Media[] }
 export type VenueInfoMediaState = { enabled: boolean; sections: Section[] }
-type Upload = { file: File; section: number; revision: number; request: string; replace?: string; submitted?: boolean; rejected?: boolean }
+type UploadProgress = { index: number; total: number; section: number; pdf: boolean; status: 'WAITING' | 'UPLOADING' | 'SUCCESS' | 'UNKNOWN' | 'FAILED' | 'CANCELLED' }
+type Upload = { progress: UploadProgress; file: File; section: number; revision: number; request: string; replace?: string; submitted?: boolean; rejected?: boolean }
 
 export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean, venueId: number) {
   const element = el('details', { className: 'venue-info-editor' })
   const content = el('div')
-  const status = el('p', { text: '' }); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
+  const status = el('p', { className: 'venue-info-result', text: '' }); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
   append(element, el('summary', { text: 'Управлять фотографиями и PDF' }), status, content)
   const deps = { isDebug, getAccessToken, clearSession }
   const path = `/api/venue/${venueId}`
@@ -18,13 +21,25 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
   let busy = false; let disposed = false; let uncertain = false
   let pending: Upload[] = []
   let outcome: 'UNKNOWN' | 'FAILED' | 'SUCCESS' = 'UNKNOWN'
-  const urls = new Set<string>()
+  let progress: UploadProgress[] = []
+  const controls = el('div')
+  content.appendChild(controls)
+  type AttachmentView = { element: HTMLElement; label: HTMLElement; actions: HTMLElement; preview: ReturnType<typeof createInfoMediaPreview> | null }
+  type SectionView = { element: HTMLElement; title: HTMLElement; visibility: HTMLElement; actions: HTMLElement; progress: HTMLElement; attachments: HTMLElement; items: Map<string, AttachmentView> }
+  const sections = new Map<number, SectionView>()
+  const successText = (job: Upload) => job.progress.pdf ? 'PDF загружен' : 'Изображение загружено'
+  const markSuccess = (job: Upload) => { job.progress.status = 'SUCCESS' }
+  const clearPreviews = () => sections.forEach((section) => section.items.forEach((item) => item.preview?.dispose()))
   const controller = new AbortController()
-  const button = (text: string, action: () => void, disabled = busy || uncertain || pending.length > 0) => {
+  let focusTarget: string | null = null
+  let updatingDom = false
+  const abandonFocus = () => { if (!updatingDom) focusTarget = null }
+  for (const event of ['focusin', 'pointerdown', 'keydown']) document.addEventListener(event, abandonFocus, { signal: controller.signal })
+  const button = (text: string, action: () => void, disabled = busy || uncertain || pending.length > 0, focusKey = text) => {
     const b = el('button', { className: 'button-small button-secondary', text }) as HTMLButtonElement
+    b.dataset.mediaFocus = focusKey
     b.type = 'button'; b.disabled = disabled; b.addEventListener('click', action); return b
   }
-  const revoke = () => { urls.forEach((url) => URL.revokeObjectURL(url)); urls.clear() }
   const refresh = async () => {
     if (busy || disposed) return
     busy = true; render(); status.textContent = 'Загружаем материалы…'
@@ -41,14 +56,16 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
         if (disposed) return
         outcome = operation.ok ? operation.data.status : 'UNKNOWN'
         if (outcome === 'UNKNOWN' && job.rejected) outcome = 'FAILED'
+        job.progress.status = outcome
         if (outcome === 'SUCCESS') {
+          markSuccess(job)
           pending.shift()
           if (pending.length) pending[0].revision = state.sections.find((s) => s.id === pending[0].section)?.revision ?? pending[0].revision
         }
         busy = false; uncertain = pending.length > 0; render()
         status.textContent = outcome === 'FAILED'
           ? 'Загрузка окончательно не выполнена. Прежнее вложение сохранено. Можно явно начать новую загрузку выбранного файла.'
-          : outcome === 'SUCCESS' ? 'Операция подтверждена. Повторная загрузка этого файла не требуется.'
+          : outcome === 'SUCCESS' ? `${successText(job)}. Операция подтверждена. Повторная загрузка этого файла не требуется.${pending.length ? ' Продолжите загрузку оставшихся файлов.' : ''}`
           : 'Результат пока неизвестен. Проверьте позже или повторите исходную операцию. При перезагрузке приложения выбранные файлы и ключ повтора могут потеряться.'
         return
       }
@@ -60,7 +77,9 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
     busy = true; uncertain = false; render()
     while (pending.length && !disposed) {
       const job = pending[0]
-      status.textContent = `Загружаем файл; осталось ${pending.length}. Старое вложение сохранится до успешной замены.`
+      job.progress.status = 'UPLOADING'
+      render()
+      status.textContent = `Загружаем файл ${job.progress.index} из ${job.progress.total} (${job.progress.pdf ? 'PDF' : 'изображение'}). Ожидаем подтверждение сервера. Старое вложение сохранится до успешной замены.`
       job.submitted = true
       const result = await requestApi<VenueInfoMediaState>(backendUrl, `${path}/info-sections/${job.section}/media`, {
         method: 'POST', signal: controller.signal, body: job.file,
@@ -70,16 +89,18 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
       if (!result.ok) {
         busy = false; uncertain = true
         job.rejected = result.error.status === 400 || result.error.status === 413
-        outcome = job.rejected ? 'FAILED' : 'UNKNOWN'; render()
+        outcome = job.rejected ? 'FAILED' : 'UNKNOWN'; job.progress.status = outcome; render()
         status.textContent = outcome === 'FAILED'
           ? `${result.error.message || 'Файл отклонён.'} Загрузка не выполнена, прежнее вложение сохранено. Проверьте список и явно начните новую загрузку подходящего файла.`
           : `${result.error.message || 'Ответ не получен.'} Проверьте список. Повтор отправит тот же файл с тем же ключом операции; новая копия не создаётся. При перезагрузке приложения выбранный файл может потеряться.`
         return
       }
-      state = result.data; outcome = 'SUCCESS'; pending.shift()
+      state = result.data; outcome = 'SUCCESS'; markSuccess(job); pending.shift(); render()
       if (pending.length) pending[0].revision = state.sections.find((s) => s.id === pending[0].section)?.revision ?? pending[0].revision
     }
-    busy = false; render(); status.textContent = 'Материалы сохранены. Откройте «Предпросмотр для гостя», чтобы проверить видимые вложения.'
+    busy = false; render()
+    const saved = progress.filter((item) => item.status === 'SUCCESS')
+    status.textContent = `${saved.length === 1 ? (saved[0].pdf ? 'PDF загружен' : 'Изображение загружено') : `Загружено файлов: ${saved.length} из ${progress.length}`}. Сохранённые материалы показаны ниже в своих разделах.`
   }
   const select = (section: Section, files: File[], replace?: string) => {
     if (busy || uncertain || pending.length) return
@@ -88,7 +109,8 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
       status.textContent = 'Выберите JPEG, PNG или PDF до 10 МБ. HEIC/HEIF экспортируйте в JPEG.'; return
     }
     if (replace ? files.length !== 1 : section.media.length + files.length > 10) { status.textContent = 'В разделе максимум 10 вложений. Для замены выберите один файл.'; return }
-    pending = files.map((file) => ({ file, section: section.id, revision: section.revision, request: crypto.randomUUID(), replace }))
+    progress = files.map((file, index) => ({ index: index + 1, total: files.length, section: section.id, pdf: file.type === 'application/pdf' || /\.pdf$/i.test(file.name), status: 'WAITING' }))
+    pending = files.map((file, index) => ({ progress: progress[index], file, section: section.id, revision: section.revision, request: crypto.randomUUID(), replace }))
     outcome = 'UNKNOWN'; void upload()
   }
   const action = async (section: Section, kind: string, media?: Media) => {
@@ -111,6 +133,8 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
   const picker = (section: Section, media?: Media) => {
     const input = el('input') as HTMLInputElement
     input.type = 'file'; input.accept = 'image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf'; input.multiple = !media
+    // A replacement gets a new media ID but keeps the same attachment slot.
+    input.dataset.mediaFocus = `picker:${section.id}:${media?.sortOrder ?? 'add'}`
     input.disabled = busy || uncertain || pending.length > 0 || !state?.enabled || section.media.some((m) => m.status === 'UPLOADING')
     input.setAttribute('aria-label', media ? `Заменить вложение ${media.sortOrder + 1}` : `Добавить файлы: ${section.title}`)
     input.addEventListener('change', () => { select(section, Array.from(input.files ?? []), media?.id); input.value = '' })
@@ -118,19 +142,9 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
     append(label, el('span', { text: media ? 'Заменить это вложение' : 'Добавить JPEG, PNG или PDF' }), input)
     return label
   }
-  const open = async (section: Section, media: Media) => {
-    status.textContent = 'Готовим файл…'
-    const result = await requestBinary(backendUrl, `${path}/info-sections/${section.id}/media/${encodeURIComponent(media.id)}/content`, { signal: controller.signal }, deps)
-    if (disposed) return
-    if (!result.ok) { status.textContent = result.error.message || 'Файл недоступен.'; return }
-    const url = URL.createObjectURL(result.data.blob); urls.add(url)
-    const link = el('a', { text: 'Открыть сохранённый файл' }) as HTMLAnchorElement
-    link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'
-    status.replaceChildren(link)
-  }
-  const render = () => {
-    revoke(); content.replaceChildren()
-    append(content, button('Обновить список', () => void refresh(), busy), ...(pending.length ? [button(outcome === 'FAILED' ? 'Начать новую загрузку' : 'Повторить загрузку', () => {
+  const renderContents = () => {
+    controls.replaceChildren()
+    append(controls, button('Обновить список', () => void refresh(), busy), ...(pending.length ? [button(outcome === 'FAILED' ? 'Начать новую загрузку' : 'Повторить загрузку', () => {
       if (outcome === 'FAILED' && state) {
         const job = pending[0]
         const section = state.sections.find((s) => s.id === job.section)
@@ -141,24 +155,87 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
       void upload()
     }, busy), button('Отменить оставшиеся файлы', () => {
       if (outcome === 'UNKNOWN' && pending[0]?.submitted) {
-        pending = pending.slice(0, 1); render()
+        pending.slice(1).forEach((job) => { job.progress.status = 'CANCELLED' }); pending = pending.slice(0, 1); render()
         status.textContent = 'Неотправленные файлы отменены. Исход неопределённой операции нужно проверить или безопасно повторить.'
-      } else { pending = []; uncertain = false; void refresh() }
+      } else { pending.forEach((job) => { job.progress.status = 'CANCELLED' }); pending = []; uncertain = false; void refresh() }
     }, busy)] : []))
     if (!state) return
+    for (const [id, view] of sections) {
+      if (state.sections.some((section) => section.id === id)) continue
+      view.items.forEach((item) => item.preview?.dispose()); view.element.remove(); sections.delete(id)
+    }
     for (const section of state.sections) {
-      const row = el('section', { className: 'venue-info-section' })
-      append(row, el('h5', { text: section.type === 'menu' ? '📖 Фото-меню' : section.title }), el('p', { text: section.visible ? 'Раздел показывается в карточке.' : 'Раздел скрыт от гостей и предпросмотра.' }), button(section.visible ? 'Скрыть раздел' : 'Показать раздел', () => void action(section, section.visible ? 'hide' : 'show')), picker(section))
-      if (section.media.some((m) => m.status === 'UPLOADING')) row.appendChild(el('p', { text: 'В разделе ещё выполняется загрузка. Обновите список позже; незавершённая операция очищается после 10 минут при работающем сервисе очистки.' }))
-      for (const media of section.media) {
-        const item = el('div', { className: 'venue-info-attachment' })
-        append(item, el('p', { text: `${media.type === 'pdf' ? 'PDF' : 'Изображение'} ${media.sortOrder + 1} · ${media.status === 'UPLOADING' ? 'Загружается' : media.visible ? 'Видимое' : 'Скрытое'} · ${media.source === 'TELEGRAM_FILE' ? 'Telegram' : 'Хранилище'}` }))
-        if (media.status === 'READY') append(item, button('Просмотреть', () => void open(section, media)), picker(section, media), button(media.visible ? 'Скрыть вложение' : 'Показать вложение', () => void action(section, media.visible ? 'hide' : 'show', media)), button('Удалить вложение', () => void action(section, 'delete', media)))
-        row.appendChild(item)
+      let view = sections.get(section.id)
+      if (!view) {
+        view = { element: el('section', { className: 'venue-info-section' }), title: el('h5'), visibility: el('p'), actions: el('div'), progress: el('div', { className: 'venue-info-upload-progress' }), attachments: el('div'), items: new Map() }
+        append(view.element, view.title, view.visibility, view.actions, view.progress, view.attachments)
+        sections.set(section.id, view); content.appendChild(view.element)
       }
-      content.appendChild(row)
+      view.title.textContent = section.type === 'menu' ? '📖 Фото-меню' : section.title
+      view.visibility.textContent = section.visible ? 'Раздел показывается в карточке.' : 'Раздел скрыт от гостей и предпросмотра.'
+      view.actions.replaceChildren(button(section.visible ? 'Скрыть раздел' : 'Показать раздел', () => void action(section, section.visible ? 'hide' : 'show'), undefined, `section:${section.id}:visibility`), picker(section))
+      view.progress.replaceChildren()
+      for (const item of progress.filter((item) => item.section === section.id)) {
+        const row = el('div', { className: 'venue-info-upload-file' })
+        row.dataset.state = item.status.toLowerCase()
+        const message = {
+          WAITING: 'Ожидает загрузки', UPLOADING: 'Загружается · ожидаем подтверждение сервера',
+          SUCCESS: item.pdf ? 'PDF загружен' : 'Изображение загружено',
+          UNKNOWN: 'Результат неизвестен · проверьте список или повторите исходную операцию',
+          FAILED: 'Загрузка не выполнена', CANCELLED: 'Загрузка отменена'
+        }[item.status]
+        append(row, el('p', { text: `Файл ${item.index} из ${item.total} · ${item.pdf ? 'PDF' : 'Изображение'} · ${message}` }))
+        if (item.status === 'UPLOADING') {
+          const indicator = el('progress')
+          indicator.setAttribute('aria-label', `Загрузка файла ${item.index} из ${item.total}`)
+          row.appendChild(indicator)
+        }
+        view.progress.appendChild(row)
+      }
+      if (section.media.some((m) => m.status === 'UPLOADING')) view.progress.appendChild(el('p', { text: 'В разделе ещё выполняется загрузка. Обновите список позже; незавершённая операция очищается после 10 минут при работающем сервисе очистки.' }))
+      for (const [id, item] of view.items) {
+        if (section.media.some((media) => media.id === id)) continue
+        item.preview?.dispose(); item.element.remove(); view.items.delete(id)
+      }
+      const ordered = [...section.media].sort((a, b) => a.sortOrder - b.sortOrder)
+      ordered.forEach((media, index) => {
+        let item = view!.items.get(media.id)
+        if (!item) {
+          item = { element: el('div', { className: 'venue-info-attachment' }), label: el('p', { className: 'info-media-title' }), actions: el('div'), preview: null }
+          item.element.dataset.mediaId = media.id
+          append(item.element, item.label, item.actions)
+          view!.items.set(media.id, item)
+        }
+        item.label.textContent = `${media.type === 'pdf' ? 'PDF' : 'Изображение'} ${media.sortOrder + 1} · ${media.status === 'READY' ? 'Сохранено' : media.status === 'UPLOADING' ? 'Загружается' : 'Недоступно'} · ${media.visible ? 'Видимое' : 'Скрытое'} · ${media.source === 'TELEGRAM_FILE' ? 'Telegram' : 'Хранилище'}`
+        if (media.status === 'READY' && !item.preview) {
+          item.preview = createInfoMediaPreview(media.type === 'pdf' ? 'pdf' : 'image', `${section.title} ${media.sortOrder + 1}`, (signal) =>
+            loadInfoMediaContent(backendUrl, `${path}/info-sections/${section.id}/media/${encodeURIComponent(media.id)}/content`, signal, true))
+          item.element.insertBefore(item.preview.element, item.actions)
+        } else if (media.status !== 'READY' && item.preview) {
+          item.preview.dispose(); item.preview.element.remove(); item.preview = null
+        }
+        item.actions.replaceChildren()
+        if (media.status === 'READY') append(item.actions, picker(section, media), button(media.visible ? 'Скрыть вложение' : 'Показать вложение', () => void action(section, media.visible ? 'hide' : 'show', media), undefined, `media:${media.id}:visibility`), button('Удалить вложение', () => void action(section, 'delete', media), undefined, `media:${media.id}:delete`))
+        if (view!.attachments.children[index] !== item.element) view!.attachments.insertBefore(item.element, view!.attachments.children[index] ?? null)
+      })
+    }
+  }
+  const render = () => {
+    const focused = document.activeElement
+    if (focused instanceof HTMLElement && element.contains(focused) && focused.dataset.mediaFocus) {
+      focusTarget = focused.dataset.mediaFocus
+    }
+    updatingDom = true
+    try { renderContents() } finally { updatingDom = false }
+    if (busy) return
+    const key = focusTarget
+    focusTarget = null
+    if (!key || disposed || document.activeElement !== document.body) return
+    const target = Array.from(element.querySelectorAll<HTMLElement>('[data-media-focus]')).find((node) => node.dataset.mediaFocus === key)
+    if (target && !target.matches(':disabled') && target.getClientRects().length && getComputedStyle(target).visibility !== 'hidden') {
+      target.focus({ preventScroll: true })
     }
   }
   element.addEventListener('toggle', () => { if ((element as HTMLDetailsElement).open && !state) void refresh() })
-  return { element, busy: () => busy, pending: () => pending.length > 0, dispose: () => { disposed = true; controller.abort(); pending = []; revoke() } }
+  return { element, busy: () => busy, pending: () => pending.length > 0, dispose: () => { disposed = true; controller.abort(); pending = []; clearPreviews() } }
 }

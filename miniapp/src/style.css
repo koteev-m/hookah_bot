@@ -3743,3 +3743,20 @@ input[type="number"] {
 .venue-info-editor p { overflow-wrap: anywhere; }
 
 .venue-info-file-label { display: block; margin: 12px 0; font-size: 14px; }
+
+.venue-info-result { padding: 12px; min-height: 48px; border: 1px solid #cbd5e1; border-radius: 10px; background: #f1f5f9; color: #243247; }
+.venue-info-result:empty { display: none; }
+.venue-info-upload-progress { display: grid; gap: 8px; }
+.venue-info-upload-file { padding: 0 12px; border-left: 4px solid #64748b; border-radius: 6px; background: #f1f5f9; color: #243247; }
+.venue-info-upload-file[data-state=success] { border-color: #15803d; background: #f0fdf4; }
+.venue-info-upload-file[data-state=failed], .venue-info-upload-file[data-state=unknown] { border-color: #b45309; background: #fffbeb; }
+.venue-info-upload-file progress { display: block; width: 100%; margin-bottom: 12px; }
+.info-media-title { font-weight: 600; overflow-wrap: anywhere; }
+.info-media-preview { min-width: 0; overflow: hidden; border: 1px solid #e5e7f2; border-radius: 10px; background: #f8fafc; color: #243247; }
+.info-media-surface { height: clamp(220px, 90vw, 480px); display: flex; align-items: center; justify-content: center; overflow: hidden; background: #eef2f7; }
+.info-media-surface canvas, .info-media-surface img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
+.info-media-preview [hidden] { display: none; }
+.info-media-preview .status { margin: 0; padding: 12px; min-height: 72px; box-sizing: border-box; overflow-wrap: anywhere; }
+.info-media-preview .status:empty { display: block; }
+.info-media-controls { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; padding: 8px; }
+.info-media-controls button, .info-media-preview > button { min-height: 44px; margin: 4px; }
