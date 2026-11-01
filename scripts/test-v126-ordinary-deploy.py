@@ -99,6 +99,24 @@ def operation_quiescent(bindings, history, start, accepted_unknown):
     return result['children'] == 'REAPED' and (result['exit'] == 0 or operation_id in accepted_unknown)
 
 
+def require_worker_success(status, upload_complete, bindings, registry, identity, target):
+    # A broken upload can be a consequence of the worker's first failure.
+    if status != 0:
+        error = ordinary.Refused('real ordinary worker failed; private capture retained')
+        error.ordinary_failure = ordinary.retained_failure(bindings, registry, identity, target)
+        raise error
+    ordinary.require(upload_complete, 'owned streaming writer did not finish')
+
+
+def integration_main(evidence):
+    try:
+        linux_integration(evidence)
+    except Exception:
+        print('ORDINARY_INTEGRATION=FAILED; safe result retained when available', file=sys.stderr)
+        return 1
+    return 0
+
+
 class OrdinaryTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='v126-ordinary-deploy-')
@@ -117,6 +135,164 @@ class OrdinaryTests(unittest.TestCase):
                         handoff_approved_and_applied=True, approval_id='synthetic-approved', observed_at='2026-09-10T00:00:00Z',
                         files={name: '7' * 64 for name in ordinary.UPLOADS}, public_url='https://fixture.invalid', public_checks=True)
         self.deploy = ordinary.Deployment(self.target, self.doc, ROOT)
+
+    def test_worker_bootstrap_emits_closed_context_and_still_exits_unknown(self):
+        source = (ROOT / 'scripts/v126-ordinary-deploy.py').read_text()
+        source += '''\ndef worker(*args):
+ _failure_stage.set('RECREATE')
+ command(['python3', '-c', 'import sys;print("private-stdout");print("https://user:pass@private.invalid/private token=secret",file=sys.stderr);sys.exit(42)'])
+'''
+        context = dict(file=str(ROOT / 'scripts/v126-ordinary-deploy.py'), source=ordinary.base64.b64encode(source.encode()).decode(),
+                       target=str(self.target), request='', bundle='')
+        with tempfile.TemporaryFile() as incoming:
+            incoming.write(json.dumps(context).encode()); incoming.seek(0)
+            result = subprocess.run([sys.executable, '-c', ordinary.WORKER_BOOTSTRAP, str(incoming.fileno())],
+                                    pass_fds=(incoming.fileno(),), input=b'', capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 75)
+        self.assertIn(b'ORDINARY_DEPLOY=UNKNOWN retry_allowed=false', result.stderr)
+        self.assertTrue(result.stdout.startswith(ordinary.FAILURE_PREFIX))
+        record = ordinary.structured(result.stdout[len(ordinary.FAILURE_PREFIX):])
+        self.assertEqual(record, dict(stage='RECREATE', consumer='python3', reason_category='CONSUMER_EXIT',
+                         exit_code=42, timed_out=False, children='UNKNOWN', supervisor_exit_code=None))
+        for secret in [b'private-stdout', b'private.invalid', b'user:pass', b'token=secret', str(self.target).encode()]:
+            self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_timeout_and_cleanup_preserve_first_failure_without_exception_text(self):
+        error = subprocess.TimeoutExpired(['docker', 'secret-argv'], 0.1, output=b'secret-output')
+        error.ordinary_failure = ordinary.failure_record(error, stage='IMAGE_LOAD', consumer='docker')
+        first = ordinary.integration_failure(None, error)
+        final = ordinary.integration_failure(first, RuntimeError('private-cleanup'), stage='CLEANUP')
+        self.assertIs(first, final)
+        self.assertEqual(first['diagnostic']['reason_category'], 'TIMEOUT')
+        self.assertTrue(first['diagnostic']['timed_out'])
+        self.assertEqual(first['diagnostic']['children'], 'UNKNOWN')
+        self.assertIsNone(first['diagnostic']['exit_code'])
+        self.assertNotIn('secret', json.dumps(final))
+        self.assertNotIn('private-cleanup', json.dumps(final))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            ordinary.worker_failure(ValueError('::error::\nhttps://user:pass@private.invalid /private/secret'))
+        self.assertNotIn('::', output.getvalue())
+        self.assertNotIn('secret', output.getvalue())
+        self.assertEqual(json.loads(output.getvalue().split(' ', 1)[1])['reason_category'], 'UNKNOWN')
+
+    def test_retained_failure_requires_real_bound_result_before_attesting_children(self):
+        bindings = ordinary.load_module(ROOT / 'scripts/v126-operation-bindings.py', 'ordinary_diagnostic_bindings')
+        registry = self.target / 'diagnostic-history'; registry.mkdir(mode=0o700)
+        identity = dict(self.doc['owner'], intent_sha256='a' * 64, kind='DEPLOY', name='ORDINARY_DEPLOY', action='ordinary-deploy')
+        operation = ordinary.sha(ordinary.canonical(identity))
+        record = ordinary.failure_record(ordinary.Refused('secret'), stage='ARCHIVE', consumer='bash')
+        log = registry / (operation + '.log')
+        ordinary.create(log, ordinary.FAILURE_PREFIX + ordinary.canonical(record))
+        self.assertEqual(ordinary.retained_failure(bindings, registry, identity, self.target)['children'], 'UNKNOWN')
+        result = dict(identity=identity, operation_id=operation, exit=75, outcome='UNKNOWN', children='REAPED',
+                      log_sha256=ordinary.sha(log.read_bytes()), completed_at='2026-10-31T00:00:00Z')
+        bindings.binding_create(registry / (operation + '.result.json'), result)
+        observed = ordinary.retained_failure(bindings, registry, identity, self.target)
+        self.assertEqual((observed['children'], observed['supervisor_exit_code'], observed['stage']), ('REAPED', 75, 'ARCHIVE'))
+        self.assertEqual(result['outcome'], 'UNKNOWN')
+        log.chmod(0o600); log.write_bytes(b'forged'); log.chmod(0o400)
+        self.assertEqual(ordinary.retained_failure(bindings, registry, identity, self.target)['children'], 'UNKNOWN')
+
+    def test_malformed_diagnostic_cannot_leak_or_override_bound_supervisor_metadata(self):
+        bindings = mock.Mock()
+        bindings.binding_result.return_value = dict(children='REAPED', exit=75)
+        identity = dict(self.doc['owner'], intent_sha256='a' * 64, kind='DEPLOY', name='ORDINARY_DEPLOY', action='ordinary-deploy')
+        operation = ordinary.sha(ordinary.canonical(identity))
+        log = self.target / (operation + '.log')
+        record = ordinary.failure_record(ValueError('secret'))
+        for payload in [ordinary.FAILURE_PREFIX + ordinary.canonical(dict(record, stderr='private-secret')),
+                        ordinary.FAILURE_PREFIX + b'x' * 1025,
+                        (ordinary.FAILURE_PREFIX + ordinary.canonical(record)) * 2]:
+            log.write_bytes(payload)
+            observed = ordinary.retained_failure(bindings, self.target, identity, self.target)
+            self.assertEqual((observed['children'], observed['supervisor_exit_code'], observed['reason_category']),
+                             ('REAPED', 75, 'UNKNOWN'))
+            self.assertNotIn('private-secret', json.dumps(observed))
+
+    def test_diagnostic_schema_rejects_leaking_extra_fields_and_unsafe_values(self):
+        record = ordinary.failure_record(ValueError('private exception'))
+        for field, value in [('consumer', '/private/docker'), ('stage', '::error::'),
+                             ('exit_code', True), ('timed_out', 'false'), ('children', 'ASSUMED')]:
+            with self.subTest(field=field), self.assertRaises(ordinary.Refused):
+                ordinary.validate_failure(dict(record, **{field: value}))
+        with self.assertRaises(ordinary.Refused):
+            ordinary.validate_failure(dict(record, stderr='secret'))
+
+    def test_worker_failure_survives_broken_upload_and_cleanup(self):
+        bindings = ordinary.load_module(ROOT / 'scripts/v126-operation-bindings.py', 'ordinary_failure_pipeline')
+        identity = dict(self.doc['owner'], intent_sha256='a' * 64, kind='DEPLOY', name='ORDINARY_DEPLOY', action='ordinary-deploy')
+        operation = ordinary.sha(ordinary.canonical(identity))
+        record = ordinary.failure_record(subprocess.TimeoutExpired(['docker', SECRET], 1),
+                                         stage='RECREATE', consumer='docker')
+        log = self.target / (operation + '.log')
+        ordinary.create(log, ordinary.FAILURE_PREFIX + ordinary.canonical(record))
+        result = dict(identity=identity, operation_id=operation, exit=75, outcome='UNKNOWN', children='REAPED',
+                      log_sha256=ordinary.sha(log.read_bytes()), completed_at='2026-11-01T00:00:00Z')
+        bindings.binding_create(self.target / (operation + '.result.json'), result)
+        before = {p.name: p.read_bytes() for p in self.target.iterdir() if p.is_file()}
+        with self.assertRaises(ordinary.Refused) as caught:
+            require_worker_success(75, False, bindings, self.target, identity, self.target)
+        first = ordinary.integration_failure(None, caught.exception)
+        self.assertEqual(first['diagnostic'], dict(record, children='REAPED', supervisor_exit_code=75))
+        self.assertIs(first, ordinary.integration_failure(first, RuntimeError(SECRET), stage='CLEANUP'))
+        self.assertFalse(operation_quiescent(bindings, self.target,
+            self.write_start(identity, operation), set()))
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.target.iterdir()
+                                 if p.is_file() and not p.name.endswith('.start.json')})
+        self.assertNotIn(SECRET, json.dumps(first))
+        with self.assertRaises(ordinary.Refused):
+            require_worker_success(0, False, bindings, self.target, identity, self.target)
+        require_worker_success(0, True, bindings, self.target, identity, self.target)
+
+    def test_real_archive_guard_rejects_nested_index_without_weakening_identity(self):
+        archive = ordinary.load_module(ROOT / 'scripts/docker-save-archive.py', 'ordinary_archive_regression')
+        path = self.target / 'image.tar'
+        image_id, _ = archive.build_fixture(path, 'valid', tag=IMAGE, revision='1' * 40, source=ordinary.SOURCE)
+        canonical = path.read_bytes()
+        with archive.tarfile.open(fileobj=io.BytesIO(canonical)) as source:
+            entries = [(m.name, source.extractfile(m).read(), None) for m in source.getmembers()]
+        index = json.loads(dict((name, raw) for name, raw, _ in entries)['index.json'])
+        # BuildKit's default provenance changes the top image identity from a
+        # platform manifest to an index. The operational verifier must refuse it.
+        nested = archive.canonical_json(dict(schemaVersion=2, mediaType='application/vnd.oci.image.index.v1+json',
+            manifests=[index['manifests'][0], dict(digest='sha256:' + 'f' * 64, size=1,
+                       annotations={'vnd.docker.reference.type': 'attestation-manifest'})]))
+        nested_id = archive.sha256_bytes(nested)
+        index['manifests'] = [dict(digest=nested_id, size=len(nested), mediaType='application/vnd.oci.image.index.v1+json')]
+        entries = [(name, archive.canonical_json(index) if name == 'index.json' else raw, kind)
+                   for name, raw, kind in entries]
+        entries.append(('blobs/sha256/' + nested_id.removeprefix('sha256:'), nested, None))
+        for raw, expected_id, accepted in [(canonical, image_id, True),
+                (archive.fixture_tar(entries), nested_id, False), (canonical, 'sha256:' + 'e' * 64, False)]:
+            with self.subTest(accepted=accepted, image_id=expected_id), tempfile.TemporaryFile() as saved:
+                saved.write(raw); saved.flush(); os.fchmod(saved.fileno(), 0o400)
+                def verify():
+                    return ordinary.shell_consumer(ROOT / 'scripts/v126-cutover.sh',
+                        'verify_saved_image_archive_fd "$1" "$2" "$3"', [saved.fileno(), IMAGE, expected_id],
+                        pass_fds=(saved.fileno(),))
+                if accepted:
+                    self.assertEqual(verify().strip().decode(), ordinary.sha(raw))
+                else:
+                    with self.assertRaises(ordinary.Refused) as caught:
+                        verify()
+                    self.assertEqual(caught.exception.ordinary_failure['exit_code'], 1)
+
+    def write_start(self, identity, operation):
+        path = self.target / (operation + '.start.json')
+        ordinary.create(path, ordinary.canonical(dict(identity=identity)))
+        return path
+
+    def test_integration_cli_keeps_nonzero_without_traceback_or_exception_text(self):
+        for error in (ordinary.Refused(SECRET), RuntimeError('https://user:pass@private.invalid/private')):
+            output = io.StringIO()
+            with self.subTest(error=type(error).__name__), mock.patch(__name__ + '.linux_integration', side_effect=error), \
+                    contextlib.redirect_stderr(output):
+                self.assertEqual(integration_main(self.target), 1)
+            self.assertEqual(output.getvalue(), 'ORDINARY_INTEGRATION=FAILED; safe result retained when available\n')
+        with mock.patch(__name__ + '.linux_integration') as integration:
+            self.assertEqual(integration_main(self.target), 0)
+            integration.assert_called_once_with(self.target)
 
     def test_cleanup_accepts_only_verified_init_metadata_completion(self):
         bindings = ordinary.load_module(ROOT / 'scripts/v126-operation-bindings.py', 'ordinary_init_cleanup_bindings')
@@ -348,8 +524,11 @@ class OrdinaryTests(unittest.TestCase):
         child = 'import pathlib,time;time.sleep(1.1);pathlib.Path(' + repr(str(marker)) + ').write_text("late")'
         parent = 'import subprocess,sys,time;subprocess.Popen([sys.executable,"-c",' + repr(child) + ']);time.sleep(4)'
         started = time.monotonic()
-        with self.assertRaises(subprocess.TimeoutExpired):
+        with self.assertRaises(subprocess.TimeoutExpired) as caught:
             ordinary.command([sys.executable, '-c', parent], timeout=0.2)
+        self.assertEqual(caught.exception.ordinary_failure['reason_category'], 'TIMEOUT')
+        self.assertIs(caught.exception.ordinary_failure['timed_out'], True)
+        self.assertEqual(caught.exception.ordinary_failure['children'], 'UNKNOWN')
         self.assertLess(time.monotonic() - started, 1.5)
         time.sleep(1.2)
         self.assertFalse(marker.exists(), 'own descendant continued after command deadline')
@@ -912,10 +1091,12 @@ def linux_integration(evidence):
                     gate.set()
                     status = active.wait(timeout=930)
                     writer.join(timeout=5)
-                    ordinary.require(not writer.is_alive() and not writer_errors, 'owned streaming writer did not finish')
-                    active = writer = None
+                    upload_complete = not writer.is_alive() and not writer_errors
+                    active = None
+                    if not writer.is_alive():
+                        writer = None
                 capture.chmod(0o400)
-                ordinary.require(status == 0, 'real ordinary worker failed; private capture retained')
+                require_worker_success(status, upload_complete, bindings, registry, identity, target)
                 ack = ordinary.shell_consumer(ROOT / 'scripts/v126-cutover.sh',
                     'capture="$1"; RUN_ID="$2"; RELEASE_SHA="$3"; SCRIPT_SHA256="$4"; ACTIVE_INTENT_HASH="$5"; '
                     'ACTIVE_OPERATION_KIND=DEPLOY; ACTIVE_OPERATION_NAME=ORDINARY_DEPLOY; verify_remote_operation_ack "$capture" ordinary-deploy',
@@ -1004,6 +1185,11 @@ def linux_integration(evidence):
         ordinary.require(outcome['outcome'] == 'UNKNOWN' and outcome['exit'] != 0 and outcome['children'] == 'REAPED' and
                          not (registry / (unknown_operation + '.deploy-proof.json')).exists(),
                          'failed real metadata guard produced an ordinary completion proof')
+        diagnostic = ordinary.retained_failure(bindings, registry, unknown_identity, target)
+        ordinary.require(diagnostic['stage'] == 'ADMISSION' and diagnostic['children'] == 'REAPED' and
+                         diagnostic['supervisor_exit_code'] == outcome['exit'] == 75,
+                         'actual failed worker diagnostic did not survive bound supervisor result')
+        events.append({'checkpoint': 'ACTUAL_FIRST_FAILURE_DIAGNOSTIC_VERIFIED', 'diagnostic': diagnostic})
         accepted_pre_mutation_unknown.add(unknown_operation)
         unknown_records = {str(path.relative_to(registry)): path.read_bytes()
                            for path in registry.rglob('*') if path.is_file()}
@@ -1047,7 +1233,7 @@ def linux_integration(evidence):
         ordinary.require(provider_stats['setChatMenuButton'] > 0, 'actual OFF startup command-menu request was not observed')
         events.append({'checkpoint': 'SYNTHETIC_PROVIDER_ONLY', 'unexpected': 0})
     except BaseException as error:
-        first_failure = {'type': type(error).__name__, 'reason': str(error) if isinstance(error, (ordinary.Refused, runtime.FixtureAssertionError)) else 'owned integration failed'}
+        first_failure = ordinary.integration_failure(first_failure, error)
     finally:
         quiescent = not getattr(fixture, 'reconciliation_cleanup_unproven', False)
         if active is not None and active.poll() is None:
@@ -1077,7 +1263,7 @@ def linux_integration(evidence):
                 fixture.relays = []
             except BaseException as error:
                 quiescent = False
-                first_failure = first_failure or {'type': type(error).__name__, 'reason': 'owned relay cleanup failed'}
+                first_failure = ordinary.integration_failure(first_failure, error, stage='CLEANUP')
         if quiescent:
             try:
                 child_pid, _ = os.waitpid(-1, os.WNOHANG)
@@ -1107,18 +1293,18 @@ def linux_integration(evidence):
                     fixture.cleanup()
                     fixture.temp.remove_after_quiescence()
             except BaseException as error:
-                first_failure = first_failure or {'type': type(error).__name__, 'reason': 'owned runtime cleanup failed'}
+                first_failure = ordinary.integration_failure(first_failure, error, stage='CLEANUP')
                 quiescent = False
         if quiescent:
             try:
                 if caddy is not None: caddy.cleanup()
             except BaseException as error:
-                first_failure = first_failure or {'type': type(error).__name__, 'reason': 'owned Caddy cleanup failed'}
+                first_failure = ordinary.integration_failure(first_failure, error, stage='CLEANUP')
                 quiescent = False
         else:
             if fixture is not None:
                 fixture.temp._finalizer.detach()
-            first_failure = first_failure or {'type': 'UnknownChildren', 'reason': 'own child or daemon completion unproved; fixture retained'}
+            first_failure = ordinary.integration_failure(first_failure, RuntimeError(), stage='CLEANUP')
         if not quiescent and fixture is not None:
             fixture.temp._finalizer.detach()
         os.environ['PATH'] = saved_path
@@ -1139,6 +1325,6 @@ if __name__ == '__main__':
         parser.add_argument('--require-linux-integration', action='store_true', required=True)
         parser.add_argument('--evidence', type=Path, required=True)
         args = parser.parse_args()
-        linux_integration(args.evidence)
+        raise SystemExit(integration_main(args.evidence))
     else:
         unittest.main(verbosity=2)

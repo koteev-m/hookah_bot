@@ -1307,7 +1307,8 @@ jobs:
         run: echo 'verified=true' >> "$GITHUB_OUTPUT"
 
   compose-runtime:
-    runs-on: ubuntu-latest
+    # Explicit compatibility coverage for the CI #656 runner generation.
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     outputs:
       verified: ${{ steps.completed.outputs.verified }}
@@ -1595,7 +1596,7 @@ jobs:
           esac
 
   miniapp-e2e-smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     strategy:
       fail-fast: true
@@ -1613,7 +1614,9 @@ jobs:
         run: npm ci
       - name: Install Playwright Chromium
         working-directory: miniapp
-        run: npx playwright install --with-deps chromium
+        run: |
+          npx playwright --version
+          npx playwright install --with-deps chromium
       - name: Run full Mini App browser smoke with structured JSON report
         working-directory: miniapp
         env:

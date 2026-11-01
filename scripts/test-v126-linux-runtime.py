@@ -529,7 +529,7 @@ class Integration:
 
     def build_image(self, source, library):
         self.images.append(self.image)  # Retain ownership even if build/inspection fails.
-        self.run(['docker', 'build', '--label', LABEL + '=' + self.token, '--tag', self.image,
+        self.run(['docker', 'build', '--provenance=false', '--label', LABEL + '=' + self.token, '--tag', self.image,
                   '--file', 'backend/Dockerfile', '.'], cwd=source, timeout=900, diagnostic_category='build')
         self.image_id = self.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', self.image]).stdout.decode().strip()
         require(re.fullmatch('sha256:[0-9a-f]{64}', self.image_id), 'test image identity unavailable')
@@ -927,6 +927,21 @@ class DiagnosticsTest(unittest.TestCase):
         record = self.diagnostics.records[-1]
         self.assertEqual((record['exit'], record['deadline_seconds'], record['timed_out']), (124, 900, True))
         self.assertEqual(record['stdout']['sha256'], hashlib.sha256(b'partial build').hexdigest())
+
+    def test_runtime_image_producer_uses_single_manifest_export(self):
+        fixture = Integration.__new__(Integration)
+        fixture.images, fixture.image, fixture.token = [], 'owned-fixture', 'owned-token'
+        # Stop at the actual build boundary; Docker archive acceptance is covered
+        # by the ordinary archive regression and the hosted lifecycle itself.
+        with patch.object(fixture, 'run', side_effect=FixtureAssertionError('owned stop')) as consumer:
+            with self.assertRaises(FixtureAssertionError):
+                fixture.build_image(self.evidence, self.evidence / 'lib')
+        argv = consumer.call_args.args[0]
+        self.assertEqual(argv[:2], ['docker', 'build'])
+        self.assertEqual(argv.count('--provenance=false'), 1)
+        self.assertNotIn('--provenance=true', argv)
+        self.assertEqual(consumer.call_args.kwargs, dict(cwd=self.evidence, timeout=900, diagnostic_category='build'))
+        self.assertEqual(fixture.images, [fixture.image], 'failed build must retain resource ownership')
 
     def fixture(self, *, primary_error=None, cleanup_error=None):
         class Fixture:
