@@ -1,5 +1,31 @@
 # Project Status
 
+## HT-VENUE-PERSONAL-LINKS-CI-RED-01 — migration CI contract alignment (2026-11-02)
+
+**LOCAL_CI_FIX_READY / UNCOMMITTED / NOT_PUBLISHED / NEW_GITHUB_CI_NOT_EXECUTED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT, primary root/common dir and expected origin;
+branch `codex/ht-venue-personal-links-01`, unchanged starting HEAD
+`0db9f515b7143acb8289753345c3f5784d9e4a57`. Completed red runs #673/#674 were read once;
+both have that SHA. Five Kotlin failures and both manifest/inventory refusals reproduced locally.
+Four Kotlin test/helper files now explicitly allow the ordered PG V130 / H2 V131 chain while
+preserving historical cursor heads and V128-only media assertions. Current staging/cutover fixtures
+pin exact reviewed paths, versions, SHA-256/Flyway checksums and reject drift; historical V126
+tree/blob/checksum, install, compatibility-review, backup and schema-rollback guards remain intact.
+No product code, workflow, release controller or any of the 261 current SQL files changed.
+
+Validation: compile/ktlint PASS; 137 backend tests in 19 suites, zero failures/errors/skips,
+including all 14 mandatory migration suites and the unchanged workflow XML validator. Simple
+staging 65, PDF-worker 8, GHCR 11 and release-CI contract 18 tests PASS. Targeted cutover lineage,
+historical production guard and existing maintenance/image/admission self-tests PASS. Endpoint
+self-test: 13 executed PASS, one hosted-Linux-only sudo check skipped; no hosted acceptance claim.
+Runtime tool errors follow the skipped existing installer; both groups used the same runner image
+and the identical installer passed in cutover. No runner/install change; actual Linux runtime,
+systemd/Caddy and full cutover integrations still require a new separately published CI run.
+Evidence/commands/red-to-green results: `/private/tmp/HT-VENUE-PERSONAL-LINKS-CI-RED-01/`.
+Original user checkpoint insertion preserved verbatim; index/refs unchanged; `scripts/dev/`
+untouched/untracked. No commit/push/PR action, rerun/dispatch, SSH, deploy or live service mutation.
+Next: inspect the local CI-only diff before separately authorizing publication.
+
 ## HT-VENUE-PERSONAL-LINKS-FIX-P2-01 — three review P2 fixes (2026-11-02)
 
 **LOCAL_FIX_READY / UNCOMMITTED / INDEPENDENT_TARGETED_REVIEW_PENDING**.

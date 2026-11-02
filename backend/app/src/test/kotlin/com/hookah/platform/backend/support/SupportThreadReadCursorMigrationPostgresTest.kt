@@ -25,7 +25,7 @@ class SupportThreadReadCursorMigrationPostgresTest {
     }
 
     @Test
-    fun `reviewed photo migration reaches current head without changing cursor contract`() {
+    fun `reviewed following migrations reach current head without changing cursor contract`() {
         assertions().assertForwardMigrationReachesCurrentHead()
     }
 
@@ -41,6 +41,8 @@ class SupportThreadReadCursorMigrationPostgresTest {
                 mapOf(
                     "127" to "V127__staff_profile_photos.sql",
                     "128" to "V128__venue_info_media_objects.sql",
+                    "129" to "V129__venue_public_addresses.sql",
+                    "130" to "V130__backfill_venue_public_addresses.sql",
                 ),
             ddlFailureContract = MigrationDdlFailureContract.TRANSACTIONAL,
             close = dataSource::close,

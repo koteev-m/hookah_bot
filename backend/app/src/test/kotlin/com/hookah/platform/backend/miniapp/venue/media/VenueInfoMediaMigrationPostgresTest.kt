@@ -43,7 +43,8 @@ class VenueInfoMediaMigrationPostgresTest {
                     )
                 }
             }
-            val after = Flyway.configure().dataSource(ds).locations("classpath:db/migration/postgresql").load()
+            val after =
+                Flyway.configure().dataSource(ds).locations("classpath:db/migration/postgresql").target("128").load()
             assertEquals(1, after.migrate().migrationsExecuted)
             assertTrue(after.validateWithResult().validationSuccessful)
             ds.connection.use { c ->
@@ -74,6 +75,19 @@ class VenueInfoMediaMigrationPostgresTest {
                 }
             }
             assertEquals("128", after.info().current().version.version)
+            val current = Flyway.configure().dataSource(ds).locations("classpath:db/migration/postgresql").load()
+            assertEquals(
+                listOf(
+                    "129" to "V129__venue_public_addresses.sql",
+                    "130" to "V130__backfill_venue_public_addresses.sql",
+                ),
+                current.info().pending().map { it.version.version to it.script },
+            )
+            assertEquals(2, current.migrate().migrationsExecuted)
+            assertEquals("130", current.info().current().version.version)
+            assertTrue(current.info().pending().isEmpty())
+            current.validate()
+            assertEquals(0, current.migrate().migrationsExecuted)
         }
     }
 }
