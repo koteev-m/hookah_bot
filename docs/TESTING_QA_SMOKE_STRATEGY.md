@@ -3331,9 +3331,10 @@ Recorded bounded staging smoke evidence (user-confirmed for release HEAD `a62faa
 
 ## Venue Mini App Media Foundation Future Quality Gate
 
-The canonical future contract is `docs/MEDIA_STORAGE_UPLOAD.md`. Its current verdict is
-`STOP_FOR_MEDIA_STORAGE_DECISION`; this gate applies only after one durable storage option,
-backup/deletion policy and operations owner are approved.
+The canonical contract is `docs/MEDIA_STORAGE_UPLOAD.md`. Private staging R2 is selected and
+venue information upload/PDF Inline UX is deployed; its bounded owner-confirmed iPhone result
+is recorded below. This broader gate still applies to remaining media/storage operations and
+future surfaces, including production admission, backup/deletion policy and operations ownership.
 
 Required future coverage:
 
@@ -4471,7 +4472,8 @@ Telegram/staff-chat:
 - Real Telegram smoke: `REQUIRED` for bot/staff-chat changes.
 - Platform Owner controlled Guest QR test: **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; `NO_MIGRATION`, bounded CI/deploy/staging smoke complete.
 - Staging deploy smoke policy: `DOCUMENTED`.
-- Venue media foundation quality gate: `DOCUMENTED / STORAGE DECISION REQUIRED`.
+- Venue media foundation quality gate: `DOCUMENTED / STAGING R2 SELECTED / BROADER OPERATIONS OPEN`;
+  PDF Inline UX is `USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED` within the recorded scope below.
 
 ## Codex Workflow Guidance
 
@@ -4720,10 +4722,11 @@ TypeScript/build, focused `direct venue info media|venue card media` then full P
 Run scripts/test_simple_staging.py for new flag validation, exact observed runtime, append-only
 V128 manifest and existing release/rollback gates. No live R2 is involved in these tests.
 
-Real iPhone file selection/cancel/orientation/PDF reader, app/chat return, published Guest and
-new-R2 Bot delivery, restart durability, private bucket admission and actual DELETE/HEAD absence
-require separately authorized staging acceptance. UX08 staff-photo partial acceptance remains
-separate; production and backup/restore are not established by these local checks.
+The ordinary iPhone upload/view, Preview/Guest and return/reopen scope has the owner-confirmed
+PDF result below. Unreported picker/cancel/orientation variants, new-R2 Bot delivery, restart
+durability, full private-bucket admission and actual DELETE/HEAD absence remain separate gates.
+UX08 staff-photo partial acceptance remains separate; production and backup/restore are not
+established by these local checks or by the bounded PDF acceptance.
 
 
 ## HT-VENUE-CARD-R2-DIRECT-UPLOAD-FIX-01 — review regressions
@@ -4786,8 +4789,9 @@ Run backend media PostgreSQL (including nonempty V127→V128), cleanup/RBAC/Gues
 ordering/outbox, StaffPhotoStorage, all three PdfClient methods, Kotlin compile/ktlint, TypeScript
 build, focused and full Playwright. XML must show actual expected methods with zero skips/errors/
 failures (a non-void JUnit method can disappear without a skip). CI retains class selectors/XML
-minima and all existing gates. Real iPhone, live R2, production and future authorized staging
-resource/rollout acceptance remain separate and open. Structural success is not antivirus proof.
+minima and all existing gates. The release/ordinary iPhone PDF result is recorded below;
+unreported live R2/resource/error cases, production and future rollout acceptance remain separate
+and open. Structural success is not antivirus proof.
 
 
 ## HT-VENUE-INFO-PDF-INLINE-UX-01 — passive pages and visible upload results
@@ -4835,7 +4839,41 @@ a blanket Telegram WebView support guarantee. Older/unsupported clients must sho
 and explicit fallback. Device memory pressure, app suspension, native file providers and iOS
 download dialogs require the manual gate below.
 
+### Recorded PDF staging acceptance — 2026-11-01
+
+**PDF INLINE UX / USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED**.
+Release `099a5b7a9ab3d8e9a03b352daf548b5858d056ec`,
+[PR #237](https://github.com/koteev-m/hookah_bot/pull/237) and
+[PR #238](https://github.com/koteev-m/hookah_bot/pull/238) merged;
+[main CI](https://github.com/koteev-m/hookah_bot/actions/runs/41264605603) has 15/15 mandatory
+jobs, `publish-ghcr`, build and browser smoke PASS. The owner-supplied Codex HT70 report records
+**STAGING_DEPLOYED / SUCCESS** at [staging](https://staging.hookahtootah.club).
+Exact image, previous/new SHA, runtime checks and unchanged configuration/resource boundaries
+are recorded in [PROJECT_STATUS.md](../PROJECT_STATUS.md#ht-pdf-release-acceptance-docs-01--pdf-release-and-iphone-acceptance-2026-11-02).
+
+On 2026-11-01 the project owner reported the agreed checks passed on a real iPhone in Telegram
+Mini App. Confirmed scope:
+
+- PDF upload and display;
+- sequential upload results;
+- page navigation and counters;
+- Preview and Guest card;
+- available OWNER and MANAGER actions;
+- JPEG/PNG images;
+- return to the app and reopening.
+
+This is owner confirmation, not independent device-automated testing. iPhone model, exact
+iOS/Telegram versions, screenshots, individual action times and per-step negative-test evidence
+were NOT_SUPPLIED. It does not assign PASS to every numbered step/variant below. Conditional
+errors, download after failed rendering, real provider failure, forced OOM, data recovery/deletion
+and physical R2 cleanup are not separately confirmed. Unreported native-picker, rotation and
+memory-pressure variants retain their regression/acceptance requirement. The result closes only
+this PDF staging slice, not the entire media subsystem, production or market launch.
+No device test, live storage operation or deploy was repeated in this docs task.
+
 ### Manual iPhone scenario (separate staging authorization)
+
+Retain this scenario as the regression checklist for future releases.
 
 1. Record exact deployed SHA, iPhone model, iOS/Telegram versions and venue publication mode.
    OWNER and MANAGER each open Settings → Public Card → Photos/PDF; keep a text draft unsaved.
@@ -4859,6 +4897,7 @@ download dialogs require the manual gate below.
    fresh access, useful file name and understandable iOS download behavior. Normal viewing must
    never require this fallback. Verify legacy Telegram media still displays through platform routes.
 
-Record PASS/FAIL/NOT_PROVABLE per step. Real iPhone, live storage and staging acceptance remain
-open until executed; local WebKit is not Telegram on iPhone. No deployment is authorized by this
-scenario or by local READY_FOR_REVIEW.
+For future releases, retain this checklist and record PASS/FAIL/NOT_PROVABLE per step. The
+owner-confirmed result above is bounded to its stated scope; remaining device/live-storage
+variants need their own evidence. Local WebKit is not Telegram on iPhone. No deployment is
+authorized by this scenario or by local READY_FOR_REVIEW.

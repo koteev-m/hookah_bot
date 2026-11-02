@@ -104,6 +104,22 @@
 
 ## Current Staging Smoke Status
 
+PDF acceptance recorded for 2026-11-01: **PDF INLINE UX / USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED**, release
+`099a5b7a9ab3d8e9a03b352daf548b5858d056ec`. Main CI has 15/15 mandatory jobs and
+`publish-ghcr` PASS; the owner-supplied HT70 report records **STAGING_DEPLOYED / SUCCESS**.
+The owner confirmed real iPhone Telegram Mini App upload/display, sequential results,
+page navigation/counters, Preview/Guest card, available OWNER/MANAGER actions, JPEG/PNG and
+return/reopen. This is owner testimony, not independent device automation or a pass for all
+media/production/launch gates. Conditional errors/download, provider failure, forced OOM and
+data deletion/restore are not separately confirmed. Exact evidence, missing device metadata
+and the retained regression checklist are in the
+[canonical QA record](../TESTING_QA_SMOKE_STRATEGY.md#recorded-pdf-staging-acceptance--2026-11-01).
+
+The earlier results below remain historical; their `Открыть PDF` presentation and absent upload
+coverage do not describe the current inline PDF slice.
+
+## Historical Staging Smoke Status — baseline through Staff Operations Slice B
+
 Status: `PASSED FOR CURRENT RELEASE THROUGH STAFF OPERATIONS SLICE B`; baseline smoke passed on 2026-06-04, with later staged parity/deployment smokes recorded through M9b.3, guest table-context exit, guest bill/bill-request parity, staff-chat activity card, hookah placeholder polish, manual billing cockpit/renewal/courtesy, staff invite deep-link sharing polish, guest communication/support-ticket split, Post-Visit Feedback, unified Guest Preview and the current Staff closure recorded above.
 
 Confirmed:
@@ -453,7 +469,8 @@ Steps:
 4. Confirm structured menu categories/items are not rendered.
 5. Confirm `ℹ️ Информация` is shown.
 6. Confirm `📖 Фото-меню` appears inside info when owner filled it.
-7. Confirm image media loads from backend media proxy and PDF opens through `Открыть PDF`.
+7. Confirm images load through the backend media proxy and PDFs render inline with independent
+   page navigation/counters. Keep the detailed iPhone regression scenario in the canonical QA record.
 8. Confirm booking entry works if bookings are enabled for the venue.
 9. Confirm search copy is `Поиск по названию, городу или адресу` and the city control has an
    accessible label plus `Все города`.
@@ -784,15 +801,15 @@ Expected:
 - Guest/Menu Options & Flavors parity is CLOSED after staging smoke: owner/manager can create hookah items, apply canonical base flavor profiles only to that item, repeat apply without duplicates, manage flavor CRUD and stop-list, stop-list the whole item, water/kitchen/drink items do not receive hookah flavors, Guest Mini App shows the picker only for the selected hookah item, hookah preparation placeholder copy is hookah-specific even in nested flavor/options flow, and `selectedOptionId` / `preferenceNote` still work.
 - `📖 Фото-меню` is currently a flat info-section media list; optional owner-defined subsections are a P2 follow-up.
 - Owner multi-image upload remains a Telegram UX follow-up: current flow may confirm each media upload separately.
-- Venue/public-card media management is `PARTIAL / BOT-FIRST`: Bot OWNER/MANAGER can add image/PDF
-  attachments, delete an attachment and hide/show its whole info section; there is no direct
-  replace or per-attachment hide action. Venue Mini App has no file picker, upload endpoint or
-  authoring/manage flow.
+- Venue/public-card direct OWNER/MANAGER JPEG/PNG/PDF upload and management are implemented
+  using selected staging R2; Bot authoring remains a fallback. PDF Inline UX has the bounded
+  owner-confirmed staging acceptance above. Broader live media/storage operations remain open.
 - Structured menu item photo/thumbnail/description media is not implemented in current Bot,
   Venue Mini App or Guest DTO/rendering. This is separate from the working view-only
   `📖 Фото-меню` info section.
-- Current smoke has no media-upload success claim. Add upload/replace/hide/delete smoke only after
-  the future media foundation is implemented.
+- The PDF result confirms upload/view within its recorded scope. Do not infer separate live
+  replace/hide/delete, provider-failure, physical cleanup or backup/restore PASS; retain those
+  regression/operations gates in `docs/MEDIA_STORAGE_UPLOAD.md` and the QA strategy.
 - Platform Mini App onboarding/placements/analytics are still partial/safe sections, not full cockpit parity; Platform Support Center for `SUPPORT_TICKET` is smoke-passed and stays in regression.
 - M4A booking conversation threads, M4B/M4C unified inbox lifecycle and the later Guest Communication UX / Support Tickets MVP are staging/smoke-closed. Guest/Venue inbox cards show multi-venue/context clarity, status/unread state, active/resolved filters and explicit `Завершить переписку` / `Возобновить переписку` actions. Venue/admin bot full inbox, structured reschedule proposals, advanced support automation/diagnostics, attachments, CSAT, support analytics and DB-level duplicate/race protection are follow-ups.
 - Broad backend test wildcards may hit heap/runtime limits; CI now uses green split release-validation jobs, and local release checks should prefer the targeted smoke/regression commands.

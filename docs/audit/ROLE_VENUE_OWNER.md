@@ -95,10 +95,11 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 
 ## Allowed actions
 
-- Управлять venue profile/card; info-section authoring/media management is currently Bot-first.
+- Управлять venue profile/card; direct information-media management is available in Venue Mini App.
 - Через Bot загружать image/PDF и удалять attachments для info sections, а также скрывать/показывать
-  весь section. Venue Mini App media upload/manage is not implemented.
-- Управлять `📖 Фото-меню` через Bot как flat view-only info section.
+  весь section. Venue Mini App also supports JPEG/PNG/PDF upload/replace/delete and
+  attachment/section visibility under `docs/MEDIA_STORAGE_UPLOAD.md`.
+- Управлять `📖 Фото-меню` через direct editor или Bot как flat view-only info section.
 - Управлять `🍽 Заказным меню`, категориями, позициями, ценами и availability.
 - Управлять stop-list item/option availability.
 - Управлять option groups/values, item media, featured/top-list and unavailable-display policy where implemented.
@@ -159,9 +160,10 @@ Mini App остаётся backend-RBAC enforced: кнопки в UI не явл�
 - Staff-call lifecycle, linked staff-chat notification delivery and ACK/DONE audit hardening are CLOSED / staging smoke passed for Venue Mini App and Telegram staff-chat surfaces. Applied ACK/DONE transitions leave audit evidence with actor user id and source; audit is best-effort.
 - Guest-visible `CANCELLED` terminal status is CLOSED / staging smoke passed for the current guest/tableSession. Venue active queue remains `NEW` / `ACK`; manual cancel UI, row-level `acked_by` / `done_by` / ACK-DONE timestamp columns and staff-call UX polish remain future. Guest table-context cleanup/exit is CLOSED / staging smoke passed and belongs to the Guest role regression checklist.
 - Menu options/photos/descriptions/top-list richness may still be partial depending on guest surface.
-- Venue/public-card media management is `PARTIAL / BOT-FIRST`: Guest and `PUBLISHED_PUBLIC` render
-  guarded media, while `PRIVATE_DRAFT` uses authenticated scoped delivery without raw refs. Venue
-  Mini App still has no file picker, upload endpoint, replace, hide/show or delete UI.
+- Venue/public-card direct media management is deployed on selected staging R2. Guest/Published
+  and authenticated Draft retain guarded delivery without raw refs. PDF Inline UX has bounded
+  `USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED` iPhone acceptance in the QA strategy; broader
+  media/storage and production gates remain open under `docs/MEDIA_STORAGE_UPLOAD.md`.
 - Structured menu item photos/descriptions/thumbnails and option/flavor media are
   `MISSING / FUTURE`; do not confuse them with the working view-only `📖 Фото-меню`.
 - Menu/options/stop-list spec is `UPDATED` in `docs/MENU_OPTIONS_STOPLIST.md`: selected-option
