@@ -4535,10 +4535,13 @@ V126 identities, checksum, schema guard, and all existing positive/negative cons
 
 After historical scenarios, the connected fixture separately builds the current unmodified
 backend and starts it against the same owned V126 PostgreSQL database. It requires exactly
-V127, all 126 historical Flyway rows unchanged, the reviewed photo migration, real current
-Flyway validation with no pending migrations, and both photo tables. The unchanged historical
-schema guard must still reject V127 with exit3. A later migration requires explicit review and
-updated forward expectations; accepting arbitrary higher heads is prohibited. No previous-image
+V1–V130, all 126 historical Flyway rows structurally unchanged, and the explicit reviewed
+V127 photo / V128 media / V129 public addresses / V130 backfill tail. Tail script names,
+SQL type, success, installed rank, SHA-256 bytes and Flyway checksums are pinned. Current Java
+`validate130` requires head V130, exactly 130 applied and zero pending migrations; both photo
+tables remain required. The unchanged historical schema guard must still reject V130 with exit3.
+A later migration requires explicit review and updated forward expectations; accepting arbitrary
+higher heads is prohibited. No previous-image
 rollback safety or staging compatibility admission is inferred from this test.
 
 Portable runtime self-tests validate pinned source selection and historical/tail drift refusal.

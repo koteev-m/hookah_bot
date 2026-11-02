@@ -1,5 +1,34 @@
 # Project Status
 
+## HT-VENUE-PERSONAL-LINKS-RUNTIME-CI-FIX-01 — exact V130 runtime fixture (2026-11-02)
+
+**LOCAL_RUNTIME_CI_FIX_READY / UNCOMMITTED / NOT_PUBLISHED / HOSTED_RUNTIME_UNVERIFIED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT, expected primary root/common dir and origin;
+branch `codex/ht-venue-personal-links-01`, unchanged HEAD
+`99732a56c6da9df90e153174a0ed4d234d32e024`. Completed runs #675/#676 at that SHA have
+13 successful jobs; only connected runtime fails, then the Compose aggregator. Tool installation,
+Caddy/systemd and other runtime steps succeed. Logs locate the failure at the stale V128 history
+length assertion; the same refusal reproduces with actual local V130 history and unchanged V1–V126.
+
+Runtime expectations now require exactly V1–V130, full equality of the first 126 history rows,
+and explicitly pinned V127–V130 script/type/success/rank/checksum plus source SHA-256. Current
+Java `validate130` requires head V130, 130 applied, zero pending and real Flyway validation.
+The old `validate128` had only this current-forward caller, with no historical compatibility use.
+Pinned historical source/tree, V125 preparation, V126 schema guard, failure/cleanup protections,
+SQL, product code, Dockerfile, installer and workflow remain unchanged. No rollback safety inferred.
+
+Validation: 7 focused migration self-tests and all 23 diagnostics self-tests PASS, including
+1260 historical-field mutations, 24 reviewed-tail mutations and missing/order/future refusals.
+Java21 compile PASS. Native JVM/Flyway plus owned disposable PostgreSQL17: 16 command/guard cases
+PASS; actual 126-row prefix unchanged, V130 accepted, V128/pending V131/applied V131 and each tail
+checksum drift refused. Unchanged schema guard accepts V126 and rejects V130 with exit3.
+Release-CI contract 18 PASS; Python compile/tabnanny and diff sanity PASS. Evidence/commands:
+`/private/tmp/HT-VENUE-PERSONAL-LINKS-RUNTIME-CI-FIX-01/`. Native checks do not replace the hosted
+Docker/JVM/Compose integration; new GitHub CI and feature staging/Telegram acceptance remain open.
+Original user checkpoint insertion preserved verbatim; index/refs unchanged; `scripts/dev/`
+untouched/untracked. No add/commit/push, PR/workflow action, SSH/deploy or external service change.
+Next: independent review of this local runtime-fixture diff before separate publication authorization.
+
 ## HT-VENUE-PERSONAL-LINKS-CI-RED-01 — migration CI contract alignment (2026-11-02)
 
 **LOCAL_CI_FIX_READY / UNCOMMITTED / NOT_PUBLISHED / NEW_GITHUB_CI_NOT_EXECUTED**.

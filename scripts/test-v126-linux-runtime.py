@@ -34,10 +34,11 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 from urllib.parse import quote, quote_plus
 import zipfile
+import zlib
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / 'scripts/fixtures/v126-linux-runtime'
@@ -52,6 +53,15 @@ V128_SCRIPT = 'V128__venue_info_media_objects.sql'
 V128_SHA256 = '153579d56223a9cadd5f988081b86853cdc7394275e160b968c6200cff5fdaf9'
 V127_SCRIPT = 'V127__staff_profile_photos.sql'
 V127_SHA256 = '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846'
+# Explicitly reviewed PostgreSQL tail; later migrations require a new contract review.
+REVIEWED_FORWARD_MIGRATIONS = (
+    ('127', V127_SCRIPT, V127_SHA256, 881920632),
+    ('128', V128_SCRIPT, V128_SHA256, 397301090),
+    ('129', 'V129__venue_public_addresses.sql',
+     'fb21b03533360487287e4d72bc8fd43bdc5319271ac688aa96c0635d6839f4ec', -618822785),
+    ('130', 'V130__backfill_venue_public_addresses.sql',
+     '8cbeabf2d72b754310b4acfd0d919f736f0132f5e26aa1f91e8103f3f5b90d26', 123295140),
+)
 sys.dont_write_bytecode = True
 SPEC = importlib.util.spec_from_file_location('database_evidence', ROOT / 'scripts/v126-database-evidence.py')
 HELPER = importlib.util.module_from_spec(SPEC)
@@ -74,10 +84,13 @@ def verify_historical_history(rows):
 
 def verify_forward_history(before, after):
     verify_historical_history(before)
-    require(len(after) == 128 and after[:126] == before, 'forward migration changed historical Flyway rows')
-    for row, version, script in zip(after[126:], ('127', '128'), (V127_SCRIPT, V128_SCRIPT)):
+    require(len(after) == 130, 'forward migration history must be exact V1-V130')
+    require(after[:126] == before, 'forward migration changed historical Flyway rows')
+    for row, (version, script, _, checksum) in zip(after[126:], REVIEWED_FORWARD_MIGRATIONS):
         require(row['version'] == version and row['script'] == script
-                and row['success'] and row['type'] == 'SQL', 'unexpected forward migration')
+                and row['success'] is True and row['type'] == 'SQL'
+                and row['installed_rank'] == int(version) and row['checksum'] == checksum,
+                'unexpected forward migration')
 
 
 def hosted_only():
@@ -726,12 +739,11 @@ class Integration:
     def forward_sequence(self):
         before = self.history()
         verify_historical_history(before)
-        photo = ROOT / MIGRATION_PATH / 'postgresql' / V127_SCRIPT
-        require(hashlib.sha256(photo.read_bytes()).hexdigest() == V127_SHA256, 'unreviewed current migration bytes')
-        media = ROOT / MIGRATION_PATH / 'postgresql' / V128_SCRIPT
-        require(hashlib.sha256(media.read_bytes()).hexdigest() == V128_SHA256, 'unreviewed media migration bytes')
+        for _, script, sha256, _ in REVIEWED_FORWARD_MIGRATIONS:
+            path = ROOT / MIGRATION_PATH / 'postgresql' / script
+            require(hashlib.sha256(path.read_bytes()).hexdigest() == sha256, 'unreviewed current migration bytes: ' + script)
         self.release = self.current_release
-        self.image = 'ht-v127-runtime-fixture:' + self.token
+        self.image = 'ht-v130-runtime-fixture:' + self.token
         self.build_image(ROOT, self.root / 'current-lib')
         self.values.update(APP_VERSION=self.release, BACKEND_IMAGE=self.image)
         self.write_inputs()
@@ -739,20 +751,20 @@ class Integration:
         cid = self.cid('backend')
         self.start_once(cid)
         result, output, _ = self.observe(cid)
-        require(result.returncode == 0 and b'READINESS=READY' in output, 'current JVM did not become ready after V128')
+        require(result.returncode == 0 and b'READINESS=READY' in output, 'current JVM did not become ready after V130')
         self.check_starts(cid)
         after = self.history()
         verify_forward_history(before, after)
         # The current image's real Flyway validates every checksum and absence of pending SQL.
         self.run(['docker', 'exec', cid, 'java', '-cp', '/app/app/lib/*:/fixture',
-                  'V126RuntimeFixture', 'validate128'], timeout=60)
+                  'V126RuntimeFixture', 'validate130'], timeout=60)
         require(self.sql("SELECT count(*) FROM information_schema.tables WHERE table_schema='public' "
                          "AND table_name IN ('staff_profile_photos','staff_profile_photo_state');") == b'2\n',
                 'photo schema missing after current JVM migration')
         rejected = self.shell('remote_compose() { command docker compose --env-file .env --file docker-compose.yml "$@"; }\n'
                               'remote_assert_schema_v126\n', env={'BACKEND_IMAGE': self.image}, check=False)
         require(rejected.returncode == 3, 'historical V126 schema guard accepted forward schema')
-        self.events.append({'checkpoint': 'ACTUAL_CURRENT_JVM_V126_TO_V128', 'source_commit': self.release,
+        self.events.append({'checkpoint': 'ACTUAL_CURRENT_JVM_V126_TO_V130', 'source_commit': self.release,
                             'image_id': self.image_id, 'historical_rows_unchanged': 126,
                             'history_sha256': hashlib.sha256(json.dumps(after, sort_keys=True).encode()).hexdigest(),
                             'forward_version': after[-1]['version'], 'forward_checksum': after[-1]['checksum'],
@@ -1026,29 +1038,99 @@ class MigrationRuntimeTest(unittest.TestCase):
             finally:
                 fixture.temp.cleanup()
 
-    def test_forward_requires_exact_history_and_only_reviewed_tail(self):
+    @staticmethod
+    def history_fixture():
         before = [dict(version=str(v), script='V' + str(v) + '__fixture.sql', checksum=v,
-                       success=True, type='SQL', installed_rank=v) for v in range(1, 127)]
-        tail = dict(version='127', script=V127_SCRIPT, checksum=127, success=True, type='SQL', installed_rank=127)
-        media_tail = dict(version='128', script=V128_SCRIPT, checksum=128, success=True, type='SQL', installed_rank=128)
-        after = before + [tail, media_tail]
+                       success=True, type='SQL', installed_rank=v, description='historical fixture',
+                       installed_by='fixture', installed_on='2030-01-01T00:00:00', execution_time=1)
+                  for v in range(1, 127)]
+        tail = [dict(version=version, script=script, checksum=checksum, success=True, type='SQL', installed_rank=int(version))
+                for version, script, checksum in (
+                    ('127', 'V127__staff_profile_photos.sql', 881920632),
+                    ('128', 'V128__venue_info_media_objects.sql', 397301090),
+                    ('129', 'V129__venue_public_addresses.sql', -618822785),
+                    ('130', 'V130__backfill_venue_public_addresses.sql', 123295140),
+                )]
+        return before, before + tail
+
+    def test_forward_accepts_exact_v130_history(self):
+        before, after = self.history_fixture()
         verify_forward_history(before, after)
-        for key, value in (('checksum', -1), ('script', 'changed.sql'), ('success', False), ('installed_rank', 999)):
-            changed = [dict(row) for row in after]
-            changed[0][key] = value
-            with self.subTest(historical=key), self.assertRaises(FixtureAssertionError):
-                verify_forward_history(before, changed)
-        for key, value in (('version', '128'), ('script', 'unknown.sql'), ('success', False), ('type', 'BASELINE')):
-            with self.subTest(tail=key), self.assertRaises(FixtureAssertionError):
-                verify_forward_history(before, before + [dict(tail, **{key: value}), media_tail])
-        for key, value in (('version', '129'), ('script', 'unknown.sql'), ('success', False), ('type', 'BASELINE')):
-            with self.subTest(media_tail=key), self.assertRaises(FixtureAssertionError):
-                verify_forward_history(before, before + [tail, dict(media_tail, **{key: value})])
-        for changed in (before, before + [tail], after + [tail], after[1:]):
-            with self.assertRaises(FixtureAssertionError):
+
+    def test_forward_rejects_changes_to_every_field_of_every_historical_row(self):
+        before, after = self.history_fixture()
+        for index in range(126):
+            for key in before[index]:
+                changed = [dict(row) for row in after]
+                changed[index][key] = 'changed'
+                with self.subTest(row=index + 1, field=key), self.assertRaisesRegex(
+                        FixtureAssertionError, 'changed historical Flyway rows'):
+                    verify_forward_history(before, changed)
+
+    def test_forward_rejects_unreviewed_tail_fields(self):
+        before, after = self.history_fixture()
+        for index in range(126, 130):
+            for key, value in (('version', '131'), ('script', 'unknown.sql'), ('checksum', -1),
+                               ('success', False), ('type', 'BASELINE'), ('installed_rank', 999)):
+                changed = [dict(row) for row in after]
+                changed[index][key] = value
+                with self.subTest(version=index + 1, field=key), self.assertRaises(FixtureAssertionError):
+                    verify_forward_history(before, changed)
+
+    def test_forward_rejects_missing_reordered_and_unexpected_rows(self):
+        before, after = self.history_fixture()
+        cases = [before, after + [dict(after[-1], version='131', installed_rank=131)], after[1:]]
+        cases.extend(after[:index] + after[index + 1:] for index in range(126, 130))
+        cases.extend(after[:index] + [after[index + 1], after[index]] + after[index + 2:]
+                     for index in range(126, 129))
+        for index, changed in enumerate(cases):
+            with self.subTest(case=index), self.assertRaises(FixtureAssertionError):
                 verify_forward_history(before, changed)
         with self.assertRaises(FixtureAssertionError):
             verify_historical_history(before[:-1])
+
+    def test_current_sql_preserves_pinned_historical_bytes_and_exact_reviewed_tail(self):
+        location = ROOT / MIGRATION_PATH / 'postgresql'
+        historical = subprocess.check_output(['git', '--no-optional-locks', 'ls-tree', '--name-only',
+                                               V126_RUNTIME_SOURCE + ':' + MIGRATION_PATH + '/postgresql'], cwd=ROOT,
+                                              text=True).splitlines()
+        self.assertEqual(len(historical), 126)
+        self.assertEqual({p.name for p in location.iterdir()},
+                         set(historical) | {row[1] for row in REVIEWED_FORWARD_MIGRATIONS})
+        for script in historical:
+            expected = subprocess.check_output(['git', '--no-optional-locks', 'show',
+                                                V126_RUNTIME_SOURCE + ':' + MIGRATION_PATH + '/postgresql/' + script], cwd=ROOT)
+            self.assertEqual((location / script).read_bytes(), expected, script)
+        for _, script, sha256, checksum in REVIEWED_FORWARD_MIGRATIONS:
+            raw = (location / script).read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), sha256, script)
+            crc = 0
+            for line in raw.decode('utf-8-sig').splitlines():
+                crc = zlib.crc32(line.encode(), crc)
+            self.assertEqual(crc if crc < 2**31 else crc - 2**32, checksum, script)
+
+    def test_forward_calls_current_flyway_validation_and_keeps_v126_schema_refusal(self):
+        for schema_exit in (3, 0):
+            with self.subTest(schema_exit=schema_exit):
+                fixture = Mock()
+                fixture.root, fixture.token = Path('/unused-fixture'), 'synthetic'
+                fixture.current_release, fixture.image_id = 'a' * 40, 'sha256:' + 'b' * 64
+                fixture.values, fixture.events = {}, []
+                fixture.history.side_effect = self.history_fixture()
+                fixture.cid.return_value = 'owned-backend'
+                fixture.observe.return_value = (subprocess.CompletedProcess([], 0), b'READINESS=READY', 0)
+                fixture.sql.return_value = b'2\n'
+                fixture.shell.return_value = subprocess.CompletedProcess([], schema_exit)
+                if schema_exit == 3:
+                    Integration.forward_sequence(fixture)
+                    self.assertEqual(fixture.events[-1]['checkpoint'], 'ACTUAL_CURRENT_JVM_V126_TO_V130')
+                else:
+                    with self.assertRaisesRegex(FixtureAssertionError, 'schema guard accepted forward schema'):
+                        Integration.forward_sequence(fixture)
+                fixture.run.assert_called_once_with(
+                    ['docker', 'exec', 'owned-backend', 'java', '-cp', '/app/app/lib/*:/fixture',
+                     'V126RuntimeFixture', 'validate130'], timeout=60)
+                self.assertIn('remote_assert_schema_v126\n', fixture.shell.call_args.args[0])
 
 
 class TransportTest(unittest.TestCase):

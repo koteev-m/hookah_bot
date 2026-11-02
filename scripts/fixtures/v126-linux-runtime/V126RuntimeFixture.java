@@ -16,15 +16,15 @@ public final class V126RuntimeFixture {
             Flyway.configure().dataSource(url, user, password)
                 .locations("classpath:db/migration/postgresql").target("125").load().migrate();
             System.out.println("FIXTURE_MIGRATED_TO_125");
-        } else if (args.length == 1 && args[0].equals("validate128")) {
+        } else if (args.length == 1 && args[0].equals("validate130")) {
             Flyway flyway = Flyway.configure().dataSource(url, user, password)
                 .locations("classpath:db/migration/postgresql").load();
             flyway.validate();
-            if (!flyway.info().current().getVersion().toString().equals("128")
-                || flyway.info().applied().length != 128 || flyway.info().pending().length != 0) {
-                throw new IllegalStateException("Current runtime must have exact validated V128 head");
+            if (!flyway.info().current().getVersion().toString().equals("130")
+                || flyway.info().applied().length != 130 || flyway.info().pending().length != 0) {
+                throw new IllegalStateException("Current runtime must have exact validated V130 head");
             }
-            System.out.println("FIXTURE_VALIDATED_CURRENT_128");
+            System.out.println("FIXTURE_VALIDATED_CURRENT_130");
         } else if (args.length == 2 && args[0].equals("identity")) {
             // Execute the production identity SQL unchanged through actual backend JDBC.
             try (Connection connection = DriverManager.getConnection(url, user, password);
