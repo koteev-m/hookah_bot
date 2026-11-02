@@ -2413,6 +2413,29 @@ class TelegramBotRouter internal constructor(
         val command = parts.firstOrNull()?.substringBefore("@") ?: ""
         val token = if (command == "/start") parts.getOrNull(1) else null
         if (token.isNullOrBlank()) {
+            if (buildHomeWebAppUrl(config.webAppPublicUrl, config.miniAppEntryEnabled) != null && chatId == from?.id) {
+                val context = chatContextRepository.get(chatId)
+                if (context == null) {
+                    if (isPlatformOwner(from.id)) {
+                        platformGuestQrPendingStore.clear(
+                            PlatformGuestQrPendingKey(actorUserId = from.id, chatId = chatId),
+                        )
+                    }
+                    enqueueMessage(
+                        chatId,
+                        "Откройте «📱 Приложение» внизу чата.\n\n" +
+                            "/menu — Функции бота\n/support — Поддержка",
+                        ReplyKeyboardRemove(removeKeyboard = true),
+                    )
+                    dialogStateRepository.clear(chatId)
+                    return
+                }
+                if (!isPlatformOwner(from.id) && context.userId == from.id) {
+                    enqueueMessage(chatId, "Выберите действие за столом.", TelegramKeyboards.tableContextBotFlow())
+                    dialogStateRepository.clear(chatId)
+                    return
+                }
+            }
             if (isPlatformOwner(from?.id)) {
                 from?.id?.let { actorUserId ->
                     platformGuestQrPendingStore.clear(

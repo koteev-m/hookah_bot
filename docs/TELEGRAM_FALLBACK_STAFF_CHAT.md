@@ -44,6 +44,58 @@ Rules:
 - Bot fallback must call the same backend/domain paths as Mini App or produce an explicitly marked fallback batch/task.
 - Staff-chat callbacks must resolve the entity server-side, check role/scope/state and handle stale/idempotent actions safely.
 
+### Primary Mini App entry and bot functions
+
+`HT-BOT-MINIAPP-ENTRY-UX-01` adds a local implementation of the global private-chat
+**📱 Приложение** menu button. Startup uses `setChatMenuButton` with `type=web_app`
+and a validated HTTPS `TELEGRAM_WEBAPP_PUBLIC_URL` with `mode=home`. Navigation/table
+parameters and fragments are removed from the configured base; other query parameters
+are retained. Missing/invalid URL or disabled Mini App entry uses `type=commands`.
+Existing maintenance restrictions on global command configuration, traffic admission,
+server RBAC and safe API-failure logging remain in force. A failed Telegram call is not
+proof that the client menu changed; existing per-chat BotFather overrides, if any, require
+separate acceptance. No live API call or BotFather change belongs to local validation.
+
+A normal private `/start` with usable Mini App configuration and no stored table context
+sends short navigation, removes the obsolete ReplyKeyboard with `ReplyKeyboardRemove`,
+and exposes **/menu — Функции бота** and `/support`. The command list contains `/start`
+(`Начать работу`) and `/support`; `/menu` remains a supported unlisted operational entry.
+When Mini App entry is unavailable, the existing role-aware bot menus remain available.
+An existing guest table context retains its operational keyboard; Platform guest-test
+validation/exit, QR payloads, invites, callbacks and staff-chat handlers retain their contracts.
+Role-specific chat menus remain reachable via `/menu`, including their old inline App links.
+
+Launch types are distinct:
+- Text ReplyKeyboard buttons send a chat message and may lead to a separate inline button.
+- Inline WebApp buttons open the existing contextual Mini App links from a message.
+- MenuButtonWebApp opens the authenticated Mini App directly from the persistent private-chat
+  menu, without a text command or an extra bot message. It is global, not role-specific.
+- KeyboardButton.web_app is not substituted: keyboard launches have different initData/sendData
+  semantics and cannot replace the mandatory Telegram auth gate.
+
+See the official [MenuButtonWebApp contract](https://core.telegram.org/bots/api#menubuttonwebapp)
+and [menu-button launch documentation](https://core.telegram.org/bots/webapps#launching-mini-apps-from-the-menu-button).
+
+`mode=home` first passes the existing nonempty initData/auth gate, then reads current server
+Venue/Platform access and the existing guest table restore endpoint. With no table context,
+Guest opens the catalog, STAFF/MANAGER/OWNER open Venue, and Platform Owner opens Platform.
+The existing Venue selector handles multiple memberships. Guest and allowed work modes can
+be explicitly selected inside this entry; switching retains Venue form/pending-operation guards, warns about unsaved changes and reloads
+through current server access checks. The `entry` URL preference grants no role and no role
+is stored locally. A revoked selection cannot mount a denied work surface. Read failures
+block selection with retry guidance instead of guessing permissions or discarding a visit.
+
+Explicit QR context and a restored active visit take precedence over automatic role selection.
+Switching to a work mode is blocked while a visit is active; use the existing guest exit flow,
+which may itself be blocked by an unpaid/open order. Restore uses the existing endpoint and
+may refresh an existing session; the selector creates no table session. Platform Guest QR
+confirmation remains server-owned and cannot be bypassed by mode/query parameters. Old
+`mode=guest`, `mode=venue`, `mode=platform`, `table_token`, inline links and Telegram BackButton
+continue through their existing surfaces. Reopening the persistent button starts a fresh role
+check; explicit guest exit is retained by the server, not undone by the selector.
+
+Real Telegram/iPhone smoke and staging deployment for this change have **not** been performed.
+
 ### Staging Traffic Modes
 
 Staging is always fail-closed and requires an explicit mode:

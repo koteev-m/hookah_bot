@@ -3760,3 +3760,12 @@ input[type="number"] {
 .info-media-preview .status:empty { display: block; }
 .info-media-controls { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; padding: 8px; }
 .info-media-controls button, .info-media-preview > button { min-height: 44px; margin: 4px; }
+
+.home-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+}
+
+.home-modes[hidden] { display: none; }

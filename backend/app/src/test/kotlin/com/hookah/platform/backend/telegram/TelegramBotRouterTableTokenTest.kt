@@ -246,6 +246,7 @@ import com.hookah.platform.backend.telegram.db.VenueStatsRepository
 import io.ktor.client.engine.mock.respond
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.config.MapApplicationConfig
+import io.mockk.Called
 import io.mockk.clearMocks
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -432,6 +433,120 @@ class TelegramBotRouterTableTokenTest {
             platformGuestQrCallbackTagFactory = platformGuestQrCallbackTagFactory,
             guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
         )
+
+    @Test
+    fun `private start with app removes obsolete keyboard and exposes bot functions for all roles`() =
+        runBlocking {
+            for (userId in listOf(200L, 999L)) {
+                routerWithWebAppPublicUrl("https://mini.app/miniapp/").process(
+                    TelegramUpdate(
+                        updateId = userId + 90_000,
+                        message =
+                            Message(
+                                messageId = userId,
+                                chat = Chat(id = userId, type = "private"),
+                                fromUser = User(id = userId),
+                                text = "/start",
+                            ),
+                    ),
+                )
+                coVerify(exactly = 1) {
+                    outboxEnqueuer.enqueueSendMessage(
+                        userId,
+                        match {
+                            it.contains("📱 Приложение") &&
+                                it.contains("/menu — Функции бота") && it.contains("/support")
+                        },
+                        match { it is ReplyKeyboardRemove && it.removeKeyboard },
+                    )
+                }
+            }
+            coVerify(exactly = 0) { chatContextRepository.clear(any()) }
+            coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+        }
+
+    @Test
+    fun `private start with guest context retains operational keyboard`() =
+        runBlocking {
+            val stored = mockk<StoredChatContext>()
+            every { stored.userId } returns 200L
+            coEvery { chatContextRepository.get(200L) } returns stored
+            routerWithWebAppPublicUrl("https://mini.app/miniapp/").process(
+                TelegramUpdate(
+                    updateId = 90_201,
+                    message =
+                        Message(
+                            messageId = 200,
+                            chat = Chat(id = 200, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "/start",
+                        ),
+                ),
+            )
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(200, "Выберите действие за столом.", any<ReplyKeyboardMarkup>())
+            }
+            coVerify(exactly = 0) { chatContextRepository.clear(any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+        }
+
+    @Test
+    fun `private start cancels booking reply without table context`() =
+        runBlocking { assertStartCancelsBookingReply(hasTableContext = false) }
+
+    @Test
+    fun `private start cancels booking reply while retaining table context`() =
+        runBlocking { assertStartCancelsBookingReply(hasTableContext = true) }
+
+    private suspend fun assertStartCancelsBookingReply(hasTableContext: Boolean) {
+        var state =
+            DialogState(
+                DialogStateType.GUEST_BOOKING_WAIT_REPLY,
+                mapOf("venue_id" to "10", "booking_id" to "77", "guest_user_id" to "200"),
+            )
+        val stored = StoredChatContext(userId = 200L, tableToken = "TOKEN", chatId = 200L, venueId = 10L, tableId = 11L)
+        coEvery { dialogStateRepository.get(200L) } answers { state }
+        coEvery { dialogStateRepository.clear(200L) } answers {
+            state = DialogState(DialogStateType.NONE)
+            Unit
+        }
+        coEvery { chatContextRepository.get(200L) } returns stored.takeIf { hasTableContext }
+        coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(10L)
+        val appRouter = routerWithWebAppPublicUrl("https://mini.app/miniapp/")
+
+        suspend fun send(
+            updateId: Long,
+            text: String,
+        ) {
+            appRouter.process(
+                TelegramUpdate(
+                    updateId = updateId,
+                    message =
+                        Message(
+                            messageId = updateId,
+                            chat = Chat(id = 200L, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = text,
+                        ),
+                ),
+            )
+        }
+
+        send(90_301L, "/start")
+        assertEquals(DialogStateType.NONE, state.state)
+        assertTrue(state.payload.isEmpty())
+        coVerify(exactly = 1) { dialogStateRepository.clear(200L) }
+        coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
+        send(90_302L, "Это уже не ответ по брони")
+        coVerify(exactly = 0) { guestBookingRepository.findActiveByGuest(any(), any(), any()) }
+        verify { supportThreadRepository wasNot Called }
+        assertEquals(stored.takeIf { hasTableContext }, chatContextRepository.get(200L))
+        coVerify(exactly = 0) { chatContextRepository.clear(any()) }
+        coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+        verify { tableSessionRepository wasNot Called }
+        verify { guestTableContextLifecycleRepository wasNot Called }
+    }
 
     @BeforeEach
     fun setup() {

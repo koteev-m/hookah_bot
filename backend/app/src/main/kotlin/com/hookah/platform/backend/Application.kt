@@ -859,6 +859,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 json = telegramJson,
                 trafficPolicy = telegramTrafficPolicy,
                 maintenancePolicy = stagingMaintenancePolicy,
+                webAppPublicUrl = telegramConfig.webAppPublicUrl,
+                miniAppEntryEnabled = telegramConfig.miniAppEntryEnabled,
             )
         telegramRouter =
             TelegramBotRouter(
@@ -1814,13 +1816,7 @@ private suspend fun configureTelegramCommandMenu(apiClient: TelegramApiClient) {
             add(
                 buildJsonObject {
                     put("command", "start")
-                    put("description", "🔄 Обновить")
-                },
-            )
-            add(
-                buildJsonObject {
-                    put("command", "menu")
-                    put("description", "🏠 Главное меню")
+                    put("description", "Начать работу")
                 },
             )
             add(
@@ -1880,7 +1876,7 @@ private suspend fun configureTelegramCommandMenu(apiClient: TelegramApiClient) {
             logger.error("Telegram bot command configuration denied unexpectedly")
     }
 
-    when (val result = apiClient.setCommandsMenuButton()) {
+    when (val result = apiClient.setApplicationMenuButton()) {
         is TelegramCallResult.Success -> logger.info("Telegram menu button configured")
         is TelegramCallResult.Failure ->
             logger.warn(

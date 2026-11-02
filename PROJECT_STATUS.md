@@ -1,5 +1,100 @@
 # Project Status
 
+## HT-BOT-MINIAPP-ENTRY-CI669-FIX-01 — source-bound menu fixture (2026-11-02)
+
+**LOCAL_FIX_VALIDATED / READY_FOR_AUTHORIZED_PUBLICATION**. PROJECT_IDENTITY_OK:
+`/private/tmp/HT-BOT-MINIAPP-ENTRY-UX-01/worktree`, branch
+`codex/ht-bot-miniapp-entry-ux-01`, starting HEAD/required parent
+`ba4abd75c152f497afb8b5582cf8d3f9cda6a3b1`, main base
+`9b4bb2f75cd7dc0192d461fd099c3cc88dcabe09`.
+CI [669](https://github.com/koteev-m/hookah_bot/actions/runs/41421105650)
+failed in compose-cutover: the Python fixture split on the removed block-body
+`setCommandsMenuButton` signature. The exact IndexError was reproduced locally.
+The fixture now binds both entry methods to the shared Kotlin producer, extracts
+its actual commands payload, and reports source drift through assertions.
+Synthetic runtime has no WebApp URL (explicit environment, clean Compose runner,
+no Dockerfile URL default); provider remains commands-only. Existing wire negative
+controls/counters/latching remain intact; added producer-drift and environment
+checks plus rejection of a complete HTTPS web_app payload. Business code unchanged.
+
+Validation: `python3 -B scripts/test-v126-ordinary-deploy.py` 33/33 PASS;
+`python3 scripts/test-v126-release-ci.py` 18/18 PASS; in-memory Python compile and
+`git diff --check` PASS. Backend/Playwright suites reused from prior validation:
+their inputs and production behavior are unchanged. No unfinished test process.
+Authorized next step: one commit and one ordinary push, verify exact remote SHA,
+then STOP. No CI waiting/rerun, PR, Telegram API, SSH or deploy. `scripts/dev/`
+and other worktrees untouched. New GitHub CI and real Telegram/iPhone/staging
+acceptance remain unverified and require separate follow-up.
+
+## HT-BOT-MINIAPP-ENTRY-REVIEW-FIX-01 — bounded review fixes (2026-11-02)
+
+**REVIEW_FINDINGS_FIXED_LOCAL / READY_FOR_TARGETED_REVIEW** — P1 and P2 only.
+PROJECT_IDENTITY_OK: physical root `/private/tmp/HT-BOT-MINIAPP-ENTRY-UX-01/worktree`,
+branch `codex/ht-bot-miniapp-entry-ux-01`, unchanged HEAD/base
+`9b4bb2f75cd7dc0192d461fd099c3cc88dcabe09`; Hookah Git common dir/origin verified.
+The existing 13 modified + 2 untracked files were preserved; no branch/worktree changes.
+
+P1: both new plain `/start` early returns clear only the pending dialog state. Stored
+table/QR context and session lifecycle are untouched. Two stateful regression tests cover
+`GUEST_BOOKING_WAIT_REPLY -> /start -> ordinary text`, with and without table context,
+and assert no booking message, context replacement/clear, or session lifecycle call.
+P2: home still checks server restore before switching, but an active visit blocks only
+work-mode destinations, allowing Guest entry. The new E2E covers a visit appearing after
+Venue opened, fresh role reads, retained token/session 77, no session end/create and
+continued Venue/Platform denial while visiting. Auth, RBAC and Platform confirmation are unchanged.
+
+Both regressions failed on the pre-fix implementation and passed after the fixes.
+Final local validation: Kotlin compile/ktlint PASS; 617 unique TelegramBotRouter tests
+PASS (573 table-token, 24 link-command, 18 venue-connection, 2 idempotency), zero skips;
+TypeScript/Vite build PASS; focused home smoke 17/17 PASS; full Chromium 510/510 PASS,
+zero flaky/skipped/failed attempts/runner errors; unchanged CI JSON assertions PASS.
+The previous 981-test backend selection was not repeated. Local evidence, exact commands,
+pre-fix failures, XML/JSON results and source hashes:
+`/private/tmp/HT-BOT-MINIAPP-ENTRY-REVIEW-FIX-01/`.
+
+Authorization remains local fixes/tests/checkpoint only. No commit, push, PR, Telegram API
+mutation, BotFather change, SSH or deployment; `scripts/dev/` and other worktrees untouched.
+Real Telegram/iPhone and staging acceptance remain **NOT RUN**. No unfinished test operation.
+Next: targeted independent review of these two fixes; publication/deployment requires separate authorization.
+
+## HT-BOT-MINIAPP-ENTRY-UX-01 — direct Telegram Mini App entry (2026-11-02)
+
+**LOCAL_READY_FOR_REVIEW** — local implementation and checks only.
+PROJECT_IDENTITY_OK in the primary checkout and the new isolated worktree:
+`/private/tmp/HT-BOT-MINIAPP-ENTRY-UX-01/worktree`, branch
+`codex/ht-bot-miniapp-entry-ux-01`, exact starting HEAD/base/local origin/main
+`9b4bb2f75cd7dc0192d461fd099c3cc88dcabe09`. Git common dir and sanitized origin
+match Hookah_Tootah / hookah_bot_ANT / github.com/koteev-m/hookah_bot.
+Primary checkout remains `codex/ht-venue-info-pdf-inline-ux-01` at
+`4878a83397e76213531abb9b01a3e2ba4fc15fe4`; existing `scripts/dev/` is untouched.
+
+Startup configures the global private-chat **📱 Приложение** MenuButtonWebApp using
+validated HTTPS config + `mode=home`, with commands fallback when disabled/invalid/missing.
+Normal private `/start` removes the obsolete keyboard only outside table context and exposes
+`/menu — Функции бота` plus `/support`. All existing role/QR/chat handlers remain available.
+Home runs after the existing auth gate, re-reads Venue/Platform rights and guest restore,
+retains multi-venue selection, active visit priority, Platform guest confirmation and exit.
+Mode switching rechecks access and preserves Venue draft/pending-operation guards. No new
+role authority, session-creation path, schema migration or server configuration is introduced.
+See [navigation contract](docs/TELEGRAM_FALLBACK_STAFF_CHAT.md#primary-mini-app-entry-and-bot-functions)
+and [QA scope](docs/TESTING_QA_SMOKE_STRATEGY.md#direct-mini-app-entry-regression--ht-bot-miniapp-entry-ux-01).
+
+Validation: Kotlin compile/ktlint PASS; 981 unique selected backend tests completed
+without failures or remaining skips across the recorded runs; TypeScript/Vite build PASS;
+full Playwright Chromium **509/509 PASS**, zero flaky/skipped/runner errors/failed attempts;
+existing CI JSON assertions PASS (only report input path adapted). The initial combined backend
+run exhausted heap; unfinished classes passed separately with `_JAVA_OPTIONS=-Xmx4g`.
+Initial PostgreSQL skips were resolved using process-local `-Dapi.version=1.44` against the local
+Docker test environment; four QR-outbox, 27 availability and one router PostgreSQL tests passed.
+No test or CI gate was weakened. Local evidence (logs, JSON summaries, source hashes):
+`/private/tmp/HT-BOT-MINIAPP-ENTRY-UX-01/`. Markdown sanity and `git diff --check` PASS.
+
+Real Telegram menu application/initData, iPhone WebView and staging acceptance remain **NOT RUN**.
+Existing per-chat menu overrides and client close/reopen behavior require that separate smoke.
+No commit, push, PR, live Telegram/BotFather call, credentials change or deployment performed.
+Authorization is local code/tests/docs only; no unfinished test operation. Next: separate review
+of the uncommitted worktree, then separately authorized publication/CI and staging/iPhone acceptance.
+
 ## HT-PDF-RELEASE-ACCEPTANCE-DOCS-01 — PDF release and iPhone acceptance (2026-11-02)
 
 **PDF INLINE UX / USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED**.

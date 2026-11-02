@@ -4,6 +4,32 @@
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
+## Direct Mini App entry regression — HT-BOT-MINIAPP-ENTRY-UX-01
+
+Local tests must cover the global MenuButtonWebApp payload (no chat_id, exact label and
+HTTPS home URL), commands fallback for disabled/missing/invalid configuration, API refusal
+and transport exception, maintenance denial and unchanged traffic policy. Verify short
+private `/start` with ReplyKeyboardRemove, hidden-but-supported `/menu`, `/support`, QR/channel
+choice, Platform guest confirmation and exit, old callbacks, inline links and group staff-chat.
+
+Browser smoke uses synthetic nonempty initData and mocked backend responses, not real Telegram
+authorization evidence. Cover home Guest/STAFF/MANAGER/OWNER/Platform selection, multi-role
+switching (including blocked Venue saves/uploads), multi-venue selection, revoked membership,
+denied auth, failed access/context reads,
+active Guest/confirmed Platform visit priority, explicit exit, QR confirmation denial, old modes
+and Telegram BackButton/return/reopen. Re-run the complete Playwright suite when main routing
+changes, plus TypeScript/Vite build, relevant backend Telegram/auth/Guest/RBAC tests and Kotlin
+compile/ktlint. No weakened assertions, retries or skipped failures count as acceptance.
+
+Separate authorized staging/iPhone acceptance remains required: startup applies the correct
+private-chat global button, one tap opens Mini App with nonempty validated initData and no chat
+command; Guest/Venue/Platform and multi-venue transitions match current server rights; an active
+QR visit and confirmed Platform Guest test survive close/reopen, blocked exit and successful exit;
+old inline links, `/menu`, `/support`, staff-chat and Telegram BackButton still work. Verify an
+existing keyboard is removed only outside the table flow and check any per-chat menu override.
+Actual Telegram API availability/failure, iPhone WebView lifecycle and staging deployment have
+**not** been exercised by local mocks. No live API/configuration mutation is authorized here.
+
 UX08 local regression scope (`HT-VENUE-TEAM-SCHEDULE-ROLE-UX08`): optional normalized card
 `displayName` in from-member creation, legacy default, Unicode/length/blank boundaries, GET and
 nickname independence, exact linkage, hidden draft, protected/foreign/Staff denials, PostgreSQL
