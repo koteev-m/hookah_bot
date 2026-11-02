@@ -318,6 +318,71 @@ class OrdinaryTests(unittest.TestCase):
         with self.assertRaisesRegex(bindings.BindingError, 'init_result_binding'):
             operation_quiescent(bindings, registry, start, {operation})
 
+    def command_menu_from_source(self, client):
+        message = 'actual command-menu producer schema changed; review synthetic endpoint contract'
+        self.assertRegex(client, r'suspend fun setCommandsMenuButton\(\): TelegramCallResult = setMenuButton\(null\)', message)
+        self.assertRegex(client, r'suspend fun setApplicationMenuButton\(\): TelegramCallResult =\s*'
+                                r'setMenuButton\(buildHomeWebAppUrl\(webAppPublicUrl, miniAppEntryEnabled\)\)', message)
+        marker = 'private suspend fun setMenuButton(webAppUrl: String?): TelegramCallResult {'
+        self.assertEqual(client.count(marker), 1, message)
+        method = client.partition(marker)[2]
+        boundary = 'private suspend fun callMethod('
+        self.assertIn(boundary, method, message)
+        method = method.partition(boundary)[0]
+        # Match the complete payload expression, including the alternative branch:
+        # extra global/nested fields or a changed null fallback must fail closed.
+        call = re.search(
+            r'return callMethod\(\s*"([A-Za-z]+)",\s*buildJsonObject\s*\{\s*'
+            r'put\(\s*"([a-z_]+)",\s*buildJsonObject\s*\{\s*'
+            r'if \(webAppUrl == null\)\s*\{\s*put\("([a-z_]+)",\s*"([a-z_]+)"\)\s*'
+            r'} else \{\s*put\("type", "web_app"\)\s*put\("text", "📱 Приложение"\)\s*'
+            r'put\("web_app", buildJsonObject \{ put\("url", webAppUrl\) }\)\s*}\s*'
+            r'},?\s*\),?\s*},?\s*\)\s*}\s*$', method)
+        self.assertIsNotNone(call, message)
+        api_method, outer, key, value = call.groups()
+        self.assertEqual((api_method, outer, key, value), ('setChatMenuButton', 'menu_button', 'type', 'commands'), message)
+        return api_method, json.dumps({outer: {key: value}}, separators=(',', ':')).encode()
+
+    def test_synthetic_runtime_has_no_webapp_url(self):
+        # The runtime writes this explicit environment to .env and passes only
+        # PATH/HOME to Compose. No host WebApp URL is inherited by the backend.
+        source = (ROOT / 'scripts/test-v126-linux-runtime.py').read_text()
+        integrations = [node for node in ast.parse(source).body
+                        if isinstance(node, ast.ClassDef) and node.name == 'Integration']
+        self.assertEqual(len(integrations), 1, 'review synthetic runtime class')
+        constructors = [node for node in integrations[0].body
+                        if isinstance(node, ast.FunctionDef) and node.name == '__init__']
+        self.assertEqual(len(constructors), 1, 'review synthetic runtime constructor')
+        environments = [node.value for node in ast.walk(constructors[0])
+                        if isinstance(node, ast.Assign) and any(
+                            isinstance(target, ast.Attribute) and target.attr == 'values'
+                            and isinstance(target.value, ast.Name) and target.value.id == 'self'
+                            for target in node.targets)]
+        self.assertEqual(len(environments), 1, 'review synthetic runtime environment source')
+        self.assertIsInstance(environments[0], ast.Dict)
+        keys = [ast.literal_eval(key) for key in environments[0].keys]
+        self.assertNotIn('TELEGRAM_WEBAPP_PUBLIC_URL', keys)
+        self.assertIn("clean = {key: os.environ[key] for key in ('PATH', 'HOME')}", source)
+        self.assertIn("'env_file': ['.env']", source)
+
+    def test_command_menu_source_binding_rejects_producer_drift(self):
+        client = (ROOT / 'backend/app/src/main/kotlin/com/hookah/platform/backend/telegram/TelegramApiClient.kt').read_text()
+        for old, new in (
+            ('setMenuButton(null)', 'setMenuButton("https://external.invalid")'),
+            ('setMenuButton(buildHomeWebAppUrl(webAppPublicUrl, miniAppEntryEnabled))', 'setMenuButton(null)'),
+            ('private suspend fun setMenuButton(', 'private suspend fun renamedMenuButton('),
+            ('private suspend fun callMethod(', 'private suspend fun renamedCallMethod('),
+            ('"setChatMenuButton"', '"sendMessage"'),
+            ('if (webAppUrl == null)', 'if (webAppUrl != null)'),
+            ('put("type", "commands")', 'put("type", "web_app")'),
+            ('put("type", "commands")', 'put("type", "commands"); put("extra", true)'),
+            ('"menu_button",', '"menu_button", buildJsonObject { put("type", "commands") }); put("chat_id", 1); put("extra",'),
+        ):
+            with self.subTest(mutation=old):
+                self.assertIn(old, client)
+                with self.assertRaises(AssertionError):
+                    self.command_menu_from_source(client.replace(old, new))
+
     def test_provider_accepts_exact_source_command_menu_and_latches_other_requests(self):
         # Execute the real HTTP parser/handler with in-memory wire transport;
         # only the TLS/listener bootstrap is excluded. No socket is opened.
@@ -335,14 +400,7 @@ class OrdinaryTests(unittest.TestCase):
         # Bind the wire fixture to the actual Kotlin producer, without replacing
         # that producer or reproducing its dispatch/maintenance algorithms.
         client = (ROOT / 'backend/app/src/main/kotlin/com/hookah/platform/backend/telegram/TelegramApiClient.kt').read_text()
-        method = client.split('suspend fun setCommandsMenuButton(): TelegramCallResult {', 1)[1].split(
-            'private suspend fun callMethod(', 1)[0]
-        call = re.search(r'return callMethod\(\s*"([A-Za-z]+)",\s*buildJsonObject\s*\{\s*put\(\s*"([a-z_]+)",\s*'
-                         r'buildJsonObject\s*\{\s*put\("([a-z_]+)",\s*"([a-z_]+)"\)\s*}\s*,?\s*\)\s*,?\s*}\s*,?\s*\)', method)
-        self.assertIsNotNone(call, 'actual command-menu producer schema changed; review synthetic endpoint contract')
-        api_method, outer, key, value = call.groups()
-        self.assertEqual((api_method, outer, key, value), ('setChatMenuButton', 'menu_button', 'type', 'commands'))
-        actual_body = json.dumps({outer: {key: value}}, separators=(',', ':')).encode()
+        api_method, actual_body = self.command_menu_from_source(client)
 
         class Wire:
             def __init__(self, request):
@@ -371,6 +429,7 @@ class OrdinaryTests(unittest.TestCase):
         cases.extend(dict(body=body) for body in (
             b'{"chat_id":1,"menu_button":{"type":"commands"}}',
             b'{"menu_button":{"type":"web_app","web_app":{"url":"https://external.invalid"}}}',
+            b'{"menu_button":{"type":"web_app","text":"App","web_app":{"url":"https://example.com"}}}',
             b'{"menu_button":{"type":"commands","extra":true}}', b'{"menu_button":{"type":"commands"},"extra":true}',
             b'{"menu_button":{"type":"commands","type":"commands"}}',
             b'{"menu_button":{"type":"commands"},"menu_button":{"type":"commands"}}',

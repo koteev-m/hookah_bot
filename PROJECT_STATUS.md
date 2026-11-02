@@ -1,5 +1,31 @@
 # Project Status
 
+## HT-BOT-MINIAPP-ENTRY-CI669-FIX-01 — source-bound menu fixture (2026-11-02)
+
+**LOCAL_FIX_VALIDATED / READY_FOR_AUTHORIZED_PUBLICATION**. PROJECT_IDENTITY_OK:
+`/private/tmp/HT-BOT-MINIAPP-ENTRY-UX-01/worktree`, branch
+`codex/ht-bot-miniapp-entry-ux-01`, starting HEAD/required parent
+`ba4abd75c152f497afb8b5582cf8d3f9cda6a3b1`, main base
+`9b4bb2f75cd7dc0192d461fd099c3cc88dcabe09`.
+CI [669](https://github.com/koteev-m/hookah_bot/actions/runs/41421105650)
+failed in compose-cutover: the Python fixture split on the removed block-body
+`setCommandsMenuButton` signature. The exact IndexError was reproduced locally.
+The fixture now binds both entry methods to the shared Kotlin producer, extracts
+its actual commands payload, and reports source drift through assertions.
+Synthetic runtime has no WebApp URL (explicit environment, clean Compose runner,
+no Dockerfile URL default); provider remains commands-only. Existing wire negative
+controls/counters/latching remain intact; added producer-drift and environment
+checks plus rejection of a complete HTTPS web_app payload. Business code unchanged.
+
+Validation: `python3 -B scripts/test-v126-ordinary-deploy.py` 33/33 PASS;
+`python3 scripts/test-v126-release-ci.py` 18/18 PASS; in-memory Python compile and
+`git diff --check` PASS. Backend/Playwright suites reused from prior validation:
+their inputs and production behavior are unchanged. No unfinished test process.
+Authorized next step: one commit and one ordinary push, verify exact remote SHA,
+then STOP. No CI waiting/rerun, PR, Telegram API, SSH or deploy. `scripts/dev/`
+and other worktrees untouched. New GitHub CI and real Telegram/iPhone/staging
+acceptance remain unverified and require separate follow-up.
+
 ## HT-BOT-MINIAPP-ENTRY-REVIEW-FIX-01 — bounded review fixes (2026-11-02)
 
 **REVIEW_FINDINGS_FIXED_LOCAL / READY_FOR_TARGETED_REVIEW** — P1 and P2 only.
