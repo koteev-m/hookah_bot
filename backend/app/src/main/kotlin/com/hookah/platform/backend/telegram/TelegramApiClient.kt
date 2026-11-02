@@ -61,6 +61,8 @@ class TelegramApiClient(
     private val json: Json,
     private val trafficPolicy: TelegramTrafficPolicy,
     private val maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
+    private val webAppPublicUrl: String? = null,
+    private val miniAppEntryEnabled: Boolean = true,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramApiClient::class.java)
     private val baseUrl = "https://api.telegram.org/bot$token"
@@ -203,7 +205,12 @@ class TelegramApiClient(
         )
     }
 
-    suspend fun setCommandsMenuButton(): TelegramCallResult {
+    suspend fun setCommandsMenuButton(): TelegramCallResult = setMenuButton(null)
+
+    suspend fun setApplicationMenuButton(): TelegramCallResult =
+        setMenuButton(buildHomeWebAppUrl(webAppPublicUrl, miniAppEntryEnabled))
+
+    private suspend fun setMenuButton(webAppUrl: String?): TelegramCallResult {
         if (
             !maintenancePolicy.allowsBotGlobalOperation(
                 StagingMaintenancePolicy.BotGlobalOperation.COMMAND_CONFIGURATION,
@@ -217,7 +224,13 @@ class TelegramApiClient(
                 put(
                     "menu_button",
                     buildJsonObject {
-                        put("type", "commands")
+                        if (webAppUrl == null) {
+                            put("type", "commands")
+                        } else {
+                            put("type", "web_app")
+                            put("text", "📱 Приложение")
+                            put("web_app", buildJsonObject { put("url", webAppUrl) })
+                        }
                     },
                 )
             },

@@ -1,4 +1,5 @@
 import './style.css'
+import { mountHomeApp } from './screens/homeApp'
 import { mountGuestApp } from './screens/guestApp'
 import { mountPlatformApp } from './screens/platformApp'
 import { mountVenueApp } from './screens/venueApp'
@@ -25,7 +26,15 @@ try {
   // ignore WebApp expand errors
 }
 
-if (mode === 'platform') {
+if (mode === 'home') {
+  dispose = mountAuthGate({
+    root,
+    onReady: () => {
+      dispose?.()
+      dispose = mountHomeApp({ root, backendUrl })
+    }
+  })
+} else if (mode === 'platform') {
   dispose = mountAuthGate({
     root,
     onReady: () => {

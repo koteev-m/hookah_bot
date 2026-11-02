@@ -70,6 +70,7 @@ class TelegramApiClientTrafficPolicyTest {
                     apiClient.dispatchOutbox(DENIED_CHAT, "sendMessage", sendMessagePayload(DENIED_CHAT)),
                 )
                 assertIs<TelegramCallResult.TrafficDenied>(apiClient.setMyCommands(null, buildJsonArray {}))
+                assertIs<TelegramCallResult.TrafficDenied>(apiClient.setApplicationMenuButton())
                 assertTrue(paths.isEmpty())
 
                 assertIs<TelegramCallResult.Success>(

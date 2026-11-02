@@ -1,5 +1,7 @@
 package com.hookah.platform.backend.telegram
 
+import java.net.URI
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
@@ -30,4 +32,32 @@ fun buildTelegramStartUrl(
     val username = botUsername.trim().removePrefix("@")
     val encodedParam = URLEncoder.encode(startParam, StandardCharsets.UTF_8)
     return "https://t.me/$username?start=$encodedParam"
+}
+
+/** A global entry must not inherit a role, table, or screen from the configured base URL. */
+fun buildHomeWebAppUrl(
+    baseUrl: String?,
+    enabled: Boolean = true,
+): String? {
+    if (!enabled || baseUrl.isNullOrBlank()) return null
+    return runCatching {
+        val uri = URI(baseUrl.trim())
+        if (
+            !uri.scheme.equals("https", ignoreCase = true) || uri.host.isNullOrBlank() ||
+            uri.rawUserInfo != null || uri.port !in -1..65535 || uri.port == 0
+        ) {
+            return null
+        }
+        val navigationKeys =
+            setOf(
+                "mode", "screen", "venueId", "venue_id", "tableToken", "table_token",
+                "tableSessionId", "table_session_id", "tgWebAppStartParam", "startapp", "start_param", "entry",
+            )
+        val query =
+            uri.rawQuery?.split("&")?.filter { part ->
+                URLDecoder.decode(part.substringBefore("="), StandardCharsets.UTF_8) !in navigationKeys
+            }?.filter { it.isNotBlank() }?.joinToString("&")
+        val base = "${uri.scheme}://${uri.rawAuthority}${uri.rawPath.orEmpty()}"
+        buildWebAppUrl(base + if (query.isNullOrBlank()) "" else "?$query", mapOf("mode" to "home"))
+    }.getOrNull()
 }

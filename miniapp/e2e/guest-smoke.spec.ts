@@ -27382,3 +27382,188 @@ test('PDF inline P2 focus refuses disabled and removed actions', async ({ page }
   await expect(oldDelete).toHaveCount(0)
   await expect(editor.getByRole('button', { name: 'Удалить вложение', exact: true })).not.toBeFocused()
 })
+
+async function mockHomeRoles(page: Page, options: { role?: 'OWNER' | 'MANAGER' | 'STAFF'; platform?: boolean; multiVenue?: boolean } = {}) {
+  let revoked = false
+  let reads = 0
+  await page.route('**/api/venue/me', async route => {
+    reads++
+    const venues = options.role && !revoked ? [{ venueId: 1, venueName: 'Микс', role: options.role, permissions: ['ORDER_QUEUE_VIEW'] }] : []
+    if (options.multiVenue && venues.length) venues.push({ ...venues[0], venueId: 2, venueName: 'Второе заведение' })
+    await route.fulfill(venues.length ? jsonResponse({ userId: 123456789, venues }) : jsonResponse({ error: { code: 'FORBIDDEN' } }, 403))
+  })
+  await page.route('**/api/platform/me', async route => {
+    await route.fulfill(options.platform && !revoked ? jsonResponse({ ok: true, ownerUserId: 123456789 }) : jsonResponse({ error: { code: 'FORBIDDEN' } }, 403))
+  })
+  return { revoke: () => { revoked = true }, reads: () => reads }
+}
+
+for (const role of ['GUEST', 'STAFF', 'MANAGER', 'OWNER', 'PLATFORM_OWNER'] as const) {
+  test(`home entry authorizes and selects ${role} without chat commands`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    await mockVenueShiftExtensionApi(page, { role: role === 'OWNER' || role === 'MANAGER' ? role : 'STAFF' })
+    await mockPlatformBillingApi(page)
+    await mockHomeRoles(page, { role: ['STAFF', 'MANAGER', 'OWNER'].includes(role) ? role as 'STAFF' | 'MANAGER' | 'OWNER' : undefined, platform: role === 'PLATFORM_OWNER' })
+    const calls: string[] = []
+    page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) calls.push(new URL(request.url()).pathname) })
+    await page.goto('?mode=home')
+    if (role === 'GUEST') {
+      await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+    } else {
+      await expect(page.getByRole('navigation', { name: 'Режим приложения' }).getByRole('button', { name: role === 'PLATFORM_OWNER' ? 'Платформа' : 'Заведение', exact: true })).toHaveAttribute('aria-pressed', 'true')
+      await expect(page.locator(role === 'PLATFORM_OWNER' ? '.platform-shell' : '.venue-shell')).toBeVisible()
+    }
+    expect(calls[0]).toBe('/api/auth/telegram')
+    expect(calls).toContain('/api/venue/me')
+    expect(calls).toContain('/api/platform/me')
+    expect(await page.evaluate(() => (window as any).__e2eTelegramSendDataPayloads)).toEqual([])
+  })
+}
+
+test('home keeps multi-venue selection and revalidates revoked roles on switching', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await mockVenueShiftExtensionApi(page)
+  await mockPlatformBillingApi(page)
+  const roles = await mockHomeRoles(page, { role: 'MANAGER', platform: true, multiVenue: true })
+  page.on('dialog', dialog => dialog.accept())
+  await page.goto('?mode=home')
+  const modes = page.getByRole('navigation', { name: 'Режим приложения' })
+  await modes.getByRole('button', { name: 'Заведение', exact: true }).click()
+  await expect(page.locator('select').filter({ has: page.locator('option', { hasText: 'Второе заведение' }) })).toBeVisible()
+  const selector = page.locator('select').filter({ has: page.locator('option', { hasText: 'Второе заведение' }) })
+  await selector.selectOption('2')
+  await expect(page).toHaveURL(/venueId=2/)
+  roles.revoke()
+  await modes.getByRole('button', { name: 'Платформа', exact: true }).click()
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+  await expect(page.locator('.platform-shell')).toHaveCount(0)
+  await expect(page.locator('.venue-shell')).toHaveCount(0)
+  expect(roles.reads()).toBeGreaterThanOrEqual(3)
+})
+
+test('home enters Guest when a visit appears after Venue opened and keeps work modes blocked', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, { activeOrder: null })
+  await mockVenueShiftExtensionApi(page, { role: 'MANAGER' })
+  await mockPlatformBillingApi(page)
+  const roles = await mockHomeRoles(page, { role: 'MANAGER', platform: true })
+  const requests: string[] = []
+  page.on('request', request => { requests.push(request.url()) })
+  page.on('dialog', dialog => dialog.accept())
+  await page.goto('?mode=home&entry=venue')
+  await expect(page.locator('.venue-shell')).toBeVisible()
+  const roleReadsBeforeSwitch = roles.reads()
+  api.setRestoreContext(buildRestoreContext())
+
+  const modes = page.getByRole('navigation', { name: 'Режим приложения' })
+  await modes.getByRole('button', { name: 'Гость', exact: true }).click()
+  await expect(page).toHaveURL(/entry=guest/)
+  await expect(modes.getByRole('button', { name: 'Гость', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await expect(page.locator('.venue-shell, .platform-shell')).toHaveCount(0)
+  expect(roles.reads()).toBeGreaterThan(roleReadsBeforeSwitch)
+  for (const label of ['Заведение', 'Платформа']) {
+    await modes.getByRole('button', { name: label, exact: true }).click()
+    await expect(page.getByText('Сначала завершите текущее посещение в гостевом режиме.')).toBeVisible()
+    await expect(page).toHaveURL(/entry=guest/)
+    await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  }
+  expect(api.getTableSessionEndRequests()).toHaveLength(0)
+  const tableResolves = requests.filter(url => new URL(url).pathname === '/api/guest/table/resolve')
+  expect(tableResolves).toHaveLength(0)
+  expect(requests.some(url => {
+    const parsed = new URL(url)
+    return parsed.searchParams.get('tableToken') === tableToken && parsed.searchParams.get('tableSessionId') === '77'
+  })).toBe(true)
+})
+
+test('home preserves confirmed platform guest visit until explicit exit', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: buildRestoreContext(), activeOrder: null })
+  await mockPlatformBillingApi(page)
+  await mockHomeRoles(page, { platform: true })
+  page.on('dialog', dialog => dialog.accept())
+  await page.goto('?mode=home')
+  const modes = page.getByRole('navigation', { name: 'Режим приложения' })
+  await expect(modes.getByRole('button', { name: 'Гость', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: /Завершить визит/ }).first()).toBeVisible()
+  await modes.getByRole('button', { name: 'Платформа', exact: true }).click()
+  await expect(page.getByText('Сначала завершите текущее посещение в гостевом режиме.')).toBeVisible()
+  await page.getByRole('button', { name: /Завершить визит/ }).first().click()
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+  await modes.getByRole('button', { name: 'Платформа', exact: true }).click()
+  await expect(page.locator('.platform-shell')).toBeVisible()
+})
+
+test('home QR entry cannot bypass platform guest confirmation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await mockHomeRoles(page, { platform: true })
+  await page.route('**/api/guest/table/resolve?**', route => route.fulfill(jsonResponse({ error: { code: 'FORBIDDEN' } }, 403)))
+  await page.goto(`?mode=home&table_token=${tableToken}&screen=menu&entry=platform`)
+  await expect(page.getByText('Требуется новое подтверждение входа')).toBeVisible()
+  await expect(page.locator('.platform-shell')).toHaveCount(0)
+})
+
+test('home requires initData and fails closed on denied auth or failed role and context reads', async ({ page }) => {
+  await page.route('https://telegram.org/js/telegram-web-app.js', route => route.fulfill({ contentType: 'application/javascript', body: '' }))
+  await page.goto('?mode=home')
+  await expect(page.getByText('Нет Telegram-авторизации', { exact: true })).toBeVisible()
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await mockHomeRoles(page)
+  await page.route('**/api/auth/telegram', route => route.fulfill(jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401)))
+  await page.reload()
+  await expect(page.locator('.home-modes')).toHaveCount(0)
+  await page.unroute('**/api/auth/telegram')
+  await page.route('**/api/auth/telegram', route => route.fulfill(jsonResponse({ token: 'home-session', expiresAtEpochSeconds: sessionExpiresAt })))
+  await page.route('**/api/guest/table/restore', route => route.fulfill(jsonResponse({ error: { code: 'INTERNAL_ERROR' } }, 500)))
+  await page.reload()
+  await expect(page.getByText(/Не удалось проверить доступ или посещение/)).toBeVisible()
+  await expect(page.locator('.platform-shell, .venue-shell')).toHaveCount(0)
+})
+
+test('home guest preserves Telegram BackButton and sends no command on return', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await mockHomeRoles(page)
+  await page.goto('?mode=home')
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await clickTelegramBackButton(page)
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+  expect(await page.evaluate(() => (window as any).__e2eTelegramSendDataPayloads)).toEqual([])
+})
+
+
+test('home keeps Venue pending saves guarded before a mode change', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  const api = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await page.route('**/api/platform/me', route => route.fulfill(jsonResponse({ error: { code: 'FORBIDDEN' } }, 403)))
+  let release: () => void = () => undefined
+  const pending = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/venue/1/schedule/weekly/1', async route => { await pending; await route.fallback() })
+  await page.goto('?mode=home&entry=venue&venueId=1#/settings/hours')
+  const monday = page.locator('.venue-schedule-day[data-weekday="1"]')
+  await monday.getByRole('button', { name: /Изменить/ }).click()
+  await monday.getByLabel('Закрываемся', { exact: true }).fill('02:30')
+  await monday.getByRole('button', { name: 'Сохранить день', exact: true }).click()
+  await expect(monday.getByLabel('Закрываемся', { exact: true })).toBeDisabled()
+  page.on('dialog', dialog => dialog.accept())
+  const guestMode = page.getByRole('navigation', { name: 'Режим приложения' }).getByRole('button', { name: 'Гость', exact: true })
+  try {
+    await guestMode.click()
+    await expect(page.getByText(/Переход отменён/)).toBeVisible()
+    await expect(page.locator('p.status')).toHaveText('Дождитесь завершения сохранения.')
+    await expect(page).toHaveURL(/#\/settings\/hours$/)
+  } finally { release() }
+  await expect(page.locator('p.status')).toHaveText('Часы работы сохранены.')
+  expect(api.getScheduleSettings().weeklyHours[0].closesAt).toBe('02:30')
+  await guestMode.click()
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+})

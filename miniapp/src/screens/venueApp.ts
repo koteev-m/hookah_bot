@@ -36,6 +36,7 @@ import { renderVenueTablesScreen } from './venueTables'
 export type VenueAppOptions = {
   root: HTMLDivElement | null
   backendUrl: string
+  registerModeExitGuard?: (guard: () => boolean) => void
 }
 
 type RouteName =
@@ -440,6 +441,15 @@ export function mountVenueApp(options: VenueAppOptions) {
   draftNotice.hidden = true
   refs.content.before(draftNotice)
   const needsRetention = (draft: SettingsDraft) => draft.state.hasUnsavedChanges() || draft.state.isSaving()
+  options.registerModeExitGuard?.(() => {
+    const guards = new Set<() => boolean>([
+      ...[...drafts.values(), ...(currentSettings ? [currentSettings] : [])].map(draft => draft.guard),
+      ...[...scheduleSessions.values(), ...(currentSchedule ? [currentSchedule] : [])].map(session => session.controller.guard),
+      ...[...photoSessions.values(), ...(currentPhotos ? [currentPhotos] : [])].map(session => session.controller.guard),
+      ...(canLeaveScreen ? [canLeaveScreen] : [])
+    ])
+    return [...guards].every(guard => guard())
+  })
   const updateDraftNotice = () => {
     if (disposed) return
     for (const [key, session] of photoSessions) {
