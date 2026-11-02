@@ -4535,10 +4535,13 @@ V126 identities, checksum, schema guard, and all existing positive/negative cons
 
 After historical scenarios, the connected fixture separately builds the current unmodified
 backend and starts it against the same owned V126 PostgreSQL database. It requires exactly
-V127, all 126 historical Flyway rows unchanged, the reviewed photo migration, real current
-Flyway validation with no pending migrations, and both photo tables. The unchanged historical
-schema guard must still reject V127 with exit3. A later migration requires explicit review and
-updated forward expectations; accepting arbitrary higher heads is prohibited. No previous-image
+V1–V130, all 126 historical Flyway rows structurally unchanged, and the explicit reviewed
+V127 photo / V128 media / V129 public addresses / V130 backfill tail. Tail script names,
+SQL type, success, installed rank, SHA-256 bytes and Flyway checksums are pinned. Current Java
+`validate130` requires head V130, exactly 130 applied and zero pending migrations; both photo
+tables remain required. The unchanged historical schema guard must still reject V130 with exit3.
+A later migration requires explicit review and updated forward expectations; accepting arbitrary
+higher heads is prohibited. No previous-image
 rollback safety or staging compatibility admission is inferred from this test.
 
 Portable runtime self-tests validate pinned source selection and historical/tail drift refusal.
@@ -4927,3 +4930,53 @@ For future releases, retain this checklist and record PASS/FAIL/NOT_PROVABLE per
 owner-confirmed result above is bounded to its stated scope; remaining device/live-storage
 variants need their own evidence. Local WebKit is not Telegram on iPhone. No deployment is
 authorized by this scenario or by local READY_FOR_REVIEW.
+
+
+## Personal venue links — HT-VENUE-PERSONAL-LINKS-01 local quality gate
+
+Required regression: deterministic Cyrillic/mixed-alphabet slug normalization, empty/long/invalid
+values, same-name separate venues, city/address collision handling, competing PostgreSQL creates,
+forward backfill, permanent aliases/deletion reservations and audit rollback. Check independent
+catalog visibility, same-venue Owner/Manager/Platform rights and unauthorized writes. Direct public
+entry, alias, authenticated venue payload and venue ID must share lifecycle/subscription denials.
+Compare domain row counts (including subscription/address registry) around repeated public GETs;
+legacy subscription lazy initialization must not be called from the public/link preview paths.
+
+`VenuePublicLinksTest`, `VenuePublicLinksPostgresTest` and `VenuePublicLinksRoutesTest` cover these
+contracts. PostgreSQL tests must execute with zero skips, not only H2. Existing
+`VenueOnboardingConcurrencyPostgresTest`, GuestVenue/RBAC, TelegramBotRouter and ApplicationMenu
+regressions remain relevant. PostgreSQL migration head is V130; H2 is V131. Preserve previous SQL
+migration bytes and the existing SQL release manifest contract.
+
+`StagingSeedPostgresTest` additionally runs the exact SQL body of `scripts/seed-staging.sh`
+through its transactional Kotlin adapter on disposable PostgreSQL 17.11. Require a registered,
+resolvable unique slug, published lifecycle, repeat stability before/after a manual slug change,
+preserved foreign addresses/aliases and complete rollback on allocation failure. Never run the
+seed against live staging/production as a local test. No migration change is needed for this fix.
+
+```bash
+JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g ./gradlew --no-daemon --max-workers=1 :backend:app:test --tests '*VenuePublicLinks*' --tests '*StagingSeedPostgresTest*' --tests '*GuestVenueRoutesTest*' --tests '*VenueRbacRoutesTest*' --tests '*VenueOnboarding*' --tests '*VenueOwnerAccount*' --tests '*TelegramBotRouter*' --tests '*TelegramApplicationMenuTest*' --tests '*PostgresMigrationSmokeTest*' --console=plain
+./gradlew --no-daemon --max-workers=1 :backend:app:compileKotlin :backend:app:ktlintCheck --console=plain
+npm --prefix miniapp run build
+MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --grep 'personal links'
+MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
+```
+
+The personal-link Playwright cases use mobile 390×844: working-role Guest entry through startapp
+and fallback WebApp query, exact venue address, card/menu/Telegram Back, reopening through App,
+explicit catalog exit through both `Каталог` and `Все заведения Hookah Tootah`, invalid payload, A visit/cart while browsing B with B ordering disabled,
+selected-venue link copying, unavailable/draft copy, cancel/confirm and read-only Manager controls.
+Keep existing printed QR/invite/home/booking/order/support regression, including 43-character table
+tokens with a `venue_` text prefix; only short venue payloads belong to the new namespace. Browser mocks do not prove
+Telegram external configuration or physical iPhone behavior.
+
+The P2 regressions also cover successful table QR superseding a personal browsing choice while
+failed/denied/unavailable/invalid/cancelled scans preserve it and authorization. Explicit card/menu
+selection must work with and without an active visit, including mobile Telegram Back, without
+changing the visit, selected tab, cart or creating an order. Ordinary table entry still defaults
+to its ordering menu; an explicit personal card entry remains a card until the guest chooses Menu.
+
+Local evidence lives in `/private/tmp/HT-VENUE-PERSONAL-LINKS-01/`; consult its validation report
+for actual results and candidate hashes. Separate authorized staging migration/deploy and published
+venue Telegram/iPhone smoke are required before acceptance. Verify Main Mini App independently of
+MenuButtonWebApp and verify the configured public origin routes `/v/*` to backend.

@@ -630,6 +630,22 @@ Current vs target:
 
 ## Settings
 
+### Personal link and catalog visibility (local candidate)
+
+The existing selected-venue card settings contain `Ссылка заведения`: saved venue name/address,
+read-only `/v/<slug>`, `Скопировать ссылку`, visible success and manual selection fallback.
+The Platform venue detail exposes the same control. Draft/unavailable venues retain their issued
+address, with a notice that guest entry requires the current publication conditions. Generation
+never publishes a venue. No bot registration, tokens, DNS or per-venue technical setup is needed.
+
+Owner and Platform Owner can expand additional settings, change the slug or `Показывать в общем
+каталоге`, then confirm consequences. Server checks exact actor/venue and current expected slug;
+mutation and `VENUE_PUBLIC_LINK_UPDATED` audit commit together. Manager can view/copy its own
+venue only; Staff cannot read this management endpoint. Old addresses remain permanently bound
+to the same venue, even after deletion. Catalog exclusion is called `Не показывать в каталоге`.
+It does not bypass lifecycle/subscription and does not authorize a guest who knows a link.
+
+
 Target settings groups:
 - Venue profile: name, description, address, city, contacts, hours.
 - Modules: locally implemented `Команда и график смен`, plus orders, staff calls, bookings,

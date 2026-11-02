@@ -29,7 +29,7 @@ class GuestVenueRepository(private val dataSource: DataSource?) {
                            v.latitude, v.longitude, v.guest_contact, v.card_description, v.status
                     FROM venues v
                     LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
-                    WHERE v.status = ?
+                    WHERE v.status = ? AND v.catalog_listed = TRUE
                       AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
                     """.trimIndent(),
                 )

@@ -175,6 +175,8 @@ import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
+import com.hookah.platform.backend.venue.links.venuePublicEntryRoutes
+import com.hookah.platform.backend.venue.links.venuePublicLinkApiRoutes
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.java.Java
@@ -1215,7 +1217,26 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         }
     }
 
+    val venuePublicLinks =
+        com.hookah.platform.backend.venue.links.VenuePublicLinksRepository(
+            dataSource,
+            platformConfig.ownerUserId,
+        )
+    val venuePublicLinkConfig =
+        com.hookah.platform.backend.venue.links.VenuePublicLinkConfig.from(
+            telegramConfig.webAppPublicUrl,
+            telegramConfig.botUsername,
+            environment.config.propertyOrNull("telegram.mainMiniAppConfigured")
+                ?.getString()?.toBooleanStrictOrNull() ?: false,
+        )
     routing {
+        venuePublicEntryRoutes(
+            venuePublicLinks,
+            guestVenueRepository,
+            subscriptionRepository,
+            venuePublicLinkConfig,
+            stagingMaintenancePolicy.active,
+        )
         get("/health") {
             call.respond(HealthResponse(status = "ok"))
         }
@@ -1340,6 +1361,12 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 maintenancePolicy = stagingMaintenancePolicy
             }
             route("/api") {
+                venuePublicLinkApiRoutes(
+                    venuePublicLinks,
+                    guestVenueRepository,
+                    subscriptionRepository,
+                    venuePublicLinkConfig,
+                )
                 route("/guest") {
                     guestVenueRoutes(
                         guestVenueRepository = guestVenueRepository,

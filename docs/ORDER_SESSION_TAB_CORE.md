@@ -96,6 +96,15 @@ The active order belongs to a verified table session/visit, not to a physical ta
 | Fallback chat order | Mini App fallback emits `cmd=start_quick_order` with `table_token`; real Telegram fallback remains release smoke. Canonical fallback/staff-chat rules are in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. | Bot fallback must create/use the same table session/tab rules as Mini App. | Keep fallback smoke whenever bot order fallback changes. |
 | Visit history foundation | Guest History Foundation MVP is DONE / staging-smoke-passed: current-user list/detail shows closed-order visits and booking-only `SEATED` visits, filters non-seated booking statuses, preserves but hides legacy invalid rows, opens legacy closed order details safely and keeps privacy filters strict. | `VISIT` is derived from closed orders and booking `SEATED`, with merge/dedup where booking + order represent the same real visit. | Repeat templates, post-visit feedback, full base item historical snapshotting where still missing, loyalty/preorder `visit_count` and analytics event completeness remain follow-ups. |
 
+## Personal-link browsing versus active visit (local candidate)
+
+A personal venue entry selects a browsing card only. It cannot create, end, move or relink a
+`table_session`, `tab`, cart, order or booking. A Guest with active visit A may browse venue B,
+including B's menu, while A's server-owned context and user-scoped cart remain intact. Existing
+same-venue `canPlaceOrders` and server table/session/tab membership checks remain authoritative;
+no B order/staff call/extension is enabled with A's context. The UI provides an explicit return to
+A and a separate general catalog exit. Reopening a personal card does not scan or apply a table QR.
+
 ## Guest order isolation consolidation — 2026-09-16
 
 **LOCAL CANDIDATE / UNCOMMITTED / RELEASE AND STAGING GATES OPEN**.

@@ -1,3 +1,4 @@
+import { getVenueBrowsePayload } from './shared/state/venueBrowseContext'
 import './style.css'
 import { mountHomeApp } from './screens/homeApp'
 import { mountGuestApp } from './screens/guestApp'
@@ -26,7 +27,7 @@ try {
   // ignore WebApp expand errors
 }
 
-if (mode === 'home') {
+if (mode === 'home' || getVenueBrowsePayload() !== null) {
   dispose = mountAuthGate({
     root,
     onReady: () => {

@@ -445,21 +445,33 @@ class ContractTests(unittest.TestCase):
         self.assertEqual([r['version'] for r in rows], list(range(1, 127)))
         self.assertEqual(rows[-1]['script'], 'V126__support_thread_read_message_cursor.sql')
 
-    def test_current_manifest_is_exact_append_only_v128(self):
+    def test_current_manifest_is_exact_append_only_v130(self):
         historical, current = real_manifest(True), real_manifest()
         self.assertEqual(current[:126], historical)
-        self.assertEqual([r['version'] for r in current], list(range(1, 129)))
-        self.assertEqual(current[-2]['script'], 'V127__staff_profile_photos.sql')
-        self.assertEqual(current[-1]['script'], 'V128__venue_info_media_objects.sql')
-        self.assertEqual(current[-2]['sha256'], '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846')
+        self.assertEqual([r['version'] for r in current], list(range(1, 131)))
+        self.assertEqual(current[126:], [
+            {'version': 127, 'script': 'V127__staff_profile_photos.sql',
+             'sha256': '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846', 'checksum': 881920632},
+            {'version': 128, 'script': 'V128__venue_info_media_objects.sql',
+             'sha256': '153579d56223a9cadd5f988081b86853cdc7394275e160b968c6200cff5fdaf9', 'checksum': 397301090},
+            {'version': 129, 'script': 'V129__venue_public_addresses.sql',
+             'sha256': 'fb21b03533360487287e4d72bc8fd43bdc5319271ac688aa96c0635d6839f4ec', 'checksum': -618822785},
+            {'version': 130, 'script': 'V130__backfill_venue_public_addresses.sql',
+             'sha256': '8cbeabf2d72b754310b4acfd0d919f736f0132f5e26aa1f91e8103f3f5b90d26', 'checksum': 123295140},
+        ])
         review = dict(from_manifest=s.digest(historical), to_manifest=s.digest(current),
-                      backward_compatible=True, reason='Synthetic test review of additive staff photo tables; not staging approval.')
+                      backward_compatible=True, reason='Synthetic test review of exact additive migration inventory through V130; not staging approval.')
         with self.assertRaisesRegex(s.Refused, 'EXACT_COMPATIBILITY_REVIEW'): s.compatibility(historical, current)
         s.compatibility(historical, current, review)
         for field in ('sha256', 'checksum', 'script'):
             drift = copy.deepcopy(current); drift[0][field] = 'changed'
             with self.subTest(field=field), self.assertRaisesRegex(s.Refused, 'APPEND_ONLY'):
                 s.compatibility(historical, drift, review)
+        for version in (127, 128, 129, 130):
+            for field in ('sha256', 'checksum', 'script'):
+                drift = copy.deepcopy(current); drift[version - 1][field] = 'changed'
+                with self.subTest(version=version, field=field), self.assertRaisesRegex(s.Refused, 'EXACT_COMPATIBILITY_REVIEW'):
+                    s.compatibility(historical, drift, review)
         with tempfile.TemporaryDirectory() as tmp:
             runtime = MemoryStaging(Path(tmp).resolve())
             bootstrap, target = image(), image('b', 127)
@@ -470,7 +482,7 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(runtime.apply('install', record(bootstrap))['schema'], 126)
             with self.assertRaisesRegex(s.Refused, 'REVIEW'): runtime.apply('deploy', record(target))
             self.assertEqual(runtime.history(), s.history_for(historical))
-            self.assertEqual(runtime.apply('deploy', record(target), review)['schema'], 128)
+            self.assertEqual(runtime.apply('deploy', record(target), review)['schema'], 130)
             self.assertEqual(runtime.history(), s.history_for(current))
             self.assertEqual(len(runtime.backups), 1)
             with self.assertRaisesRegex(s.Refused, 'SCHEMA_ROLLBACK'): runtime.apply('rollback')

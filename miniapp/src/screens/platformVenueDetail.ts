@@ -1,3 +1,4 @@
+import { mountVenuePublicLink } from './venuePublicLink'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
@@ -597,6 +598,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   const { root, backendUrl, isDebug, venueId, focusHeadingOnLoad = false } = options
   if (!root) return () => undefined
   const refs = buildDetailDom(root)
+  const disposePublicLink = mountVenuePublicLink(root, backendUrl, isDebug, venueId)
   const deps = buildApiDeps(isDebug)
 
   let disposed = false
@@ -1360,6 +1362,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   void loadAll()
 
   return () => {
+    disposePublicLink()
     disposed = true
     if (headingFocusFrame != null) window.cancelAnimationFrame(headingFocusFrame)
     headingFocusFrame = null

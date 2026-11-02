@@ -1,3 +1,4 @@
+import { getVenueBrowseId } from '../shared/state/venueBrowseContext'
 import { createInfoMediaPreview, type InfoMediaLoader } from '../shared/ui/infoMediaPreview'
 import { loadInfoMediaContent } from '../shared/api/infoMediaContent'
 import { requestBinary } from '../shared/api/request'
@@ -1001,7 +1002,11 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.questionButton.hidden = !venueId || !onAskVenue || isTableVenueContext()
     refs.questionButton.disabled = !venueId || isTableVenueContext()
   }
-  const shouldShowOrderMenu = () => !readOnlyPreview && canPlaceOrders()
+  const shouldShowOrderMenu = () => {
+    if (readOnlyPreview) return false
+    const explicitMenu = new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('browseMenu')
+    return explicitMenu === '1' || (explicitMenu !== '0' && getVenueBrowseId() !== venueId && canPlaceOrders())
+  }
 
   const currentStaffStatusParams = () => {
     if (!canCallStaff()) return null
@@ -1978,6 +1983,14 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
   updateStaffState()
   void getAccessToken()
+  if (!readOnlyPreview && venueId) {
+    const browseMenu = shouldShowOrderMenu()
+    const menuButton = el('button', { className: 'button-secondary', text: browseMenu ? 'Карточка заведения' : 'Меню заведения' })
+    menuButton.addEventListener('click', () => {
+      window.location.hash = `#/venue/${venueId}?browseMenu=${browseMenu ? '0' : '1'}`
+    })
+    refs.menuBody.before(menuButton)
+  }
   void loadVenue()
 
   return () => {

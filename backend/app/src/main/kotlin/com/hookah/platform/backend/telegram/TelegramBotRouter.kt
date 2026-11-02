@@ -993,6 +993,13 @@ class TelegramBotRouter internal constructor(
             handleStartCommand(chatId, from, text ?: "")
             return
         }
+        if (
+            !isGroupChat(message.chat.type) && command?.name == "/start" &&
+            com.hookah.platform.backend.venue.links.isVenuePayload(command.argument)
+        ) {
+            handleStartCommand(chatId, from, text ?: "")
+            return
+        }
         val state = dialogStateRepository.get(chatId)
         if (command != null && isVenueConnectionDialogState(state.state)) {
             dialogStateRepository.clear(chatId)
@@ -2412,6 +2419,25 @@ class TelegramBotRouter internal constructor(
         val parts = text.trim().split(Regex("\\s+"))
         val command = parts.firstOrNull()?.substringBefore("@") ?: ""
         val token = if (command == "/start") parts.getOrNull(1) else null
+        if (com.hookah.platform.backend.venue.links.isVenuePayload(token)) {
+            if (chatId != from?.id) return
+            val venueId = com.hookah.platform.backend.venue.links.parseVenuePayload(token)
+            val venue = venueId?.let { venueRepository.findCatalogVenueByIdForGuest(it) }
+            val base = buildHomeWebAppUrl(config.webAppPublicUrl, config.miniAppEntryEnabled)
+            if (venue == null || base == null) {
+                enqueueMessage(chatId, "Заведение недоступно. Проверьте ссылку или попробуйте позже.")
+                return
+            }
+            val url = buildWebAppUrl(base, mapOf("venue_entry" to token.orEmpty()))
+            enqueueMessage(
+                chatId,
+                listOfNotNull(venue.name, venue.city, venue.address).joinToString("\n"),
+                InlineKeyboardMarkup(
+                    listOf(listOf(InlineKeyboardButton(text = "Открыть заведение", webApp = WebAppInfo(url)))),
+                ),
+            )
+            return
+        }
         if (token.isNullOrBlank()) {
             if (buildHomeWebAppUrl(config.webAppPublicUrl, config.miniAppEntryEnabled) != null && chatId == from?.id) {
                 val context = chatContextRepository.get(chatId)

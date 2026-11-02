@@ -51,7 +51,8 @@ fun buildHomeWebAppUrl(
         val navigationKeys =
             setOf(
                 "mode", "screen", "venueId", "venue_id", "tableToken", "table_token",
-                "tableSessionId", "table_session_id", "tgWebAppStartParam", "startapp", "start_param", "entry",
+                "tableSessionId", "table_session_id", "tgWebAppStartParam", "startapp", "start_param",
+                "entry", "venue_entry", "venue_browse",
             )
         val query =
             uri.rawQuery?.split("&")?.filter { part ->

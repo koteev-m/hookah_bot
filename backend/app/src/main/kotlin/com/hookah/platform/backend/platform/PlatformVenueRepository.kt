@@ -28,8 +28,16 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val venueId = insertVenue(connection, name, city, address, ownerAccountId)
-                    loadVenueDetail(connection, venueId) ?: throw DatabaseUnavailableException()
+                    connection.autoCommit = false
+                    try {
+                        val venueId = insertVenue(connection, name, city, address, ownerAccountId)
+                        val venue = loadVenueDetail(connection, venueId) ?: throw DatabaseUnavailableException()
+                        connection.commit()
+                        venue
+                    } catch (error: Exception) {
+                        connection.rollback()
+                        throw error
+                    }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
@@ -596,7 +604,9 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     if (rs.next()) {
-                        return rs.getLong(1)
+                        val id = rs.getLong(1)
+                        com.hookah.platform.backend.venue.links.VenueSlugs.assign(connection, id, name, city, address)
+                        return id
                     }
                 }
             }
@@ -616,7 +626,9 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     if (rs.next()) {
-                        return rs.getLong(1)
+                        val id = rs.getLong(1)
+                        com.hookah.platform.backend.venue.links.VenueSlugs.assign(connection, id, name, city, address)
+                        return id
                     }
                 }
             }

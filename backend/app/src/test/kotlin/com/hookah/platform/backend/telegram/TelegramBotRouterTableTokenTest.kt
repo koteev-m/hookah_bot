@@ -435,6 +435,64 @@ class TelegramBotRouterTableTokenTest {
         )
 
     @Test
+    fun `personal venue start opens guest card for guest and platform owner without touching table context`() =
+        runBlocking {
+            coEvery { venueRepository.findCatalogVenueByIdForGuest(10L) } returns
+                CatalogVenueShort(id = 10L, name = "Дым", city = "Казань", address = "Баумана, 2")
+            for (userId in listOf(200L, 999L)) {
+                routerWithWebAppPublicUrl("https://mini.app/miniapp/").process(
+                    TelegramUpdate(
+                        updateId = 91000 + userId,
+                        message =
+                            Message(
+                                messageId = userId,
+                                chat = Chat(id = userId, type = "private"),
+                                fromUser = User(id = userId),
+                                text = "/start venue_a",
+                            ),
+                    ),
+                )
+                coVerify {
+                    outboxEnqueuer.enqueueSendMessage(
+                        userId,
+                        "Дым\nКазань\nБаумана, 2",
+                        match {
+                            it is InlineKeyboardMarkup &&
+                                it.inlineKeyboard.flatten().any { button ->
+                                    button.webApp?.url?.contains("venue_entry=venue_a") == true &&
+                                        button.webApp?.url?.contains("mode=home") == true
+                                }
+                        },
+                    )
+                }
+            }
+            coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.clear(any()) }
+            coVerify(exactly = 0) { dialogStateRepository.clear(any()) }
+        }
+
+    @Test
+    fun `malformed personal venue start fails closed before QR handling`() =
+        runBlocking {
+            routerWithWebAppPublicUrl("https://mini.app/miniapp/").process(
+                TelegramUpdate(
+                    updateId = 92000,
+                    message =
+                        Message(
+                            messageId = 1,
+                            chat = Chat(id = 200L, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "/start venue_bad!",
+                        ),
+                ),
+            )
+            coVerify { outboxEnqueuer.enqueueSendMessage(200L, match { it.contains("Заведение недоступно") }, any()) }
+            coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
+            coVerify(exactly = 0) { venueRepository.findCatalogVenueByIdForGuest(any()) }
+        }
+
+    @Test
     fun `private start with app removes obsolete keyboard and exposes bot functions for all roles`() =
         runBlocking {
             for (userId in listOf(200L, 999L)) {

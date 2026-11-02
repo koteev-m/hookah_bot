@@ -266,6 +266,22 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Analytics | Bot stats where implemented. | No dashboard; future profile summaries only. | Owner/Manager role dashboards where reliable. Staff operational counters only. | Platform analytics future/partial. | Delivery telemetry only. | Analytics events are not operational truth. |
 | Platform lifecycle | Platform bot where implemented. | No. | No direct platform lifecycle. | Platform Owner cockpit. | No. | Requires confirmation/reason/audit where implemented. |
 
+## Personal venue link boundary (local candidate)
+
+- Authenticated `GET /api/venue/{venueId}/public-link`: exact own Owner/Manager/legacy Admin,
+  or exact configured Platform Owner. `PUT` is Owner/Platform Owner only; Staff/Guest/foreign
+  Manager cannot read or mutate another venue. No new membership is granted.
+- PUT requires `confirmed=true` and matching `expectedSlug`; validation, permanent reservation,
+  visibility update and `VENUE_PUBLIC_LINK_UPDATED` audit share one transaction. A failed audit
+  rolls back both current slug and newly reserved alias. Audit contains actor/entity and public
+  slug/visibility values, no address, token, initData or Telegram payload.
+- `/v/{slug}` exposes only published, subscription-allowed name/address with HTML escaping,
+  no-store/CSP and config-derived Telegram targets. Host, forwarded host and redirect parameters
+  never choose a target. Existing Guest APIs/catalog remain authenticated.
+- `venue_<base36-id>` is a browsing pointer, not a table token or authority. Authenticated
+  `/api/guest/venue-entry/{payload}` repeats normal guest availability. New/old aliases and direct
+  venue IDs cannot bypass lifecycle/subscription. Public entry never creates a visit/tab/booking/order.
+
 ## Dangerous Actions
 
 These actions require server-side authorization and should require confirmation, reason and/or audit according to risk and current implementation:

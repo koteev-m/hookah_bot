@@ -88,8 +88,8 @@ internal class SupportThreadReadCursorMigrationAssertions(
             val flyway = Flyway.configure().dataSource(dataSource).locations(location).load()
             assertEquals(expectedVersion, flyway.info().current().version.version)
             assertEquals(
-                expectedFollowingMigrations,
-                flyway.info().pending().associate { it.version.version to it.script },
+                expectedFollowingMigrations.entries.map { it.key to it.value },
+                flyway.info().pending().map { it.version.version to it.script },
                 "later migrations must be explicitly reviewed without changing the historical cursor head",
             )
             assertEquals(listOf(true), targetHistory(connection))
@@ -103,8 +103,8 @@ internal class SupportThreadReadCursorMigrationAssertions(
             val messageIndexes = indexes(connection, SUPPORT_MESSAGES)
             val flyway = Flyway.configure().dataSource(dataSource).locations(location).load()
             assertEquals(
-                expectedFollowingMigrations,
-                flyway.info().pending().associate { it.version.version to it.script },
+                expectedFollowingMigrations.entries.map { it.key to it.value },
+                flyway.info().pending().map { it.version.version to it.script },
             )
             assertEquals(expectedFollowingMigrations.size, flyway.migrate().migrationsExecuted)
             assertEquals(expectedFollowingMigrations.keys.last(), flyway.info().current().version.version)

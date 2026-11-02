@@ -247,6 +247,8 @@ SHOULD:
   audit remains a separate contract where not already implemented.
 
 ## Block 3 — Entry points & context (QR/deep links)
+
+
 MUST:
 - Catalog entry, venue link entry, table QR entry.
 - Table QR sets context (venue_id + table_id via opaque token).
@@ -262,6 +264,29 @@ MUST:
 - Existing `Завершить визит` uses the stored exact actor/chat context for teardown without requiring the token, table, venue or subscription to remain Guest-available. It clears context, persisted Guest dialog, cart/draft and pending confirmation, records or preserves the user-exit marker when the linked table session remains resolvable, and then restores Platform menu precedence. If deletion makes the linked session unavailable, context and local Guest state are still cleared and the old entry remains fail-closed even though no marker can be recorded. While an active confirmed Guest context remains, `/start` without a token keeps Guest routing and shows the Guest table menu or the safe instruction to use `Завершить визит`; only after exit does tokenless `/start` show the normal Platform menu.
 SHOULD:
 - Venue “general QR” (no table) that opens venue card/menu preview.
+
+### Personal venue links — HT-VENUE-PERSONAL-LINKS-01 (local candidate)
+
+- One shared bot/Mini App/backend. `/v/<slug>` identifies exactly one `venue_id`; equal names,
+  brands or franchises never merge venues or authority. The general catalog remains available.
+- Every supported creation path reserves a deterministic lowercase Cyrillic-transliterated slug.
+  Collisions use city/address and then a short suffix, with DB uniqueness and transactional retries.
+  PostgreSQL V129/V130 (H2 V130/V131) backfill existing records without publishing or editing location.
+- Issued slugs survive name/address edits. Owner or Platform Owner may explicitly confirm a change;
+  every old alias remains reserved for the same venue, including deleted venues. Manager can copy only.
+- `catalog_listed` defaults true independently of lifecycle. `Не показывать в каталоге` removes a
+  venue from Bot/Mini App catalog/search, while direct public browsing still requires published
+  lifecycle and guest-allowed subscription. This setting is not authorization or a private venue.
+- The compact public transition exposes name/address only. It opens `startapp=venue_<base36-id>`
+  after platform Main Mini App configuration is confirmed, otherwise `/start venue_<base36-id>`
+  opens a WebApp button. These pointers never establish table/session/tab or grant working roles.
+- Browsing context is user-scoped and distinct from the active visit. Viewing B preserves A's cart,
+  tab and order; B's menu remains browse-only without B's valid table context. `Вернуться к посещению`
+  explicitly returns to A. Card/menu/Back and reopening the App preserve the browsing selection;
+  `Все заведения Hookah Tootah` clears it. General role-aware entry remains unchanged without it.
+- Local evidence and platform prerequisites: `docs/TESTING_QA_SMOKE_STRATEGY.md` and
+  `docs/DEPLOYMENT_RUNBOOK.md`. No staging or real Telegram/iPhone acceptance is implied.
+
 
 ## Block 4 — Guest journey (catalog/booking/visit)
 MUST:

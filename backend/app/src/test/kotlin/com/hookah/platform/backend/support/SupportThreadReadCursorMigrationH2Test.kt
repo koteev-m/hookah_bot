@@ -26,7 +26,7 @@ class SupportThreadReadCursorMigrationH2Test {
     }
 
     @Test
-    fun `reviewed photo migration reaches current head without changing cursor contract`() {
+    fun `reviewed following migrations reach current head without changing cursor contract`() {
         assertions().assertForwardMigrationReachesCurrentHead()
     }
 
@@ -48,6 +48,8 @@ class SupportThreadReadCursorMigrationH2Test {
                 mapOf(
                     "128" to "V128__staff_profile_photos.sql",
                     "129" to "V129__venue_info_media_objects.sql",
+                    "130" to "V130__venue_public_addresses.sql",
+                    "131" to "V131__backfill_venue_public_addresses.sql",
                 ),
             ddlFailureContract = MigrationDdlFailureContract.NON_TRANSACTIONAL,
         )

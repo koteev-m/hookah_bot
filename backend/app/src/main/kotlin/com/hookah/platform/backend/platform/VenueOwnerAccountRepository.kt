@@ -874,7 +874,11 @@ class VenueOwnerAccountRepository(private val dataSource: DataSource?) {
             statement.setLong(4, ownerAccountId)
             statement.executeUpdate()
             statement.generatedKeys.use { rs ->
-                if (rs.next()) return rs.getLong(1)
+                if (rs.next()) {
+                    val id = rs.getLong(1)
+                    com.hookah.platform.backend.venue.links.VenueSlugs.assign(connection, id, name, city, address)
+                    return id
+                }
             }
         }
         throw SQLException("Failed to insert owned draft venue")

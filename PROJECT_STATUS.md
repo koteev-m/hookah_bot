@@ -1,5 +1,116 @@
 # Project Status
 
+## HT-VENUE-PERSONAL-LINKS-RUNTIME-CI-FIX-01 — exact V130 runtime fixture (2026-11-02)
+
+**LOCAL_RUNTIME_CI_FIX_READY / UNCOMMITTED / NOT_PUBLISHED / HOSTED_RUNTIME_UNVERIFIED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT, expected primary root/common dir and origin;
+branch `codex/ht-venue-personal-links-01`, unchanged HEAD
+`99732a56c6da9df90e153174a0ed4d234d32e024`. Completed runs #675/#676 at that SHA have
+13 successful jobs; only connected runtime fails, then the Compose aggregator. Tool installation,
+Caddy/systemd and other runtime steps succeed. Logs locate the failure at the stale V128 history
+length assertion; the same refusal reproduces with actual local V130 history and unchanged V1–V126.
+
+Runtime expectations now require exactly V1–V130, full equality of the first 126 history rows,
+and explicitly pinned V127–V130 script/type/success/rank/checksum plus source SHA-256. Current
+Java `validate130` requires head V130, 130 applied, zero pending and real Flyway validation.
+The old `validate128` had only this current-forward caller, with no historical compatibility use.
+Pinned historical source/tree, V125 preparation, V126 schema guard, failure/cleanup protections,
+SQL, product code, Dockerfile, installer and workflow remain unchanged. No rollback safety inferred.
+
+Validation: 7 focused migration self-tests and all 23 diagnostics self-tests PASS, including
+1260 historical-field mutations, 24 reviewed-tail mutations and missing/order/future refusals.
+Java21 compile PASS. Native JVM/Flyway plus owned disposable PostgreSQL17: 16 command/guard cases
+PASS; actual 126-row prefix unchanged, V130 accepted, V128/pending V131/applied V131 and each tail
+checksum drift refused. Unchanged schema guard accepts V126 and rejects V130 with exit3.
+Release-CI contract 18 PASS; Python compile/tabnanny and diff sanity PASS. Evidence/commands:
+`/private/tmp/HT-VENUE-PERSONAL-LINKS-RUNTIME-CI-FIX-01/`. Native checks do not replace the hosted
+Docker/JVM/Compose integration; new GitHub CI and feature staging/Telegram acceptance remain open.
+Original user checkpoint insertion preserved verbatim; index/refs unchanged; `scripts/dev/`
+untouched/untracked. No add/commit/push, PR/workflow action, SSH/deploy or external service change.
+Next: independent review of this local runtime-fixture diff before separate publication authorization.
+
+## HT-VENUE-PERSONAL-LINKS-CI-RED-01 — migration CI contract alignment (2026-11-02)
+
+**LOCAL_CI_FIX_READY / UNCOMMITTED / NOT_PUBLISHED / NEW_GITHUB_CI_NOT_EXECUTED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT, primary root/common dir and expected origin;
+branch `codex/ht-venue-personal-links-01`, unchanged starting HEAD
+`0db9f515b7143acb8289753345c3f5784d9e4a57`. Completed red runs #673/#674 were read once;
+both have that SHA. Five Kotlin failures and both manifest/inventory refusals reproduced locally.
+Four Kotlin test/helper files now explicitly allow the ordered PG V130 / H2 V131 chain while
+preserving historical cursor heads and V128-only media assertions. Current staging/cutover fixtures
+pin exact reviewed paths, versions, SHA-256/Flyway checksums and reject drift; historical V126
+tree/blob/checksum, install, compatibility-review, backup and schema-rollback guards remain intact.
+No product code, workflow, release controller or any of the 261 current SQL files changed.
+
+Validation: compile/ktlint PASS; 137 backend tests in 19 suites, zero failures/errors/skips,
+including all 14 mandatory migration suites and the unchanged workflow XML validator. Simple
+staging 65, PDF-worker 8, GHCR 11 and release-CI contract 18 tests PASS. Targeted cutover lineage,
+historical production guard and existing maintenance/image/admission self-tests PASS. Endpoint
+self-test: 13 executed PASS, one hosted-Linux-only sudo check skipped; no hosted acceptance claim.
+Runtime tool errors follow the skipped existing installer; both groups used the same runner image
+and the identical installer passed in cutover. No runner/install change; actual Linux runtime,
+systemd/Caddy and full cutover integrations still require a new separately published CI run.
+Evidence/commands/red-to-green results: `/private/tmp/HT-VENUE-PERSONAL-LINKS-CI-RED-01/`.
+Original user checkpoint insertion preserved verbatim; index/refs unchanged; `scripts/dev/`
+untouched/untracked. No commit/push/PR action, rerun/dispatch, SSH, deploy or live service mutation.
+Next: inspect the local CI-only diff before separately authorizing publication.
+
+## HT-VENUE-PERSONAL-LINKS-FIX-P2-01 — three review P2 fixes (2026-11-02)
+
+**LOCAL_FIX_READY / UNCOMMITTED / INDEPENDENT_TARGETED_REVIEW_PENDING**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT, expected primary root/common dir and origin;
+branch `codex/ht-venue-personal-links-01`, unchanged HEAD/base
+`0994a1c325ce611c2b367ec29cc068f764251ded`. Initial 43 paths matched the review snapshot.
+Only the three P2 were addressed: successful QR clears browsing selection; explicit card/menu works
+with or without a visit; staging seed calls the shared allocator inside its SQL transaction through
+an opt-in backend CLI. Repeats preserve issued links/aliases; allocation failure rolls back the seed.
+All 257 previous SQL migrations and four unpublished link migrations remain byte-identical.
+
+Red reproductions confirmed all three defects before fixes. Final compile/ktlint/installDist PASS;
+855 backend tests, failures/errors/skips 0, including disposable PostgreSQL 17.11 seed/migration
+checks; Mini App build PASS; Playwright 524/524, including eight new mobile regressions. Both
+unchanged review UI reproductions now PASS. Actual shell command through an isolated Docker stub
+and installed CLI passed against disposable PostgreSQL 17.11, including repeat stability.
+Evidence/commands, fix-only diff and final hashes: `/private/tmp/HT-VENUE-PERSONAL-LINKS-FIX-P2-01/`.
+Original user checkpoint and all prior implementation paths preserved; index remains empty;
+`scripts/dev/` untouched/untracked. No add/commit/push/PR/workflow/SSH/deploy/live DB or Telegram.
+No unfinished local operation. Next: separate targeted independent review of this fixed snapshot.
+Existing exact-release CI, staging deploy/migration and real Telegram/iPhone prerequisites remain open.
+
+## HT-VENUE-PERSONAL-LINKS-01 — personal venue links (2026-11-02)
+
+**LOCAL_IMPLEMENTATION_READY / UNCOMMITTED / NOT_PUBLISHED / STAGING_AND_TELEGRAM_SMOKE_PENDING**.
+Identity preflight PASS: Hookah_Tootah / hookah_bot_ANT, primary physical root/common dir
+and origin `github.com/koteev-m/hookah_bot`; no initial HEAD/base/branch/parent constraints.
+Feature branch `codex/ht-venue-personal-links-01`, fetched/verified main base and unchanged HEAD
+`0994a1c325ce611c2b367ec29cc068f764251ded`. Original local checkpoint block preserved verbatim;
+`scripts/dev/` remains untracked and untouched. No stage/commit/push/PR/SSH/deploy/live Telegram.
+
+All existing venue creation paths reserve a stable public slug. PostgreSQL V129/V130 and H2
+V130/V131 add permanent alias reservations, default-listed catalog visibility and safe backfill.
+Owner/Platform Owner changes require current-slug confirmation and transaction-bound audit;
+Manager reads/copies own venue only. Unlisted remains directly browseable with unchanged guest
+lifecycle/subscription guards. Public transition exposes name/address only and creates no domain
+rows, including no lazy subscription initialization. Short venue payloads stay separate from old
+43-character table QR tokens. Browsing B preserves A's visit/cart/tab/order; menu/Back/App reopen
+retain selection, both explicit catalog actions clear it, and return-to-visit restores A's screen.
+
+Validation: Kotlin compile/ktlint PASS; 853 backend tests, failures/errors/skips 0, including real
+PostgreSQL migration/concurrency/aliases/audit rollback and order idempotency. Mini App production
+build PASS; full Playwright smoke 516/516, including mobile 390x844 personal-link scenarios and
+legacy QR/home/invite/order/support regressions. Diff/docs sanity PASS. Synthetic mobile screenshot
+inspected. Evidence, commands, exact Git status, inventories and candidate hashes:
+`/private/tmp/HT-VENUE-PERSONAL-LINKS-01/` (REPORT.txt, backend-final-summary.json,
+backend-validation-final.log, playwright-full-final.log, candidate-files.sha256.json).
+
+Platform prerequisites remain external/unverified: configured HTTPS Mini App origin and bot
+username, `/v/*` edge routing to backend, and one-time Main Mini App setup independent of
+MenuButtonWebApp. Default `TELEGRAM_MAIN_MINI_APP_CONFIGURED=false` uses `/start` plus an inline
+WebApp button; enable direct startapp only after platform confirmation. Venue owners need no bots,
+tokens, DNS or technical onboarding. Acceptance requires separately authorized staging migration/
+deploy and real Telegram/iPhone smoke after venue publication. Next: review this local diff before
+any separate publication/release task. No unfinished local test process or server operation.
+
 ## HT-BOT-MINIAPP-ENTRY-CI669-FIX-01 — source-bound menu fixture (2026-11-02)
 
 **LOCAL_FIX_VALIDATED / READY_FOR_AUTHORIZED_PUBLICATION**. PROJECT_IDENTITY_OK:

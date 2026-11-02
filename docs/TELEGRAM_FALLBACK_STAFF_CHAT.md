@@ -148,6 +148,30 @@ for every Guest, Owner, Manager and Staff identity.
 | `S3_STAFF_CALL_DIALOG` | Guest creates live staff call from table context. | Choose reason, optional comment, create `STAFF_CALL`, notify operational surfaces. | Staff-call create, ACK/DONE lifecycle and guest-visible terminal `CANCELLED` are smoke-closed; manual cancel UI and quick replies remain future/partial. |
 | `S4_CHAT_SUPPORT_HANDOFF` | Guest wants conversation/help. | Booking chat opens `BOOKING_CHAT`; venue question opens `VENUE_CHAT` where supported; support opens `SUPPORT_TICKET`; do not mix thread types. | Guest communication split is smoke-closed; keep staff-chat denial for support/venue chats in regression. |
 
+## Personal venue `/start` and Main Mini App (local candidate)
+
+`/v/<slug>` resolves one permanent registry entry, checks the existing guest browse guards and
+renders only venue name/address plus Telegram actions. When platform Main Mini App configuration
+has been verified, `TELEGRAM_MAIN_MINI_APP_CONFIGURED=true` enables direct
+`https://t.me/<configured-bot>?startapp=venue_<base36-id>`. Default false uses the working
+`?start=venue_<base36-id>` chat route. It returns a WebApp button with `mode=home&venue_entry=...`;
+Mini App authenticates normally, resolves the pointer through the backend and opens that venue.
+
+Short venue payloads (at most 19 characters) are dispatched before QR/invite/platform test paths.
+Generated legacy table tokens remain 43 characters, including tokens with the same text prefix.
+Venue entry works without touching the chat's
+active table context or clearing an unfinished Guest dialog/cart. The Mini App does not pass it to
+table resolve or the QR scanner. Invalid/unavailable entries show a safe state and an explicit
+catalog action. A working-role actor enters the Guest card; role grants and Platform Owner QR
+confirmation remain unchanged. No-context `/start`, `/menu`, `/support`, old table QR and invites
+retain their existing paths. User-scoped browsing persistence is separate from table restoration.
+
+Official contract checked 2026-11-02: [Main Mini App and startapp](https://core.telegram.org/bots/webapps#launching-the-main-mini-app),
+[bot deep linking](https://core.telegram.org/bots/features#deep-linking).
+MenuButtonWebApp is a separate launch mechanism and does not prove Main Mini App setup. The platform
+must verify Main Mini App once; a venue owner never performs BotFather/configuration work.
+Real Telegram/iPhone behavior remains a separate post-publication smoke.
+
 ## QR `/start` Flow
 
 Target:
