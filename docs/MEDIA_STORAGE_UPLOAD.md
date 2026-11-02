@@ -1,13 +1,14 @@
 # Venue Media Storage And Upload
 
-Дата актуализации: 2026-10-31 (HT-VENUE-INFO-PDF-INLINE-UX-01; local inline-page UX, staging acceptance pending).
+Дата актуализации: 2026-11-02 (HT-PDF-RELEASE-ACCEPTANCE-DOCS-01; PDF staging release and owner-confirmed iPhone acceptance).
 
-Статус: **CANONICAL SPEC / STAFF PHOTOS AND VENUE INFO MEDIA LOCAL IMPLEMENTATION / LIVE ACCEPTANCE OPEN**.
+Статус: **CANONICAL SPEC / PDF INLINE UX STAGING-SMOKE-PASSED / BROADER MEDIA ACCEPTANCE OPEN**.
 
 Staff-photo iPhone upload has partial owner-confirmed acceptance below. The product owner selects
 existing private staging R2 bucket `hookah-tootah-media-staging-eu` for venue information media.
-`STOP_FOR_MEDIA_STORAGE_DECISION` no longer blocks this staging slice. Production admission,
-backup/restore, actual R2 permissions/configuration and real-device acceptance remain open.
+`STOP_FOR_MEDIA_STORAGE_DECISION` no longer blocks this staging slice. The deployed PDF slice has
+owner-confirmed iPhone acceptance below. Production admission, backup/restore, full R2
+permissions/configuration review and remaining media/device operations remain open.
 
 This document is the canonical source of truth for venue-owned media storage, upload, delivery,
 lifecycle and Bot/Mini App compatibility. It covers the foundation needed by public-card
@@ -16,11 +17,33 @@ remain separate product slices; staff-photo local implementation is specified be
 
 ## Inline pages — HT-VENUE-INFO-PDF-INLINE-UX-01
 
-Local frontend change; no backend/parser-worker, PostgreSQL V128, bucket, storage schema or
+Released frontend change; no backend/parser-worker, PostgreSQL V128, bucket, storage schema or
 service change. Existing server validation, idempotency, authorization and delivery checks remain.
 This section supersedes the previous blanket prohibition on automatic PDF embedding **only for
 passive page rasterization**. PDF JavaScript, actions, forms, annotations and interactive content
 must not execute; native PDF iframe/object/embed viewers are not used.
+
+Release `099a5b7a9ab3d8e9a03b352daf548b5858d056ec`, merged
+[PR #237](https://github.com/koteev-m/hookah_bot/pull/237) after
+[PR #238](https://github.com/koteev-m/hookah_bot/pull/238):
+[main CI](https://github.com/koteev-m/hookah_bot/actions/runs/41264605603) 15/15 mandatory jobs,
+`publish-ghcr`, build and browser smoke PASS. Owner-supplied HT70 report records
+**STAGING_DEPLOYED / SUCCESS** at [staging](https://staging.hookahtootah.club), exact image
+digest/revision and 60 Mini App files matched, health/DB/version/HTTPS PASS, PostgreSQL 17.11
+and PDF worker healthy, 128 migrations matched with none required. R2 and worker were already
+enabled; runtime config, PostgreSQL container/volume/binding and shared-host resources were
+preserved. Exact image and previous SHA are recorded in [the release checkpoint](../PROJECT_STATUS.md#ht-pdf-release-acceptance-docs-01--pdf-release-and-iphone-acceptance-2026-11-02).
+This docs task did not repeat the deploy or independently inspect the server.
+
+**USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED**: on 2026-11-01 the owner reported all agreed
+PDF checks passed on a real iPhone through Telegram Mini App: upload/display, sequential upload
+results, page navigation/counters, Preview and Guest card, available OWNER/MANAGER actions,
+JPEG/PNG and app return/reopen. This is owner testimony, not independent device automation;
+model, iOS/Telegram versions, screenshots and per-action timings were not supplied.
+The [QA acceptance record and regression scenario](TESTING_QA_SMOKE_STRATEGY.md#recorded-pdf-staging-acceptance--2026-11-01)
+retain the evidence boundary. Conditional errors/download after render failure, real provider
+failures, forced OOM, data recovery/deletion and physical cleanup have no separate manual PASS.
+The result does not close broader media/storage, production or market launch.
 
 - OWNER/MANAGER: sequential uploads show `Файл N из M`, indeterminate progress while waiting for
   the server, and persistent per-file `PDF загружен` / `Изображение загружено` only after confirmed
@@ -39,7 +62,8 @@ must not execute; native PDF iframe/object/embed viewers are not used.
   compatibility; TypeScript 5.9.3 is needed for its typed-array declarations. Vite preserves names
   as required by PDF.js. See [versioned build targets](https://github.com/mozilla/pdf.js/blob/v5.4.624/gulpfile.mjs)
   (Safari ≥16.4 target) and [official API](https://mozilla.github.io/pdf.js/api/draft/module-pdfjsLib.html).
-  The build target is not proof for every iOS/Telegram version; actual iPhone acceptance stays open.
+  The build target is not proof for every iOS/Telegram version; owner-confirmed iPhone acceptance
+  covers only the recorded staging slice above.
 - Only scoped same-backend platform media paths are read. Published Guest remains anonymous;
   Published Preview uses the same public path with the existing session; Private Draft uses only
   the private path and session. Editor reads its authenticated management endpoint (including
@@ -66,8 +90,8 @@ must not execute; native PDF iframe/object/embed viewers are not used.
   is no durable browser cache of private bytes. Downloaded copies cannot be revoked.
 
 Local browser fixtures do not establish real Telegram WebView/R2/staging behavior, antivirus
-safety or production readiness. Manual iPhone acceptance is specified in
-`TESTING_QA_SMOKE_STRATEGY.md` under this task ID.
+safety or production readiness. The separate owner-confirmed iPhone result and the retained
+manual regression scenario are recorded in `TESTING_QA_SMOKE_STRATEGY.md`.
 
 ## PDF isolation — HT-VENUE-PDF-ISOLATED-WORKER-01
 
@@ -255,7 +279,8 @@ existing HT70 migration admission; no old-schema rollback. After creating R2 row
 requires a media-aware compatible binary. Confirm existing bucket-scoped credentials already
 permit `venue-info/` PUT/GET/HEAD/DELETE; expanded permissions require a separate decision.
 Actual endpoint/jurisdiction, disabled public access, live class/limits, cost/operator ownership,
-iPhone PDF/image picker + Bot roundtrip and physical deletion remain separately unverified.
+new-R2 Bot roundtrip and physical deletion remain separately unverified. The ordinary PDF/image
+iPhone upload/view/return scope is accepted above; unreported device/error cases remain open.
 Production bucket/admission, backup destination/encryption/retention, RPO/RTO and restore/deletion
 reconciliation remain open. Local fake/loopback/PostgreSQL results do not close these gates.
 
@@ -735,7 +760,7 @@ it does not block the selected staging R2 implementation above.
 ## Target Source-Of-Truth Model
 
 The following original target design remains a reference, not a claim that every field/route is
-implemented. The selected staging variant above is authoritative for this local slice: raw single
+implemented. The selected staging variant above is authoritative for this bounded slice: raw single
 file bodies, no original filename collection, technical-journal cleanup acknowledgement, and
 opaque IDs in existing scoped routes with numeric legacy compatibility. Other media surfaces and
 production expansion remain future.
@@ -1096,7 +1121,9 @@ Likely focused classes include new Venue media route/service/storage tests plus 
 
 ## Staging Smoke And Operations Gate
 
-The future runtime slice requires green Actions, then:
+The bounded PDF staging result is recorded above. Keep this broader regression/operations gate
+for future releases and unverified media operations; the PDF result does not mark every item PASS.
+Runtime releases require green Actions, then:
 
 1. health, DB health and Mini App static checks;
 2. OWNER image upload; MANAGER PDF upload; STAFF/foreign direct denial;

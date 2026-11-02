@@ -1,5 +1,55 @@
 # Project Status
 
+## HT-PDF-RELEASE-ACCEPTANCE-DOCS-01 — PDF release and iPhone acceptance (2026-11-02)
+
+**PDF INLINE UX / USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT; primary root, origin and Git
+common dir verified. Starting branch/HEAD/base/parent constraints were NOT_SUPPLIED.
+Primary checkout remains `codex/ht-venue-info-pdf-inline-ux-01` at
+`4878a83397e76213531abb9b01a3e2ba4fc15fe4`, with only existing untracked `scripts/dev/`.
+Isolated docs worktree `/private/tmp/HT-PDF-RELEASE-ACCEPTANCE-DOCS-01/worktree`, branch
+`codex/ht-pdf-release-acceptance-docs-01`, base = verified remote `origin/main`
+`099a5b7a9ab3d8e9a03b352daf548b5858d056ec`; repeated identity gate PASS.
+
+[PR #238](https://github.com/koteev-m/hookah_bot/pull/238) (CI compatibility) and
+[PR #237](https://github.com/koteev-m/hookah_bot/pull/237) (PDF Inline UX) are merged.
+Release [main CI](https://github.com/koteev-m/hookah_bot/actions/runs/41264605603):
+15/15 mandatory jobs PASS, `publish-ghcr` PASS, Mini App build/browser smoke PASS;
+merged PR metadata and completed jobs were checked read-only in this docs task.
+
+Owner-supplied Codex HT70 report: **STAGING_DEPLOYED / SUCCESS** at
+[staging](https://staging.hookahtootah.club), from
+`4d894b435f52915a8370c76a14877daf0cea062d` to the exact release SHA above.
+Immutable image: `ghcr.io/koteev-m/hookah_bot/backend@sha256:a20b91c7b6a53b8acbd6fec6be40f42b532033974123a124e70e5ea8df89bdc6`.
+Digest/revision, health/DB health/version/HTTPS and all 60 Mini App files matched;
+PostgreSQL 17.11 and PDF worker healthy, all 128 migrations matched, no migration needed.
+Existing venue-media R2/worker enablement and runtime config were retained; PostgreSQL
+container/volume/DB binding, shared Docker lock, neighbouring service and Caddy were preserved.
+No rollback, repeat deploy or production deployment was reported; no server action in this task.
+
+On 2026-11-01 the owner confirmed the agreed PDF checks passed on a real iPhone in Telegram
+Mini App: upload/display, sequential results, page navigation/counters, Preview/Guest card,
+available OWNER/MANAGER actions, JPEG/PNG, return/reopen. This is owner testimony, not independent
+device automation. [QA acceptance scope](docs/TESTING_QA_SMOKE_STRATEGY.md#recorded-pdf-staging-acceptance--2026-11-01)
+preserves the regression checklist and unverified error/download/provider/OOM/deletion/restore
+cases. Broader media, production and market-launch readiness remain open.
+
+Docs validation PASS: `git diff --check` and task-local `docs_sanity.py` (Markdown-only scope,
+new links/anchors, unchanged commands, history, manual steps and unrelated backlog rows).
+No backend/browser build, device test or server check was rerun for this docs-only change.
+
+**NEXT RECOMMENDED OPERATIONAL FOCUS: QA-PILOT-READINESS-001** — the master inventory's
+`OPEN_CONFIRMED / P1 launch gate`: one test venue, Guest QR → menu → cart → order → staff;
+Venue queue → lifecycle → full bill; Platform baseline; cross-channel notifications;
+role/venue/session privacy; health and operational outcome. Recommended only, not executed
+or an automatically approved implementation epic. See [master roadmap](docs/UPDATED_PRODUCT_AI_ROADMAP.md).
+Authorization: Markdown only, at most one docs commit and one ordinary new-branch push after
+checks, exact remote HEAD verification, then stop. No unfinished runtime operation; no merge,
+new PR, deploy, pilot smoke or `scripts/dev/` changes. These docs are not in main until merged.
+
+Earlier checkpoints below are historical; their pending PDF release/device acceptance and old
+next steps are superseded only within the bounded release and acceptance scope above.
+
 ## HT-PR237-SYNC-MAIN-AFTER-CI238-01 — merge validation (2026-11-01)
 
 Identity PASS: Hookah_Tootah / hookah_bot_ANT; primary physical root

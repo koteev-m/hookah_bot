@@ -28,10 +28,13 @@ Venue media storage/upload source of truth:
 - New PDF structural parsing runs only in the OS-limited `pdf-worker` from the same admitted image,
   with fail-closed Unix IPC and no backend fallback; see `MEDIA_STORAGE_UPLOAD.md`
   (`HT-VENUE-PDF-ISOLATED-WORKER-01`). Local proof requires independent review and staging admission.
-- Venue information JPEG/PNG/PDF direct Mini App upload is implemented locally for the owner-selected
-  private staging R2 bucket, using `venue-info/` and the existing metadata registry. Production
-  storage admission, backup/restore and actual R2/device acceptance remain open; no container
-  filesystem storage is authorized. See the bounded contract in `MEDIA_STORAGE_UPLOAD.md`.
+- Venue information JPEG/PNG/PDF direct Mini App upload is deployed on the owner-selected private
+  staging R2 bucket, using `venue-info/` and the existing metadata registry. PDF Inline UX is
+  `USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED` on release
+  `099a5b7a9ab3d8e9a03b352daf548b5858d056ec`, with owner-confirmed iPhone acceptance on 2026-11-01.
+  Production admission, backup/restore, physical cleanup and unreported R2/device/error cases
+  remain open; no container filesystem storage is authorized. See the bounded evidence and
+  contract in `MEDIA_STORAGE_UPLOAD.md` and `TESTING_QA_SMOKE_STRATEGY.md`.
 
 Security/RBAC source of truth:
 - Canonical roles, scopes, permissions, surface parity, dangerous actions and current-vs-target gaps are tracked in `docs/SECURITY_RBAC_MATRIX.md`.
@@ -74,9 +77,9 @@ Staff profiles, Today Shift, Staff Schedule and staff tips source of truth:
   active photos survive without a data migration. Owner-confirmed partial iPhone acceptance covers
   successful upload, OWNER/MANAGER, STAFF mutation denial and no consent/publish. Guest display
   (venue unpublished) and physical R2 cleanup deletion remain unverified; full UX08 is open.
-  See `MEDIA_STORAGE_UPLOAD.md`. Public-card PDF/images remain a separate Bot-first flow, now
-  editable directly in Settings/card under the separate selected staging R2 contract; the Bot-first
-  guide remains a fallback. This does not close live acceptance or production admission.
+  See `MEDIA_STORAGE_UPLOAD.md`. Public-card PDF/images are a separate direct Settings/card flow
+  under the selected staging R2 contract, with the bounded PDF iPhone acceptance above; the Bot
+  guide remains a fallback. Broader live media acceptance and production admission remain open.
 
 Booking lifecycle source of truth:
 - Canonical booking flow, queue, status state machine, hold/deadline, reminders, booking chat, support routing, analytics and RBAC rules are tracked in `docs/BOOKING_LIFECYCLE.md`.

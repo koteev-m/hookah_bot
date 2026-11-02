@@ -140,9 +140,10 @@ Manager Mini App areas:
 - Manager Staff-only invite/profile/schedule scope is staging-smoke-passed and stays in regression.
 - Staff invite deep-link sharing polish is CLOSED / staging smoke passed for the allowed manager invite path: link is selectable/copyable/shareable and accepted payload grants the intended role.
 - Some Telegram manager flows may still be richer than Mini App equivalents.
-- Venue/public-card image/PDF management is `PARTIAL / BOT-FIRST`: Manager can manage attachments
-  through Bot, while Venue Mini App has no upload/manage flow. Guest and `PUBLISHED_PUBLIC` render
-  guarded media; `PRIVATE_DRAFT` uses authenticated scoped delivery without raw refs.
+- Venue/public-card JPEG/PNG/PDF direct management is deployed for Manager on selected staging R2;
+  Bot remains a fallback. Guest/Published and authenticated Draft retain guarded delivery without
+  raw refs. PDF Inline UX has bounded `USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED` iPhone acceptance
+  in the QA strategy; broader media/storage and production gates remain open in `docs/MEDIA_STORAGE_UPLOAD.md`.
 - Structured menu item photo/description/thumbnail and option/flavor media are
   `MISSING / FUTURE`, separately from the working view-only Photo/PDF menu.
 - Staff chat diagnostics/test flow is implemented in Mini App; manager must stay denied for owner-only unlink.

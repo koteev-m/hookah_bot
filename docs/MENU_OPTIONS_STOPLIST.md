@@ -66,7 +66,7 @@ does not expand the broader menu constructor, media/top-list or permission-parit
 | Order item modifiers/options snapshot | Current docs say selected option id/name/price delta and line preference notes are preserved where implemented. | Snapshot item and selected option names/prices at submit time; later edits never rewrite old bills/history. | Keep cross-channel bill snapshots in regression; multi-option quantities/counts need future design if introduced. |
 | Photos/descriptions | Current structured menu item repositories/DTOs/rendering do not expose item photos, thumbnails or descriptions. The DB has a legacy `menu_items.description` column, but current Bot/Venue/Guest menu paths do not read or write it. | Item photos can be shown in structured menu; descriptions are guest-safe. | Structured menu-item media/description is `MISSING / FUTURE`; do not infer support from working info-section media. |
 | Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
-| PDF/media | `Фото-меню` exists as a flat info/media section and is separate from structured order menu. Bot OWNER/MANAGER can add image/PDF attachments, delete one and hide/show the whole section. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | Venue Mini App authoring/upload is missing; direct replace, per-attachment hide and optional subsections remain future. |
+| PDF/media | `Фото-меню` is a flat info/media section, separate from structured orders. Bot authoring and direct OWNER/MANAGER Venue Mini App JPEG/PNG/PDF management coexist under the canonical media contract. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | PDF Inline UX has bounded owner-confirmed staging acceptance; broader media operations and optional subsections remain open. See `MEDIA_STORAGE_UPLOAD.md`. |
 | Shift check | **DONE / MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER Venue Mini App uses saved menu state, readiness counts, search/filters, local draft, a separate mass-selection mode, confirmation summary and one atomic request. STAFF has no entry/direct permission. | Venue Mode keeps optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Keep role/tenant, atomicity, stale-state, Guest availability and Telegram stop-list parity in regression; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
 | Audit logs | Existing release-closed actions remain intact; nine category/item management actions are transaction-bound with exact-one/no-op/rollback rules. | All dangerous mutations write privacy-safe server-derived actor/source evidence. | Description/media/archive and the broader audit stay `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
@@ -218,8 +218,8 @@ is not durable storage: leaving/reloading the app can discard drafts.
 | Option group/value manage | Owner/Manager where implemented. | No management. | Owner/Manager where implemented. | No. | No. |
 | Option/value availability | Owner/Manager/Staff where permission allows. | Hides/disables/rejects unavailable. | Owner/Manager/Staff where permission allows. | No. | No. |
 | Structured item media/photos/descriptions | No current item photo/thumbnail/description management. | Current structured menu shows no item photo/thumbnail/description. | No current item photo/thumbnail/description management. | No. | No. |
-| Public info-section image/PDF | OWNER/MANAGER add and delete attachments and hide/show the whole section; storage uses Telegram `file_id`. | View through guarded backend proxy before QR and in `PUBLISHED_PUBLIC`. | No author/upload/manage flow; both Preview modes are view-only, and `PRIVATE_DRAFT` uses authenticated venue/section/media-scoped delivery without raw refs. | No. | No. |
-| PDF/view-only menu | OWNER/MANAGER use the flat info-section image/PDF flow. | View-only `📖 Фото-меню`. | No management; both Preview modes are view-only through their guarded/scoped routes. | No. | No. |
+| Public info-section image/PDF | OWNER/MANAGER add/delete legacy attachments and hide/show the whole section; new R2 delivery preserves Bot compatibility. | Images and passive inline PDF pages through guarded public delivery before QR and in `PUBLISHED_PUBLIC`. | OWNER/MANAGER direct upload/replace/delete and attachment/section visibility on selected staging R2; Preview remains read-only, with authenticated scoped `PRIVATE_DRAFT` delivery and no raw refs. | No. | No. |
+| PDF/view-only menu | OWNER/MANAGER use the flat info-section image/PDF flow. | View-only `📖 Фото-меню`, with inline PDF navigation. | Direct information-media management under `MEDIA_STORAGE_UPLOAD.md`; both Preview modes remain read-only. | No. | No. |
 | Option/flavor media | No media fields/actions; name, price delta and availability only. | No option/flavor media. | No media fields/actions. | No. | No. |
 | Featured/top-list | Needs verification. | Guest display where implemented. | Needs verification. | Paid placement is separate. | No. |
 | Shift check | No Phase 1 UI; existing individual stop-list flow is unchanged. | No. | OWNER/MANAGER Phase 1 is staging-smoke-passed; STAFF hidden and direct API denied. | No. | No. |
@@ -294,13 +294,16 @@ Guest behavior:
 - Structured menu is the only source of truth for orders.
 - PDF/photo menu is view-only.
 - Guest cannot order from PDF directly unless the item is represented in structured menu.
-- Current public-card/Photo-PDF-menu attachments are Bot-first: images/PDFs are stored by Telegram
-  `file_id`; Guest Mini App and `PUBLISHED_PUBLIC` receive guarded Guest proxy URLs, while
+- Current public-card/Photo-PDF-menu attachments share the existing registry: legacy Telegram
+  `file_id` and new private staging R2 objects. Guest Mini App and `PUBLISHED_PUBLIC` receive
+  guarded Guest proxy URLs, while
   `PRIVATE_DRAFT` receives authenticated venue/section/media-scoped proxy URLs. Neither preview
   DTO exposes raw refs.
 - Current Bot can add/delete attachments and hide/show their whole info section; it has no direct
   replace or per-attachment hide action.
-- Current Venue Mini App has no file picker, upload endpoint or media-management UI.
+- Venue Mini App implements OWNER/MANAGER direct JPEG/PNG/PDF upload, replace/delete and
+  attachment/section visibility. PDF Inline UX is `USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED`
+  within the 2026-11-01 owner-confirmed iPhone scope in `TESTING_QA_SMOKE_STRATEGY.md`.
 - Current structured menu has no item photo/thumbnail/description contract in active
   Bot/Venue/Guest paths; option/flavor media is absent.
 - `menu_category_images` is currently test/seed-oriented with no owner CRUD or active Guest/Venue
@@ -310,13 +313,11 @@ Guest behavior:
 - Backend media proxy or safe object storage is required before public display.
 - Media moderation is future/optional.
 
-Future **Venue Mini App Media Upload & Management Foundation** must cover OWNER/MANAGER image
-upload, PDF only on allowed surfaces, server-side MIME/type/size and venue-scope checks, safe
-storage abstraction, replace/hide/show/delete, audit and guest-safe delivery. Bot and Mini App must
-share one media source or compatible bridge. `docs/MEDIA_STORAGE_UPLOAD.md` now specifies that
-contract; verdict is **STOP_FOR_MEDIA_STORAGE_DECISION** until Telegram technical storage chat
-versus hybrid private S3-compatible target (or an operations-qualified filesystem volume) is
-approved. No object-storage provider is selected.
+`docs/MEDIA_STORAGE_UPLOAD.md` specifies the implemented bounded information-media contract:
+OWNER/MANAGER only, PDF on allowed surfaces, server validation/venue scope, shared registry,
+safe delivery and lifecycle. Existing private staging R2 is selected and enabled. Production
+admission, physical cleanup, backup/restore and unreported live/device/error cases remain open;
+the accepted PDF slice does not close structured menu-item media or all future media surfaces.
 
 ## Analytics And Audit
 
@@ -749,9 +750,9 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 - Menu constructor implementation: `PARTIAL` unless route/screen/test evidence proves full coverage.
 - Option modifiers in orders: structured selected-option parity is documented as `CLOSED / staging smoke passed`; option price, option availability and option create audits are release-closed; broader multi-group modifier model remains `PARTIAL / needs verification`.
 - Staff stop-list parity: current docs say item/option availability is aligned between Bot and Mini App; per-venue `staff_stoplist_enabled` remains `FUTURE`.
-- Public info-section / Photo-PDF-menu media: `PARTIAL / BOT-FIRST`; Guest rendering and both
-  Preview modes work through guarded/scoped proxies, while Venue Mini App upload/manage is
-  `MISSING / FUTURE`.
+- Public info-section / Photo-PDF-menu media: direct Mini App management is deployed on selected
+  staging R2; PDF Inline UX is `USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED` within its recorded
+  scope. Broader media/storage operations remain open; Guest/Preview retain guarded delivery.
 - Structured menu-item media/description/thumbnail and option/flavor media: `MISSING / FUTURE`.
 - Featured/top-list: `PARTIAL/FUTURE` unless implementation evidence proves a given slice.
 - Shift check: `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; keep the passed

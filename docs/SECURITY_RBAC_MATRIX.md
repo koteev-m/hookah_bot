@@ -1032,5 +1032,6 @@ Promotion Compatibility Policy and a broader audit viewer remain open.
 - Security smoke checklist: `UPDATED`.
 - Post-Visit Feedback RBAC/privacy: `DONE / MVP / STAGING-SMOKE-PASSED`; Platform feedback dashboard remains `FUTURE`.
 - Venue Mini App media foundation: security contract is canonical in
-  `docs/MEDIA_STORAGE_UPLOAD.md`; runtime is `MISSING` and storage selection is
-  `STOP_FOR_MEDIA_STORAGE_DECISION`.
+  `docs/MEDIA_STORAGE_UPLOAD.md`; direct information-media management is deployed on selected
+  private staging R2. The bounded PDF iPhone result is `USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED`
+  in the QA strategy; it does not close broader RBAC/privacy, storage or production gates.
