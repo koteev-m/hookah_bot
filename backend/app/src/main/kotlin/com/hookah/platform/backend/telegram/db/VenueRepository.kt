@@ -79,7 +79,7 @@ open class VenueRepository(
                                v.latitude, v.longitude, v.guest_contact, v.card_description, v.status
                         FROM venues v
                         LEFT JOIN venue_subscriptions vs ON vs.venue_id = v.id
-                        WHERE v.status = ?
+                        WHERE v.status = ? AND v.catalog_listed = TRUE
                           AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
                         ORDER BY v.id ASC
                         """.trimIndent(),
@@ -130,6 +130,7 @@ open class VenueRepository(
                                 statement.executeUpdate()
                             }
                         }
+                        com.hookah.platform.backend.venue.links.backfillVenuePublicAddresses(connection)
                         connection.commit()
                     } catch (e: SQLException) {
                         runCatching { connection.rollback() }

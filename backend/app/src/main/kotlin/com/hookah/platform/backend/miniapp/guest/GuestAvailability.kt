@@ -33,3 +33,15 @@ suspend fun ensureGuestBrowseAvailable(
         throw NotFoundException()
     }
 }
+
+// Public entry/link previews must not trigger the legacy lazy subscription creation.
+// A missing row follows catalog semantics; an existing unknown/blocked state stays denied.
+suspend fun ensureGuestBrowseAvailableReadOnly(
+    venueId: Long,
+    guestVenueRepository: GuestVenueRepository,
+    subscriptionRepository: SubscriptionRepository,
+) = ensureVenuePublishedForGuest(venueId, guestVenueRepository).also {
+    if (subscriptionRepository.findSubscriptionState(venueId)?.status?.isBlockedForGuest() == true) {
+        throw NotFoundException()
+    }
+}

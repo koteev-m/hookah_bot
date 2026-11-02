@@ -1,0 +1,4 @@
+CREATE ALIAS HT_BACKFILL_VENUE_PUBLIC_ADDRESSES FOR
+    "com.hookah.platform.backend.venue.links.VenuePublicAddressBackfillKt.backfillVenuePublicAddresses";
+CALL HT_BACKFILL_VENUE_PUBLIC_ADDRESSES();
+DROP ALIAS HT_BACKFILL_VENUE_PUBLIC_ADDRESSES;

@@ -2468,3 +2468,30 @@ publication or deploy commands. Include what to send back for an actual terminal
 - Production release process: `FUTURE / PARTIAL`; the V126 commands are staging-only and are not
   production authorization.
 - `scripts/dev/` policy: `DOCUMENTED`.
+
+
+## Personal venue links — platform prerequisites (local implementation only)
+
+HT-VENUE-PERSONAL-LINKS-01 adds PostgreSQL V129 (registry/visibility) and V130 (deterministic
+backfill); H2 equivalents are V130/V131. All remain SQL Flyway migrations. The registry intentionally
+has no cascading venue FK so issued spellings stay reserved after physical venue deletion. Existing
+records default to catalog-listed and retain lifecycle/location. Backfill must complete before
+serving the new application; do not generate slugs from public GETs or hand-edit production rows.
+
+`TELEGRAM_WEBAPP_PUBLIC_URL` must be the platform's correct HTTPS Mini App URL and
+`TELEGRAM_BOT_USERNAME` the existing environment's bot. Public `/v` addresses use that configured
+URL's origin, never request Host/Forwarded-Host. The same environment's public origin must route
+`/v/*` to backend; local code does not prove the current edge route. Verify it in a separately
+authorized deployment. No DNS/Caddy/server change is authorized by local implementation.
+
+Main Mini App setup is a one-time platform prerequisite, separate from MenuButtonWebApp. Configure
+and verify the existing bot's Main Mini App through the platform owner, including its environment's
+Mini App URL. Only after confirmation set `TELEGRAM_MAIN_MINI_APP_CONFIGURED=true` (Compose forwards
+it; default false). Until then the public transition uses `/start` and an inline WebApp button;
+`startapp` support is implemented but real external configuration is unverified. Never ask venues
+for bots, tokens, BotFather, domains or extra processes; never change the common bot profile.
+
+Before acceptance: exact release CI, separately authorized staging migration/deploy and real
+Telegram/iPhone smoke after venue publication. Exercise two same-name venues/addresses, old aliases,
+unlisted, unavailable lifecycle/subscription, App re-entry, A visit while browsing B, old printed QR,
+invites and `/start` `/menu` `/support`. No publication or staging acceptance follows from local tests.

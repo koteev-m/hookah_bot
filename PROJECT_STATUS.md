@@ -1,5 +1,61 @@
 # Project Status
 
+## HT-VENUE-PERSONAL-LINKS-FIX-P2-01 — three review P2 fixes (2026-11-02)
+
+**LOCAL_FIX_READY / UNCOMMITTED / INDEPENDENT_TARGETED_REVIEW_PENDING**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT, expected primary root/common dir and origin;
+branch `codex/ht-venue-personal-links-01`, unchanged HEAD/base
+`0994a1c325ce611c2b367ec29cc068f764251ded`. Initial 43 paths matched the review snapshot.
+Only the three P2 were addressed: successful QR clears browsing selection; explicit card/menu works
+with or without a visit; staging seed calls the shared allocator inside its SQL transaction through
+an opt-in backend CLI. Repeats preserve issued links/aliases; allocation failure rolls back the seed.
+All 257 previous SQL migrations and four unpublished link migrations remain byte-identical.
+
+Red reproductions confirmed all three defects before fixes. Final compile/ktlint/installDist PASS;
+855 backend tests, failures/errors/skips 0, including disposable PostgreSQL 17.11 seed/migration
+checks; Mini App build PASS; Playwright 524/524, including eight new mobile regressions. Both
+unchanged review UI reproductions now PASS. Actual shell command through an isolated Docker stub
+and installed CLI passed against disposable PostgreSQL 17.11, including repeat stability.
+Evidence/commands, fix-only diff and final hashes: `/private/tmp/HT-VENUE-PERSONAL-LINKS-FIX-P2-01/`.
+Original user checkpoint and all prior implementation paths preserved; index remains empty;
+`scripts/dev/` untouched/untracked. No add/commit/push/PR/workflow/SSH/deploy/live DB or Telegram.
+No unfinished local operation. Next: separate targeted independent review of this fixed snapshot.
+Existing exact-release CI, staging deploy/migration and real Telegram/iPhone prerequisites remain open.
+
+## HT-VENUE-PERSONAL-LINKS-01 — personal venue links (2026-11-02)
+
+**LOCAL_IMPLEMENTATION_READY / UNCOMMITTED / NOT_PUBLISHED / STAGING_AND_TELEGRAM_SMOKE_PENDING**.
+Identity preflight PASS: Hookah_Tootah / hookah_bot_ANT, primary physical root/common dir
+and origin `github.com/koteev-m/hookah_bot`; no initial HEAD/base/branch/parent constraints.
+Feature branch `codex/ht-venue-personal-links-01`, fetched/verified main base and unchanged HEAD
+`0994a1c325ce611c2b367ec29cc068f764251ded`. Original local checkpoint block preserved verbatim;
+`scripts/dev/` remains untracked and untouched. No stage/commit/push/PR/SSH/deploy/live Telegram.
+
+All existing venue creation paths reserve a stable public slug. PostgreSQL V129/V130 and H2
+V130/V131 add permanent alias reservations, default-listed catalog visibility and safe backfill.
+Owner/Platform Owner changes require current-slug confirmation and transaction-bound audit;
+Manager reads/copies own venue only. Unlisted remains directly browseable with unchanged guest
+lifecycle/subscription guards. Public transition exposes name/address only and creates no domain
+rows, including no lazy subscription initialization. Short venue payloads stay separate from old
+43-character table QR tokens. Browsing B preserves A's visit/cart/tab/order; menu/Back/App reopen
+retain selection, both explicit catalog actions clear it, and return-to-visit restores A's screen.
+
+Validation: Kotlin compile/ktlint PASS; 853 backend tests, failures/errors/skips 0, including real
+PostgreSQL migration/concurrency/aliases/audit rollback and order idempotency. Mini App production
+build PASS; full Playwright smoke 516/516, including mobile 390x844 personal-link scenarios and
+legacy QR/home/invite/order/support regressions. Diff/docs sanity PASS. Synthetic mobile screenshot
+inspected. Evidence, commands, exact Git status, inventories and candidate hashes:
+`/private/tmp/HT-VENUE-PERSONAL-LINKS-01/` (REPORT.txt, backend-final-summary.json,
+backend-validation-final.log, playwright-full-final.log, candidate-files.sha256.json).
+
+Platform prerequisites remain external/unverified: configured HTTPS Mini App origin and bot
+username, `/v/*` edge routing to backend, and one-time Main Mini App setup independent of
+MenuButtonWebApp. Default `TELEGRAM_MAIN_MINI_APP_CONFIGURED=false` uses `/start` plus an inline
+WebApp button; enable direct startapp only after platform confirmation. Venue owners need no bots,
+tokens, DNS or technical onboarding. Acceptance requires separately authorized staging migration/
+deploy and real Telegram/iPhone smoke after venue publication. Next: review this local diff before
+any separate publication/release task. No unfinished local test process or server operation.
+
 ## HT-BOT-MINIAPP-ENTRY-CI669-FIX-01 — source-bound menu fixture (2026-11-02)
 
 **LOCAL_FIX_VALIDATED / READY_FOR_AUTHORIZED_PUBLICATION**. PROJECT_IDENTITY_OK:

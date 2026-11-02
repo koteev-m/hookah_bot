@@ -1023,7 +1023,15 @@ class VenueConnectionRequestRepository(
             statement.executeUpdate()
             statement.generatedKeys.use { keys ->
                 if (!keys.next()) throw SQLException("Failed to create onboarding venue")
-                keys.getLong(1)
+                keys.getLong(1).also { id ->
+                    com.hookah.platform.backend.venue.links.VenueSlugs.assign(
+                        connection,
+                        id,
+                        request.venueName,
+                        request.city,
+                        null,
+                    )
+                }
             }
         }
 

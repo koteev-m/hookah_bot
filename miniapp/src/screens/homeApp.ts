@@ -1,3 +1,4 @@
+import { getVenueBrowsePayload, clearVenueBrowse } from '../shared/state/venueBrowseContext'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { guestRestoreTable } from '../shared/api/guestApi'
 import { platformGetMe } from '../shared/api/platformApi'
@@ -52,7 +53,7 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
     const explicitTable = getTelegramContext().tableTokenStatus !== 'missing'
     const activeVisit = visit.data.context?.tableSessionActive === true
     const requested = new URLSearchParams(window.location.search).get('entry')
-    const selected: Mode = explicitTable || activeVisit ? 'guest'
+    const selected: Mode = explicitTable || activeVisit || getVenueBrowsePayload() !== null ? 'guest'
       : requested && allowed.includes(requested as Mode) ? requested as Mode
       : allowed.includes('platform') ? 'platform' : allowed.includes('venue') ? 'venue' : 'guest'
     status.textContent = ''
@@ -90,6 +91,9 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
         const url = new URL(window.location.href)
         url.searchParams.set('mode', 'home')
         url.searchParams.set('entry', mode)
+        clearVenueBrowse()
+        url.searchParams.set('venue_browse', 'off')
+        url.searchParams.delete('venue_entry')
         url.searchParams.delete('venueId')
         url.searchParams.delete('screen')
         for (const key of [...tableTokenQueryParamKeys, 'tableSessionId', 'table_session_id']) url.searchParams.delete(key)

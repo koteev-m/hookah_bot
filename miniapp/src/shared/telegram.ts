@@ -232,10 +232,11 @@ export function getTelegramContext(): TelegramContext {
     startParamSource !== null &&
     startParamSource !== 'query_tableToken' &&
     startParamSource !== 'query_table_token'
-  const tableTokenAutoResolve = Boolean(startParam) && (screen === 'menu' || hasExplicitStartSignal)
+  const isVenuePayload = startParam?.startsWith('venue_') === true && startParam.length <= 19
+  const tableTokenAutoResolve = !isVenuePayload && Boolean(startParam) && (screen === 'menu' || hasExplicitStartSignal)
   let tableToken: string | null = null
   let tableTokenStatus: TelegramContext['tableTokenStatus'] = 'missing'
-  if (!startParam) {
+  if (!startParam || isVenuePayload) {
     tableTokenStatus = 'missing'
   } else {
     const validation = validateTableToken(startParam)

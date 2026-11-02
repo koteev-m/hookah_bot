@@ -1,3 +1,4 @@
+import { mountVenuePublicLink } from './venuePublicLink'
 import { createVenueInfoMediaEditor } from './venueInfoMedia'
 import type { VenueSettingsSection } from './venueSettingsCatalog'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
@@ -1139,6 +1140,11 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     }
   }
   const disposables: Array<() => void> = []
+  if (inSection('card') && (access.role === 'OWNER' || access.role === 'MANAGER')) {
+    const linkSlot = el('div')
+    refs.publicCard.after(linkSlot)
+    disposables.push(mountVenuePublicLink(linkSlot, backendUrl, isDebug, venueId), () => linkSlot.remove())
+  }
   const mediaEditor = canManagePublicCard ? createVenueInfoMediaEditor(backendUrl,isDebug,venueId) : null
   if (mediaEditor) {
     const container = refs.publicCard.querySelector('[data-testid="venue-card-info-media"]')
@@ -1760,6 +1766,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     selectedLatitude = publicCardSnapshot.latitude
     selectedLongitude = publicCardSnapshot.longitude
     renderPublicCardSettings(refs, currentPublicCardSettings)
+    window.dispatchEvent(new CustomEvent('venue-public-card-saved', { detail: result.data }))
     refs.status.textContent = 'Публичная карточка сохранена.'
     showToast('Публичная карточка сохранена.')
     setPublicCardSavedState()

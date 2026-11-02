@@ -37,7 +37,7 @@ export function extractTableTokenFromScannedText(
   const text = scannedText.trim()
   // TableTokenGenerator emits unpadded base64url. A URL or arbitrary text is never a raw token.
   const normalizeQrToken = (value: string | null) =>
-    value && /^[A-Za-z0-9_-]+$/.test(value) ? normalizeTableToken(value) : null
+    value && !(value.startsWith('venue_') && value.length <= 19) && /^[A-Za-z0-9_-]+$/.test(value) ? normalizeTableToken(value) : null
   if (/^[A-Za-z0-9_-]+$/.test(text)) {
     return normalizeQrToken(text)
   }

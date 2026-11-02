@@ -751,6 +751,13 @@ The seed creates or updates one idempotent smoke venue:
 
 It does not delete existing data and does not insert real secrets.
 
+The backend image must include `com.hookah.platform.backend.venue.links.StagingSeedMain`.
+The script runs that CLI through the existing backend container and its DB configuration;
+it does not start another application server. SQL seed changes and the existing `VenueSlugs`
+allocator commit in one transaction. A new smoke venue receives a unique personal slug;
+repeating the seed preserves its current address and all old aliases. Allocation failure rolls
+back the seed. The command prints the published venue ID and public slug after commit.
+
 Required before running:
 
 - backend and postgres containers are up;

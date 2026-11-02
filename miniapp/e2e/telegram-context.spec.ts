@@ -124,3 +124,28 @@ for (const initData of ['', telegramLaunchInitData]) {
       back: 1, shown: 1, hidden: 1, unbound: 1, scans: 1, sent: 1, chat: { ok: true } })
   })
 }
+
+
+test('personal links separate short venue payloads from legacy generated table QR tokens with the same prefix', async ({ page }) => {
+  const token = `venue_${'a'.repeat(37)}`
+  await openContext(page, false, '?tgWebAppStartParam=venue_2')
+  const venue = await page.evaluate(async () => {
+    const path = '/miniapp/src/shared/telegram.ts'
+    const { getTelegramContext } = await import(path)
+    const ctx = getTelegramContext()
+    return { tableToken: ctx.tableToken, status: ctx.tableTokenStatus, auto: ctx.tableTokenAutoResolve }
+  })
+  expect(venue).toEqual({ tableToken: null, status: 'missing', auto: false })
+  await openContext(page, false, `?tgWebAppStartParam=${token}`)
+  const legacy = await page.evaluate(async token => {
+    const path = '/miniapp/src/shared/telegram.ts'
+    const { getTelegramContext } = await import(path)
+    const validationPath = '/miniapp/src/shared/validation/tableToken.ts'
+    const { extractTableTokenFromScannedText } = await import(validationPath)
+    const ctx = getTelegramContext()
+    return { tableToken: ctx.tableToken, status: ctx.tableTokenStatus, auto: ctx.tableTokenAutoResolve,
+      scanned: extractTableTokenFromScannedText(`https://t.me/ExampleBot?start=${token}`, { miniAppUrl: location.href, botUsername: 'ExampleBot' }),
+      venueScan: extractTableTokenFromScannedText('https://t.me/ExampleBot?start=venue_2', { miniAppUrl: location.href, botUsername: 'ExampleBot' }) }
+  }, token)
+  expect(legacy).toEqual({ tableToken: token, status: 'valid', auto: true, scanned: token, venueScan: null })
+})

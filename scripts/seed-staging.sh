@@ -55,26 +55,8 @@ docker compose exec -T \
   -e SEED_VENUE_NAME="${VENUE_NAME}" \
   -e SEED_VENUE_CITY="${VENUE_CITY}" \
   -e SEED_VENUE_ADDRESS="${VENUE_ADDRESS}" \
-  postgres sh -c 'psql -v ON_ERROR_STOP=1 \
-    -v owner_id="$SEED_OWNER_ID" \
-    -v manager_id="$SEED_MANAGER_ID" \
-    -v staff_id="$SEED_STAFF_ID" \
-    -v venue_name="$SEED_VENUE_NAME" \
-    -v venue_city="$SEED_VENUE_CITY" \
-    -v venue_address="$SEED_VENUE_ADDRESS" \
-    -U "$POSTGRES_USER" \
-    -d "$POSTGRES_DB"' <<'SQL'
-BEGIN;
-
-CREATE TEMP TABLE staging_seed_params AS
-SELECT
-    :'owner_id'::bigint AS owner_id,
-    NULLIF(:'manager_id', '')::bigint AS manager_id,
-    NULLIF(:'staff_id', '')::bigint AS staff_id,
-    :'venue_name'::text AS venue_name,
-    :'venue_city'::text AS venue_city,
-    :'venue_address'::text AS venue_address;
-
+  backend java -cp '/app/app/lib/*' \
+    com.hookah.platform.backend.venue.links.StagingSeedMain <<'SQL'
 INSERT INTO users (telegram_user_id, username, first_name, last_name, updated_at)
 SELECT owner_id, 'staging_owner', 'Staging', 'Owner', now()
 FROM staging_seed_params
@@ -104,7 +86,7 @@ SET first_name = COALESCE(users.first_name, EXCLUDED.first_name),
     last_name = COALESCE(users.last_name, EXCLUDED.last_name),
     updated_at = now();
 
-CREATE TEMP TABLE staging_seed_venue AS
+CREATE TEMP TABLE staging_seed_venue ON COMMIT DROP AS
 WITH existing AS (
     SELECT v.id
     FROM venues v
@@ -257,7 +239,7 @@ SET opens_at = EXCLUDED.opens_at,
 CREATE TEMP TABLE staging_seed_categories (
     category_key text PRIMARY KEY,
     category_id bigint NOT NULL
-);
+) ON COMMIT DROP;
 
 WITH category_input(category_key, category_name, sort_order, category_type) AS (
     VALUES
@@ -367,7 +349,7 @@ CREATE TEMP TABLE staging_seed_tables (
     table_number int PRIMARY KEY,
     table_id bigint NOT NULL,
     preferred_token text NOT NULL
-);
+) ON COMMIT DROP;
 
 WITH table_input(table_number, capacity, preferred_token) AS (
     VALUES
@@ -403,20 +385,6 @@ SET is_active = true,
     revoked_at = NULL
 WHERE table_tokens.table_id = EXCLUDED.table_id;
 
-COMMIT;
-
-SELECT
-    v.id AS venue_id,
-    v.name AS venue_name,
-    v.status AS venue_status,
-    vt.table_number,
-    tt.token AS active_table_token
-FROM staging_seed_venue sv
-JOIN venues v ON v.id = sv.venue_id
-LEFT JOIN venue_tables vt ON vt.venue_id = v.id
-LEFT JOIN table_tokens tt ON tt.table_id = vt.id AND tt.is_active = true
-WHERE vt.table_number IN (104, 105)
-ORDER BY vt.table_number;
 SQL
 
 echo "==> Staging seed finished"

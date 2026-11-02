@@ -1,3 +1,5 @@
+import { clearVenueBrowse, getVenueBrowseId, getVenueBrowsePayload, rememberVenueBrowse } from '../shared/state/venueBrowseContext'
+import { requestApi } from '../shared/api/request'
 import { getBackendBaseUrl } from '../shared/api/backend'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { guestEndTableSession, guestGetActiveOrder, guestGetStaffCallStatus, guestGetTabs } from '../shared/api/guestApi'
@@ -480,7 +482,44 @@ function updateGuestShellActions(
   renderActionSet(refs.nav, navActionsByMode[mode], 'nav-button', cartQty, route, mode, 'nav', staffCallActive, onAction)
 }
 
-export function mountGuestApp(options: GuestAppOptions) {
+export function mountGuestApp(options: GuestAppOptions): () => void {
+  const payload = getVenueBrowsePayload()
+  if (payload === null || !options.root) return mountGuestScreens(options)
+  const controller = new AbortController()
+  let dispose: (() => void) | undefined
+  const message = el('p', { text: 'Открываем заведение…' })
+  options.root.replaceChildren(message)
+  const open = async () => {
+    const result = /^venue_[1-9a-z][0-9a-z]{0,12}$/.test(payload)
+      ? await requestApi<{ venueId: number }>(getBackendBaseUrl(), `/api/guest/venue-entry/${encodeURIComponent(payload)}`,
+        { signal: controller.signal }, { isDebug: isDebugEnabled(), getAccessToken, clearSession })
+      : null
+    if (controller.signal.aborted) return
+    if (!result?.ok) {
+      message.textContent = 'Заведение недоступно. Проверьте ссылку или попробуйте позже.'
+      const catalog = el('button', { text: 'Все заведения Hookah Tootah' })
+      catalog.addEventListener('click', () => {
+        clearVenueBrowse()
+        window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}#/catalog`)
+        dispose = mountGuestScreens(options)
+      })
+      options.root?.appendChild(catalog)
+      return
+    }
+    const hash = window.location.hash
+    rememberVenueBrowse(payload, result.data.venueId)
+    if (!/^#\/(venue|cart|order|bookings|account|messages|support)(?:[/?]|$)/.test(hash)) {
+      const url = new URL(window.location.href)
+      url.hash = `#/venue/${result.data.venueId}`
+      window.history.replaceState(window.history.state, '', url)
+    }
+    dispose = mountGuestScreens(options)
+  }
+  void open()
+  return () => { controller.abort(); dispose?.() }
+}
+
+function mountGuestScreens(options: GuestAppOptions) {
   const { root } = options
   if (!root) return () => undefined
   initTableContext()
@@ -491,6 +530,9 @@ export function mountGuestApp(options: GuestAppOptions) {
   const refs = buildGuestShell(root)
   let tableSnapshot = getTableContext()
   let currentRoute: Route = resolveRoute()
+  let catalogChosen = new URLSearchParams(window.location.search).get('venue_browse') === 'off' && window.location.hash === '#/catalog'
+  const browseBar = el('div', { className: 'card venue-browse-bar' })
+  refs.content.before(browseBar)
   let staffCallActive = false
   let canLeaveTable = false
   let handleGuestAction: (action: GuestActionId) => void = () => undefined
@@ -652,6 +694,11 @@ export function mountGuestApp(options: GuestAppOptions) {
   }
 
   const navigateCatalogButton = () => {
+    const browseVenueId = getVenueBrowseId()
+    if (browseVenueId) {
+      navigate(`#/venue/${browseVenueId}`, { replace: true })
+      return
+    }
     if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
       navigate(`#/venue/${tableSnapshot.venueId}`, { replace: true })
       return
@@ -663,10 +710,13 @@ export function mountGuestApp(options: GuestAppOptions) {
     const shouldPushFromTableRoot = resolveTableMode(tableSnapshot) === 'active-table' && route.name === 'venue'
     navigate(hash, shouldPushFromTableRoot ? undefined : { replace: true })
   }
-  const resolveGuestRootHash = () =>
+  const resolveGuestRootHash = () => getVenueBrowseId() ? `#/venue/${getVenueBrowseId()}` : catalogChosen ? '#/catalog' :
     resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId ? `#/venue/${tableSnapshot.venueId}` : '#/catalog'
   const isCurrentGuestRoot = () => {
     const route = resolveRoute()
+    if (new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('browseMenu') === '1') return false
+    if (getVenueBrowseId()) return route.name === 'venue' && route.venueId === getVenueBrowseId() && !route.openStaffCall
+    if (catalogChosen) return route.name === 'catalog'
     if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
       return route.name === 'venue' && route.venueId === tableSnapshot.venueId && !route.openStaffCall
     }
@@ -787,6 +837,10 @@ export function mountGuestApp(options: GuestAppOptions) {
               showTelegramAlert([failure.title, failure.details].filter(Boolean).join(' '))
               return
             }
+            if (getVenueBrowseId() !== null) {
+              clearVenueBrowse()
+              catalogChosen = false
+            }
             const nextUrl = new URL(window.location.href)
             tableContextQueryParamKeys.forEach((key) => nextUrl.searchParams.delete(key))
             nextUrl.searchParams.set('table_token', token)
@@ -874,7 +928,19 @@ export function mountGuestApp(options: GuestAppOptions) {
   handleGuestAction = (action) => {
     switch (action) {
       case 'catalog':
+        if (getVenueBrowseId()) {
+          clearVenueBrowse()
+          catalogChosen = true
+          navigate('#/catalog', { replace: true })
+          return
+        }
+        navigateCatalogButton()
+        return
       case 'menu':
+        if (getVenueBrowseId()) {
+          navigate(`#/venue/${getVenueBrowseId()}?browseMenu=1`, { replace: true })
+          return
+        }
         navigateCatalogButton()
         return
       case 'qr':
@@ -969,16 +1035,30 @@ export function mountGuestApp(options: GuestAppOptions) {
   const render = () => {
     const route = resolveRoute()
     currentRoute = route
+    browseBar.replaceChildren()
+    const browsingVenue = getVenueBrowseId()
+    const showVisitReturn = tableSnapshot.tableSessionActive && tableSnapshot.venueId && route.name === 'venue' && route.venueId !== tableSnapshot.venueId
+    browseBar.hidden = !browsingVenue && !showVisitReturn
+    if (browsingVenue) {
+      const all = el('button', { className: 'button-secondary', text: 'Все заведения Hookah Tootah' })
+      all.addEventListener('click', () => { clearVenueBrowse(); catalogChosen = true; navigate('#/catalog') })
+      browseBar.appendChild(all)
+    }
+    if (showVisitReturn) {
+      const visit = el('button', { text: `Вернуться к посещению: ${tableSnapshot.venueName ?? 'текущее заведение'}` })
+      visit.addEventListener('click', () => { clearVenueBrowse(); catalogChosen = false; navigate(`#/venue/${tableSnapshot.venueId}`) })
+      append(browseBar, el('p', { text: 'Вы просматриваете другое заведение. Визит, корзина и счёт остаются в текущем заведении.' }), visit)
+    }
     renderShellActions()
     refreshVisitExitAvailability()
     currentDispose?.()
-    if (route.name === 'catalog' && resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
+    if (route.name === 'catalog' && !catalogChosen && !getVenueBrowseId() && resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
       navigate(`#/venue/${tableSnapshot.venueId}`, { replace: true })
       return
     }
     const endedTableSession =
       tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && !tableSnapshot.tableSessionActive
-    if ((route.name === 'venue' || route.name === 'cart' || route.name === 'order') && endedTableSession) {
+    if (((route.name === 'venue' && !getVenueBrowseId()) || route.name === 'cart' || route.name === 'order') && endedTableSession) {
       currentDispose = renderCatalogScreen({
         root: refs.content,
         backendUrl,

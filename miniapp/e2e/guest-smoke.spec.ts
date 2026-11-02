@@ -27567,3 +27567,246 @@ test('home keeps Venue pending saves guarded before a mode change', async ({ pag
   await guestMode.click()
   await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
 })
+
+
+async function mockPersonalVenue(page: Page, id = 2) {
+  await page.route(`**/api/guest/venue-entry/venue_${id}`, route => route.fulfill(jsonResponse({ venueId: id })))
+  await page.route(`**/api/guest/venue/${id}`, route => route.fulfill(jsonResponse({ venue: {
+    ...buildGuestCatalogVenue({ id, name: 'Микс', city: 'Казань', address: 'Баумана, 2', displayAddress: 'Казань, Баумана, 2' }),
+    timezone: 'Europe/Moscow', status: 'PUBLISHED', isFavorite: false, todayStaff: [], promotions: []
+  } })))
+  await page.route(`**/api/guest/venue/${id}/info-sections`, route => route.fulfill(jsonResponse({ venueId: id, sections: [] })))
+  await page.route(`**/api/guest/venue/${id}/menu`, route => route.fulfill(jsonResponse({ venueId: id, categories: buildDefaultGuestMenu().map(c => ({ ...c, items: c.items.map(item => ({ ...item, id: item.id + 1000, name: `Другой ${item.name}` })) })) })))
+}
+
+for (const entry of ['startapp', 'fallback'] as const) {
+  test(`personal links ${entry} open exact guest card preserve menu Back and App reopen for working role`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    await mockHomeRoles(page, { role: 'MANAGER', platform: true })
+    await mockPersonalVenue(page)
+    const calls: string[] = []
+    page.on('request', request => { calls.push(new URL(request.url()).pathname) })
+    await page.goto(entry === 'startapp' ? '?mode=home&tgWebAppStartParam=venue_2' : '?mode=home&venue_entry=venue_2')
+    await expect(page.locator('.venue-location').first()).toContainText('Казань, Баумана, 2')
+    await expect(page).toHaveURL(/#\/venue\/2$/)
+    await expect(page.locator('.venue-shell, .platform-shell')).toHaveCount(0)
+    await page.getByRole('button', { name: 'Меню заведения', exact: true }).click()
+    await expect(page).toHaveURL(/browseMenu=1/)
+    await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
+    await expect(page.getByText('Другой Double Apple', { exact: true })).toBeVisible()
+    await clickTelegramBackButton(page)
+    await expect(page).toHaveURL(/#\/venue\/2$/)
+    await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
+    await page.goto('?mode=home')
+    await expect(page).toHaveURL(/#\/venue\/2$/)
+    await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
+    await page.screenshot({ path: test.info().outputPath('personal-venue-mobile.png'), fullPage: true })
+    expect(calls.filter(path => path === '/api/guest/table/resolve')).toHaveLength(0)
+    await page.getByRole('button', { name: entry === 'startapp' ? 'Каталог' : 'Все заведения Hookah Tootah', exact: true }).click()
+    await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+    expect(await page.evaluate(() => (window as any).__e2eTelegramSendDataPayloads)).toEqual([])
+  })
+}
+
+test('personal links browse B retain visit cart and order A and explicit catalog stays open', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+  await mockHomeRoles(page, { role: 'MANAGER', platform: true })
+  await mockPersonalVenue(page)
+  const mutations: string[] = []
+  page.on('request', request => { if (request.method() === 'POST' && !request.url().includes('/auth/')) mutations.push(request.url()) })
+  await page.goto('?mode=home&startapp=venue_2')
+  await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
+  await expect(page.getByText('Визит, корзина и счёт остаются в текущем заведении.', { exact: false })).toBeVisible()
+  await page.getByRole('button', { name: 'Меню заведения', exact: true }).click()
+  await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
+  await expect(page.locator('.menu-item-controls button').first()).toBeDisabled()
+  await page.getByRole('button', { name: 'Вернуться к посещению: Микс', exact: true }).click()
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Добавить', exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+  await page.goto('?mode=home&startapp=venue_2')
+  await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
+  await page.getByRole('button', { name: /^Корзина/ }).first().click()
+  await expect(page).toHaveURL(/#\/cart/)
+  await expect(page.getByText('Double Apple', { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: 'Все заведения Hookah Tootah', exact: true }).click()
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+  expect(api.getTableSessionEndRequests()).toHaveLength(0)
+  expect(mutations.filter(url => !url.includes('/cart/preview'))).toEqual([])
+})
+
+test('personal links reject malformed or unavailable payload without selecting another venue', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await mockHomeRoles(page)
+  const tableCalls: string[] = []
+  page.on('request', request => { if (request.url().includes('/table/resolve')) tableCalls.push(request.url()) })
+  await page.goto('?mode=home&startapp=venue_bad!')
+  await expect(page.getByText('Заведение недоступно. Проверьте ссылку или попробуйте позже.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('searchbox')).toHaveCount(0)
+  expect(tableCalls).toEqual([])
+})
+
+
+test('personal links owner copies the selected venue and manager sees read only settings', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockGuestApi(page)
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await mockOwnerUx(page)
+  const updates: Array<Record<string, unknown>> = []
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async (text: string) => { (window as any).__copiedPersonalLink = text }
+    } })
+  })
+  await page.route('**/api/venue/*/public-link', async route => {
+    const id = Number(new URL(route.request().url()).pathname.match(/venue\/(\d+)/)?.[1])
+    if (route.request().method() === 'PUT') updates.push(route.request().postDataJSON())
+    await route.fulfill(jsonResponse({ venueId: id, name: 'Микс', address: id === 1 ? 'Москва, Арбат, 1' : 'Казань, Баумана, 2',
+      slug: id === 1 ? 'mix' : 'mix-kazan', catalogListed: true, canManage: true, guestAvailable: id === 2,
+      url: `https://stage.example.org/v/${id === 1 ? 'mix' : 'mix-kazan'}` }))
+  })
+  await page.goto('?mode=venue&venueId=1#/settings/card')
+  const block = page.locator('.venue-public-link')
+  await expect(block).toContainText('Москва, Арбат, 1')
+  await expect(block).toContainText('Создание ссылки не публикует заведение.')
+  await block.getByRole('button', { name: 'Скопировать ссылку', exact: true }).click()
+  await expect(block.getByRole('status')).toHaveText('Ссылка скопирована.')
+  expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBe('https://stage.example.org/v/mix')
+  const selector = page.locator('select').filter({ has: page.locator('option', { hasText: 'Дымный берег' }) })
+  await selector.selectOption('2')
+  await page.goto('?mode=venue&venueId=2#/settings/card')
+  await expect(block).toContainText('Казань, Баумана, 2')
+  await block.getByRole('button', { name: 'Скопировать ссылку', exact: true }).click()
+  expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBe('https://stage.example.org/v/mix-kazan')
+  await block.getByText('Дополнительные настройки ссылки', { exact: true }).click()
+  await block.getByLabel('Адрес ссылки', { exact: true }).fill('mix-kazan-new')
+  page.once('dialog', dialog => dialog.dismiss())
+  await block.getByRole('button', { name: 'Сохранить настройки ссылки', exact: true }).click()
+  expect(updates).toEqual([])
+  page.once('dialog', dialog => dialog.accept())
+  await block.getByRole('button', { name: 'Сохранить настройки ссылки', exact: true }).click()
+  await expect.poll(() => updates.length).toBe(1)
+  expect(updates[0]).toMatchObject({ expectedSlug: 'mix-kazan', slug: 'mix-kazan-new', confirmed: true })
+  await page.route('**/api/venue/2/public-link', route => route.fulfill(jsonResponse({ venueId: 2, name: 'Микс', address: 'Казань, Баумана, 2',
+    slug: 'mix-kazan', catalogListed: true, canManage: false, guestAvailable: true, url: 'https://stage.example.org/v/mix-kazan' })))
+  await page.reload()
+  await expect(block.getByRole('button', { name: 'Скопировать ссылку', exact: true })).toBeEnabled()
+  await expect(block.locator('details')).toBeHidden()
+  await expectNoHorizontalOverflow(page)
+})
+
+async function personalLinkProtectedState(page: Page) {
+  return page.evaluate(async () => {
+    const tablePath = '/miniapp/src/shared/state/tableContext.ts'
+    const cartPath = '/miniapp/src/shared/state/cartStore.ts'
+    const tabsPath = '/miniapp/src/shared/state/guestTabSelection.ts'
+    const { getTableContext } = await import(tablePath)
+    const { getCartSnapshot } = await import(cartPath)
+    const { getSelectedGuestTabId } = await import(tabsPath)
+    const table = getTableContext()
+    const cart = getCartSnapshot()
+    return { table, lines: [...cart.items.values()], comment: cart.commentDraft,
+      selectedTab: getSelectedGuestTabId(table.tableSessionId),
+      session: { ...sessionStorage } }
+  })
+}
+
+test('personal links P2 successful QR supersedes browsing B and Menu opens A', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await installQrScanner(page)
+  const api = await mockGuestApi(page)
+  await mockHomeRoles(page)
+  await mockPersonalVenue(page)
+  await page.goto(`?mode=home&venue_entry=venue_2&tgWebAppBotUsername=${tableQrFixture.botUsername}`)
+  await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('hookah_browse_venue:user:123456789'))).toBe('venue_2')
+  await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).first().click()
+  await scanQr(page, tableQrFixture.qrText)
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem('hookah_browse_venue:user:123456789'))).toBeNull()
+  await page.getByRole('button', { name: 'Меню', exact: true }).click()
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
+  await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+  const before = await personalLinkProtectedState(page)
+  await page.getByRole('button', { name: 'Карточка заведения', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'ℹ️ Информация', exact: true })).toBeVisible()
+  expect(await personalLinkProtectedState(page)).toEqual(before)
+  await page.getByRole('button', { name: 'Меню', exact: true }).click()
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await expect(page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true })).toBeVisible()
+  expect(api.getTableSessionEndRequests()).toEqual([])
+  expect(api.getAddBatchRequests()).toEqual([])
+  expect(await page.evaluate(() => (window as any).__e2eTelegramSendDataPayloads)).toEqual([])
+  await expectNoHorizontalOverflow(page)
+})
+
+for (const outcome of ['denied', 'error', 'unavailable', 'invalid', 'cancel'] as const) {
+  test(`personal links P2 ${outcome} QR preserves browsing and authorization`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installQrScanner(page)
+    const api = await mockGuestApi(page)
+    await mockHomeRoles(page)
+    await mockPersonalVenue(page)
+    const resolves: string[] = []
+    await page.route('**/api/guest/table/resolve?**', async route => {
+      resolves.push(route.request().url())
+      if (outcome === 'error') await route.abort('failed')
+      else if (outcome === 'unavailable') await route.fulfill(jsonResponse({ ...buildRestoreContext(), available: false, unavailableReason: 'SERVICE_SUSPENDED' }))
+      else await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Table unavailable' } }) })
+    })
+    await page.goto(`?mode=home&venue_entry=venue_2&tgWebAppBotUsername=${tableQrFixture.botUsername}`)
+    await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
+    await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).first().click()
+    const before = await personalLinkProtectedState(page)
+    const storageBefore = await page.evaluate(() => ({ url: location.href, local: { ...localStorage } }))
+    if (outcome === 'cancel') await page.evaluate(() => (window as unknown as ScannerWindow).__qrCancel?.())
+    await scanQr(page, outcome === 'invalid' ? 'not a QR URL' : tableQrFixture.qrText)
+    if (outcome !== 'cancel') await expect.poll(() => page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts.length)).toBe(1)
+    expect(resolves).toHaveLength(outcome === 'invalid' || outcome === 'cancel' ? 0 : 1)
+    expect(await personalLinkProtectedState(page)).toEqual(before)
+    expect(await page.evaluate(() => ({ url: location.href, local: { ...localStorage } }))).toEqual(storageBefore)
+    await page.getByRole('button', { name: 'Меню заведения', exact: true }).click()
+    await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
+    await expect(page.getByText('Другой Double Apple', { exact: true })).toBeVisible()
+    await expect(page.locator('.menu-item-controls button').first()).toBeDisabled()
+    expect(api.getTableSessionEndRequests()).toEqual([])
+    expect(api.getAddBatchRequests()).toEqual([])
+  })
+}
+
+for (const activeVisit of [true, false]) {
+  test(`personal links P2 mobile card menu card retains ${activeVisit ? 'active visit cart and tab' : 'guest without visit'}`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    const api = await mockGuestApi(page, activeVisit ? { restoreContext: buildRestoreContext() } : {})
+    await mockHomeRoles(page)
+    await page.route('**/api/guest/venue-entry/venue_1', route => route.fulfill(jsonResponse({ venueId: 1 })))
+    await page.goto('?mode=home&venue_entry=venue_1')
+    await expect(page.getByRole('heading', { name: 'ℹ️ Информация', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Меню заведения', exact: true }).click()
+    await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
+    if (activeVisit) await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+    else await expect(page.locator('.menu-item-controls button').first()).toBeDisabled()
+    const before = await personalLinkProtectedState(page)
+    await page.getByRole('button', { name: 'Карточка заведения', exact: true }).click()
+    await expect(page).toHaveURL(/#\/venue\/1\?browseMenu=0$/)
+    await expect(page.getByRole('heading', { name: 'ℹ️ Информация', exact: true })).toBeVisible()
+    expect(await personalLinkProtectedState(page)).toEqual(before)
+    await page.getByRole('button', { name: 'Меню заведения', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true })).toBeVisible()
+    await clickTelegramBackButton(page)
+    await expect(page.getByRole('heading', { name: 'ℹ️ Информация', exact: true })).toBeVisible()
+    expect(await personalLinkProtectedState(page)).toEqual(before)
+    expect(api.getTableSessionEndRequests()).toEqual([])
+    expect(api.getAddBatchRequests()).toEqual([])
+    await expectNoHorizontalOverflow(page)
+  })
+}
