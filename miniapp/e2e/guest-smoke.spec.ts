@@ -27702,6 +27702,35 @@ test('personal links owner copies the selected venue and manager sees read only 
   await expectNoHorizontalOverflow(page)
 })
 
+test('personal links copy the activated subdomain for the selected venue', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockGuestApi(page)
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await mockOwnerUx(page)
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async (text: string) => { (window as any).__copiedPersonalLink = text }
+    } })
+  })
+  await page.route('**/api/venue/*/public-link', route => {
+    const id = Number(new URL(route.request().url()).pathname.split('/')[3])
+    const slug = id === 1 ? 'miks' : 'miks-kazan'
+    return route.fulfill(jsonResponse({
+      venueId: id, name: 'Микс', address: id === 1 ? 'Москва, Арбат, 1' : 'Казань, Баумана, 2',
+      slug, catalogListed: false, canManage: true, guestAvailable: true, url: `https://${slug}.hookahtootah.club`
+    }))
+  })
+  for (const [id, slug] of [[1, 'miks'], [2, 'miks-kazan']] as const) {
+    await page.goto(`?mode=venue&venueId=${id}#/settings/card`)
+    const block = page.locator('.venue-public-link')
+    const url = `https://${slug}.hookahtootah.club`
+    await expect(block.getByLabel('Персональная ссылка заведения')).toHaveValue(url)
+    await block.getByRole('button', { name: 'Скопировать ссылку', exact: true }).click()
+    await expect(block.getByRole('status')).toHaveText('Ссылка скопирована.')
+    expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBe(url)
+  }
+})
+
 async function personalLinkProtectedState(page: Page) {
   return page.evaluate(async () => {
     const tablePath = '/miniapp/src/shared/state/tableContext.ts'

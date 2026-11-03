@@ -34,6 +34,23 @@ class VenuePublicLinksRepository(private val dataSource: DataSource?, private va
         }
     }
 
+    suspend fun resolveSubdomain(label: String): Long? {
+        if (VenueSlugs.validSubdomain(label)) return resolveSlug(label)
+        val venueId = VenueSlugs.legacyDnsVenueId(label) ?: return null
+        return transaction { connection ->
+            connection.prepareStatement("SELECT slug FROM venue_public_addresses WHERE venue_id = ?").use {
+                it.setLong(1, venueId)
+                it.executeQuery().use { rows ->
+                    while (rows.next()) {
+                        val slug = rows.getString(1)
+                        if (VenueSlugs.valid(slug) && !VenueSlugs.validSubdomain(slug)) return@transaction venueId
+                    }
+                    null
+                }
+            }
+        }
+    }
+
     suspend fun settings(
         venueId: Long,
         actor: Long,
@@ -57,8 +74,11 @@ class VenuePublicLinksRepository(private val dataSource: DataSource?, private va
             val slug = request.slug ?: before.slug
             if (slug == null || !VenueSlugs.valid(slug)) {
                 throw InvalidInputException(
-                    "Адрес: 1–64 латинских букв, цифр и дефисов.",
+                    "Адрес: строчные латинские буквы, цифры и одиночные дефисы между ними.",
                 )
+            }
+            if (slug != before.slug && !VenueSlugs.validSubdomain(slug)) {
+                throw InvalidInputException("Выберите новый адрес до 63 символов. Служебные имена использовать нельзя.")
             }
             if (slug != before.slug && !VenueSlugs.reserve(connection, venueId, slug)) {
                 throw InvalidInputException("Этот адрес уже использовался. Выберите другой.")
