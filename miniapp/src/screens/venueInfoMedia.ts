@@ -10,7 +10,7 @@ export type VenueInfoMediaState = { enabled: boolean; sections: Section[] }
 type UploadProgress = { index: number; total: number; section: number; pdf: boolean; status: 'WAITING' | 'UPLOADING' | 'SUCCESS' | 'UNKNOWN' | 'FAILED' | 'CANCELLED' }
 type Upload = { progress: UploadProgress; file: File; section: number; revision: number; request: string; replace?: string; submitted?: boolean; rejected?: boolean }
 
-export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean, venueId: number) {
+export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean, venueId: number, onChange?: () => void) {
   const element = el('details', { className: 'venue-info-editor' })
   const content = el('div')
   const status = el('p', { className: 'venue-info-result', text: '' }); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
@@ -227,6 +227,7 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
     }
     updatingDom = true
     try { renderContents() } finally { updatingDom = false }
+    onChange?.()
     if (busy) return
     const key = focusTarget
     focusTarget = null

@@ -1,4 +1,5 @@
 import { mountVenuePublicLink } from './venuePublicLink'
+import { mountVenuePublication } from './venuePublication'
 import { createVenueInfoMediaEditor } from './venueInfoMedia'
 import type { VenueSettingsSection } from './venueSettingsCatalog'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
@@ -57,6 +58,7 @@ export type VenueSettingsOptions = {
   onDraftChange?: () => void
   onBack?: () => void
   onOpenPreview?: () => void
+  onPublicationStatusChanged?: (status: string | null) => void
   onStaffModuleSettingsSaved?: (settings: VenueStaffModuleSettingsDto) => void
 }
 
@@ -1140,12 +1142,9 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     }
   }
   const disposables: Array<() => void> = []
-  if (inSection('card') && (access.role === 'OWNER' || access.role === 'MANAGER')) {
-    const linkSlot = el('div')
-    refs.publicCard.after(linkSlot)
-    disposables.push(mountVenuePublicLink(linkSlot, backendUrl, isDebug, venueId), () => linkSlot.remove())
-  }
-  const mediaEditor = canManagePublicCard ? createVenueInfoMediaEditor(backendUrl,isDebug,venueId) : null
+  let publication: ReturnType<typeof mountVenuePublication> | null = null
+  let publicLink: ReturnType<typeof mountVenuePublicLink> | null = null
+  const mediaEditor = canManagePublicCard ? createVenueInfoMediaEditor(backendUrl, isDebug, venueId, () => publication?.draftChanged()) : null
   if (mediaEditor) {
     const container = refs.publicCard.querySelector('[data-testid="venue-card-info-media"]')
     container?.insertBefore(mediaEditor.element, container.querySelector('details'))
@@ -1155,7 +1154,11 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
 
   let disposed = false
   let discarded = false
-  const notifyDraftChange = () => queueMicrotask(() => { if (!disposed) options.onDraftChange?.() })
+  const notifyDraftChange = () => queueMicrotask(() => {
+    if (disposed) return
+    publication?.draftChanged()
+    options.onDraftChange?.()
+  })
   let loadAbort: AbortController | null = null
   let publicCardSaveAbort: AbortController | null = null
   let reviewLinkSaveAbort: AbortController | null = null
@@ -1692,13 +1695,14 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     }
     loadAbort = null
     settingsLoaded = true
+    notifyDraftChange()
     updatePreviewButton()
     updateScheduleControls()
     refs.status.textContent = ''
   }
 
   const savePublicCardSettings = async () => {
-    if (!canManagePublicCard || !currentPublicCardSettings || !publicCardSnapshot || publicCardSaving) return
+    if (!canManagePublicCard || !currentPublicCardSettings || !publicCardSnapshot || publicCardSaving || publication?.isPublishing()) return
     if (!publicCardIsDirty()) return
     const draft = currentPublicCardDraft()
     const city = draft.city ?? ''
@@ -1729,6 +1733,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     }
 
     setPublicCardBusy(true)
+    notifyDraftChange()
     publicCardSaveAbort?.abort()
     const controller = new AbortController()
     publicCardSaveAbort = controller
@@ -1773,7 +1778,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const saveReviewLinkSettings = async () => {
-    if (!canManageReviewLink || reviewLinkSaving || !reviewLinkIsDirty()) return
+    if (!canManageReviewLink || reviewLinkSaving || publication?.isPublishing() || !reviewLinkIsDirty()) return
     const value = currentReviewLinkValue()
     if (!value) {
       refs.status.textContent = 'Введите ссылку или очистите текущую настройку.'
@@ -1785,6 +1790,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     }
 
     setReviewLinkBusy(true)
+    notifyDraftChange()
     reviewLinkSaveAbort?.abort()
     const controller = new AbortController()
     reviewLinkSaveAbort = controller
@@ -1811,8 +1817,9 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const clearReviewLinkSettings = async () => {
-    if (!canManageReviewLink || reviewLinkSaving || !normalizeNullableText(currentReviewLinkSettings?.publicReviewUrl)) return
+    if (!canManageReviewLink || reviewLinkSaving || publication?.isPublishing() || !normalizeNullableText(currentReviewLinkSettings?.publicReviewUrl)) return
     setReviewLinkBusy(true)
+    notifyDraftChange()
     reviewLinkSaveAbort?.abort()
     const controller = new AbortController()
     reviewLinkSaveAbort = controller
@@ -2336,7 +2343,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.guestContactInput.value !== (publicCardSnapshot.guestContact ?? '') ||
     refs.cardDescriptionInput.value !== (publicCardSnapshot.cardDescription ?? '')
   )
-  const hasUnsavedChanges = () => !discarded && (hasRawCardDraft() || publicCardIsDirty() || reviewLinkIsDirty() || (currentReviewLinkSettings !== null && refs.reviewLinkInput.value !== (currentReviewLinkSettings.publicReviewUrl ?? '')) || scheduleIsDirty() || staffModuleIsDirty() ||
+  const hasUnsavedChanges = () => !discarded && (hasRawCardDraft() || publicCardIsDirty() || publicLink?.isDirty() || reviewLinkIsDirty() || (currentReviewLinkSettings !== null && refs.reviewLinkInput.value !== (currentReviewLinkSettings.publicReviewUrl ?? '')) || scheduleIsDirty() || staffModuleIsDirty() ||
     (currentBookingSettings !== null && refs.holdInput.value !== String(currentBookingSettings.holdMinutes)) ||
     (currentShiftExtensionSettings !== null && (
       refs.enabledInput.checked !== currentShiftExtensionSettings.enabled ||
@@ -2348,7 +2355,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.status.textContent = message
     showToast(message)
   }
-  const isSaving = () => Boolean(mediaEditor?.busy() || publicCardSaving || reviewLinkSaving || scheduleSaving || bookingSaveAbort || extensionSaveAbort || staffModuleSaving)
+  const isSaving = () => Boolean(publication?.isPublishing() || publicLink?.isSaving() || mediaEditor?.busy() || publicCardSaving || reviewLinkSaving || scheduleSaving || bookingSaveAbort || extensionSaveAbort || staffModuleSaving)
   const canLeave = () => {
     if (isSaving()) {
       refs.status.textContent = 'Дождитесь завершения сохранения.'
@@ -2366,6 +2373,27 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       notifyDraftChange()
     }
     return true
+  }
+  if (canManagePublicCard) {
+    const publicationSlot = el('div')
+    const linkSlot = el('div')
+    refs.publicCard.before(publicationSlot, linkSlot)
+    publicLink = mountVenuePublicLink(linkSlot, backendUrl, isDebug, venueId, notifyDraftChange)
+    publication = mountVenuePublication({
+      root: publicationSlot, backendUrl, isDebug, venueId, initialStatus: access.venueStatus,
+      blocked: () => {
+        if (!settingsLoaded) return 'Дождитесь загрузки карточки заведения.'
+        if (publicCardSaving || reviewLinkSaving || publicLink?.isSaving() || mediaEditor?.busy()) return 'Дождитесь завершения сохранения.'
+        if (hasUnsavedChanges() || mediaEditor?.pending()) return 'Сохраните изменения карточки или отмените их, затем повторите проверку готовности.'
+        return ''
+      },
+      onStatusChanged: (status) => {
+        options.onPublicationStatusChanged?.(status)
+        void publicLink?.refresh()
+      },
+      onBusyChanged: notifyDraftChange
+    })
+    disposables.push(publication.dispose, publicLink.dispose)
   }
   options.setLeaveGuard?.(canLeave)
   options.setDraftState?.({ hasUnsavedChanges: () => hasUnsavedChanges() || Boolean(mediaEditor?.pending()), isSaving })

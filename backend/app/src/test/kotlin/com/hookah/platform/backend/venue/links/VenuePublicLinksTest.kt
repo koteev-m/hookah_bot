@@ -49,6 +49,43 @@ class VenuePublicLinksTest {
     }
 
     @Test
+    fun `explicit HTTPS public origin changes issued URLs only and cannot be enabled in staging`() {
+        val miniApp = "https://miniapp.example.org/miniapp/?mode=home"
+        val branded = "https://hookahtootah.club"
+        for (env in listOf("staging", "production")) {
+            val default = assertNotNull(VenuePublicLinkConfig.from(miniApp, "ExampleBot", appEnv = env))
+            assertEquals("https://miniapp.example.org/v/dym", default.publicUrl("dym"))
+        }
+        assertEquals(
+            "https://staging.hookahtootah.club/v/dym",
+            VenuePublicLinkConfig.from(
+                "https://staging.hookahtootah.club/miniapp/",
+                "ExampleBot",
+                appEnv = "staging",
+            )?.publicUrl("dym"),
+        )
+        val config =
+            assertNotNull(
+                VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, "$branded/", "production"),
+            )
+        assertEquals("$branded/v/dym", config.publicUrl("dym"))
+        assertEquals("https://t.me/ExampleBot?startapp=venue_1", config.telegramUrl(1))
+        assertEquals("https://t.me/ExampleBot?start=venue_1", config.telegramUrl(1, false))
+        assertNull(VenuePublicLinkConfig.from(null, "ExampleBot", true, branded, "production"))
+        assertFailsWith<IllegalArgumentException> {
+            VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, branded, "staging")
+        }
+        for (invalid in listOf(
+            "http://example.org", "//example.org", " ", "https://user@example.org", "https://example.org:",
+            "https://example.org:0", "https://example.org:65536", "$branded/v", "$branded?", "$branded#fragment",
+        )) {
+            assertFailsWith<IllegalArgumentException>(invalid) {
+                VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, invalid, "production")
+            }
+        }
+    }
+
+    @Test
     fun `migration backfills every lifecycle without changing publication or location and rerun is stable`() {
         h2(migrate = false).use { ds ->
             flyway(ds, "129").migrate()

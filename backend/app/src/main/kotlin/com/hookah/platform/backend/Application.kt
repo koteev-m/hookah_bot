@@ -80,6 +80,7 @@ import com.hookah.platform.backend.miniapp.shift.guestShiftExtensionRoutes
 import com.hookah.platform.backend.miniapp.shift.venueShiftExtensionRoutes
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.VenuePublicationService
 import com.hookah.platform.backend.miniapp.venue.bookings.venueBookingRoutes
 import com.hookah.platform.backend.miniapp.venue.feedback.venueFeedbackRoutes
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationProvider
@@ -108,6 +109,7 @@ import com.hookah.platform.backend.miniapp.venue.tables.venueTableRoutes
 import com.hookah.platform.backend.miniapp.venue.venueBillingRoutes
 import com.hookah.platform.backend.miniapp.venue.venueGuestPreviewRoutes
 import com.hookah.platform.backend.miniapp.venue.venueInfoMediaRoutes
+import com.hookah.platform.backend.miniapp.venue.venuePublicationRoutes
 import com.hookah.platform.backend.miniapp.venue.venueRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffCallRoutes
 import com.hookah.platform.backend.miniapp.venue.venueStaffModuleSettingsRoutes
@@ -175,6 +177,7 @@ import com.hookah.platform.backend.telegram.db.VenuePromotionRuleRepository
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
+import com.hookah.platform.backend.venue.links.VenuePublicLinkConfig
 import com.hookah.platform.backend.venue.links.venuePublicEntryRoutes
 import com.hookah.platform.backend.venue.links.venuePublicLinkApiRoutes
 import io.ktor.client.HttpClient
@@ -454,6 +457,14 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         overrides.telegramWebhookProductAbuseLimiter ?: TelegramProductAbuseLimiter()
     val miniAppAbuseProtection = overrides.miniAppAbuseProtection ?: MiniAppAbuseProtection()
     val telegramConfig = TelegramBotConfig.from(appConfig, appEnv)
+    val venuePublicLinkConfig =
+        VenuePublicLinkConfig.from(
+            telegramConfig.webAppPublicUrl,
+            telegramConfig.botUsername,
+            appConfig.propertyOrNull("telegram.mainMiniAppConfigured")?.getString()?.toBooleanStrictOrNull() ?: false,
+            publicOrigin = appConfig.propertyOrNull("venue.publicLinkOrigin")?.getString(),
+            appEnv = appEnv,
+        )
     val dbConfig = DbConfig.from(appConfig)
     val appVersion = appConfig.optionalString("app.version") ?: "dev"
     val miniAppDevServerUrl = appConfig.optionalString("miniapp.devServerUrl")?.takeIf { it.isNotBlank() }
@@ -596,6 +607,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             auditLogger = AuditLogAiAuditLogger(auditLogRepository),
         )
     val platformVenueRepository = PlatformVenueRepository(dataSource)
+    val venuePublication = VenuePublicationService(dataSource)
     val subscriptionSettingsRepository = PlatformSubscriptionSettingsRepository(dataSource)
     val platformUserRepository = PlatformUserRepository(dataSource)
     val platformVenueMemberRepository = PlatformVenueMemberRepository(dataSource)
@@ -894,6 +906,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 tableSessionRepository = tableSessionRepository,
                 guestTabsRepository = guestTabsRepository,
                 platformVenueRepository = platformVenueRepository,
+                venuePublication = venuePublication,
                 platformSubscriptionSettingsRepository = subscriptionSettingsRepository,
                 platformVenueMemberRepository = platformVenueMemberRepository,
                 venueOwnerAccountRepository = venueOwnerAccountRepository,
@@ -1222,13 +1235,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             dataSource,
             platformConfig.ownerUserId,
         )
-    val venuePublicLinkConfig =
-        com.hookah.platform.backend.venue.links.VenuePublicLinkConfig.from(
-            telegramConfig.webAppPublicUrl,
-            telegramConfig.botUsername,
-            environment.config.propertyOrNull("telegram.mainMiniAppConfigured")
-                ?.getString()?.toBooleanStrictOrNull() ?: false,
-        )
     routing {
         venuePublicEntryRoutes(
             venuePublicLinks,
@@ -1361,11 +1367,18 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 maintenancePolicy = stagingMaintenancePolicy
             }
             route("/api") {
+                venuePublicationRoutes(
+                    venuePublication,
+                    guestVenueRepository,
+                    subscriptionRepository,
+                    stagingMaintenancePolicy.active,
+                )
                 venuePublicLinkApiRoutes(
                     venuePublicLinks,
                     guestVenueRepository,
                     subscriptionRepository,
                     venuePublicLinkConfig,
+                    stagingMaintenancePolicy.active,
                 )
                 route("/guest") {
                     guestVenueRoutes(

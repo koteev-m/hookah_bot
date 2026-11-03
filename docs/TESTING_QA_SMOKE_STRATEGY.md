@@ -4980,3 +4980,22 @@ Local evidence lives in `/private/tmp/HT-VENUE-PERSONAL-LINKS-01/`; consult its 
 for actual results and candidate hashes. Separate authorized staging migration/deploy and published
 venue Telegram/iPhone smoke are required before acceptance. Verify Main Mini App independently of
 MenuButtonWebApp and verify the configured public origin routes `/v/*` to backend.
+
+## Venue draft publication and branded public origin
+
+Local acceptance: run `VenuePublicationRoutesTest` (H2 with authenticated HTTP), `VenuePublicationPostgresTest`
+(real PostgreSQL and venue-row contention), the `VenuePublicLinks*`, Guest Preview, Venue RBAC,
+Platform lifecycle and Telegram router/keyboard suites, Kotlin compile/lint, Mini App build, and
+Playwright (including the mobile `venue publication` cases). Keep the standard migration and
+release checks. There is no new SQL migration.
+
+H2 checks per-venue authorization, a readiness change after the check, disabled catalog
+visibility, and subscription denial after publication. PostgreSQL checks one audit across two
+publishers, rollback on audit failure, and a publish waiting behind a committed suspension.
+Browser tests cover explicit cancellation/confirmation, no auto-save, read-only Preview and
+same-screen status and link refresh. Branded origin tests cover default and explicit origins,
+environment restrictions, invalid origins, Host spoofing and preservation of aliases/fallback.
+
+Before accepting an independently authorized release, smoke the selected test venue through
+Telegram on mobile as Owner and Manager, and verify the guest result and unchanged printed QR.
+Production root activation has its own [operations checklist](VENUE_PUBLIC_LINK_ORIGIN_CHECKLIST.md).

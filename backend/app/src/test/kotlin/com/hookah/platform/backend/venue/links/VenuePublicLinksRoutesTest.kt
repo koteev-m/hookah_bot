@@ -24,11 +24,18 @@ import kotlin.test.assertTrue
 class VenuePublicLinksRoutesTest {
     @Test
     fun `public entry is safe read only and aliases direct ids and payload share lifecycle subscription guards`() =
+        verifyPublicEntry(branded = false)
+
+    @Test
+    fun `branded origin preserves previous host alias and Telegram fallback`() = verifyPublicEntry(branded = true)
+
+    private fun verifyPublicEntry(branded: Boolean) =
         testApplication {
             h2().use { ds ->
+                val appEnv = if (branded) "production" else "test"
                 val config =
                     MapApplicationConfig(
-                        "app.env" to "test",
+                        "app.env" to appEnv,
                         "db.jdbcUrl" to ds.jdbcUrl,
                         "db.user" to "sa",
                         "db.password" to "",
@@ -36,7 +43,12 @@ class VenuePublicLinksRoutesTest {
                         "telegram.enabled" to "false",
                         "telegram.webAppPublicUrl" to "https://stage.example.org/miniapp/",
                         "telegram.botUsername" to "ExampleBot",
-                    )
+                    ).apply {
+                        if (branded) {
+                            put("venue.publicLinkOrigin", "https://hookahtootah.club")
+                            put("venue.staffInviteSecretPepper", "synthetic-brand-route-fixture")
+                        }
+                    }
                 environment { this.config = config }
                 application { module() }
                 client.get("/health")
@@ -54,8 +66,21 @@ class VenuePublicLinksRoutesTest {
                 val links = VenuePublicLinksRepository(ds, null)
                 val settings = links.settings(id, 101)
                 links.update(id, 101, VenueLinkUpdate(settings.slug, true, "new-dym"))
-                val token = SessionTokenService(SessionTokenConfig.from(config, "test")).issueToken(101).token
-                val manager = SessionTokenService(SessionTokenConfig.from(config, "test")).issueToken(303).token
+                val token = SessionTokenService(SessionTokenConfig.from(config, appEnv)).issueToken(101).token
+                val manager = SessionTokenService(SessionTokenConfig.from(config, appEnv)).issueToken(303).token
+
+                val expectedOrigin = if (branded) "https://hookahtootah.club" else "https://stage.example.org"
+                val management =
+                    client.get("/api/venue/$id/public-link") {
+                        header(HttpHeaders.Authorization, "Bearer $token")
+                        header(HttpHeaders.Host, "evil.example")
+                        header("X-Forwarded-Host", "evil.example")
+                    }
+                assertEquals(HttpStatusCode.OK, management.status)
+                assertEquals(
+                    "$expectedOrigin/v/new-dym",
+                    Json.parseToJsonElement(management.bodyAsText()).jsonObject["url"]?.jsonPrimitive?.content,
+                )
 
                 fun counts() =
                     ds.connection.use { c ->
@@ -82,10 +107,10 @@ class VenuePublicLinksRoutesTest {
                     }
                 val before = counts()
                 repeat(2) {
-                    for (slug in listOf(settings.slug, "new-dym")) {
+                    for ((slug, host) in listOf(settings.slug to "stage.example.org", "new-dym" to "evil.example")) {
                         val page =
                             client.get("/v/$slug?redirect=https://evil.example") {
-                                header(HttpHeaders.Host, "evil.example")
+                                header(HttpHeaders.Host, host)
                                 header("X-Forwarded-Host", "evil.example")
                             }
                         assertEquals(HttpStatusCode.OK, page.status)

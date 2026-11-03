@@ -7,7 +7,7 @@ type LinkSettings = {
   catalogListed: boolean; canManage: boolean; guestAvailable: boolean; url: string | null
 }
 
-export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDebug: boolean, venueId: number) {
+export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDebug: boolean, venueId: number, onChange?: () => void) {
   const controller = new AbortController()
   const section = el('section', { className: 'card venue-public-link' })
   const title = el('h3', { text: 'Ссылка заведения' })
@@ -39,9 +39,15 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
   root.appendChild(section)
   let settings: LinkSettings | null = null
   let saving = false
+  let requestId = 0
   let savedIdentity: string | null = null
   const deps = { isDebug, getAccessToken, clearSession }
   const path = `/api/venue/${venueId}/public-link`
+  const showAvailability = (data: LinkSettings) => {
+    availability.textContent = !data.guestAvailable
+      ? 'Гостевой доступ сейчас закрыт. Создание ссылки не публикует заведение.'
+      : data.catalogListed ? 'Заведение доступно гостям и показывается в каталоге.' : 'Не показывать в каталоге. Гости могут открыть заведение по ссылке.'
+  }
   const show = (data: LinkSettings) => {
     settings = data
     identity.textContent = savedIdentity ?? `${data.name} · ${data.address || 'Адрес пока не указан'}`
@@ -51,9 +57,7 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
     listed.checked = data.catalogListed
     extra.hidden = !data.canManage
     save.disabled = !data.canManage
-    availability.textContent = !data.guestAvailable
-      ? 'Гостевой вход станет доступен после выполнения текущих условий публикации. Создание ссылки не публикует заведение.'
-      : data.catalogListed ? 'Заведение доступно гостям и показывается в каталоге.' : 'Не показывать в каталоге. Гости могут открыть заведение по ссылке.'
+    showAvailability(data)
     status.textContent = data.url ? '' : 'Ссылка ещё недоступна. Настройку адреса платформы выполняет администратор платформы.'
   }
   copy.disabled = true
@@ -74,7 +78,8 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
       return
     }
     if (!window.confirm('Сохранить адрес и видимость выбранного заведения? Старые ссылки продолжат вести в это заведение и не смогут перейти другому. Это не меняет публикацию или текущие визиты.')) return
-    saving = true; save.disabled = true
+    saving = true; save.disabled = true; requestId++
+    onChange?.()
     const result = await requestApi<LinkSettings>(backendUrl, path, {
       method: 'PUT', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ expectedSlug: settings.slug, slug: slug.value, catalogListed: listed.checked, confirmed: true })
@@ -83,12 +88,22 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
     if (controller.signal.aborted) return
     if (result.ok) { show(result.data); status.textContent = 'Настройки ссылки сохранены.' }
     else status.textContent = result.error.message || 'Не удалось сохранить настройки. Обновите страницу и повторите.'
+    onChange?.()
   })
-  void requestApi<LinkSettings>(backendUrl, path, { signal: controller.signal }, deps).then(result => {
-    if (controller.signal.aborted) return
-    if (result.ok) show(result.data)
-    else status.textContent = 'Не удалось загрузить ссылку выбранного заведения. Обновите страницу и повторите.'
-  })
+  const refresh = async () => {
+    const id = ++requestId
+    const result = await requestApi<LinkSettings>(backendUrl, path, { signal: controller.signal }, deps)
+    if (controller.signal.aborted || id !== requestId || saving) return
+    if (result.ok) {
+      if (settings) showAvailability(result.data)
+      else show(result.data)
+    } else if (settings) {
+      availability.textContent = 'Не удалось обновить доступность ссылки.'
+    } else {
+      status.textContent = 'Не удалось загрузить ссылку выбранного заведения. Обновите страницу и повторите.'
+    }
+  }
+  void refresh()
   const updateIdentity = (event: Event) => {
     const detail = (event as CustomEvent<{ venueId: number; name: string; displayAddress?: string | null; city?: string | null; address?: string | null }>).detail
     if (detail?.venueId !== venueId) return
@@ -97,5 +112,10 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
     identity.textContent = savedIdentity
   }
   window.addEventListener('venue-public-card-saved', updateIdentity)
-  return () => { controller.abort(); window.removeEventListener('venue-public-card-saved', updateIdentity); section.remove() }
+  return {
+    refresh,
+    isDirty: () => Boolean(settings?.canManage && (slug.value !== (settings.slug ?? '') || listed.checked !== settings.catalogListed)),
+    isSaving: () => saving,
+    dispose: () => { controller.abort(); window.removeEventListener('venue-public-card-saved', updateIdentity); section.remove() }
+  }
 }
