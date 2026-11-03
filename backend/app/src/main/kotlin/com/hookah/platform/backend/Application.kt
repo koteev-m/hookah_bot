@@ -464,6 +464,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             appConfig.propertyOrNull("telegram.mainMiniAppConfigured")?.getString()?.toBooleanStrictOrNull() ?: false,
             publicOrigin = appConfig.propertyOrNull("venue.publicLinkOrigin")?.getString(),
             appEnv = appEnv,
+            publicLinkFormat = appConfig.propertyOrNull("venue.publicLinkFormat")?.getString(),
         )
     val dbConfig = DbConfig.from(appConfig)
     val appVersion = appConfig.optionalString("app.version") ?: "dev"

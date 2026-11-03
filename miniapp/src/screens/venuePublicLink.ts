@@ -24,7 +24,7 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
   extra.hidden = true
   append(extra, el('summary', { text: 'Дополнительные настройки ссылки' }))
   const slug = document.createElement('input')
-  slug.maxLength = 64
+  slug.maxLength = 63
   slug.className = 'venue-input'
   slug.setAttribute('aria-label', 'Адрес ссылки')
   const listed = document.createElement('input')
@@ -73,8 +73,8 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
   })
   save.addEventListener('click', async () => {
     if (!settings?.canManage || saving) return
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug.value) || slug.value.length > 64) {
-      status.textContent = 'Адрес: 1–64 латинских букв, цифр и дефисов.'
+    if (slug.value !== settings.slug && (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug.value) || slug.value.length > 63)) {
+      status.textContent = 'Новый адрес: до 63 символов, строчные латинские буквы, цифры и одиночные дефисы между ними.'
       return
     }
     if (!window.confirm('Сохранить адрес и видимость выбранного заведения? Старые ссылки продолжат вести в это заведение и не смогут перейти другому. Это не меняет публикацию или текущие визиты.')) return

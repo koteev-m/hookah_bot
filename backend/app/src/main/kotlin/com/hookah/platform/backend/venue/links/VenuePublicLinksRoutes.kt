@@ -7,7 +7,9 @@ import com.hookah.platform.backend.miniapp.guest.ensureGuestBrowseAvailableReadO
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.response.header
@@ -18,9 +20,34 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.put
 import kotlinx.coroutines.CancellationException
 import java.net.URI
+import java.util.Locale
 
-data class VenuePublicLinkConfig(val origin: String, val botUsername: String, val mainMiniAppConfigured: Boolean) {
-    fun publicUrl(slug: String): String = "$origin/v/$slug"
+data class VenuePublicLinkConfig(
+    val origin: String,
+    val botUsername: String,
+    val mainMiniAppConfigured: Boolean,
+    val canResolveSubdomains: Boolean = false,
+    private val issueSubdomains: Boolean = false,
+) {
+    fun publicUrl(
+        venueId: Long,
+        slug: String,
+    ): String =
+        if (issueSubdomains) {
+            "https://${VenueSlugs.dnsLabel(slug, venueId)}.$VENUE_ZONE"
+        } else {
+            "$origin/v/$slug"
+        }
+
+    fun labelFromHost(authority: String?): String? {
+        if (!canResolveSubdomains || authority == null || authority.any { it.code !in 33..126 }) return null
+        val host = authority.lowercase(Locale.ROOT)
+        val suffix = ".$VENUE_ZONE"
+        if (!host.endsWith(suffix)) return null
+        return host.removeSuffix(suffix).takeIf {
+            VenueSlugs.validSubdomain(it) || VenueSlugs.legacyDnsVenueId(it) != null
+        }
+    }
 
     fun telegramUrl(
         venueId: Long,
@@ -28,7 +55,9 @@ data class VenuePublicLinkConfig(val origin: String, val botUsername: String, va
     ): String = "https://t.me/$botUsername?${if (main) "startapp" else "start"}=${venuePayload(venueId)}"
 
     companion object {
-        private const val STAGING_BRANDED_ORIGIN = "https://hookahtootah.club"
+        private const val VENUE_ZONE = "hookahtootah.club"
+        private const val STAGING_BRANDED_ORIGIN = "https://$VENUE_ZONE"
+        private const val STAGING_MINIAPP_ORIGIN = "https://staging.$VENUE_ZONE"
 
         fun from(
             webAppUrl: String?,
@@ -36,7 +65,11 @@ data class VenuePublicLinkConfig(val origin: String, val botUsername: String, va
             mainMiniAppConfigured: Boolean = false,
             publicOrigin: String? = null,
             appEnv: String = "dev",
+            publicLinkFormat: String? = null,
         ): VenuePublicLinkConfig? {
+            require(publicLinkFormat == null || publicLinkFormat == "path" || publicLinkFormat == "subdomain") {
+                "VENUE_PUBLIC_LINK_FORMAT must be path or subdomain."
+            }
             val brandedOrigin =
                 publicOrigin?.takeIf(String::isNotEmpty)?.let { value ->
                     require(appEnv == "staging" || appEnv == "prod" || appEnv == "production") {
@@ -49,9 +82,21 @@ data class VenuePublicLinkConfig(val origin: String, val botUsername: String, va
                         "VENUE_PUBLIC_LINK_ORIGIN must be an HTTPS origin without a path, query or fragment."
                     }
                 }
-            val miniAppOrigin = originOf(webAppUrl ?: return null, strict = false) ?: return null
+            val miniAppOrigin = webAppUrl?.let { originOf(it, strict = false) }
+            val canResolveSubdomains = appEnv == "staging" && miniAppOrigin == STAGING_MINIAPP_ORIGIN
+            val issueSubdomains = publicLinkFormat == "subdomain"
+            require(!issueSubdomains || canResolveSubdomains) {
+                "Subdomain links require Hookah staging and its existing Mini App origin."
+            }
+            if (miniAppOrigin == null) return null
             val bot = username?.removePrefix("@")?.takeIf { Regex("[A-Za-z0-9_]{5,32}").matches(it) } ?: return null
-            return VenuePublicLinkConfig(brandedOrigin ?: miniAppOrigin, bot, mainMiniAppConfigured)
+            return VenuePublicLinkConfig(
+                brandedOrigin ?: miniAppOrigin,
+                bot,
+                mainMiniAppConfigured,
+                canResolveSubdomains,
+                issueSubdomains,
+            )
         }
 
         private fun originOf(
@@ -93,19 +138,19 @@ fun Route.venuePublicEntryRoutes(
     config: VenuePublicLinkConfig?,
     maintenanceActive: Boolean = false,
 ) {
-    get("/v/{slug}") {
-        call.response.header("Cache-Control", "no-store")
-        call.response.header("X-Content-Type-Options", "nosniff")
-        call.response.header("Referrer-Policy", "no-referrer")
-        call.response.header(
+    suspend fun ApplicationCall.entry(resolveVenueId: suspend () -> Long?) {
+        response.header("Cache-Control", "no-store")
+        response.header("X-Content-Type-Options", "nosniff")
+        response.header("Referrer-Policy", "no-referrer")
+        response.header(
             "Content-Security-Policy",
             "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; " +
                 "frame-ancestors 'none'; form-action 'none'",
         )
         val venue =
             try {
-                val id = links.resolveSlug(call.parameters["slug"].orEmpty()) ?: throw NotFoundException()
                 if (maintenanceActive) throw NotFoundException()
+                val id = resolveVenueId() ?: throw NotFoundException()
                 ensureGuestBrowseAvailableReadOnly(id, venues, subscriptions)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -113,7 +158,7 @@ fun Route.venuePublicEntryRoutes(
                 null
             }
         if (venue == null || config == null) {
-            call.respondText(
+            respondText(
                 """
                 <!doctype html><html lang="ru"><head><meta charset="utf-8">
                 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -129,7 +174,7 @@ fun Route.venuePublicEntryRoutes(
                 venue.formattedAddress?.takeIf(String::isNotBlank)
                     ?: listOfNotNull(venue.city, venue.address).joinToString(", ").ifBlank { "Адрес пока не указан" }
             val target = html(config.telegramUrl(venue.id))
-            call.respondText(
+            respondText(
                 """
                 <!doctype html><html lang="ru"><head><meta charset="utf-8">
                 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -146,6 +191,17 @@ fun Route.venuePublicEntryRoutes(
                 """.trimIndent(),
                 ContentType.Text.Html,
             )
+        }
+    }
+
+    get("/v/{slug}") {
+        call.entry { call.parameters["slug"]?.let { links.resolveSlug(it) } }
+    }
+    if (config?.canResolveSubdomains == true) {
+        get("/") {
+            // The edge preserves Host. Forwarded values and query parameters cannot select a venue.
+            val host = call.request.headers.getAll(HttpHeaders.Host)?.singleOrNull()
+            call.entry { config.labelFromHost(host)?.let { links.resolveSubdomain(it) } }
         }
     }
 }
@@ -167,13 +223,15 @@ fun Route.venuePublicLinkApiRoutes(
         val id = call.parameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
         val settings = links.settings(id, call.requireUserId())
         val available = !maintenanceActive && isPublicLinkGuestAvailable(id, venues, subscriptions)
-        call.respond(settings.copy(guestAvailable = available, url = settings.slug?.let { config?.publicUrl(it) }))
+        val url = settings.slug?.let { config?.publicUrl(settings.venueId, it) }
+        call.respond(settings.copy(guestAvailable = available, url = url))
     }
     put("/venue/{venueId}/public-link") {
         val id = call.parameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
         val settings = links.update(id, call.requireUserId(), call.receive())
         val available = !maintenanceActive && isPublicLinkGuestAvailable(id, venues, subscriptions)
-        call.respond(settings.copy(guestAvailable = available, url = settings.slug?.let { config?.publicUrl(it) }))
+        val url = settings.slug?.let { config?.publicUrl(settings.venueId, it) }
+        call.respond(settings.copy(guestAvailable = available, url = url))
     }
 }
 

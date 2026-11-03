@@ -43,7 +43,7 @@ class VenuePublicLinksTest {
         assertNull(VenuePublicLinkConfig.from("https://example.org", "bad/name"))
         val config =
             assertNotNull(VenuePublicLinkConfig.from("https://stage.example.org/miniapp/?mode=home", "ExampleBot"))
-        assertEquals("https://stage.example.org/v/dym", config.publicUrl("dym"))
+        assertEquals("https://stage.example.org/v/dym", config.publicUrl(1, "dym"))
         assertEquals("https://t.me/ExampleBot?start=venue_1", config.telegramUrl(1))
         assertEquals("https://t.me/ExampleBot?startapp=venue_1", config.telegramUrl(1, true))
     }
@@ -54,7 +54,7 @@ class VenuePublicLinksTest {
         val branded = "https://hookahtootah.club"
         for (env in listOf("staging", "production")) {
             val default = assertNotNull(VenuePublicLinkConfig.from(miniApp, "ExampleBot", appEnv = env))
-            assertEquals("https://miniapp.example.org/v/dym", default.publicUrl("dym"))
+            assertEquals("https://miniapp.example.org/v/dym", default.publicUrl(1, "dym"))
         }
         assertEquals(
             "https://staging.hookahtootah.club/v/dym",
@@ -62,13 +62,13 @@ class VenuePublicLinksTest {
                 "https://staging.hookahtootah.club/miniapp/",
                 "ExampleBot",
                 appEnv = "staging",
-            )?.publicUrl("dym"),
+            )?.publicUrl(1, "dym"),
         )
         val config =
             assertNotNull(
                 VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, "$branded/", "production"),
             )
-        assertEquals("$branded/v/dym", config.publicUrl("dym"))
+        assertEquals("$branded/v/dym", config.publicUrl(1, "dym"))
         assertEquals("https://t.me/ExampleBot?startapp=venue_1", config.telegramUrl(1))
         assertEquals("https://t.me/ExampleBot?start=venue_1", config.telegramUrl(1, false))
         assertNull(VenuePublicLinkConfig.from(null, "ExampleBot", true, branded, "production"))
@@ -88,7 +88,7 @@ class VenuePublicLinksTest {
         val branded = "https://hookahtootah.club"
         val config =
             assertNotNull(VenuePublicLinkConfig.from(miniApp, "ExampleBot", publicOrigin = branded, appEnv = "staging"))
-        assertEquals("$branded/v/dym", config.publicUrl("dym"))
+        assertEquals("$branded/v/dym", config.publicUrl(1, "dym"))
         assertEquals("https://t.me/ExampleBot?start=venue_1", config.telegramUrl(1))
         for (invalid in listOf(
             "https://example.org", "http://hookahtootah.club", "https://www.hookahtootah.club", "$branded.evil.example",
@@ -107,12 +107,68 @@ class VenuePublicLinksTest {
     }
 
     @Test
+    fun `subdomain issuance is explicit and gives legacy slugs a distinct DNS namespace`() {
+        val miniApp = "https://staging.hookahtootah.club/miniapp/"
+        val root = "https://hookahtootah.club"
+        val long = "a".repeat(64)
+        val active =
+            assertNotNull(VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, root, "staging", "subdomain"))
+        assertEquals("https://dym.hookahtootah.club", active.publicUrl(1, "dym"))
+        assertEquals("https://venue--z.hookahtootah.club", active.publicUrl(35, long))
+        assertEquals("https://venue--10.hookahtootah.club", active.publicUrl(36, "www"))
+        assertEquals("https://t.me/ExampleBot?startapp=venue_1", active.telegramUrl(1))
+        for (format in listOf(null, "path")) {
+            val config = assertNotNull(VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, root, "staging", format))
+            assertEquals("$root/v/dym", config.publicUrl(1, "dym"))
+            assertEquals("$root/v/$long", config.publicUrl(35, long))
+            assertEquals("dym", config.labelFromHost("DYM.hookahtootah.club"))
+        }
+        for (format in listOf("", "SUBDOMAIN", "https://another.example")) {
+            assertFailsWith<IllegalArgumentException> {
+                VenuePublicLinkConfig.from(miniApp, "ExampleBot", appEnv = "staging", publicLinkFormat = format)
+            }
+        }
+        for ((url, env) in listOf(miniApp to "production", miniApp to "dev", "https://example.org" to "staging")) {
+            assertFailsWith<IllegalArgumentException> {
+                VenuePublicLinkConfig.from(url, "ExampleBot", appEnv = env, publicLinkFormat = "subdomain")
+            }
+        }
+    }
+
+    @Test
+    fun `new venues automatically get distinct DNS labels even for service names and long collisions`() =
+        runBlocking {
+            h2().use { ds ->
+                val platform = PlatformVenueRepository(ds)
+                val links = VenuePublicLinksRepository(ds, 999)
+                val names =
+                    listOf("WWW", "DEV", "staging", "markettap-stg", "api", "admin", "Д".repeat(64), "Д".repeat(65))
+                val venues = names.map { platform.createVenue(it, "Москва", "Арбат, 1").id }
+                val slugs = venues.map { assertNotNull(links.settings(it, 999).slug) }
+                assertEquals(venues.size, slugs.toSet().size)
+                for ((id, slug) in venues.zip(slugs)) {
+                    assertTrue(VenueSlugs.validSubdomain(slug), slug)
+                    assertEquals(id, links.resolveSlug(slug))
+                }
+                for (invalid in listOf("www", "dev", "staging", "markettap-stg", "api", "admin", "a".repeat(64))) {
+                    assertFailsWith<InvalidInputException> {
+                        links.update(venues.first(), 999, VenueLinkUpdate(slugs.first(), true, invalid))
+                    }
+                    assertNull(links.resolveSlug(invalid))
+                }
+            }
+        }
+
+    @Test
     fun `migration backfills every lifecycle without changing publication or location and rerun is stable`() {
         h2(migrate = false).use { ds ->
             flyway(ds, "129").migrate()
             val first = insertVenue(ds, "Дым", "Москва", "Арбат, 1", "PUBLISHED")
             val second = insertVenue(ds, "Дым", "Казань", "Баумана, 2", "DRAFT")
             val third = insertVenue(ds, "!!!", null, null, "DELETED")
+            val reserved = insertVenue(ds, "www", null, null, "PUBLISHED")
+            val long = "a".repeat(64)
+            val legacyLong = insertVenue(ds, long, null, null, "PUBLISHED")
             val migration = flyway(ds).migrate()
             assertEquals(2, migration.migrationsExecuted)
             runBlocking {
@@ -120,12 +176,21 @@ class VenuePublicLinksTest {
                 assertEquals(first, links.resolveSlug("dym"))
                 assertEquals(second, links.resolveSlug("dym-kazan-baumana-2"))
                 assertEquals(third, links.resolveSlug("venue"))
+                assertEquals(reserved, links.resolveSlug("www"))
+                assertEquals(legacyLong, links.resolveSlug(long))
+                assertNull(links.resolveSubdomain("www"))
+                assertEquals(legacyLong, links.resolveSubdomain(VenueSlugs.dnsLabel(long, legacyLong)))
+                assertEquals(reserved, links.resolveSubdomain(VenueSlugs.dnsLabel("www", reserved)))
+                assertNull(links.resolveSubdomain("venue--${first.toString(36)}"))
+                val updated = links.update(legacyLong, 999, VenueLinkUpdate(long, true, long, false))
+                assertEquals(long, updated.slug)
+                assertFalse(updated.catalogListed)
             }
             ds.connection.use { c ->
                 c.createStatement().use { s ->
                     s.executeQuery("SELECT COUNT(*) FROM venues WHERE catalog_listed = TRUE").use { r ->
                         assertTrue(r.next())
-                        assertEquals(3, r.getInt(1))
+                        assertEquals(4, r.getInt(1))
                     }
                     s.executeQuery("SELECT status, address FROM venues WHERE id = $second").use { r ->
                         assertTrue(r.next())

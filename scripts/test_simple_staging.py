@@ -199,6 +199,42 @@ class PublicLinkOriginTests(unittest.TestCase):
             self.assertEqual(r.state(), before)
             self.assertEqual(len(r.calls), calls)
 
+    def test_subdomain_format_uses_same_apply_config_gate_and_keeps_path_origin(self):
+        key = 'VENUE_PUBLIC_LINK_FORMAT'
+        for invalid in ('', 'SUBDOMAIN', 'subdomain ', 'https://another.example'):
+            with self.subTest(invalid=invalid):
+                c = config()
+                c['runtime'][key] = invalid
+                with self.assertRaisesRegex(s.Refused, 'VENUE_PUBLIC_LINK_FORMAT_INVALID'):
+                    s.validate_config(c)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            r = RuntimeStaging(Path(tmp).resolve())
+            candidate = record(image())
+            r.config['runtime'][self.key] = self.origin
+            r.apply('install', candidate)
+            legacy_env = copy.deepcopy(r.app_env)
+            legacy_state = r.state()
+            self.assertNotIn(key, legacy_env)
+
+            r.config['runtime'][key] = 'subdomain'
+            s.validate_config(r.config)
+            with self.assertRaisesRegex(s.Refused, 'RUNTIME_CONFIG_CHANGED_USE_APPLY_CONFIG'):
+                r.apply('deploy', candidate)
+            self.assertEqual(r.state(), legacy_state)
+            self.assertEqual(r.apply('deploy', candidate, apply_config=True)['status'], 'SUCCESS')
+            self.assertEqual(r.app_env, dict(legacy_env, VENUE_PUBLIC_LINK_FORMAT='subdomain'))
+
+            del r.config['runtime'][key]
+            r.app_env[key] = 'path'
+            with self.assertRaisesRegex(s.Refused, 'BACKEND_RUNTIME_CONFIG_MISMATCH'):
+                r.apply('deploy', candidate, apply_config=True)
+            r.app_env[key] = 'subdomain'
+            self.assertEqual(r.apply('deploy', candidate, apply_config=True)['status'], 'SUCCESS')
+            self.assertEqual(r.app_env, legacy_env)
+            for name in ('runtime_hash', 'compose_hash', 'config_binding'):
+                self.assertEqual(r.state()[name], legacy_state[name])
+
 
 class R2ConfigTests(unittest.TestCase):
     def test_old_runtime_is_unchanged_and_r2_defaults_off(self):

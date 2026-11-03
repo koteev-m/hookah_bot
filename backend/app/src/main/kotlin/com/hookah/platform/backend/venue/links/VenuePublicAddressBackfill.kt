@@ -17,5 +17,5 @@ fun backfillVenuePublicAddresses(connection: Connection) {
                 }
             }
         }
-    venues.forEach { VenueSlugs.assign(connection, it.id, it.name, it.city, it.address) }
+    venues.forEach { VenueSlugs.assign(connection, it.id, it.name, it.city, it.address, legacyBackfill = true) }
 }
