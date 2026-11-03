@@ -32,20 +32,42 @@ data class VenuePublicLinkConfig(val origin: String, val botUsername: String, va
             webAppUrl: String?,
             username: String?,
             mainMiniAppConfigured: Boolean = false,
+            publicOrigin: String? = null,
+            appEnv: String = "dev",
         ): VenuePublicLinkConfig? {
-            val uri = runCatching { URI(webAppUrl ?: return null) }.getOrNull() ?: return null
-            val bot = username?.removePrefix("@") ?: return null
+            val brandedOrigin =
+                publicOrigin?.takeIf(String::isNotEmpty)?.let { value ->
+                    require(appEnv == "prod" || appEnv == "production") {
+                        "VENUE_PUBLIC_LINK_ORIGIN is only supported in production."
+                    }
+                    requireNotNull(originOf(value, strict = true)) {
+                        "VENUE_PUBLIC_LINK_ORIGIN must be an HTTPS origin without a path, query or fragment."
+                    }
+                }
+            val miniAppOrigin = originOf(webAppUrl ?: return null, strict = false) ?: return null
+            val bot = username?.removePrefix("@")?.takeIf { Regex("[A-Za-z0-9_]{5,32}").matches(it) } ?: return null
+            return VenuePublicLinkConfig(brandedOrigin ?: miniAppOrigin, bot, mainMiniAppConfigured)
+        }
+
+        private fun originOf(
+            value: String,
+            strict: Boolean,
+        ): String? {
+            val uri = runCatching { URI(value) }.getOrNull() ?: return null
             if (uri.scheme != "https" || uri.host.isNullOrBlank() || uri.rawUserInfo != null ||
-                uri.port !in -1..65535 || uri.port == 0 ||
-                !Regex("[A-Za-z0-9_]{5,32}").matches(bot)
+                uri.port !in -1..65535 || uri.port == 0
             ) {
                 return null
             }
-            return VenuePublicLinkConfig(
-                URI("https", null, uri.host, uri.port, null, null, null).toASCIIString(),
-                bot,
-                mainMiniAppConfigured,
-            )
+            if (strict &&
+                (
+                    uri.rawPath !in listOf("", "/") || uri.rawQuery != null || uri.rawFragment != null ||
+                        uri.rawAuthority.endsWith(':')
+                )
+            ) {
+                return null
+            }
+            return URI("https", null, uri.host, uri.port, null, null, null).toASCIIString()
         }
     }
 }
@@ -128,6 +150,7 @@ fun Route.venuePublicLinkApiRoutes(
     venues: GuestVenueRepository,
     subscriptions: SubscriptionRepository,
     config: VenuePublicLinkConfig?,
+    maintenanceActive: Boolean = false,
 ) {
     get("/guest/venue-entry/{payload}") {
         call.requireUserId()
@@ -138,16 +161,30 @@ fun Route.venuePublicLinkApiRoutes(
     get("/venue/{venueId}/public-link") {
         val id = call.parameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
         val settings = links.settings(id, call.requireUserId())
-        val available = runCatching { ensureGuestBrowseAvailableReadOnly(id, venues, subscriptions) }.isSuccess
+        val available = !maintenanceActive && isPublicLinkGuestAvailable(id, venues, subscriptions)
         call.respond(settings.copy(guestAvailable = available, url = settings.slug?.let { config?.publicUrl(it) }))
     }
     put("/venue/{venueId}/public-link") {
         val id = call.parameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
         val settings = links.update(id, call.requireUserId(), call.receive())
-        val available = runCatching { ensureGuestBrowseAvailableReadOnly(id, venues, subscriptions) }.isSuccess
+        val available = !maintenanceActive && isPublicLinkGuestAvailable(id, venues, subscriptions)
         call.respond(settings.copy(guestAvailable = available, url = settings.slug?.let { config?.publicUrl(it) }))
     }
 }
+
+private suspend fun isPublicLinkGuestAvailable(
+    id: Long,
+    venues: GuestVenueRepository,
+    subscriptions: SubscriptionRepository,
+): Boolean =
+    try {
+        ensureGuestBrowseAvailableReadOnly(id, venues, subscriptions)
+        true
+    } catch (_: NotFoundException) {
+        false
+    } catch (_: DatabaseUnavailableException) {
+        false
+    }
 
 private fun html(value: String): String =
     value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

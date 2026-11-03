@@ -266,6 +266,20 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
 | Analytics | Bot stats where implemented. | No dashboard; future profile summaries only. | Owner/Manager role dashboards where reliable. Staff operational counters only. | Platform analytics future/partial. | Delivery telemetry only. | Analytics events are not operational truth. |
 | Platform lifecycle | Platform bot where implemented. | No. | No direct platform lifecycle. | Platform Owner cockpit. | No. | Requires confirmation/reason/audit where implemented. |
 
+## Venue draft publication (local implementation)
+
+- Authenticated `GET /api/venue/{venueId}/publication` reads status/readiness for exact venue
+  Owner, Manager and legacy Admin. `POST` requires explicit confirmation and an exact `OWNER`
+  membership for the selected venue. Staff, unrelated Owners and a Platform-only identity
+  have no Venue publication authority. Platform Mode retains its own lifecycle endpoint.
+- Owner Bot confirmation and Mini App POST share one transaction. It locks the venue, rechecks
+  membership and saved readiness, and allows only `DRAFT → PUBLISHED`. Repeated requests
+  do not write a second transition or audit. `VENUE_STATUS_CHANGE` records actor, venue, source
+  and transition atomically; audit failure rolls back the transition. No catalog, slug, invite
+  or subscription data is modified. Guest entry still checks current lifecycle and subscription.
+- Unsaved form values are never sent to the publication endpoint. Guest Preview remains a
+  separate read-only endpoint and has no publication authority.
+
 ## Personal venue link boundary (local candidate)
 
 - Authenticated `GET /api/venue/{venueId}/public-link`: exact own Owner/Manager/legacy Admin,

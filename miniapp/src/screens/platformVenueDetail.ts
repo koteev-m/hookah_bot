@@ -598,7 +598,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   const { root, backendUrl, isDebug, venueId, focusHeadingOnLoad = false } = options
   if (!root) return () => undefined
   const refs = buildDetailDom(root)
-  const disposePublicLink = mountVenuePublicLink(root, backendUrl, isDebug, venueId)
+  const { dispose: disposePublicLink } = mountVenuePublicLink(root, backendUrl, isDebug, venueId)
   const deps = buildApiDeps(isDebug)
 
   let disposed = false

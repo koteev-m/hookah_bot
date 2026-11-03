@@ -5,7 +5,9 @@ A single Telegram bot + Telegram Mini App (WebApp) that serves many hookah loung
 Guests can browse a catalog, book a visit, and in-venue scan a table QR to open the Mini App, view menu, place orders and call staff.
 Venue OWNER/MANAGER/STAFF users manage their own venue according to runtime `venue_members` permissions: tables/QRs, menu with photos/options, stop-list, bookings, staff roles, and order processing.
 Platform Owner manages onboarding of venues, venue OWNER invitations/revocation, lifecycle (publish/hide/suspend/archive/delete), subscriptions (trial/prices), support and analytics.
-Owner Bot also has a guarded readiness and self-publish flow; equivalent Venue Mini App UX is tracked as `VENUE-OWNER-PUBLISH-UX-001` in the master roadmap.
+The Owner Bot and the local Venue Mini App publication flow share a server check and an
+Owner-only `DRAFT → PUBLISHED` operation. Venue Mini App exposes the flow under Settings → Venue
+Card; staging and Telegram acceptance for this change remain pending (`VENUE-OWNER-PUBLISH-UX-001`).
 
 Owner-approved strategic direction: stabilize and launch the current Telegram Bot + Mini App product first, then gradually develop an independent Web version and separate iOS/Android apps. Telegram remains the starting and an additional channel.
 This does not expand the current MVP; implementation, timing, technologies, budget and sequencing require separate decisions. The deferred work is tracked as `PRODUCT-INDEPENDENT-CLIENTS-001` in [the master roadmap](UPDATED_PRODUCT_AI_ROADMAP.md).
@@ -277,6 +279,9 @@ SHOULD:
 - `catalog_listed` defaults true independently of lifecycle. `Не показывать в каталоге` removes a
   venue from Bot/Mini App catalog/search, while direct public browsing still requires published
   lifecycle and guest-allowed subscription. This setting is not authorization or a private venue.
+- Personal links use the Mini App's HTTPS origin by default. A separately verified and explicitly
+  configured production link origin changes issued addresses only; the Mini App URL, alias registry
+  and Telegram targets are unchanged. See the [activation checklist](VENUE_PUBLIC_LINK_ORIGIN_CHECKLIST.md).
 - The compact public transition exposes name/address only. It opens `startapp=venue_<base36-id>`
   after platform Main Mini App configuration is confirmed, otherwise `/start venue_<base36-id>`
   opens a WebApp button. These pointers never establish table/session/tab or grant working roles.

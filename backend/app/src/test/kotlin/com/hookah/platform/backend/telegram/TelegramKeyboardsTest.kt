@@ -1524,7 +1524,11 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `owner publish readiness actions include back to selected venue`() {
-        val buttons = TelegramKeyboards.inlineVenueOwnerPublishReadinessActions(10L).inlineKeyboard.flatten()
+        val buttons =
+            TelegramKeyboards.inlineVenueOwnerPublishReadinessActions(
+                10L,
+                canPublish = true,
+            ).inlineKeyboard.flatten()
 
         assertEquals(true, buttons.any { it.text == "↩️ Назад к заведению" && it.callbackData == "owner_venue_hub:10" })
     }

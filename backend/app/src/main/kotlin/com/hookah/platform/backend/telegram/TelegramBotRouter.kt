@@ -4,6 +4,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.client.j2se.MatrixToImageWriter
 import com.google.zxing.qrcode.QRCodeWriter
 import com.hookah.platform.backend.ai.AiAssistantService
+import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
@@ -61,6 +62,10 @@ import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
 import com.hookah.platform.backend.miniapp.venue.VenuePermissions
+import com.hookah.platform.backend.miniapp.venue.VenuePublicationOutcome
+import com.hookah.platform.backend.miniapp.venue.VenuePublicationRequirement
+import com.hookah.platform.backend.miniapp.venue.VenuePublicationService
+import com.hookah.platform.backend.miniapp.venue.VenuePublicationSource
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.appendStaffCallStatusAuditBestEffort
@@ -309,6 +314,7 @@ class TelegramBotRouter internal constructor(
     private val tableSessionRepository: TableSessionRepository,
     private val guestTabsRepository: GuestTabsRepository,
     private val platformVenueRepository: PlatformVenueRepository = PlatformVenueRepository(null),
+    private val venuePublication: VenuePublicationService = VenuePublicationService(null),
     private val platformSubscriptionSettingsRepository: PlatformSubscriptionSettingsRepository =
         PlatformSubscriptionSettingsRepository(null),
     private val platformVenueMemberRepository: PlatformVenueMemberRepository = PlatformVenueMemberRepository(null),
@@ -782,18 +788,6 @@ class TelegramBotRouter internal constructor(
         val cardDescription: String?,
         val status: String?,
     )
-
-    private data class OwnerVenuePublishReadiness(
-        val status: VenueStatus?,
-        val nameReady: Boolean,
-        val addressReady: Boolean,
-        val hoursReady: Boolean,
-        val descriptionReady: Boolean,
-        val menuReady: Boolean,
-    ) {
-        val canPublish: Boolean
-            get() = nameReady && addressReady && hoursReady && descriptionReady && menuReady
-    }
 
     private data class OwnerVenueStopListEntry(
         val sectionId: Long,
@@ -15549,21 +15543,33 @@ class TelegramBotRouter internal constructor(
         userId: Long,
         venueId: Long,
     ) {
-        val hasAccess =
-            runCatching { venueAccessRepository.hasVenueAdminOrOwner(userId, venueId) }
-                .onFailure { logBestEffort("check venue owner access on publish readiness", it) }
-                .getOrDefault(false)
-        if (!hasAccess) {
-            enqueueMessage(chatId, "Нет доступа к заведению.")
-            return
-        }
+        val state =
+            try {
+                venuePublication.inspect(venueId, userId, checkReadiness = true)
+            } catch (e: ApiException) {
+                showOwnerPublicationError(chatId, e)
+                return
+            }
         botVenuePreviewContexts.remove(chatId)
-        val venueCard = loadOwnerVenueCardByVenueId(chatId, venueId) ?: return
-        val readiness = loadOwnerVenuePublishReadiness(chatId, venueCard) ?: return
+        val missing = state.missing.orEmpty()
         enqueueMessage(
             chatId,
-            buildOwnerVenuePublishReadinessText(venueCard, readiness),
-            TelegramKeyboards.inlineVenueOwnerPublishReadinessActions(venueId),
+            buildString {
+                append("✅ Готовность к публикации")
+                append("\n\nСтатус: ${humanizeOwnerVenuePublishStatus(state.status)}")
+                VenuePublicationRequirement.entries.forEach {
+                    append("\n").append(if (it in missing) "❌ " else "✅ ").append(it.label)
+                }
+                if (missing.isNotEmpty()) {
+                    append("\n\nНе заполнено:")
+                    missing.forEach { append("\n• ").append(it.label) }
+                }
+                append("\n\nКальянная: ${state.name}")
+            },
+            TelegramKeyboards.inlineVenueOwnerPublishReadinessActions(
+                venueId,
+                state.ownerCanPublish && missing.isEmpty(),
+            ),
         )
     }
 
@@ -15609,124 +15615,52 @@ class TelegramBotRouter internal constructor(
             enqueueMessage(chatId, "Не удалось опубликовать кальянную. Попробуйте ещё раз.")
             return
         }
-        val hasAccess =
-            runCatching { venueAccessRepository.hasVenueAdminOrOwner(userId, venueId) }
-                .onFailure { logBestEffort("check venue owner access on publish", it) }
-                .getOrDefault(false)
-        if (!hasAccess) {
-            enqueueMessage(chatId, "Нет доступа к заведению.")
-            return
-        }
-        val venueCard = loadOwnerVenueCardByVenueId(chatId, venueId) ?: return
-        val readiness = loadOwnerVenuePublishReadiness(chatId, venueCard) ?: return
-        if (readiness.status == VenueStatus.PUBLISHED) {
-            enqueueMessage(chatId, "Кальянная уже опубликована.")
-            showVenueOwnerPublishReadinessByVenueId(chatId, userId, venueId)
-            return
-        }
-        if (!readiness.canPublish) {
-            val missing = ownerReadinessMissingLabels(readiness)
-            enqueueMessage(
-                chatId,
-                buildString {
-                    append("Пока нельзя опубликовать кальянную.")
-                    if (missing.isNotEmpty()) {
-                        append("\nНе заполнено:")
-                        missing.forEach { append("\n• ").append(it) }
+        val result =
+            try {
+                venuePublication.publish(venueId, userId, VenuePublicationSource.OWNER_BOT)
+            } catch (e: ApiException) {
+                showOwnerPublicationError(chatId, e)
+                return
+            }
+        when (result.outcome) {
+            VenuePublicationOutcome.PUBLISHED,
+            VenuePublicationOutcome.ALREADY_PUBLISHED,
+            -> {
+                val message =
+                    if (result.outcome == VenuePublicationOutcome.PUBLISHED) {
+                        "✅ Кальянная опубликована."
+                    } else {
+                        "Кальянная уже опубликована."
                     }
-                },
-                TelegramKeyboards.inlineVenueOwnerPublishReadinessActions(venueId),
-            )
-            return
-        }
-        when (val result = platformVenueRepository.updateStatus(venueId, VenueStatusAction.PUBLISH)) {
-            is VenueStatusChangeResult.Success -> {
-                enqueueMessage(chatId, "✅ Кальянная опубликована.")
+                enqueueMessage(chatId, message)
                 showVenueOwnerPublishReadinessByVenueId(chatId, userId, venueId)
             }
-            VenueStatusChangeResult.NotFound -> enqueueMessage(chatId, "Заведение не найдено.")
-            VenueStatusChangeResult.MissingOwner ->
-                enqueueMessage(chatId, "Не удалось опубликовать: назначьте владельца или администратора.")
-            VenueStatusChangeResult.InvalidTransition ->
+            VenuePublicationOutcome.NOT_READY ->
+                enqueueMessage(
+                    chatId,
+                    buildString {
+                        append("Пока нельзя опубликовать кальянную.\nНе заполнено:")
+                        result.state.missing.orEmpty().forEach { append("\n• ").append(it.label) }
+                    },
+                    TelegramKeyboards.inlineVenueOwnerPublishReadinessActions(venueId, canPublish = false),
+                )
+            VenuePublicationOutcome.INVALID_STATUS ->
                 enqueueMessage(chatId, "Не удалось опубликовать из текущего статуса.")
-            VenueStatusChangeResult.AlreadyDeleted ->
-                enqueueMessage(chatId, "Заведение удалено и не может быть опубликовано.")
-            VenueStatusChangeResult.DatabaseError ->
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
         }
     }
 
-    private suspend fun loadOwnerVenuePublishReadiness(
+    private suspend fun showOwnerPublicationError(
         chatId: Long,
-        card: OwnerVenueCard,
-    ): OwnerVenuePublishReadiness? {
-        val hoursReady =
-            try {
-                venueBookingHoursRepository.hasConfiguredHours(card.venueId)
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return null
+        error: ApiException,
+    ) {
+        val message =
+            when (error) {
+                is ForbiddenException -> "Нет доступа к публикации заведения."
+                is NotFoundException -> "Заведение не найдено."
+                else -> "Не удалось проверить публикацию. Попробуйте позже."
             }
-        val menuReady =
-            try {
-                guestMenuRepository
-                    .getMenu(card.venueId)
-                    .categories
-                    .any { category -> category.items.isNotEmpty() }
-            } catch (e: DatabaseUnavailableException) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return null
-            }
-        return OwnerVenuePublishReadiness(
-            status = card.status?.let { VenueStatus.fromDb(it) },
-            nameReady = card.name.isNotBlank(),
-            addressReady = !card.address.isNullOrBlank(),
-            hoursReady = hoursReady,
-            descriptionReady = !card.cardDescription.isNullOrBlank(),
-            menuReady = menuReady,
-        )
+        enqueueMessage(chatId, message)
     }
-
-    private fun buildOwnerVenuePublishReadinessText(
-        card: OwnerVenueCard,
-        readiness: OwnerVenuePublishReadiness,
-    ): String =
-        buildString {
-            append("✅ Готовность к публикации")
-            append("\n\nСтатус: ${humanizeOwnerVenuePublishStatus(readiness.status)}")
-            append("\n")
-            append(ownerReadinessLine("Название", readiness.nameReady))
-            append("\n")
-            append(ownerReadinessLine("Адрес", readiness.addressReady))
-            append("\n")
-            append(ownerReadinessLine("Часы работы", readiness.hoursReady))
-            append("\n")
-            append(ownerReadinessLine("Краткое описание карточки", readiness.descriptionReady))
-            append("\n")
-            append(ownerReadinessLine("Меню", readiness.menuReady))
-            if (!readiness.canPublish) {
-                val missing = ownerReadinessMissingLabels(readiness)
-                if (missing.isNotEmpty()) {
-                    append("\n\nНе заполнено:")
-                    missing.forEach { append("\n• ").append(it) }
-                }
-            }
-            append("\n\nКальянная: ${card.name}")
-        }
-
-    private fun ownerReadinessLine(
-        label: String,
-        ready: Boolean,
-    ): String = if (ready) "✅ $label" else "❌ $label"
-
-    private fun ownerReadinessMissingLabels(readiness: OwnerVenuePublishReadiness): List<String> =
-        buildList {
-            if (!readiness.nameReady) add("Название")
-            if (!readiness.addressReady) add("Адрес")
-            if (!readiness.hoursReady) add("Часы работы")
-            if (!readiness.descriptionReady) add("Краткое описание карточки")
-            if (!readiness.menuReady) add("Меню")
-        }
 
     private fun humanizeOwnerVenuePublishStatus(status: VenueStatus?): String =
         when (status) {

@@ -1047,6 +1047,16 @@ export function mountVenueApp(options: VenueAppOptions) {
           setDraftState: (value) => { state = value },
           onDraftChange: updateDraftNotice,
           onBack: () => navigate('#/dashboard'),
+          onPublicationStatusChanged: (venueStatus) => {
+            if (disposed || selectedVenueId !== venueId) return
+            const index = accessList.findIndex(item => item.venueId === venueId)
+            if (index < 0) return
+            const updated = { ...accessList[index], venueStatus }
+            accessList[index] = updated
+            const option = refs.venueSelect.selectedOptions[0]
+            if (option?.value === String(venueId)) option.text = venueSelectorLabel(updated)
+            updateAccessState()
+          },
           onOpenPreview: () => navigate(`#/guest-preview?from=settings${route.settingsSection ? `&section=${route.settingsSection}` : ''}`),
           onStaffModuleSettingsSaved: (settings) => {
             if (disposed) return

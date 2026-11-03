@@ -41,7 +41,7 @@ Canonical dependencies:
 | Staff schedule | Optional venue-local planning of one shift per profile/start-date. | `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; `CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`; `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`. | Keep schedule, restore/bulk, CAS, timezone, module guards, Guest source parity and RBAC/privacy in regression. |
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Feedback | Internal post-visit feedback from completed Guest History. | DONE / MVP / staging-smoke-passed: Owner/Manager read own-venue aggregate/list and can manually open exact `VENUE_CHAT` follow-up for ratings `1..3`; Staff denied. | Platform feedback analytics dashboard and automated prompts remain future. |
-| Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. One `Предпросмотр для гостя` entry uses one backend-selected `PUBLISHED_PUBLIC` / own-venue `PRIVATE_DRAFT` endpoint and is **DONE / MVP / STAGING-SMOKE-PASSED**. Unsaved public-card, weekly-schedule and date-exception changes block preview without auto-save. | Direct information-media management is deployed with bounded PDF staging acceptance below. Broader settings, versioned snapshots and publish workflow remain future; archived/deleted/missing venues continue to fail closed. |
+| Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. One `Предпросмотр для гостя` entry uses one backend-selected `PUBLISHED_PUBLIC` / own-venue `PRIVATE_DRAFT` endpoint and is **DONE / MVP / STAGING-SMOKE-PASSED**. Unsaved public-card, weekly-schedule and date-exception changes block preview without auto-save. | Direct information-media management is deployed with bounded PDF staging acceptance below. Draft publication is implemented locally under the venue card; versioned snapshots remain future. Archived/deleted/missing venues continue to fail closed for Guest Preview. |
 | Stats | Role-specific operational summaries. | Venue Mini App read-only stats passed staging smoke for Owner/Manager. | Custom ranges, arbitrary stats, AI summaries and advanced analytics remain future. |
 
 ## Dashboard
@@ -630,9 +630,25 @@ Current vs target:
 
 ## Settings
 
+### Venue publication (local implementation)
+
+`Настройки → Карточка заведения` starts with `Публикация заведения`. An Owner or Manager can
+see the current lifecycle and ask the server to check saved draft data. The checklist requires
+a name, address, short card description, all seven weekly hours entries (closed days count) and
+at least one available item in an active menu category. The panel explains each missing item.
+
+Only the selected venue's Owner can confirm a ready draft. The Owner Bot and Venue Mini App
+recheck saved data and exact membership before the transition. They do not automatically save
+card edits or enable the catalog listing. The Mini App asks the user to save or discard edits
+and run the check again, and refreshes the lifecycle and link availability in place on success.
+Guest access is separate from lifecycle and still depends on the existing subscription and
+public access rules. The link can still be copied while access is closed. Manager has no
+publication action; Staff cannot use the panel. Other lifecycle states show a safe status
+without a recovery action. `Предпросмотр для гостя` stays read-only.
+
 ### Personal link and catalog visibility (local candidate)
 
-The existing selected-venue card settings contain `Ссылка заведения`: saved venue name/address,
+Immediately below the publication panel, `Ссылка заведения` shows saved venue name/address,
 read-only `/v/<slug>`, `Скопировать ссылку`, visible success and manual selection fallback.
 The Platform venue detail exposes the same control. Draft/unavailable venues retain their issued
 address, with a notice that guest entry requires the current publication conditions. Generation
@@ -807,7 +823,7 @@ Current vs target:
 - Staff-call ACK/DONE and guest-visible `CANCELLED` are smoke-closed; manual cancel UI, row-level actor/timestamps and quick replies remain future.
 - Booking queue/lifecycle is smoke-closed for MVP; automatic expiry/no-show policy, preorder and broad reminder rollout remain future.
 - Full bill/display/order snapshots are smoke-closed for current paths; tab reopen, force-close reason/audit and all modifier variants need verification.
-- Settings are `PARTIAL`: closed slices are backend-backed, including Owner-only public review URL and the unified read-only Guest Preview with a no-auto-save dirty-form guard, while versioned snapshots and publish workflow remain future/partial. Direct information-media authoring is deployed under the selected staging R2 contract above.
+- Settings are `PARTIAL`: closed slices are backend-backed, including Owner-only public review URL and the unified read-only Guest Preview with a no-auto-save dirty-form guard, while the local draft publication flow awaits live acceptance and versioned snapshots remain future. Direct information-media authoring is deployed under the selected staging R2 contract above.
 - Venue/public-card information-media management is `DIRECT EDITOR + BOT COMPATIBILITY`;
   PDF Inline UX has bounded owner-confirmed staging acceptance; broader media operations and
   production remain open. Structured menu-item media stays

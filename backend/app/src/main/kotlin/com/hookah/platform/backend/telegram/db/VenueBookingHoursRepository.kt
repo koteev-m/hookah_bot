@@ -216,30 +216,6 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
         }
     }
 
-    suspend fun hasConfiguredHours(venueId: Long): Boolean {
-        val ds = dataSource ?: throw DatabaseUnavailableException()
-        return withContext(Dispatchers.IO) {
-            try {
-                ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        SELECT COUNT(DISTINCT weekday) AS cnt
-                        FROM venue_booking_hours
-                        WHERE venue_id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.executeQuery().use { rs ->
-                            if (rs.next()) rs.getInt("cnt") == 7 else false
-                        }
-                    }
-                }
-            } catch (_: SQLException) {
-                throw DatabaseUnavailableException()
-            }
-        }
-    }
-
     suspend fun listWeeklyHours(venueId: Long): List<VenueBookingHours> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {

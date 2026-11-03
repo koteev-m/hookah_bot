@@ -3,12 +3,14 @@ package com.hookah.platform.backend.telegram
 import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
-import com.hookah.platform.backend.miniapp.guest.db.MenuCategoryModel
-import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
-import com.hookah.platform.backend.miniapp.guest.db.MenuModel
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.VenuePublicationOutcome
+import com.hookah.platform.backend.miniapp.venue.VenuePublicationResult
+import com.hookah.platform.backend.miniapp.venue.VenuePublicationService
+import com.hookah.platform.backend.miniapp.venue.VenuePublicationSource
+import com.hookah.platform.backend.miniapp.venue.VenuePublicationState
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepository
 import com.hookah.platform.backend.platform.PlatformEffectivePrice
@@ -20,8 +22,6 @@ import com.hookah.platform.backend.platform.PlatformVenueDetail
 import com.hookah.platform.backend.platform.PlatformVenueMemberRepository
 import com.hookah.platform.backend.platform.PlatformVenueRepository
 import com.hookah.platform.backend.platform.VenueOwnerAccountRepository
-import com.hookah.platform.backend.platform.VenueStatusAction
-import com.hookah.platform.backend.platform.VenueStatusChangeResult
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
@@ -1257,84 +1257,17 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
             val tableSessionRepository: TableSessionRepository = mockk(relaxed = true)
             val guestTabsRepository: GuestTabsRepository = mockk(relaxed = true)
             val venueConnectionRequestRepository: VenueConnectionRequestRepository = mockk(relaxed = true)
-            val platformVenueRepository: PlatformVenueRepository = mockk()
+            val publication: VenuePublicationService = mockk()
+            val draft = VenuePublicationState("Owner Lounge", VenueStatus.DRAFT, true, emptyList())
+            val published = draft.copy(status = VenueStatus.PUBLISHED, ownerCanPublish = false)
 
             coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returns true
             coEvery { dialogStateRepository.get(any()) } returns DialogState(DialogStateType.NONE)
             coEvery { dialogStateRepository.clear(any()) } returns Unit
             coEvery { dialogStateRepository.set(any(), any()) } returns Unit
-            coEvery { venueAccessRepository.hasVenueAdminOrOwner(8001L, 9101L) } returns true
-
-            val draftDetail =
-                PlatformVenueDetail(
-                    id = 9101L,
-                    name = "Owner Lounge",
-                    city = "Москва",
-                    address = "Арбат, 10",
-                    status = VenueStatus.DRAFT,
-                    createdAt = Instant.parse("2026-04-05T10:00:00Z"),
-                    deletedAt = null,
-                    cardDescription = "Уютная атмосфера и авторские миксы.",
-                )
-            val publishedDetail = draftDetail.copy(status = VenueStatus.PUBLISHED)
-            coEvery { platformVenueRepository.getVenueDetail(9101L) } returnsMany
-                listOf(
-                    draftDetail,
-                    draftDetail,
-                    publishedDetail,
-                    publishedDetail,
-                )
-
-            coEvery { venueConnectionRequestRepository.findApprovedByLinkedVenue(9101L) } returns
-                VenueConnectionRequestRecord(
-                    id = 8101L,
-                    telegramUserId = 8001L,
-                    venueName = "Owner Lounge",
-                    city = "Москва",
-                    contact = "@owner_lounge",
-                    comment = "Уютная атмосфера и авторские миксы.",
-                    status = VenueConnectionRequestRepository.STATUS_APPROVED,
-                    createdAt = Instant.parse("2026-04-05T09:50:00Z"),
-                    linkedVenueId = 9101L,
-                    trialConfigured = true,
-                    trialEndsOn = null,
-                    currentPriceRub = 10000L,
-                    futurePriceRub = null,
-                    futurePriceEffectiveOn = null,
-                    commercialNote = null,
-                )
-            coEvery { venueBookingHoursRepository.hasConfiguredHours(9101L) } returns true
-            coEvery { guestMenuRepository.getMenu(9101L) } returns
-                MenuModel(
-                    venueId = 9101L,
-                    categories =
-                        listOf(
-                            MenuCategoryModel(
-                                id = 1L,
-                                name = "Кальяны",
-                                sortOrder = 0,
-                                items =
-                                    listOf(
-                                        MenuItemModel(
-                                            id = 11L,
-                                            name = "Премиум кальян",
-                                            priceMinor = 250000L,
-                                            currency = "RUB",
-                                            isAvailable = true,
-                                            sortOrder = 0,
-                                        ),
-                                    ),
-                            ),
-                        ),
-                )
-            coEvery {
-                platformVenueRepository.updateStatus(9101L, VenueStatusAction.PUBLISH)
-            } returns
-                VenueStatusChangeResult.Success(
-                    venue = publishedDetail,
-                    fromStatus = VenueStatus.DRAFT,
-                    toStatus = VenueStatus.PUBLISHED,
-                )
+            coEvery { publication.inspect(9101L, 8001L, true) } returnsMany listOf(draft, published)
+            coEvery { publication.publish(9101L, 8001L, VenuePublicationSource.OWNER_BOT) } returns
+                VenuePublicationResult(VenuePublicationOutcome.PUBLISHED, published)
 
             val router =
                 TelegramBotRouter(
@@ -1372,7 +1305,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                     guestMenuRepository = guestMenuRepository,
                     tableSessionRepository = tableSessionRepository,
                     guestTabsRepository = guestTabsRepository,
-                    platformVenueRepository = platformVenueRepository,
+                    venuePublication = publication,
                     tableSessionTtl = Duration.ofHours(2),
                     json = Json { ignoreUnknownKeys = true },
                     venueConnectionRequestRepository = venueConnectionRequestRepository,
@@ -1429,7 +1362,7 @@ class TelegramBotRouterVenueConnectionRequestFlowTest {
                 ),
             )
 
-            coVerify { platformVenueRepository.updateStatus(9101L, VenueStatusAction.PUBLISH) }
+            coVerify(exactly = 1) { publication.publish(9101L, 8001L, VenuePublicationSource.OWNER_BOT) }
             coVerify { outboxEnqueuer.enqueueSendMessage(chatId, "✅ Кальянная опубликована.", null) }
         }
 

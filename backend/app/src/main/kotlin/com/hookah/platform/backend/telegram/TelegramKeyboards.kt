@@ -6432,29 +6432,40 @@ object TelegramKeyboards {
                 ),
         )
 
-    fun inlineVenueOwnerPublishReadinessActions(venueId: Long): InlineKeyboardMarkup =
+    fun inlineVenueOwnerPublishReadinessActions(
+        venueId: Long,
+        canPublish: Boolean,
+    ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
-                listOf(
-                    listOf(
-                        InlineKeyboardButton(
-                            text = "👁 Предпросмотр",
-                            callbackData = "owner_venue_publish_preview:$venueId",
+                buildList {
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "👁 Предпросмотр",
+                                callbackData = "owner_venue_publish_preview:$venueId",
+                            ),
                         ),
-                    ),
-                    listOf(
-                        InlineKeyboardButton(
-                            text = "✅ Опубликовать кальянную",
-                            callbackData = "owner_venue_publish_confirm:$venueId",
+                    )
+                    if (canPublish) {
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "✅ Опубликовать кальянную",
+                                    callbackData = "owner_venue_publish_confirm:$venueId",
+                                ),
+                            ),
+                        )
+                    }
+                    add(
+                        listOf(
+                            InlineKeyboardButton(
+                                text = "↩️ Назад к заведению",
+                                callbackData = "owner_venue_hub:$venueId",
+                            ),
                         ),
-                    ),
-                    listOf(
-                        InlineKeyboardButton(
-                            text = "↩️ Назад к заведению",
-                            callbackData = "owner_venue_hub:$venueId",
-                        ),
-                    ),
-                ),
+                    )
+                },
         )
 
     fun inlineBotMyBookingActions(

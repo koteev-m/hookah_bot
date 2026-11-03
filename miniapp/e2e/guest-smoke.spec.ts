@@ -27810,3 +27810,135 @@ for (const activeVisit of [true, false]) {
     await expectNoHorizontalOverflow(page)
   })
 }
+
+test('venue publication mobile owner checks saved data previews confirms and refreshes the unlisted link', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const cardApi = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await mockOwnerUx(page)
+  let status = 'DRAFT'
+  const checks: string[] = []
+  const posts: unknown[] = []
+  const previews: string[] = []
+  let releasePublish!: () => void
+  const publishReady = new Promise<void>(resolve => { releasePublish = resolve })
+  await page.route('**/api/venue/1/publication**', async route => {
+    const request = route.request()
+    if (request.method() === 'POST') {
+      posts.push(request.postDataJSON())
+      await publishReady
+      status = 'PUBLISHED'
+      await route.fulfill(jsonResponse({ status, name: 'Микс', ownerCanPublish: false, guestAccess: 'AVAILABLE', outcome: 'PUBLISHED' }))
+      return
+    }
+    const checking = new URL(request.url()).searchParams.has('check')
+    if (checking) checks.push(request.method())
+    const missing = checking ? (cardApi.getPublicCardSettings().cardDescription ? [] : ['DESCRIPTION']) : null
+    await route.fulfill(jsonResponse({ status, name: 'Микс', ownerCanPublish: status === 'DRAFT', missing,
+      guestAccess: status === 'PUBLISHED' ? 'AVAILABLE' : 'UNAVAILABLE' }))
+  })
+  await page.route('**/api/venue/1/public-link', route => route.fulfill(jsonResponse({
+    venueId: 1, name: 'Микс', address: 'Москва, Арбат, 1', slug: 'mix', catalogListed: false, canManage: true,
+    guestAvailable: status === 'PUBLISHED', url: 'https://stage.example.org/v/mix'
+  })))
+  await page.route('**/api/venue/1/guest-preview', async route => {
+    previews.push(route.request().method())
+    await route.fulfill(jsonResponse(buildVenuePrivatePreviewFixture(1, { infoSections: [] })))
+  })
+  await page.goto('?mode=venue&venueId=1#/settings')
+  await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
+  const block = page.getByTestId('venue-publication')
+  const check = block.getByRole('button', { name: 'Проверить готовность' })
+  const publish = block.getByRole('button', { name: 'Опубликовать заведение' })
+  await expect(block.getByRole('heading')).toBeInViewport()
+  await expect(block).toContainText('Статус: Черновик')
+  await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
+  await expect(page).toHaveURL(/#\/guest-preview\?from=settings&section=card$/)
+  await expect(page.getByText('Гости пока не видят эту карточку.', { exact: false })).toBeVisible()
+  expect(previews).toEqual(['GET'])
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/settings\/card$/)
+
+  await check.click()
+  await expect(block).toContainText('Добавьте и сохраните краткое описание')
+  await expect(publish).toBeHidden()
+  const description = page.getByPlaceholder(/авторские чаши/)
+  await description.fill('Сохранённое описание для гостей')
+  await expect(check).toBeDisabled()
+  await expect(block).toContainText('Сохраните изменения карточки')
+  expect(posts).toEqual([])
+  expect(cardApi.getUpdatePublicCardSettingsCalls()).toBe(0)
+  const card = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) })
+  await card.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(check).toBeEnabled()
+  await check.click()
+  await expect(publish).toBeVisible()
+
+  await description.fill('Этот черновик не должен уйти в публикацию')
+  await expect(publish).toBeHidden()
+  await expect(block).toContainText('повторите проверку готовности')
+  expect(posts).toEqual([])
+  await description.fill('Сохранённое описание для гостей')
+  await expect(publish).toBeHidden()
+  await check.click()
+  await expect(publish).toBeVisible()
+  page.once('dialog', async dialog => {
+    expect(dialog.message()).toContain('Видимость в каталоге сохранится')
+    await dialog.dismiss()
+  })
+  await publish.click()
+  expect(posts).toEqual([])
+  page.once('dialog', dialog => dialog.accept())
+  await publish.click()
+  await expect(publish).toBeDisabled()
+  await expect.poll(() => posts.length).toBe(1)
+  releasePublish()
+  await expect(block).toContainText('Статус: Опубликовано')
+  await expect(block).toContainText('Гостевой доступ: открыт')
+  await expect(page.locator('.venue-header')).toContainText('Москва · Опубликовано')
+  await expect(page.locator('.venue-select option:checked')).toHaveText('Микс · Москва · Опубликовано')
+  const link = page.locator('.venue-public-link')
+  await expect(link).toContainText('Гости могут открыть заведение по ссылке')
+  await expect(link.getByRole('button', { name: 'Скопировать ссылку' })).toBeEnabled()
+  await expect(link.getByLabel('Персональная ссылка заведения')).toHaveValue('https://stage.example.org/v/mix')
+  await expect(page).toHaveURL(/#\/settings\/card$/)
+  expect(posts).toEqual([{ confirmed: true }])
+  expect(checks).toEqual(['GET', 'GET', 'GET'])
+  expect(cardApi.getUpdatePublicCardSettingsCalls()).toBe(1)
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: testInfo.outputPath('venue-published-390.png'), fullPage: true, animations: 'disabled' })
+})
+
+for (const scenario of [
+  { role: 'MANAGER', status: 'DRAFT', label: 'Черновик' },
+  { role: 'OWNER', status: 'PUBLISHED', label: 'Опубликовано' },
+  { role: 'OWNER', status: 'SUSPENDED', label: 'Заблокировано' }
+] as const) {
+  test(`venue publication shows safe controls for ${scenario.role} ${scenario.status}`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    await mockVenueShiftExtensionApi(page, { role: scenario.role, permissions: ownerUxPermissions })
+    const methods: string[] = []
+    await page.route('**/api/venue/1/publication**', route => {
+      methods.push(route.request().method())
+      const missing = new URL(route.request().url()).searchParams.has('check') ? [] : null
+      return route.fulfill(jsonResponse({ name: 'Микс', status: scenario.status, ownerCanPublish: false, missing, guestAccess: 'UNAVAILABLE' }))
+    })
+    await page.goto('?mode=venue#/settings')
+    await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
+    const block = page.getByTestId('venue-publication')
+    await expect(block).toContainText(`Статус: ${scenario.label}`)
+    const check = block.getByRole('button', { name: 'Проверить готовность' })
+    if (scenario.role === 'MANAGER') {
+      await check.click()
+      await expect(block).toContainText('Заведение готово к публикации')
+      await expect(block).toContainText('может только его владелец')
+    } else {
+      await expect(check).toBeHidden()
+    }
+    if (scenario.status === 'PUBLISHED') await expect(block).toContainText('Гостевой доступ закрыт. Проверьте подписку')
+    if (scenario.status === 'SUSPENDED') await expect(block).toContainText('Из этого статуса публикация в настройках недоступна')
+    await expect(block.getByRole('button', { name: 'Опубликовать заведение' })).toBeHidden()
+    expect(methods).toEqual(scenario.role === 'MANAGER' ? ['GET', 'GET'] : ['GET'])
+    await expectNoHorizontalOverflow(page)
+  })
+}
