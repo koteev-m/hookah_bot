@@ -1,49 +1,69 @@
-# Personal venue links: production root domain
+# Personal venue links on the root domain
 
-This checklist supplements the existing [deployment runbook](DEPLOYMENT_RUNBOOK.md#personal-venue-links--platform-prerequisites-local-implementation-only). DNS, Caddy and production activation are separate operations.
+The prelaunch setup uses one HT70 `hookah-bot` Compose project on the existing VPS,
+one PostgreSQL database, and the current Telegram bot and Mini App. Keep
+`APP_ENV=staging` and `TELEGRAM_WEBAPP_PUBLIC_URL=https://staging.hookahtootah.club/miniapp/`.
+The staging hostname remains the Mini App origin and a compatible address for links already shared.
 
-Keep `TELEGRAM_WEBAPP_PUBLIC_URL` and the environment's bot unchanged. By default the platform
-issues `/v/<slug>` using the HTTPS origin of that Mini App URL. An explicit
-`VENUE_PUBLIC_LINK_ORIGIN` changes only the origin in generated personal links; it does not
-change the Mini App, Telegram routing or the venue registry. Leave it unset in staging and
-until production routing is verified. The backend rejects a nonempty override outside production
-or an override that is not an HTTPS origin (no credentials, path other than `/`, query or fragment).
-Host and forwarded host do not affect generated links or Telegram targets.
+By default, links use the HTTPS origin of `TELEGRAM_WEBAPP_PUBLIC_URL`. The optional
+`runtime.VENUE_PUBLIC_LINK_ORIGIN` in HT70's private `config.json` accepts exactly
+`https://hookahtootah.club`. Leave the key absent until activation. The override
+changes the origin in generated links only. The same backend serves both hosts and
+uses the same venue registry, aliases, availability checks and Telegram targets.
+Request Host and forwarded headers cannot choose the generated origin.
 
-### Production root domain activation checklist
+The public preflight on 2026-11-03 found Porkbun parking on the root domain (A
+`207.207.210.107` and `207.207.210.229`), `www` forwarding to the root, and
+staging at `178.20.209.5`. Recheck those observations, confirm the actual Hookah
+upstream and public IPv4, and record the current zone, TTLs, parking/forwarding
+and Caddy configuration before any authorized change. The root DNS cutover affects
+the whole hostname. Agree on what to serve outside `/v/*` before the cutover.
 
-1. **Starting evidence (2026-11-03, public DNS read only):** the zone uses Porkbun nameservers.
-   The apex `hookahtootah.club` answers A `207.207.210.229` and `207.207.210.107`; staging
-   answers A `178.20.209.5`. Neither hostname answered with AAAA or CNAME. These observations do
-   not establish what service owns the apex. A read-only HTTPS check returned `200` with
-   `Server: openresty` on the apex, and the application's `404` with `Cache-Control: no-store`
-   on an unknown staging slug. The [staging proxy example](STAGING_DEPLOYMENT.md#6-reverse-proxy)
-   forwards paths to the staging backend, including `/v/*`. The live Caddyfile and production
-   upstream/edge are not verified in this task.
-2. **Separate authorization and inventory:** in Porkbun, export/record the current zone, TTLs,
-   forwarding settings and apex purpose. Confirm the production edge, backend, bot and database
-   identity before planning any write. Preserve staging and dev records, any existing
-   `www`/other subdomains, NS, MX/TXT (including verification and mail), and all unrelated Caddy
-   sites/routes. Do not add IPv6 unless the production edge is reachable over IPv6. Keep the
-   production Mini App origin and every legacy production hostname serving venue links.
-3. **Route before issuing links:** on the production edge only, prepare a distinct Caddy site
-   for `hookahtootah.club` with trusted HTTPS. Route `/v/*` with its path intact to the verified
-   **production** backend. Keep existing website routes and the legacy production `/v/*` handler;
-   do not send the apex or real customers to staging. Validate the candidate Caddy config and
-   compare existing routes before changing only the approved apex records in Porkbun. Confirm
-   DNS convergence and TLS for apex and old hosts. Existing staging URLs continue to resolve in
-   staging; never translate a staging alias or `venue_id` into a production one by name.
-4. **Smoke before enabling:** with generation still unchanged, open an approved published
-   production venue's current slug and an alias on the apex and legacy production host; confirm
-   exact venue/address and production bot, an unknown/unavailable slug gives the safe no-store
-   response, unlisted venue works by link, and `startapp` (if enabled) and Bot fallback open the
-   correct venue. Confirm Mini App and working printed table QR are unchanged; verify staging
-   still serves only its own bot/data. Only after those checks set
-   `VENUE_PUBLIC_LINK_ORIGIN=https://hookahtootah.club` in the authorized production rollout
-   and verify the actual copied URL from Venue Mode.
-5. **Rollback:** clear `VENUE_PUBLIC_LINK_ORIGIN` in production to resume issuing the previous
-   Mini App origin. Leave both production `/v/*` routes on the same database when possible so
-   links already shared on the apex still work. If the edge/DNS change itself must be reverted,
-   restore the inventoried apex records and prior Caddy config, then verify the old hostname
-   and any retained apex route. Do not rename/reassign slugs or run a data migration to roll back
-   link generation; aliases remain reserved in the original database.
+## Activation
+
+A Draft PR or green CI does not authorize DNS, Caddy or HT70 changes. Use the
+[HT70 release procedure](STAGING_ORDINARY_RELEASE.md) for exact release admission
+and the existing runtime, Compose and database binding checks.
+
+1. **A — Caddy.** Add a site for `hookahtootah.club` to the existing edge. Match
+   `handle /v/*` and reverse proxy to the verified existing Hookah upstream
+   (HT70 default `127.0.0.1:8080`). Preserve the full URI so the backend receives
+   `/v/<slug>`. Serve the agreed root/other paths separately. Validate the Caddy
+   candidate, compare it with the saved configuration, and keep staging and Clubs
+   routes intact. Ensure the root can obtain trusted TLS.
+2. **B — Porkbun.** Replace only the root's parking A records with the confirmed
+   VPS IPv4. Preserve `www`, staging, NS, mail/verification and other records.
+   Confirm what visitors following the existing `www` redirect will see.
+3. **C — Public smoke before issuance.** Check DNS convergence and trusted HTTPS
+   for the root and staging. Verify `https://hookahtootah.club/v/miks` and the old
+   staging link show the same published venue and Telegram target. An unknown or
+   unavailable slug must return the safe `404` with `Cache-Control: no-store`.
+   Stop before D if any check fails.
+4. **D — HT70 activation.** After exact-release CI and candidate admission, deliver
+   the matching HT70 tool and add `"VENUE_PUBLIC_LINK_ORIGIN": "https://hookahtootah.club"`
+   to `runtime` in the root-owned private `/opt/hookah-bot/config.json`. Use the
+   existing HT70 state and candidate files. Apply the change through the standard
+   config gate, leaving the generated Compose file to the tool:
+
+   ```bash
+   python3 -B /opt/hookah-bot/simple_staging.py deploy --directory /opt/hookah-bot \
+     --candidate /opt/hookah-bot/candidate.json --apply-config
+   ```
+
+   Follow the ordinary compatibility and backup rules if the selected candidate
+   changes the schema. This feature adds no migration.
+5. **E — Acceptance.** Confirm Venue Mode copies the root link. Open it and the
+   previously shared staging link in Telegram on mobile. Check a known alias and
+   an unlisted test venue by direct link if fixtures exist. Verify the bot
+   `/start` fallback opens the same venue, the Mini App and a working printed
+   table QR still open correctly, and Clubs passes its existing public smoke.
+
+## Rollback
+
+Remove the key from `runtime` and use the same admitted release with
+`deploy --apply-config`. Issuance resumes on the staging origin. Keep both
+`/v/*` routes while safe so already shared links keep working. If the edge
+change must also be undone, restore the saved Porkbun parking records/settings
+and prior Caddy configuration, then verify DNS/TLS, staging links and Clubs.
+Restoring parking removes the root venue route for already shared links.
+Leave slug/alias reservations and database contents as they are.

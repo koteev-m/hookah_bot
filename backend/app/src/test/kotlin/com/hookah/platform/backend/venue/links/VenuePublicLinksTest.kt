@@ -49,7 +49,7 @@ class VenuePublicLinksTest {
     }
 
     @Test
-    fun `explicit HTTPS public origin changes issued URLs only and cannot be enabled in staging`() {
+    fun `explicit HTTPS public origin changes issued URLs only`() {
         val miniApp = "https://miniapp.example.org/miniapp/?mode=home"
         val branded = "https://hookahtootah.club"
         for (env in listOf("staging", "production")) {
@@ -72,15 +72,36 @@ class VenuePublicLinksTest {
         assertEquals("https://t.me/ExampleBot?startapp=venue_1", config.telegramUrl(1))
         assertEquals("https://t.me/ExampleBot?start=venue_1", config.telegramUrl(1, false))
         assertNull(VenuePublicLinkConfig.from(null, "ExampleBot", true, branded, "production"))
-        assertFailsWith<IllegalArgumentException> {
-            VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, branded, "staging")
-        }
         for (invalid in listOf(
             "http://example.org", "//example.org", " ", "https://user@example.org", "https://example.org:",
             "https://example.org:0", "https://example.org:65536", "$branded/v", "$branded?", "$branded#fragment",
         )) {
             assertFailsWith<IllegalArgumentException>(invalid) {
                 VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, invalid, "production")
+            }
+        }
+    }
+
+    @Test
+    fun `staging accepts only the approved branded origin`() {
+        val miniApp = "https://staging.hookahtootah.club/miniapp/"
+        val branded = "https://hookahtootah.club"
+        val config =
+            assertNotNull(VenuePublicLinkConfig.from(miniApp, "ExampleBot", publicOrigin = branded, appEnv = "staging"))
+        assertEquals("$branded/v/dym", config.publicUrl("dym"))
+        assertEquals("https://t.me/ExampleBot?start=venue_1", config.telegramUrl(1))
+        for (invalid in listOf(
+            "https://example.org", "http://hookahtootah.club", "https://www.hookahtootah.club", "$branded.evil.example",
+            "$branded/", "$branded:443", "$branded/v", "$branded?", "$branded#fragment",
+            "https://user@hookahtootah.club",
+        )) {
+            assertFailsWith<IllegalArgumentException>(invalid) {
+                VenuePublicLinkConfig.from(miniApp, "ExampleBot", publicOrigin = invalid, appEnv = "staging")
+            }
+        }
+        for (env in listOf("dev", "test")) {
+            assertFailsWith<IllegalArgumentException>(env) {
+                VenuePublicLinkConfig.from(miniApp, "ExampleBot", publicOrigin = branded, appEnv = env)
             }
         }
     }

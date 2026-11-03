@@ -279,9 +279,9 @@ SHOULD:
 - `catalog_listed` defaults true independently of lifecycle. `Не показывать в каталоге` removes a
   venue from Bot/Mini App catalog/search, while direct public browsing still requires published
   lifecycle and guest-allowed subscription. This setting is not authorization or a private venue.
-- Personal links use the Mini App's HTTPS origin by default. A separately verified and explicitly
-  configured production link origin changes issued addresses only; the Mini App URL, alias registry
-  and Telegram targets are unchanged. See the [activation checklist](VENUE_PUBLIC_LINK_ORIGIN_CHECKLIST.md).
+- Personal links use the Mini App's HTTPS origin by default. The single-instance HT70 prelaunch
+  setup can explicitly issue links on `https://hookahtootah.club` while serving both hosts from
+  the same backend, venue registry and Telegram bot. See the [activation checklist](VENUE_PUBLIC_LINK_ORIGIN_CHECKLIST.md).
 - The compact public transition exposes name/address only. It opens `startapp=venue_<base36-id>`
   after platform Main Mini App configuration is confirmed, otherwise `/start venue_<base36-id>`
   opens a WebApp button. These pointers never establish table/session/tab or grant working roles.

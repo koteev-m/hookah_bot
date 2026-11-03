@@ -4998,4 +4998,4 @@ environment restrictions, invalid origins, Host spoofing and preservation of ali
 
 Before accepting an independently authorized release, smoke the selected test venue through
 Telegram on mobile as Owner and Manager, and verify the guest result and unchanged printed QR.
-Production root activation has its own [operations checklist](VENUE_PUBLIC_LINK_ORIGIN_CHECKLIST.md).
+HT70 prelaunch root activation has its own [operations checklist](VENUE_PUBLIC_LINK_ORIGIN_CHECKLIST.md).

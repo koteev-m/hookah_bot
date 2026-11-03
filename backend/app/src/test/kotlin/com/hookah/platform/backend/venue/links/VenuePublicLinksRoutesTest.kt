@@ -32,7 +32,9 @@ class VenuePublicLinksRoutesTest {
     private fun verifyPublicEntry(branded: Boolean) =
         testApplication {
             h2().use { ds ->
-                val appEnv = if (branded) "production" else "test"
+                val appEnv = "staging"
+                val stagingHost = "staging.hookahtootah.club"
+                val rootHost = "hookahtootah.club"
                 val config =
                     MapApplicationConfig(
                         "app.env" to appEnv,
@@ -41,12 +43,13 @@ class VenuePublicLinksRoutesTest {
                         "db.password" to "",
                         "api.session.jwtSecret" to "links-test-secret",
                         "telegram.enabled" to "false",
-                        "telegram.webAppPublicUrl" to "https://stage.example.org/miniapp/",
+                        "telegram.trafficPolicy" to "PRODUCT",
+                        "telegram.webAppPublicUrl" to "https://$stagingHost/miniapp/",
                         "telegram.botUsername" to "ExampleBot",
+                        "venue.staffInviteSecretPepper" to "synthetic-brand-route-fixture",
                     ).apply {
                         if (branded) {
-                            put("venue.publicLinkOrigin", "https://hookahtootah.club")
-                            put("venue.staffInviteSecretPepper", "synthetic-brand-route-fixture")
+                            put("venue.publicLinkOrigin", "https://$rootHost")
                         }
                     }
                 environment { this.config = config }
@@ -69,7 +72,7 @@ class VenuePublicLinksRoutesTest {
                 val token = SessionTokenService(SessionTokenConfig.from(config, appEnv)).issueToken(101).token
                 val manager = SessionTokenService(SessionTokenConfig.from(config, appEnv)).issueToken(303).token
 
-                val expectedOrigin = if (branded) "https://hookahtootah.club" else "https://stage.example.org"
+                val expectedHost = if (branded) rootHost else stagingHost
                 val management =
                     client.get("/api/venue/$id/public-link") {
                         header(HttpHeaders.Authorization, "Bearer $token")
@@ -78,7 +81,7 @@ class VenuePublicLinksRoutesTest {
                     }
                 assertEquals(HttpStatusCode.OK, management.status)
                 assertEquals(
-                    "$expectedOrigin/v/new-dym",
+                    "https://$expectedHost/v/new-dym",
                     Json.parseToJsonElement(management.bodyAsText()).jsonObject["url"]?.jsonPrimitive?.content,
                 )
 
@@ -107,7 +110,7 @@ class VenuePublicLinksRoutesTest {
                     }
                 val before = counts()
                 repeat(2) {
-                    for ((slug, host) in listOf(settings.slug to "stage.example.org", "new-dym" to "evil.example")) {
+                    for ((slug, host) in listOf(settings.slug to stagingHost, "new-dym" to expectedHost)) {
                         val page =
                             client.get("/v/$slug?redirect=https://evil.example") {
                                 header(HttpHeaders.Host, host)
@@ -191,7 +194,10 @@ class VenuePublicLinksRoutesTest {
                         client.get(path) { header(HttpHeaders.Authorization, "Bearer $token") }.status,
                     )
                 }
-                assertEquals(HttpStatusCode.NotFound, client.get("/v/unknown").status)
+                val unknown = client.get("/v/unknown") { header(HttpHeaders.Host, expectedHost) }
+                assertEquals(HttpStatusCode.NotFound, unknown.status)
+                assertEquals("no-store", unknown.headers[HttpHeaders.CacheControl])
+                assertTrue(unknown.bodyAsText().contains("Заведение недоступно"))
                 assertEquals(
                     HttpStatusCode.NotFound,
                     client.get("/api/guest/venue-entry/venue_invalid!") {
