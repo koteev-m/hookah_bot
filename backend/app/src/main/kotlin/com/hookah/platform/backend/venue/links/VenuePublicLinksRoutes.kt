@@ -28,6 +28,8 @@ data class VenuePublicLinkConfig(val origin: String, val botUsername: String, va
     ): String = "https://t.me/$botUsername?${if (main) "startapp" else "start"}=${venuePayload(venueId)}"
 
     companion object {
+        private const val STAGING_BRANDED_ORIGIN = "https://hookahtootah.club"
+
         fun from(
             webAppUrl: String?,
             username: String?,
@@ -37,8 +39,11 @@ data class VenuePublicLinkConfig(val origin: String, val botUsername: String, va
         ): VenuePublicLinkConfig? {
             val brandedOrigin =
                 publicOrigin?.takeIf(String::isNotEmpty)?.let { value ->
-                    require(appEnv == "prod" || appEnv == "production") {
-                        "VENUE_PUBLIC_LINK_ORIGIN is only supported in production."
+                    require(appEnv == "staging" || appEnv == "prod" || appEnv == "production") {
+                        "VENUE_PUBLIC_LINK_ORIGIN is only supported in staging and production."
+                    }
+                    require(appEnv != "staging" || value == STAGING_BRANDED_ORIGIN) {
+                        "Staging VENUE_PUBLIC_LINK_ORIGIN must be $STAGING_BRANDED_ORIGIN."
                     }
                     requireNotNull(originOf(value, strict = true)) {
                         "VENUE_PUBLIC_LINK_ORIGIN must be an HTTPS origin without a path, query or fragment."

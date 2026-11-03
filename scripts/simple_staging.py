@@ -42,7 +42,10 @@ PDF_FLAG = "VENUE_INFO_PDF_WORKER_ENABLED"
 PDF_IPC = "/run/hookah-pdf"
 PDF_MEMORY = 384 * 1024 * 1024
 PDF_VOLUME_OPTIONS = {"type": "tmpfs", "device": "tmpfs", "o": "size=12m,uid=10001,gid=10001,mode=0700"}
-RUNTIME_KEYS = BASE_RUNTIME_KEYS | PHOTO_RUNTIME_KEYS | {PDF_FLAG}
+PUBLIC_LINK_ORIGIN_KEY = 'VENUE_PUBLIC_LINK_ORIGIN'
+STAGING_BRANDED_ORIGIN = 'https://hookahtootah.club'
+OPTIONAL_RUNTIME_KEYS = PHOTO_RUNTIME_KEYS | {PDF_FLAG, PUBLIC_LINK_ORIGIN_KEY}
+RUNTIME_KEYS = BASE_RUNTIME_KEYS | OPTIONAL_RUNTIME_KEYS
 REQUIRED_JOBS = {'backend-ktlint', 'backend-compile', 'backend-archive-reproducibility',
                  'backend-release-critical-routes', 'backend-venue-booking-rbac',
                  'backend-telegram-lightweight', 'backend-migration-sanity', 'backend',
@@ -277,6 +280,8 @@ def validate_config(c):
         require(e['TELEGRAM_BOT_TOKEN'] == '', 'DISABLED_TELEGRAM_TOKEN_MUST_BE_EMPTY')
     require(e.get(PDF_FLAG, 'false') in ('true', 'false'), 'PDF_WORKER_FLAG_INVALID')
     # Do not insert defaults: old runtime/Compose hashes must remain unchanged.
+    require(PUBLIC_LINK_ORIGIN_KEY not in e or e[PUBLIC_LINK_ORIGIN_KEY] == STAGING_BRANDED_ORIGIN,
+            'VENUE_PUBLIC_LINK_ORIGIN_INVALID')
     require(e.get('STAFF_PHOTOS_R2_ENABLED', 'false') in ('true', 'false'), 'R2_FLAG_INVALID')
     require(e.get('VENUE_INFO_MEDIA_R2_ENABLED', 'false') in ('true', 'false'), 'INFO_MEDIA_FLAG_INVALID')
     if e.get('STAFF_PHOTOS_R2_ENABLED') == 'true' or e.get('VENUE_INFO_MEDIA_R2_ENABLED') == 'true' or R2_CONNECTION_KEYS & set(e):
@@ -457,8 +462,8 @@ class Staging:
             require(not app['Mounts'] and not workers, 'BACKEND_ISOLATION_MISMATCH')
         actual = dict(x.split('=', 1) for x in app['Config']['Env'])
         require(all(actual.get(k) == v for k, v in self.document(image)['services']['backend']['environment'].items()), 'BACKEND_RUNTIME_CONFIG_MISMATCH')
-        require({k: v for k, v in actual.items() if k in PHOTO_RUNTIME_KEYS | {PDF_FLAG}}
-                == {k: v for k, v in self.config['runtime'].items() if k in PHOTO_RUNTIME_KEYS | {PDF_FLAG}},
+        require({k: v for k, v in actual.items() if k in OPTIONAL_RUNTIME_KEYS}
+                == {k: v for k, v in self.config['runtime'].items() if k in OPTIONAL_RUNTIME_KEYS},
                 'BACKEND_RUNTIME_CONFIG_MISMATCH')
 
     def pdf_mount(self, mounts, *, writable):

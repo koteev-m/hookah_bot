@@ -137,6 +137,69 @@ class RuntimeStaging(MemoryStaging):
             s.Staging.observe(self, target, binding)
 
 
+class PublicLinkOriginTests(unittest.TestCase):
+    key = 'VENUE_PUBLIC_LINK_ORIGIN'
+    origin = 'https://hookahtootah.club'
+
+    def test_only_exact_explicit_origin_is_admitted(self):
+        for value in ('', 'https://example.org', 'http://hookahtootah.club', 'https://www.hookahtootah.club',
+                      self.origin + '/', self.origin + ':443', self.origin + '/v',
+                      self.origin + '?query', self.origin + '#fragment', 'https://user@hookahtootah.club'):
+            with self.subTest(value=value):
+                c = config()
+                c['runtime'][self.key] = value
+                with self.assertRaisesRegex(s.Refused, 'VENUE_PUBLIC_LINK_ORIGIN_INVALID'):
+                    s.validate_config(c)
+
+    def test_enable_and_remove_preserve_legacy_hashes_and_require_apply_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = RuntimeStaging(Path(tmp).resolve())
+            candidate = record(image())
+            r.apply('install', candidate)
+            legacy_env = copy.deepcopy(r.app_env)
+            self.assertNotIn(self.key, legacy_env)
+            self.assertEqual(legacy_env['APP_ENV'], 'staging')
+            self.assertEqual(legacy_env['TELEGRAM_WEBAPP_PUBLIC_URL'], 'https://staging.hookahtootah.club/miniapp/')
+            legacy_state = r.state()
+            db, neighbor = copy.deepcopy(r.pg), copy.deepcopy(r.neighbor)
+
+            for enabled in (True, False):
+                with self.subTest(enabled=enabled):
+                    if enabled:
+                        r.config['runtime'][self.key] = self.origin
+                    else:
+                        del r.config['runtime'][self.key]
+                    s.validate_config(r.config)
+                    state, compose, calls = r.state(), r.compose_file.read_bytes(), len(r.calls)
+                    with self.assertRaisesRegex(s.Refused, 'RUNTIME_CONFIG_CHANGED_USE_APPLY_CONFIG'):
+                        r.apply('deploy', candidate)
+                    self.assertEqual(r.state(), state)
+                    self.assertEqual(r.compose_file.read_bytes(), compose)
+                    self.assertEqual(len(r.calls), calls)
+                    self.assertEqual(r.apply('deploy', candidate, apply_config=True)['status'], 'SUCCESS')
+                    self.assertEqual(r.app_env, dict(legacy_env, **{self.key: self.origin}) if enabled else legacy_env)
+                    self.assertEqual(r.calls[calls:],
+                                     [['up', '-d', '--no-build', '--pull', 'never', '--no-deps', '--force-recreate', 'backend']])
+                    self.assertEqual((r.pg, r.neighbor), (db, neighbor))
+
+            for key in ('runtime_hash', 'compose_hash', 'config_binding'):
+                self.assertEqual(r.state()[key], legacy_state[key])
+            self.assertEqual(r.apply('deploy', candidate)['status'], 'SUCCESS')
+
+    def test_untracked_live_origin_blocks_apply_config_before_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = RuntimeStaging(Path(tmp).resolve())
+            candidate = record(image())
+            r.apply('install', candidate)
+            r.app_env[self.key] = self.origin
+            r.config['runtime'][self.key] = self.origin
+            before, calls = r.state(), len(r.calls)
+            with self.assertRaisesRegex(s.Refused, 'BACKEND_RUNTIME_CONFIG_MISMATCH'):
+                r.apply('deploy', candidate, apply_config=True)
+            self.assertEqual(r.state(), before)
+            self.assertEqual(len(r.calls), calls)
+
+
 class R2ConfigTests(unittest.TestCase):
     def test_old_runtime_is_unchanged_and_r2_defaults_off(self):
         c = config(); original = copy.deepcopy(c)
