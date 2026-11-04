@@ -4814,6 +4814,54 @@ It seeds only a synthetic managed historical current-schema state, retains a sen
 PG binding through real Compose recreation, rejects implicit admission and worker CPU drift.
 CI/registry acquisition and host operator admission are fixtures; no claim of V126 bootstrap or VPS.
 
+For **HT-PDF-WORKER-DURABLE-SWAP-FIX-01**, run the HT70 portable suite and
+`test_pdf_worker_contract.py`. They cover worker-only annotation, exact historical
+document/hash compatibility, unchanged runtime/schema/PG/neighbor, stale healthy
+with nonzero swap refusal, missing systemd limit, annotation drift and bounded fixed
+read commands. These mocks do not prove systemd enforcement.
+
+Use the existing local worker-capable image, without rebuilding Kotlin or Mini App:
+
+```bash
+python3 -B scripts/test_pdf_worker_swap_docker.py \
+  --docker-context desktop-linux --image <exact-local-Hookah-image-ID> \
+  --evidence-dir <new-private-directory>
+```
+
+This uses only a unique disposable Compose project and labelled tmpfs volume. It
+checks actual HostConfig annotations, native health, the native HT70 observer and kernel limits before/after
+worker recreation, retains a canary with a nonzero swap allowance unchanged, then
+removes only its own resources. A cgroupfs/Desktop result is
+`DOCKER_PIPELINE_PARTIAL`: OCI spec and systemd reload are **not observed**.
+
+The full gate requires a separately provisioned **empty dedicated Linux VM**, hostname
+`ht-pdf-swap-proof-<unique-suffix>`, root, local Unix Docker endpoint, systemd PID1,
+cgroup v2/systemd driver, Docker 29.9.2, Compose 2.40.3 and runc 1.5.2. No existing
+containers or `/opt/hookah-bot` may be present. With the same command use its local
+context and explicitly add `--systemd-reload`. The script refuses a Mac, a shared
+host, a remote endpoint, existing containers or mismatching runtime versions before
+any test mutation. It rechecks the owned-container set before either reload.
+
+`SYSTEMD_SWAP_PROOF_PASS` requires observed Compose → Docker → actual OCI annotations,
+systemd `MemorySwapMax=0` and kernel `memory.swap.max=0` at creation, after reload,
+after recreation and after another reload. The canary must retain its own limit and
+ID. Snapshots include exact runtime versions, image ID and OCI spec hashes, never
+environment/credentials. No availability of such a VM means `VERIFICATION_REQUIRED`,
+not a skipped-test PASS. Never invoke this reload gate on the shared VPS, even if
+the worker is currently unhealthy. Recovery/publication need separate authorization;
+see the PDF zero-swap subsection of `STAGING_ORDINARY_RELEASE.md`.
+
+Executed **HT-PDF-WORKER-SYSTEMD-PROOF-01**, 2026-11-04: `SYSTEMD_SWAP_PROOF_PASS`
+on a disposable Lima VZ Ubuntu VM, Docker29.9.2 / Compose2.40.3 / runc1.5.2,
+containerd2.4.2, systemd255.4-1ubuntu8.17, cgroup-v2/systemd, ARM64 kernel6.8.0-142.
+All four snapshots showed kernel swap0, systemd swap0, memory402653184, PIDs64,
+CPU100000/100000, native health and native HT70 observation PASS. Actual OCI carried
+the typed annotation; the canary's ID/spec/32MiB swap limit remained identical.
+Evidence and source hashes are in
+`/private/tmp/HT-PDF-WORKER-SYSTEMD-PROOF-01/systemd-proof/`.
+This closes the isolated mechanism gate, not amd64 VPS release/recovery acceptance;
+the shared VPS was not used. The test image is a local fixture, not the live release.
+
 Run backend media PostgreSQL (including nonempty V127→V128), cleanup/RBAC/Guest/Preview, Bot
 ordering/outbox, StaffPhotoStorage, all three PdfClient methods, Kotlin compile/ktlint, TypeScript
 build, focused and full Playwright. XML must show actual expected methods with zero skips/errors/

@@ -10,7 +10,43 @@ from unittest.mock import patch
 
 import simple_staging as s
 import test_pdf_worker_docker as docker_proof
+import test_pdf_worker_swap_docker as swap_proof
 from test_simple_staging import MemoryStaging, config, image, record
+
+
+class SystemdProofScopeTests(unittest.TestCase):
+    def test_reload_proof_refuses_mac_shared_host_and_nonempty_daemon(self):
+        info = {'Name': 'ht-pdf-swap-proof-fixture', 'ServerVersion': '29.9.2',
+                'CgroupDriver': 'systemd', 'CgroupVersion': '2', 'DefaultRuntime': 'runc'}
+        with patch.object(swap_proof.sys, 'platform', 'darwin'):
+            with self.assertRaisesRegex(s.Refused, 'LINUX_ROOT'):
+                swap_proof.isolated_systemd_host(info, '2.40.3', [])
+        with patch.object(swap_proof.sys, 'platform', 'linux'), patch.object(os, 'geteuid', return_value=0):
+            with patch.object(swap_proof.socket, 'gethostname', return_value='operational-vps'):
+                with self.assertRaisesRegex(s.Refused, 'HOSTNAME'):
+                    swap_proof.isolated_systemd_host(info, '2.40.3', [])
+            with patch.object(swap_proof.socket, 'gethostname', return_value=info['Name']):
+                with self.assertRaisesRegex(s.Refused, 'EMPTY_DISPOSABLE'):
+                    swap_proof.isolated_systemd_host(info, '2.40.3', ['existing-container'])
+
+    def test_reload_proof_requires_matching_runtime_and_systemd(self):
+        info = {'Name': 'ht-pdf-swap-proof-fixture', 'ServerVersion': '29.9.2',
+                'CgroupDriver': 'systemd', 'CgroupVersion': '2', 'DefaultRuntime': 'runc'}
+        with patch.object(swap_proof.sys, 'platform', 'linux'), patch.object(os, 'geteuid', return_value=0), \
+             patch.object(swap_proof.socket, 'gethostname', return_value=info['Name']), \
+             patch.object(Path, 'exists', return_value=False), patch.object(Path, 'read_text', return_value='systemd\n'), \
+             patch.object(swap_proof, 'command', return_value=b'runc version 1.5.2\n') as command:
+            swap_proof.isolated_systemd_host(info, '2.40.3', [])
+            self.assertEqual(command.call_args.args[0], ['runc', '--version'])
+            for key, value in [('ServerVersion', '29.8.1'), ('CgroupDriver', 'cgroupfs'),
+                               ('CgroupVersion', '1'), ('DefaultRuntime', 'other')]:
+                with self.subTest(key=key), self.assertRaises(s.Refused):
+                    swap_proof.isolated_systemd_host(dict(info, **{key: value}), '2.40.3', [])
+            with self.assertRaisesRegex(s.Refused, 'TARGET_DOCKER_COMPOSE'):
+                swap_proof.isolated_systemd_host(info, '5.5.1', [])
+            command.return_value = b'runc version 1.4.0\n'
+            with self.assertRaisesRegex(s.Refused, 'TARGET_RUNC'):
+                swap_proof.isolated_systemd_host(info, '2.40.3', [])
 
 
 class PdfProbeFixtureTests(unittest.TestCase):
@@ -84,6 +120,12 @@ class PdfTopologyTests(unittest.TestCase):
         self.assertEqual(worker['network_mode'], 'none')
         self.assertEqual(worker['mem_limit'], 384 * 1024 * 1024)
         self.assertEqual(worker['memswap_limit'], worker['mem_limit'])
+        self.assertEqual(worker['annotations'], s.PDF_SYSTEMD_ANNOTATIONS)
+        self.assertNotIn('annotations', backend)
+        self.assertNotIn('annotations', doc['services']['postgres'])
+        old = copy.deepcopy(doc)
+        del old['services']['pdf-worker']['annotations']
+        self.assertEqual(s.digest(old), '2fd1bd47d22456417568bf966f508b005c5961889dac9507a7166c6fc999bffc')
         self.assertEqual(worker['cpus'], 1); self.assertEqual(worker['pids_limit'], 64)
         self.assertTrue(worker['read_only']); self.assertEqual(worker['user'], '10001:10001')
         self.assertEqual(worker['cap_drop'], ['ALL']); self.assertTrue(worker['init'])
@@ -119,17 +161,118 @@ class PdfTopologyTests(unittest.TestCase):
         self.enable(); r = self.runtime; target = r.images[image('b')['image']]
         labels = {'com.docker.compose.project': r.project, 'com.docker.compose.project.working_dir': str(r.root)}
         mount = {'Type': 'volume', 'Name': r.project + '_pdf_ipc', 'Destination': s.PDF_IPC, 'RW': True}
-        worker = {'Image': target['id'], 'State': {'Running': True, 'Health': {'Status': 'healthy'}},
+        worker = {'Id': 'd' * 64, 'Image': target['id'], 'State': {'Running': True, 'Health': {'Status': 'healthy'}},
                   'Config': {'User': '10001:10001', 'Entrypoint': ['/app/app/bin/pdf-worker'], 'Cmd': [],
                              'Env': ['PATH=/safe'], 'Labels': dict(labels, **{'com.docker.compose.service': 'pdf-worker'})},
-                  'HostConfig': {'Memory': s.PDF_MEMORY, 'MemorySwap': s.PDF_MEMORY, 'NanoCpus': 1000000000,
+                  'HostConfig': {'Annotations': dict(s.PDF_SYSTEMD_ANNOTATIONS),
+                                 'Memory': s.PDF_MEMORY, 'MemorySwap': s.PDF_MEMORY, 'NanoCpus': 1000000000,
                                  'PidsLimit': 64, 'RestartPolicy': {'Name': 'unless-stopped', 'MaximumRetryCount': 0}, 'Ulimits': [{'Name': 'core', 'Soft': 0, 'Hard': 0}], 'NetworkMode': 'none', 'ReadonlyRootfs': True, 'Privileged': False,
                                  'CapDrop': ['ALL'], 'SecurityOpt': ['no-new-privileges:true'], 'Init': True, 'IpcMode': 'private', 'Mounts': [{'Type': 'volume', 'Source': r.project + '_pdf_ipc', 'Target': s.PDF_IPC, 'ReadOnly': False}]},
                   'NetworkSettings': {'Networks': {'none': {}}}, 'Mounts': [mount]}
         volume = {'Driver': 'local', 'Options': s.PDF_VOLUME_OPTIONS,
                   'Labels': {'com.docker.compose.project': r.project, 'com.docker.compose.volume': 'pdf_ipc'}}
-        r.run = lambda argv, **kwargs: json.dumps([volume]).encode()
+        def run(argv, **kwargs):
+            if argv[:3] == ['docker', 'volume', 'inspect']: return json.dumps([volume]).encode()
+            if argv == ['docker', 'info', '--format', '{{.CgroupDriver}}']: return b'systemd\n'
+            if argv == ['docker', 'exec', worker['Id'], '/bin/cat', '/sys/fs/cgroup/memory.swap.max']: return b'0\n'
+            if argv == ['systemctl', 'show', 'docker-' + worker['Id'] + '.scope',
+                        '--property=MemorySwapMax', '--value']: return b'0\n'
+            raise AssertionError('Unexpected command ' + repr(argv))
+        r.run = run
         return target, worker, volume
+
+    def test_annotation_drift_refused_before_kernel_read(self):
+        target, worker, _ = self.inspect_fixture()
+        for value in (None, {}, {'org.systemd.property.MemorySwapMax': '0'},
+                      {'org.systemd.property.MemorySwapMax': 'uint64 1'},
+                      dict(s.PDF_SYSTEMD_ANNOTATIONS, **{'org.systemd.property.MemoryMax': 'uint64 1'})):
+            with self.subTest(value=value):
+                bad = copy.deepcopy(worker); bad['HostConfig']['Annotations'] = value
+                with patch.object(self.runtime, 'pdf_swap_state') as limits:
+                    with self.assertRaisesRegex(s.Refused, 'ANNOTATIONS_MISMATCH'):
+                        s.Staging.observe_pdf_worker(self.runtime, bad, target)
+                    limits.assert_not_called()
+
+    def test_cached_healthy_does_not_admit_lost_kernel_or_systemd_limit(self):
+        target, worker, _ = self.inspect_fixture()
+        for actual, systemd, reason in [('max', 'infinity', 'SWAP_NOT_ZERO'),
+                                        ('1', '0', 'SWAP_NOT_ZERO'),
+                                        ('0', 'infinity', 'SYSTEMD_SWAP_NOT_ZERO')]:
+            with self.subTest(actual=actual, systemd=systemd), patch.object(
+                    self.runtime, 'pdf_swap_state', return_value={
+                        'driver': 'systemd', 'cgroup': actual, 'systemd': systemd}):
+                with self.assertRaisesRegex(s.Refused, reason):
+                    s.Staging.observe_pdf_worker(self.runtime, worker, target)
+
+    def test_old_managed_document_and_hash_remain_observable_without_rewrite(self):
+        target, worker, _ = self.inspect_fixture()
+        old = self.runtime.document(target)
+        del old['services']['pdf-worker']['annotations']
+        worker['HostConfig'].pop('Annotations')
+        s.atomic(self.runtime.compose_file, old)
+        before = self.runtime.compose_file.read_bytes()
+        runtime_hash = s.digest(self.runtime.config['runtime'])
+        legacy = {'driver': 'systemd', 'cgroup': '0', 'systemd': 'infinity'}
+        with patch.object(self.runtime, 'pdf_swap_state', return_value=legacy):
+            s.Staging.observe_pdf_worker(self.runtime, worker, target)
+            legacy['cgroup'] = 'max'
+            with self.assertRaisesRegex(s.Refused, 'SWAP_NOT_ZERO'):
+                s.Staging.observe_pdf_worker(self.runtime, worker, target)
+        self.assertEqual(before, self.runtime.compose_file.read_bytes())
+        self.assertEqual(runtime_hash, s.digest(self.runtime.config['runtime']))
+
+    def test_old_pdf_state_can_adopt_annotation_without_runtime_or_schema_change(self):
+        self.runtime.apply('install', record(image()))
+        target = self.enable()
+        self.runtime.apply('deploy', record(target), apply_config=True)
+        old = self.runtime.document(target); del old['services']['pdf-worker']['annotations']
+        s.atomic(self.runtime.compose_file, old)
+        state = self.runtime.state(); state['compose_hash'] = s.digest(old); self.runtime.save(state)
+        pg, neighbor = copy.deepcopy(self.runtime.pg), copy.deepcopy(self.runtime.neighbor)
+        self.assertEqual(self.runtime.apply('deploy', record(target))['status'], 'SUCCESS')
+        after = s.private_json(self.runtime.compose_file)
+        self.assertEqual(after['services']['pdf-worker'].pop('annotations'), s.PDF_SYSTEMD_ANNOTATIONS)
+        self.assertEqual(after, old)
+        for key in ('runtime_hash', 'config_binding', 'binding', 'target'):
+            self.assertEqual(self.runtime.state()[key], state[key])
+        self.assertEqual((self.runtime.pg, self.runtime.neighbor), (pg, neighbor))
+
+    def test_unhealthy_old_worker_is_not_silently_repaired_by_deploy(self):
+        self.runtime.apply('install', record(image()))
+        target = self.enable()
+        self.runtime.apply('deploy', record(target), apply_config=True)
+        before, state, calls = self.runtime.compose_file.read_bytes(), self.runtime.state(), len(self.runtime.calls)
+        with patch.object(self.runtime, 'observe', side_effect=s.Refused('PDF_WORKER_NOT_HEALTHY')):
+            with self.assertRaisesRegex(s.Refused, 'PDF_WORKER_NOT_HEALTHY'):
+                self.runtime.apply('deploy', record(target))
+        self.assertEqual(before, self.runtime.compose_file.read_bytes())
+        self.assertEqual(state, self.runtime.state()); self.assertEqual(calls, len(self.runtime.calls))
+
+    def test_swap_reader_is_scoped_to_exact_worker_and_no_shell(self):
+        target, worker, _ = self.inspect_fixture()
+        original = self.runtime.run
+        with patch.object(self.runtime, 'run', wraps=original) as runner:
+            self.assertEqual(self.runtime.pdf_swap_state(worker),
+                             {'driver': 'systemd', 'cgroup': '0', 'systemd': '0'})
+            self.assertEqual([c.args[0][0] for c in runner.call_args_list], ['docker', 'docker', 'systemctl'])
+            self.assertEqual(runner.call_args_list[1].args[0],
+                             ['docker', 'exec', worker['Id'], '/bin/cat', '/sys/fs/cgroup/memory.swap.max'])
+            for invalid in ('', '../other', 'd' * 63, 'neighbor;cmd', None):
+                bad = dict(worker, Id=invalid); runner.reset_mock()
+                with self.assertRaisesRegex(s.Refused, 'ID_INVALID'): self.runtime.pdf_swap_state(bad)
+                runner.assert_not_called()
+
+    def test_swap_reader_failures_do_not_pass_or_leak_output(self):
+        _, worker, _ = self.inspect_fixture()
+        for driver in (b'', b'unknown\n'):
+            with patch.object(self.runtime, 'run', return_value=driver):
+                with self.assertRaisesRegex(s.Refused, 'DRIVER_UNKNOWN'): self.runtime.pdf_swap_state(worker)
+        with patch.object(self.runtime, 'run', side_effect=[b'systemd\n', b'0\n', b'\n']):
+            with self.assertRaisesRegex(s.Refused, 'SCOPE_UNKNOWN'): self.runtime.pdf_swap_state(worker)
+        with patch.object(self.runtime, 'run', side_effect=[b'cgroupfs\n', b'0\n']) as runner:
+            self.assertEqual(self.runtime.pdf_swap_state(worker),
+                             {'driver': 'cgroupfs', 'cgroup': '0', 'systemd': None})
+            self.assertEqual(runner.call_count, 2)  # No systemd claim on cgroupfs.
 
     def test_actual_inspect_contract_accepts_only_exact_isolation(self):
         target, worker, volume = self.inspect_fixture()
