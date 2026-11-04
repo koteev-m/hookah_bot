@@ -234,14 +234,12 @@ import org.slf4j.LoggerFactory
 import java.io.ByteArrayOutputStream
 import java.security.SecureRandom
 import java.sql.Connection
-import java.time.DateTimeException
 import java.time.DayOfWeek
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
-import java.time.MonthDay
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Base64
@@ -3062,7 +3060,7 @@ class TelegramBotRouter internal constructor(
             enqueueMessage(chatId, "Не удалось определить пользователя. Попробуйте /start.")
             return
         }
-        val parsed = parseGuestBirthday(text)
+        val parsed = UserRepository.parseGuestBirthday(text)
         if (parsed == null) {
             enqueueMessage(chatId, "Введите реальную дату в формате ДД.ММ, например 05.09.")
             return
@@ -3194,17 +3192,6 @@ class TelegramBotRouter internal constructor(
         val month = profile?.birthdayMonth ?: return null
         val day = profile.birthdayDay ?: return null
         return "%02d.%02d".format(day, month)
-    }
-
-    private fun parseGuestBirthday(value: String): MonthDay? {
-        val match = Regex("""^\s*(\d{2})\.(\d{2})\s*$""").matchEntire(value) ?: return null
-        val day = match.groupValues[1].toIntOrNull() ?: return null
-        val month = match.groupValues[2].toIntOrNull() ?: return null
-        return try {
-            MonthDay.of(month, day)
-        } catch (_: DateTimeException) {
-            null
-        }
     }
 
     private suspend fun showBotVenueCatalog(chatId: Long) {

@@ -51,6 +51,19 @@ data class VenueDto(
 )
 
 @Serializable
+data class GuestPromotionFeedResponse(
+    val items: List<GuestPromotionFeedItemDto>,
+)
+
+@Serializable
+data class GuestPromotionFeedItemDto(
+    val venueId: Long,
+    val venueName: String,
+    val timezone: String,
+    val promotion: GuestVenuePromotionDto,
+)
+
+@Serializable
 data class GuestVenuePromotionDto(
     val id: Long,
     val title: String,

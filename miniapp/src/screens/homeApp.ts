@@ -112,7 +112,7 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
     if (selected === 'guest') {
       disposeApp = mountGuestApp({ root: content })
       unsubscribe = subscribe(snapshot => {
-        if (snapshot.tableSessionActive) {
+        if (snapshot.tableSessionActive && allowed.length > 1) {
           status.hidden = false
           status.textContent = 'Идёт посещение. Для перехода в рабочий режим сначала завершите визит.'
         } else if (snapshot.status !== 'resolving' && snapshot.status !== 'error') {

@@ -33,6 +33,12 @@ import { showToast } from '../shared/ui/toast'
 
 type SupportOpenBotResult = { ok: true } | { ok: false; message: string }
 
+export type GuestConversationState = {
+  filter: SupportThreadFilter
+  listScroll: number
+  drafts: Map<number, { text: string; attempt: ReturnType<typeof createBookingMessageAttempt> }>
+}
+
 type GuestSupportThreadsOptions = {
   root: HTMLDivElement | null
   backendUrl: string
@@ -43,12 +49,20 @@ type GuestSupportThreadsOptions = {
   onBack: () => void
   onOpenBot: () => SupportOpenBotResult
   onOpenVenueStaffCall: () => void
+  conversationState: GuestConversationState
+  onOpenThread: (threadId: number, replace?: boolean) => void
+  onOpenList: () => void
+  startVenueChat?: boolean
   initialThreadId?: number | null
   createVenueChatVenueId?: number | null
   prefillSupportVenueId?: number | null
 }
 
 type GuestSupportRefs = {
+  header: HTMLElement
+  detailHeader: HTMLElement
+  detailBack: HTMLButtonElement
+  createCard: HTMLElement
   status: HTMLParagraphElement
   refreshButton: HTMLButtonElement
   activeButton: HTMLButtonElement
@@ -121,24 +135,6 @@ function threadTitle(thread: SupportThreadDto): string {
   return thread.title
 }
 
-function statusLabel(status: string): string {
-  switch (status.toUpperCase()) {
-    case 'NEW':
-      return 'Новый'
-    case 'OPEN':
-    case 'IN_PROGRESS':
-      return 'В работе'
-    case 'WAITING_USER':
-      return 'Ждём ответа'
-    case 'RESOLVED':
-      return 'Решено'
-    case 'CLOSED':
-      return 'Закрыто'
-    default:
-      return status
-  }
-}
-
 function previewText(thread: SupportThreadDto): string {
   const value = thread.lastMessagePreview?.trim()
   if (!value) return 'Сообщений пока нет.'
@@ -173,10 +169,11 @@ function renderMessages(list: HTMLDivElement, messages: SupportMessageDto[]) {
           : message.authorRole === 'PLATFORM'
             ? 'Поддержка'
             : 'Система'
-    const row = el('p', {
-      className: message.authorRole === 'GUEST' ? 'venue-order-meta' : 'venue-order-sub',
-      text: `${author}, ${formatDateTime(message.createdAt)}: ${message.text}`
-    })
+    const row = el('article', { className: 'guest-chat-message' })
+    row.dataset.author = message.authorRole
+    const meta = el('p', { className: 'status', text: `${author} · ${formatDateTime(message.createdAt)}` })
+    const text = el('p', { className: 'guest-chat-message-text', text: message.text })
+    append(row, meta, text)
     list.appendChild(row)
   })
 }
@@ -194,7 +191,7 @@ function screenCopy(screenMode: GuestSupportThreadsOptions['screenMode']): Guest
   }
   return {
     title: 'Чаты',
-    body: 'Здесь все ваши чаты с заведениями: вопросы, брони и другие переписки. Проблемы и жалобы находятся в разделе Помощь.',
+    body: '',
     emptyText: 'Пока нет чатов. Вы можете задать вопрос заведению из каталога или карточки заведения.',
     showCreate: false,
     threadTypes: ['BOOKING_THREAD', 'VENUE_CHAT'],
@@ -203,10 +200,10 @@ function screenCopy(screenMode: GuestSupportThreadsOptions['screenMode']): Guest
 }
 
 function buildDom(root: HTMLDivElement, hasTableContext: boolean, copy: GuestSupportScreenCopy): GuestSupportRefs {
-  const wrapper = el('div', { className: 'venue-settings' })
+  const wrapper = el('div', { className: 'venue-settings guest-conversations' })
   const header = el('section', { className: 'card' })
-  const title = el('h2', { text: copy.title })
-  const body = el('p', { text: copy.body })
+  const title = el('h1', { text: copy.title })
+  const body = copy.body ? el('p', { text: copy.body }) : null
   const tableHint = el('p', {
     className: 'venue-order-sub',
     text: hasTableContext
@@ -220,7 +217,7 @@ function buildDom(root: HTMLDivElement, hasTableContext: boolean, copy: GuestSup
   categorySelect.className = 'venue-select'
   ;[
     ['ORDER_SERVICE', 'Проблема с заказом/обслуживанием'],
-    ['MINIAPP_TECHNICAL', 'Mini App / техническая проблема'],
+    ['MINIAPP_TECHNICAL', 'Проблема с приложением'],
     ['BOOKING', 'Бронь'],
     ['OTHER', 'Другое']
   ].forEach(([value, label]) => {
@@ -240,20 +237,25 @@ function buildDom(root: HTMLDivElement, hasTableContext: boolean, copy: GuestSup
   const createButton = el('button', { className: 'button-small', text: 'Создать обращение' }) as HTMLButtonElement
   append(createCard, createTitle, categorySelect, venueField, createTextarea, createButton)
   const status = el('p', { className: 'status', text: '' })
-  const refreshButton = el('button', { className: 'button-secondary', text: '🔄 Обновить' }) as HTMLButtonElement
+  status.setAttribute('role', 'status')
+  const refreshButton = el('button', { className: 'button-secondary', text: 'Обновить' }) as HTMLButtonElement
   const filterActions = el('div', { className: 'message-filter-tabs' })
   const activeButton = el('button', { className: 'button-small', text: 'Активные' }) as HTMLButtonElement
   const resolvedButton = el('button', { className: 'button-small button-secondary', text: 'Завершённые' }) as HTMLButtonElement
   append(filterActions, activeButton, resolvedButton)
-  append(header, title, body, tableHint, status, filterActions, refreshButton)
+  append(header, title, body, copy.showCreate ? tableHint : null, filterActions)
+  const detailHeader = el('div', { className: 'guest-chat-toolbar' })
+  const detailBack = el('button', { className: 'button-secondary button-small', text: copy.showCreate ? 'К обращениям' : 'К чатам' })
+  detailHeader.appendChild(detailBack)
 
   const list = el('div', { className: 'venue-messages-list' })
   const detail = el('div', { className: 'venue-messages-detail' })
   const botMessage = el('p', { className: 'staff-message', text: '' })
   botMessage.hidden = true
-  append(wrapper, header, createCard, list, detail, botMessage)
+  append(wrapper, header, detailHeader, status, createCard, list, detail, refreshButton, botMessage)
   root.replaceChildren(wrapper)
   return {
+    header, detailHeader, detailBack, createCard,
     status,
     refreshButton,
     activeButton,
@@ -282,7 +284,11 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     onOpenVenueStaffCall,
     initialThreadId,
     createVenueChatVenueId,
-    prefillSupportVenueId
+    prefillSupportVenueId,
+    startVenueChat,
+    conversationState,
+    onOpenThread,
+    onOpenList
   } = options
   if (!root) return () => undefined
   const copy = screenCopy(screenMode)
@@ -293,13 +299,27 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
   let abortController: AbortController | null = null
   let threads: SupportThreadDto[] = []
   let venues: CatalogVenueDto[] = []
-  let currentFilter: SupportThreadFilter = 'active'
+  let currentFilter: SupportThreadFilter = conversationState.filter
   let selectedThreadId: number | null = initialThreadId ?? null
   let disposeThreadDetail: (() => void) | null = null
   let detailThread: SupportThreadDto | null = null
   let reconciliationState: BookingThreadReconciliationState = bookingThreadLoading()
   let initialInventoryPending = initialThreadId != null
   let bookingSendInFlightThreadId: number | null = null
+  let openingVenueChat = false
+  let restoreListScroll = initialThreadId == null
+  const detailView = initialThreadId != null || Boolean(createVenueChatVenueId)
+  refs.header.hidden = refs.list.hidden = detailView
+  refs.detailHeader.hidden = !detailView
+  refs.createCard.hidden = detailView || !copy.showCreate
+  refs.detailBack.addEventListener('click', () => {
+    if (!showBookingSendBusy()) onOpenList()
+  })
+  if (!detailView && screenMode === 'tickets') {
+    const back = el('button', { className: 'button-secondary button-small', text: 'Назад' })
+    back.addEventListener('click', onBack)
+    refs.header.prepend(back)
+  }
   const bookingSendBusyMessage = 'Дождитесь завершения отправки перед обновлением или сменой переписки.'
 
   const showBookingSendBusy = () => {
@@ -387,6 +407,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
   const loadVenuesForSupport = async () => {
     if (screenMode !== 'tickets' || hasTableContext) return
     const result = await guestGetCatalog(backendUrl, deps)
+    if (disposed) return
     if (!result.ok) {
       renderApiError(refs.status, result.error, isDebug)
       return
@@ -419,6 +440,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     }
     refs.createButton.disabled = true
     const result = await guestCreateSupportThread(backendUrl, payload, deps)
+    if (disposed) return
     refs.createButton.disabled = false
     if (!result.ok) {
       renderApiError(refs.status, result.error, isDebug)
@@ -427,29 +449,39 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     refs.createTextarea.value = ''
     refs.status.textContent = 'Обращение создано.'
     showToast('Обращение создано.')
-    currentFilter = 'active'
-    selectedThreadId = result.data.thread.threadId
-    await loadThreads()
-    void loadThread(result.data.thread.threadId)
+    conversationState.filter = 'active'
+    onOpenThread(result.data.thread.threadId)
   }
 
   const openOrCreateVenueChat = async (venueId: number) => {
-    refs.status.textContent = 'Открываем чат с заведением...'
+    if (openingVenueChat) return
+    openingVenueChat = true
+    refs.detail.replaceChildren()
+    refs.refreshButton.hidden = true
+    refs.status.textContent = 'Открываем чат с заведением…'
     const result = await guestCreateVenueChat(backendUrl, { venueId }, deps)
+    if (disposed) return
+    openingVenueChat = false
     if (!result.ok) {
       renderApiError(refs.status, result.error, isDebug)
-      await loadThreads()
+      offerVenueChat(venueId, 'Попробовать ещё раз')
       return
     }
-    refs.status.textContent = ''
-    selectedThreadId = result.data.thread.threadId
-    showThreadDetail(result.data.thread, result.data.messages)
-    await loadThreads()
+    onOpenThread(result.data.thread.threadId, true)
+  }
+
+  const offerVenueChat = (venueId: number, label: string) => {
+    refs.refreshButton.hidden = true
+    const open = el('button', { text: label })
+    open.addEventListener('click', () => void openOrCreateVenueChat(venueId))
+    refs.detail.replaceChildren(open)
   }
 
   const updateFilterButtons = () => {
     refs.activeButton.dataset.active = String(currentFilter === 'active')
     refs.resolvedButton.dataset.active = String(currentFilter === 'resolved')
+    refs.activeButton.setAttribute('aria-pressed', String(currentFilter === 'active'))
+    refs.resolvedButton.setAttribute('aria-pressed', String(currentFilter === 'resolved'))
   }
 
   const renderFallbackActions = (container: HTMLElement) => {
@@ -469,10 +501,11 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
   }
 
   const renderThreadList = () => {
+    if (detailView) return
     refs.list.replaceChildren()
     if (!threads.length) {
       const empty = el('section', { className: 'card' })
-      append(empty, el('p', { className: 'venue-empty', text: copy.emptyText }))
+      append(empty, el('p', { className: 'venue-empty', text: currentFilter === 'resolved' ? 'Завершённых переписок пока нет.' : copy.emptyText }))
       if (screenMode === 'messages') {
         renderFallbackActions(empty)
       }
@@ -486,23 +519,34 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       card.dataset.threadType = thread.threadType
       card.dataset.unreadCount = String(unreadCount(thread))
       if (thread.bookingId != null) card.dataset.bookingId = String(thread.bookingId)
-      const title = el('h3', { text: threadTitle(thread) })
-      const venue = el('p', { className: 'venue-order-sub', text: thread.venueName || 'Заведение' })
-      const meta = el('p', {
-        className: 'venue-order-sub',
-        text: `${statusLabel(thread.status)} · ${formatDateTime(thread.lastMessageAt || thread.createdAt)}`
-      })
-      const preview = el('p', { className: 'message-preview', text: previewText(thread) })
+      const name = thread.venueName || threadTitle(thread)
+      const openButton = el('button', { className: 'button-secondary guest-chat-row' })
       const unread = unreadCount(thread)
-      if (unread > 0) {
-        card.appendChild(el('span', { className: 'menu-item-badge', text: `Новых: ${unread}` }))
+      const summary = el('span', { className: 'guest-chat-summary' })
+      const title = el('strong', { text: name })
+      const time = thread.lastMessageAt || thread.createdAt
+      append(summary, title, el('span', { className: 'status message-preview', text: previewText(thread) }))
+      if (thread.threadType !== 'VENUE_CHAT') {
+        summary.appendChild(el('span', { className: 'status', text: threadTitle(thread) }))
       }
-      const openButton = el('button', { className: 'button-small', text: 'Открыть' }) as HTMLButtonElement
-      openButton.disabled = bookingSendInFlightThreadId != null
-      openButton.addEventListener('click', () => void loadThread(thread.threadId, 'selection'))
-      append(card, title, venue, meta, preview, openButton)
+      const info = el('span', { className: 'guest-chat-row-meta' })
+      if (time) info.appendChild(el('span', { className: 'status', text: formatDateTime(time) }))
+      if (unread > 0) info.appendChild(el('span', { className: 'menu-item-badge', text: `Новых: ${unread}` }))
+      append(openButton, summary, info)
+      openButton.setAttribute('aria-label', `Открыть · ${threadTitle(thread)}`)
+      openButton.addEventListener('click', () => {
+        conversationState.listScroll = window.scrollY
+        onOpenThread(thread.threadId)
+      })
+      card.appendChild(openButton)
       refs.list.appendChild(card)
     })
+    if (restoreListScroll) {
+      restoreListScroll = false
+      window.requestAnimationFrame(() => {
+        if (!disposed) window.scrollTo(0, conversationState.listScroll)
+      })
+    }
   }
 
   const loadThreads = async () => {
@@ -523,12 +567,14 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     if (disposed || abortController !== controller) return
     abortController = null
     refs.refreshButton.disabled = false
-    refs.refreshButton.textContent = '🔄 Обновить'
+    refs.refreshButton.hidden = false
+    refs.refreshButton.textContent = 'Обновить'
     if (!result.ok) {
       reconciliationState = bookingThreadError()
-      refs.status.textContent = 'Не удалось сверить список переписок. Отправка сообщений заблокирована.'
-      refs.refreshButton.textContent = 'Обновить переписку'
-      showReconciliationError('Не удалось сверить переписку. Черновик сохранён; повторите чтение.')
+      refs.status.textContent = detailView ? 'Не удалось загрузить переписку.' : 'Не удалось загрузить список чатов.'
+      refs.refreshButton.hidden = detailView
+      refs.refreshButton.textContent = 'Повторить'
+      if (detailView) showReconciliationError('Не удалось сверить переписку. Черновик сохранён; повторите чтение.')
       return
     }
     refs.status.textContent = ''
@@ -555,8 +601,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     const selectedStillVisible = selectedThreadId && threads.some((thread) => thread.threadId === selectedThreadId)
     if (selectedThreadId && selectedStillVisible) {
       void loadThread(selectedThreadId)
-    } else if (screenMode === 'messages' && threads.length && !detailThread) {
-      void loadThread(threads[0].threadId)
+
     } else if (!threads.length || !selectedStillVisible) {
       selectedThreadId = null
       clearThreadDetail()
@@ -580,10 +625,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       initialInventoryPending = false
     }
     const switchingThread = selectedThreadId !== threadId
-    const preservedDraft =
-      !switchingThread && detailThread?.threadId === threadId && detailThread.threadType === 'BOOKING_THREAD'
-        ? refs.detail.querySelector<HTMLTextAreaElement>('[data-booking-composer]')?.value ?? ''
-        : ''
+    const preservedDraft = conversationState.drafts.get(threadId)?.text ?? ''
     if (switchingThread && refs.detail.childElementCount > 0) {
       clearThreadDetail()
     }
@@ -652,19 +694,21 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
 
   const renderThreadDetail = (thread: SupportThreadDto, messages: SupportMessageDto[], preservedDraft = '') => {
     const bookingMessage = thread.threadType === 'BOOKING_THREAD'
-    const messageAttempt = createBookingMessageAttempt()
+    const draft = conversationState.drafts.get(thread.threadId) ?? { text: '', attempt: createBookingMessageAttempt() }
+    const messageAttempt = draft.attempt
+    let lifecyclePending = false
     let detailDisposed = false
     let sendController: AbortController | null = null
     let currentMessages = messages
     const resolved = isResolvedThread(thread)
     const closed = isClosedThread(thread)
     const card = el('section', { className: 'card' })
-    const title = el('h3', { text: threadTitle(thread) })
+    const title = el('h1', { text: threadTitle(thread) })
     const meta = el('p', {
       className: 'venue-order-sub',
       text: thread.booking
         ? `${thread.venueName || 'Заведение'} · ${formatDateTime(thread.booking.scheduledAt)}`
-        : thread.venueName || 'Заведение'
+        : thread.threadType === 'VENUE_CHAT' ? '' : thread.venueName || 'Обращение в поддержку'
     })
     const messagesList = el('div', { className: 'venue-support-messages' })
     renderMessages(messagesList, currentMessages)
@@ -679,10 +723,12 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     textarea.className = 'venue-textarea'
     textarea.placeholder = screenMode === 'tickets' ? 'Напишите ответ по обращению.' : 'Напишите ответ заведению.'
     textarea.maxLength = 1000
-    textarea.rows = 4
-    textarea.value = preservedDraft
+    textarea.rows = 2
+    textarea.value = preservedDraft || draft.text
+    textarea.setAttribute('aria-label', 'Сообщение')
     textarea.dataset.bookingComposer = String(bookingMessage)
     const status = el('p', { className: 'status', text: '' })
+    status.setAttribute('role', 'status')
     status.dataset.bookingStatus = String(bookingMessage)
     const actions = el('div', { className: 'order-actions' })
     const submitButton = el('button', { className: 'button-small', text: 'Отправить' }) as HTMLButtonElement
@@ -694,19 +740,26 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     } else if (resolved) {
       append(actions, reopenButton)
     }
-    append(card, title, meta, messagesList, lifecycleBanner, textarea, status, actions)
+    const composer = el('div', { className: 'guest-chat-composer' })
+    append(composer, textarea, status, actions)
+    append(card, title, meta.textContent ? meta : null, messagesList, lifecycleBanner, composer)
     refs.detail.replaceChildren(card)
+    window.requestAnimationFrame(() => { messagesList.scrollTop = messagesList.scrollHeight })
     textarea.hidden = resolved || closed
     submitButton.hidden = resolved || closed
 
     const applyStatusChange = async (action: 'resolve' | 'reopen', button: HTMLButtonElement) => {
-      if (showBookingSendBusy()) return
-      button.disabled = true
+      if (showBookingSendBusy() || lifecyclePending) return
+      if (action === 'resolve' && !window.confirm('Завершить переписку? Она переместится в «Завершённые».')) return
+      lifecyclePending = true
+      button.disabled = submitButton.disabled = true
       const result =
         action === 'resolve'
           ? await guestResolveSupportThread(backendUrl, thread.threadId, deps)
           : await guestReopenSupportThread(backendUrl, thread.threadId, deps)
-      button.disabled = false
+      if (detailDisposed) return
+      lifecyclePending = false
+      button.disabled = submitButton.disabled = false
       if (!result.ok) {
         renderApiError(status, result.error, isDebug)
         return
@@ -724,14 +777,15 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     reopenButton.addEventListener('click', () => void applyStatusChange('reopen', reopenButton))
 
     const invalidateDraftAttempt = () => {
-      if (bookingMessage) {
-        messageAttempt.invalidate()
-      }
+      if (textarea.value.trim() !== draft.text.trim()) messageAttempt.invalidate()
+      draft.text = textarea.value
+      if (draft.text) conversationState.drafts.set(thread.threadId, draft)
+      else conversationState.drafts.delete(thread.threadId)
     }
     textarea.addEventListener('input', invalidateDraftAttempt)
 
     submitButton.addEventListener('click', async () => {
-      if (sendController || (bookingMessage && reconciliationState.status !== 'READY_WITH_THREAD')) return
+      if (sendController || lifecyclePending || reconciliationState.status !== 'READY_WITH_THREAD') return
       const text = textarea.value.trim()
       if (!text) {
         status.textContent = 'Введите сообщение.'
@@ -747,16 +801,15 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       if (bookingMessage) {
         setBookingSendInFlight(thread.threadId)
       }
-      const payload = bookingMessage
-        ? {
-            message: text,
-            clientMessageId: messageAttempt.clientMessageIdFor(text, {
-              venueId: thread.venueId ?? null,
-              threadId: thread.threadId,
-              bookingId: thread.bookingId ?? null
-            })
-          }
-        : { message: text }
+      conversationState.drafts.set(thread.threadId, draft)
+      const payload = {
+        message: text,
+        clientMessageId: messageAttempt.clientMessageIdFor(text, {
+          venueId: thread.venueId ?? null,
+          threadId: thread.threadId,
+          bookingId: thread.bookingId ?? null
+        })
+      }
       const result = await guestSendSupportThreadMessage(backendUrl, thread.threadId, payload, deps, controller.signal)
       if (detailDisposed || sendController !== controller) return
       sendController = null
@@ -769,31 +822,29 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       reopenButton.disabled = false
       if (!result.ok) {
         const code = normalizeErrorCode(result.error)
-        if (bookingMessage && result.error.status === 409 && code === ApiErrorCodes.BOOKING_MESSAGE_IDEMPOTENCY_PAYLOAD_MISMATCH) {
+        if (result.error.status === 409 && code === ApiErrorCodes.BOOKING_MESSAGE_IDEMPOTENCY_PAYLOAD_MISMATCH) {
           messageAttempt.invalidate()
           status.textContent = 'Текст сообщения отличается от предыдущей попытки. Проверьте его и отправьте ещё раз.'
         } else {
           renderApiError(status, result.error, isDebug)
-          if (bookingMessage) {
-            status.textContent = `${status.textContent} Текст сохранён: повторите отправку без изменений — дубликат не появится.`
-          }
+          status.textContent = `${status.textContent} Черновик сохранён, повторите отправку без изменений.`
         }
         return
       }
       messageAttempt.invalidate()
-      currentMessages = [...currentMessages, result.data.message]
+      conversationState.drafts.delete(thread.threadId)
+      if (!currentMessages.some((message) => message.messageId === result.data.message.messageId)) {
+        currentMessages = [...currentMessages, result.data.message]
+      }
       renderMessages(messagesList, currentMessages)
       textarea.value = ''
+      draft.text = ''
+      messagesList.scrollTop = messagesList.scrollHeight
       status.textContent = screenMode === 'tickets' ? 'Сообщение добавлено к обращению.' : 'Сообщение отправлено заведению.'
       showToast(screenMode === 'tickets' ? 'Сообщение добавлено.' : 'Сообщение отправлено заведению.')
-      if (bookingMessage) {
-        threads = threads.map((candidate) =>
-          candidate.threadId === result.data.thread.threadId ? result.data.thread : candidate
-        )
-        renderThreadList()
-      } else {
-        void loadThreads()
-      }
+      threads = threads.map((candidate) =>
+        candidate.threadId === result.data.thread.threadId ? result.data.thread : candidate
+      )
     })
 
     return () => {
@@ -803,7 +854,6 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       if (bookingMessage && bookingSendInFlightThreadId === thread.threadId) {
         setBookingSendInFlight(null)
       }
-      messageAttempt.invalidate()
       textarea.removeEventListener('input', invalidateDraftAttempt)
     }
   }
@@ -826,6 +876,8 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     if (showBookingSendBusy()) return
     if (currentFilter === filter) return
     currentFilter = filter
+    conversationState.filter = filter
+    conversationState.listScroll = 0
     selectedThreadId = null
     clearThreadDetail()
     void loadThreads()
@@ -840,7 +892,8 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
   disposables.push(on(refs.createButton, 'click', () => void createTicket()))
   updateVenuePicker()
   if (screenMode === 'messages' && createVenueChatVenueId) {
-    void openOrCreateVenueChat(createVenueChatVenueId)
+    if (startVenueChat) void openOrCreateVenueChat(createVenueChatVenueId)
+    else offerVenueChat(createVenueChatVenueId, 'Открыть чат с заведением')
   } else {
     void loadThreads()
   }

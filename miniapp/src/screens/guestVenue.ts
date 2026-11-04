@@ -1,3 +1,4 @@
+import { renderGuestPromotion } from './guestPromotions'
 import { getVenueBrowseId } from '../shared/state/venueBrowseContext'
 import { createInfoMediaPreview, type InfoMediaLoader } from '../shared/ui/infoMediaPreview'
 import { loadInfoMediaContent } from '../shared/api/infoMediaContent'
@@ -68,9 +69,13 @@ type VenueScreenOptions = {
   isDebug: boolean
   venueId: number | null
   openStaffCall?: boolean
+  focusHeading?: boolean
   replaceCartLineRef?: string | null
   onBookVenue?: (venueId: number) => void
   onAskVenue?: (venueId: number) => void
+  onOpenCatalog?: () => void
+  onOpenHelp?: (venueId: number) => void
+  onBack?: () => void
   readOnlyPreview?: boolean
   onPreviewLoaded?: (
     preview: Pick<VenueGuestPreviewResponse, 'mode' | 'venueAvailabilityLabel'>
@@ -95,10 +100,13 @@ type VenueRefs = {
   errorMessage: HTMLParagraphElement
   errorActions: HTMLDivElement
   errorDetails: HTMLDivElement
+  header: HTMLDivElement
   venueTitle: HTMLHeadingElement
   venueLocation: HTMLParagraphElement
   venueSchedule: HTMLParagraphElement
-  routeLink: HTMLAnchorElement
+  previewRouteLink: HTMLAnchorElement | null
+  maps: HTMLDetailsElement
+  mapLinks: HTMLDivElement
   copyAddressButton: HTMLButtonElement
   favoriteButton: HTMLButtonElement
   bookingButton: HTMLButtonElement
@@ -195,34 +203,44 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
   })
 }
 
-function buildVenueDom(root: HTMLDivElement): VenueRefs {
+function buildVenueDom(root: HTMLDivElement, readOnlyPreview: boolean): VenueRefs {
   const wrapper = el('div', { className: 'venue-screen' })
   const header = el('div', { className: 'venue-header' })
-  const venueTitle = el('h3', { text: 'Загрузка...' })
-  const venueLocation = el('p', { className: 'venue-location', text: '' })
-  const venueSchedule = el('p', { className: 'venue-location', text: '' })
-  const routeLink = el('a', { className: 'button-secondary button-small venue-route-link', text: 'Построить маршрут' }) as HTMLAnchorElement
-  routeLink.target = '_blank'
-  routeLink.rel = 'noopener noreferrer'
-  routeLink.hidden = true
+  const venueTitle = el(readOnlyPreview ? 'h3' : 'h1', { text: '' })
+  const venueLocation = el('p', { className: 'venue-location' })
+  const venueSchedule = el('p', { className: 'venue-location guest-today-schedule' })
+  const maps = el('details', { className: 'guest-map-options' })
+  maps.hidden = true
+  const mapLinks = el('div', { className: 'guest-map-links' })
   const copyAddressButton = el('button', {
-    className: 'button-secondary button-small venue-route-link',
+    className: 'button-secondary button-small',
     text: 'Скопировать адрес'
-  }) as HTMLButtonElement
-  copyAddressButton.hidden = true
+  })
+  append(maps, el('summary', { text: 'Как добраться' }), mapLinks)
+  if (!readOnlyPreview) maps.appendChild(copyAddressButton)
+  const previewRouteLink = readOnlyPreview ? el('a', {
+    className: 'button-secondary button-small venue-route-link', text: 'Построить маршрут'
+  }) : null
+  if (previewRouteLink) {
+    previewRouteLink.target = '_blank'
+    previewRouteLink.rel = 'noopener noreferrer'
+  }
   const favoriteButton = el('button', {
     className: 'button-secondary button-small favorite-toggle',
     text: 'В избранное'
   }) as HTMLButtonElement
   favoriteButton.setAttribute('aria-pressed', 'false')
   const bookingButton = el('button', { className: 'button-secondary button-small', text: 'Забронировать' }) as HTMLButtonElement
-  const questionButton = el('button', { className: 'button-small', text: '💬 Задать вопрос' }) as HTMLButtonElement
-  append(header, venueTitle, venueLocation, venueSchedule, routeLink, copyAddressButton, favoriteButton, bookingButton, questionButton)
+  const questionButton = el('button', { className: 'button-secondary button-small', text: 'Задать вопрос' }) as HTMLButtonElement
+  const extras = el('div', { className: 'guest-venue-extras' })
+  append(extras, questionButton, favoriteButton)
+  append(header, venueTitle, venueLocation, venueSchedule, bookingButton, extras, maps,
+    previewRouteLink, readOnlyPreview ? copyAddressButton : null)
 
   const status = el('p', { className: 'status', text: '' })
   const message = el('p', { className: 'status menu-message', text: '' })
 
-  const retryButton = el('button', { className: 'button-small', text: 'Обновить' })
+  const retryButton = el('button', { className: 'button-secondary button-small guest-venue-refresh', text: 'Обновить' })
 
   const error = el('div', { className: 'error-card' })
   error.hidden = true
@@ -290,10 +308,10 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     staffSlot,
     status,
     message,
-    retryButton,
     error,
     menuBody,
     todayStaffSlot,
+    retryButton,
     staffModalOverlay
   )
   root.replaceChildren(wrapper)
@@ -305,10 +323,13 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
     errorMessage,
     errorActions,
     errorDetails,
+    header,
     venueTitle,
     venueLocation,
     venueSchedule,
-    routeLink,
+    previewRouteLink,
+    maps,
+    mapLinks,
     copyAddressButton,
     favoriteButton,
     bookingButton,
@@ -342,61 +363,13 @@ function buildVenueDom(root: HTMLDivElement): VenueRefs {
   }
 }
 
-function formatPromotionDateTime(value: string, timezone?: string | null): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  try {
-    return date.toLocaleString('ru-RU', {
-      ...(timezone ? { timeZone: timezone } : {}),
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  } catch {
-    return date.toLocaleString('ru-RU')
-  }
-}
-
-function promotionPeriodLabel(promotion: GuestVenuePromotionDto, timezone?: string | null): string | null {
-  if (promotion.startsAt && promotion.endsAt) {
-    return `с ${formatPromotionDateTime(promotion.startsAt, timezone)} по ${formatPromotionDateTime(promotion.endsAt, timezone)}`
-  }
-  if (promotion.endsAt) {
-    return `Действует до ${formatPromotionDateTime(promotion.endsAt, timezone)}`
-  }
-  if (promotion.startsAt) {
-    return `Действует с ${formatPromotionDateTime(promotion.startsAt, timezone)}`
-  }
-  return null
-}
-
 function renderGuestPromotions(promotions: GuestVenuePromotionDto[], timezone?: string | null): HTMLElement | null {
   if (!promotions.length) return null
   const section = el('section', { className: 'card guest-venue-promotions' })
   section.appendChild(el('h4', { text: 'Акции' }))
   const list = el('div', { className: 'guest-venue-promotion-list' })
   promotions.forEach((promotion) => {
-    const card = el('article', { className: 'guest-venue-promotion' })
-    card.appendChild(el('h5', { text: promotion.title }))
-    card.appendChild(el('p', { text: promotion.description }))
-    if (promotion.templateType === 'HAPPY_HOURS_PERCENT') {
-      card.appendChild(
-        el('p', {
-          className: 'guest-venue-promotion-terms',
-          text: 'Скидка рассчитывается автоматически по актуальным ценам при оформлении заказа.'
-        })
-      )
-    }
-    const period = promotionPeriodLabel(promotion, timezone)
-    if (period) {
-      card.appendChild(el('p', { className: 'guest-venue-promotion-period', text: period }))
-    }
-    if (promotion.terms?.trim()) {
-      card.appendChild(el('p', { className: 'guest-venue-promotion-terms', text: `Условия: ${promotion.terms.trim()}` }))
-    }
-    list.appendChild(card)
+    list.appendChild(renderGuestPromotion(promotion, timezone))
   })
   section.appendChild(list)
   return section
@@ -571,17 +544,20 @@ function guestScheduleDayLabel(weekday: number): string {
 function guestScheduleHoursLabel(
   hours: Pick<GuestVenueScheduleDayDto, 'opensAt' | 'closesAt' | 'isClosed'>
 ): string {
-  return hours.isClosed ? 'Закрыто' : `${hours.opensAt}–${hours.closesAt}`
+  if (hours.isClosed) return 'Закрыто'
+  if (hours.opensAt === hours.closesAt) return 'Круглосуточно'
+  return `${hours.opensAt}–${hours.closesAt}`
 }
 
 function renderGuestSchedule(
   weeklyHours: GuestVenueScheduleDayDto[],
-  dateExceptions: GuestVenueDateExceptionDto[]
+  dateExceptions: GuestVenueDateExceptionDto[],
+  collapsible: boolean
 ): HTMLElement | null {
   if (!weeklyHours.length && !dateExceptions.length) return null
 
-  const section = el('section', { className: 'card venue-info-section guest-venue-schedule' })
-  section.appendChild(el('h4', { text: 'График работы' }))
+  const section = el(collapsible ? 'details' : 'section', { className: 'card venue-info-section guest-venue-schedule' })
+  section.appendChild(el(collapsible ? 'summary' : 'h4', { text: 'График работы' }))
 
   if (weeklyHours.length) {
     const weeklyList = el('div', { className: 'guest-venue-schedule-list' })
@@ -682,10 +658,11 @@ function resolveInfoMediaCount(section: VenueInfoSectionDto, mediaItems: ReturnT
 function renderInfoSection(
   section: VenueInfoSectionDto,
   loadMedia: (url: string) => InfoMediaLoader,
-  disposables: Array<() => void>
+  disposables: Array<() => void>,
+  openMedia?: (index: number) => void
 ) {
   const sectionCard = el('section', { className: 'card venue-info-section' })
-  const title = section.displayTitle || section.title
+  const title = section.displayTitle?.trim() || section.title?.trim() || 'Материалы заведения'
   sectionCard.appendChild(el('h4', { text: title }))
   if (section.text?.trim()) sectionCard.appendChild(el('p', { text: section.text.trim() }))
   const mediaItems = normalizeInfoMedia(section)
@@ -700,10 +677,20 @@ function renderInfoSection(
         return
       }
       const card = el('div', { className: 'venue-info-document' })
-      if (pdf) card.appendChild(el('p', { className: 'info-media-title', text: `PDF ${number}` }))
-      const preview = createInfoMediaPreview(pdf ? 'pdf' : 'image', `${title} ${number}`, loadMedia(media.url!))
+      const label = !openMedia ? `${title} ${number}` : mediaItems.length > 1 ? `${title} · ${number}` : title
+      if (!openMedia && pdf) card.appendChild(el('p', { className: 'info-media-title', text: `PDF ${number}` }))
+      const preview = createInfoMediaPreview(pdf ? 'pdf' : 'image', label, loadMedia(media.url!), openMedia ? 'thumbnail' : undefined)
       disposables.push(preview.dispose)
       card.appendChild(preview.element)
+      if (openMedia) {
+        const open = el('button', {
+          className: 'button-secondary button-small',
+          text: pdf ? 'Открыть документ' : 'Открыть фото'
+        })
+        open.setAttribute('aria-label', `${open.textContent} · ${label}`)
+        open.addEventListener('click', () => openMedia(index))
+        card.appendChild(open)
+      }
       list.appendChild(card)
     })
     sectionCard.appendChild(list)
@@ -792,7 +779,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
   const readOnlyPreview = options.readOnlyPreview === true
   let privateMedia = false
-  const refs = buildVenueDom(root)
+  const refs = buildVenueDom(root, readOnlyPreview)
+  const routeParams = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+  const mediaKey = !readOnlyPreview ? routeParams.get('media') : null
   refs.bookingButton.disabled = !venueId
   refs.questionButton.disabled = !venueId
   refs.staffCounter.textContent = `${refs.staffComment.value.length}/${MAX_STAFF_COMMENT_LENGTH}`
@@ -805,7 +794,15 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.retryButton.textContent = 'Повторить'
     refs.retryButton.hidden = true
   }
+  const menuButton = el('button', { className: 'guest-venue-menu-button', text: 'Меню' })
+  const catalogButton = el('button', { className: 'button-secondary button-small', text: 'Другие заведения' })
+  if (!readOnlyPreview && venueId) {
+    refs.bookingButton.before(menuButton)
+    refs.retryButton.before(catalogButton)
+    catalogButton.addEventListener('click', () => options.onOpenCatalog?.())
+  }
   let disposed = false
+  let focusHeading = options.focusHeading === true
   let menuAbort: AbortController | null = null
   let favoriteAbort: AbortController | null = null
   let staffAbort: AbortController | null = null
@@ -974,6 +971,10 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       isDebug,
       extraNotes: presentation.debugLine ? [presentation.debugLine] : undefined
     })
+    if (!readOnlyPreview && venueId && options.onOpenHelp) {
+      actions.push({ label: 'Помощь', onClick: () => options.onOpenHelp?.(venueId) })
+      renderErrorActions(refs.errorActions, actions)
+    }
     refs.error.hidden = false
   }
 
@@ -994,18 +995,20 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     !readOnlyPreview &&
     tableSnapshot.status === 'resolved' &&
     tableSnapshot.venueId === venueId &&
+    tableSnapshot.tableSessionActive &&
     Boolean(tableSnapshot.tableToken) &&
     typeof tableSnapshot.tableSessionId === 'number' &&
     Number.isFinite(tableSnapshot.tableSessionId) &&
     tableSnapshot.tableSessionId > 0
   const updateQuestionAction = () => {
-    refs.questionButton.hidden = !venueId || !onAskVenue || isTableVenueContext()
+    refs.questionButton.hidden = !venueId || !onAskVenue || isTableVenueContext() || shouldShowOrderMenu()
     refs.questionButton.disabled = !venueId || isTableVenueContext()
   }
   const shouldShowOrderMenu = () => {
     if (readOnlyPreview) return false
-    const explicitMenu = new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('browseMenu')
-    return explicitMenu === '1' || (explicitMenu !== '0' && getVenueBrowseId() !== venueId && canPlaceOrders())
+    const explicitMenu = routeParams.get('browseMenu')
+    return !mediaKey && (explicitMenu === '1' || Boolean(replaceCartLineRef) ||
+      (explicitMenu !== '0' && getVenueBrowseId() !== venueId && canPlaceOrders()))
   }
 
   const currentStaffStatusParams = () => {
@@ -1026,7 +1029,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     if (typeof window === 'undefined' || !venueId) return
     const nextUrl = new URL(window.location.href)
     nextUrl.hash = `#/venue/${venueId}`
-    window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+    window.history.replaceState(window.history.state, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
   }
 
   const dispatchStaffActionState = () => {
@@ -1158,7 +1161,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const updateBookingButtonVisibility = () => {
     if (readOnlyPreview) return
     const inTableContext = isTableVenueContext()
-    refs.bookingButton.hidden = inTableContext || !onBookVenue
+    refs.bookingButton.hidden = inTableContext || shouldShowOrderMenu() || !onBookVenue
     refs.bookingButton.disabled = !venueId || inTableContext
     updateQuestionAction()
   }
@@ -1221,33 +1224,64 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const renderVenueInfo = (venue: VenueDto) => {
     currentIsFavorite = venue.isFavorite
     updateFavoriteButton()
+    refs.header.hidden = Boolean(mediaKey)
     refs.venueTitle.textContent = venue.name
+    if (focusHeading) {
+      refs.venueTitle.tabIndex = -1
+      refs.venueTitle.focus()
+      focusHeading = false
+    }
+    const menuOpen = shouldShowOrderMenu()
+    menuButton.textContent = menuOpen ? 'Карточка заведения' : 'Меню'
+    menuButton.classList.toggle('button-secondary', menuOpen)
+    menuButton.onclick = () => {
+      window.location.hash = `#/venue/${venueId}?browseMenu=${menuOpen ? '0' : '1'}`
+    }
+    refs.favoriteButton.hidden = menuOpen
     const fallbackParts = [venue.city, venue.address].filter(Boolean)
     const displayAddress = venue.displayAddress?.trim() || (fallbackParts.length ? fallbackParts.join(', ') : '')
     const inTableContext = isTableVenueContext()
-    refs.venueLocation.textContent = inTableContext
-      ? tableSnapshot.tableNumber
-        ? `Вы за столом №${tableSnapshot.tableNumber}`
-        : 'Вы за столом'
-      : displayAddress || 'Адрес не указан'
+    refs.venueLocation.hidden = inTableContext && menuOpen
+    refs.venueLocation.textContent = displayAddress || 'Адрес не указан'
     const scheduleText = formatTodaySchedule(venue.todaySchedule)
     refs.venueSchedule.textContent = scheduleText
     refs.venueSchedule.hidden = !scheduleText
-    refs.copyAddressButton.hidden = inTableContext || !displayAddress
-    refs.copyAddressButton.onclick = !inTableContext && displayAddress
-      ? () => {
-          void navigator.clipboard?.writeText(displayAddress)
-          showToast('Адрес скопирован.')
-        }
-      : null
-    const routeUrl = venue.routeUrl?.trim()
-    refs.routeLink.hidden = inTableContext || !routeUrl
-    if (!inTableContext && routeUrl) {
-      refs.routeLink.href = routeUrl
-    } else {
-      refs.routeLink.removeAttribute('href')
+    const latitude = venue.latitude
+    const longitude = venue.longitude
+    const hasCoordinates = typeof latitude === 'number' && Number.isFinite(latitude) && Math.abs(latitude) <= 90 &&
+      typeof longitude === 'number' && Number.isFinite(longitude) && Math.abs(longitude) <= 180
+    const mapQuery = hasCoordinates ? `${latitude},${longitude}` : displayAddress
+    if (refs.previewRouteLink) {
+      const route = venue.routeUrl?.trim()
+      refs.previewRouteLink.hidden = !route
+      if (route) refs.previewRouteLink.href = route
+      else refs.previewRouteLink.removeAttribute('href')
     }
-    const promotions = renderGuestPromotions(venue.promotions ?? [], venue.timezone)
+    refs.maps.hidden = readOnlyPreview || inTableContext || menuOpen || !mapQuery
+    refs.mapLinks.replaceChildren()
+    if (!refs.maps.hidden) {
+      const yandex = new URL('https://yandex.ru/maps/')
+      yandex.searchParams.set('rtext', `~${mapQuery}`)
+      const apple = new URL('https://maps.apple.com/')
+      apple.searchParams.set('daddr', mapQuery)
+      for (const [label, url] of [['Яндекс Карты', yandex], ['Apple Maps', apple]] as const) {
+        const link = el('a', { text: label, className: 'button-secondary button-small' })
+        link.href = url.toString()
+        link.target = '_blank'
+        link.rel = 'noopener noreferrer'
+        refs.mapLinks.appendChild(link)
+      }
+    }
+    refs.copyAddressButton.hidden = !displayAddress
+    refs.copyAddressButton.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(displayAddress)
+        showToast('Адрес скопирован')
+      } catch {
+        showToast('Не удалось скопировать адрес. Его можно выделить в карточке.')
+      }
+    }
+    const promotions = menuOpen || mediaKey ? null : renderGuestPromotions(venue.promotions ?? [], venue.timezone)
     refs.promotionsSlot.replaceChildren()
     refs.promotionsSlot.hidden = !promotions
     if (promotions) {
@@ -1256,7 +1290,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     clearStaffPhotos()
     staffPhotoAbort = new AbortController()
     const photoSignal = staffPhotoAbort.signal
-    const todayStaff = renderTodayStaff(venue.todayStaff ?? [], (person, avatar) => {
+    const todayStaff = renderTodayStaff(mediaKey ? [] : (venue.todayStaff ?? []), (person, avatar) => {
       const prefix = `/api/guest/venue/${venueId}/staff/${person.id}/photos/`
       if (!person.photoUrl?.startsWith(prefix) || !/^[a-f0-9-]{36}$/.test(person.photoUrl.slice(prefix.length))) return
       void requestBinary(backendUrl, person.photoUrl, { signal: photoSignal }, buildApiDeps(isDebug)).then((result) => {
@@ -1284,40 +1318,48 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     itemDisposables.forEach((dispose) => dispose())
     itemDisposables = []
 
+    if (mediaKey) {
+      const [sectionIndex, mediaIndex] = mediaKey.split('.').map(Number)
+      const section = sections[sectionIndex]
+      const media = section ? normalizeInfoMedia(section)[mediaIndex] : undefined
+      const title = section?.displayTitle?.trim() || section?.title?.trim() || 'Материалы заведения'
+      const viewer = el('section', { className: 'card guest-media-viewer' })
+      const back = el('button', { className: 'button-secondary button-small', text: 'К карточке заведения' })
+      back.addEventListener('click', () => options.onBack?.())
+      append(viewer, back, el('h1', { text: title }))
+      const type = media?.mediaType?.toLowerCase() ?? ''
+      const pdf = type === 'pdf' || type === 'application/pdf'
+      if (media?.url && (pdf || ['image', 'photo', 'image/jpeg', 'image/png'].includes(type))) {
+        const preview = createInfoMediaPreview(pdf ? 'pdf' : 'image', title, loadInfoMedia(media.url), 'viewer')
+        infoMediaDisposables.push(preview.dispose)
+        viewer.appendChild(preview.element)
+      } else {
+        viewer.appendChild(el('p', { text: 'Файл недоступен. Проверьте материалы в карточке заведения.' }))
+      }
+      refs.menuBody.appendChild(viewer)
+      return
+    }
+
     const description = venue.cardDescription?.trim()
     const contact = venue.guestContact?.trim()
-    const schedule = renderGuestSchedule(venue.weeklyHours ?? [], venue.dateExceptions ?? [])
-    if (schedule) {
-      refs.menuBody.appendChild(schedule)
-    }
-
-    if (description || contact || !readOnlyPreview) {
+    if (description || contact) {
       const intro = el('section', { className: 'card venue-info-section' })
-      intro.appendChild(el('h4', { text: 'ℹ️ Информация' }))
-      if (description) {
-        intro.appendChild(el('p', { text: description }))
-      }
-      if (contact) {
-        intro.appendChild(el('p', { className: 'status', text: `Контакт: ${contact}` }))
-      }
-      if (!readOnlyPreview) {
-        intro.appendChild(
-          el('p', {
-            className: 'status',
-            text: 'Заказное меню и корзина доступны после сканирования QR-кода на столе.'
-          })
-        )
-      }
+      if (readOnlyPreview) intro.appendChild(el('h4', { text: 'ℹ️ Информация' }))
+      if (description) intro.appendChild(el('p', { text: description }))
+      if (contact) intro.appendChild(el('p', { className: 'status', text: `Контакт: ${contact}` }))
       refs.menuBody.appendChild(intro)
     }
-
-    if (!sections.length) {
+    const schedule = renderGuestSchedule(venue.weeklyHours ?? [], venue.dateExceptions ?? [], !readOnlyPreview)
+    if (schedule) refs.menuBody.appendChild(schedule)
+    if (readOnlyPreview && !sections.length) {
       refs.menuBody.appendChild(el('p', { text: 'Информация пока не заполнена.' }))
-    } else {
-      sections.forEach((section) => {
-        refs.menuBody.appendChild(renderInfoSection(section, loadInfoMedia, infoMediaDisposables))
-      })
     }
+    sections.forEach((section, sectionIndex) => {
+      const openMedia = readOnlyPreview ? undefined : (mediaIndex: number) => {
+        window.location.hash = `#/venue/${venueId}?media=${sectionIndex}.${mediaIndex}`
+      }
+      refs.menuBody.appendChild(renderInfoSection(section, loadInfoMedia, infoMediaDisposables, openMedia))
+    })
   }
 
   const renderMenuCategoryList = (categories: MenuCategoryDto[]) => {
@@ -1503,6 +1545,12 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     itemRefs.clear()
     itemDisposables.forEach((dispose) => dispose())
     itemDisposables = []
+    if (!canPlaceOrders()) {
+      refs.menuBody.appendChild(el('p', {
+        className: 'status guest-menu-hint',
+        text: 'Для заказа отсканируйте QR на столе.'
+      }))
+    }
     if (!categories.length && !shiftExtensionAvailability.visible) {
       refs.menuBody.appendChild(el('p', { text: 'Меню заведения пока не загружено.' }))
       return
@@ -1713,9 +1761,11 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.venueTitle.textContent = ''
     refs.venueLocation.textContent = ''
     refs.venueSchedule.textContent = ''
-    refs.routeLink.hidden = true
-    refs.routeLink.removeAttribute('href')
-    refs.copyAddressButton.hidden = true
+    refs.header.hidden = true
+    refs.maps.hidden = true
+    refs.maps.open = false
+    refs.retryButton.hidden = Boolean(mediaKey)
+    catalogButton.hidden = Boolean(mediaKey) || !options.onOpenCatalog
     refs.promotionsSlot.replaceChildren()
     refs.promotionsSlot.hidden = true
     refs.todayStaffSlot.replaceChildren()
@@ -1850,6 +1900,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     }
     if (!detailsResult.ok) {
       setStatus('')
+      renderVenueInfo(venueResult.data.venue)
+      updateBookingButtonVisibility()
+      if (!orderMenuMode) renderPreQrInfo(venueResult.data.venue, [])
       showError(detailsResult.error)
       return
     }
@@ -1895,7 +1948,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         bindItemActions()
 
         const itemsToCache: MenuItemDto[] = categories.flatMap((category) => category.items)
-        updateItemCache(
+        if (canPlaceOrders()) updateItemCache(
           itemsToCache.map((item) => ({
             itemId: item.id,
             name: item.name,
@@ -1983,14 +2036,6 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
   updateStaffState()
   void getAccessToken()
-  if (!readOnlyPreview && venueId) {
-    const browseMenu = shouldShowOrderMenu()
-    const menuButton = el('button', { className: 'button-secondary', text: browseMenu ? 'Карточка заведения' : 'Меню заведения' })
-    menuButton.addEventListener('click', () => {
-      window.location.hash = `#/venue/${venueId}?browseMenu=${browseMenu ? '0' : '1'}`
-    })
-    refs.menuBody.before(menuButton)
-  }
   void loadVenue()
 
   return () => {

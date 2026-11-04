@@ -1210,6 +1210,59 @@ private suspend fun addGuestThreadMessage(
     messageText: String,
     clientMessageId: String?,
 ): GuestThreadMessageResult {
+    if (clientMessageId != null && detail.thread.threadType != SupportThreadType.BOOKING_THREAD) {
+        val key = normalizeBookingClientMessageId(clientMessageId)
+        val beforeInsert: (SupportThreadRecord) -> Unit = { thread ->
+            requireThreadMessageAllowed(thread)
+            enforceGuestSupportRateLimit(
+                guestRateLimitConfig = guestRateLimitConfig,
+                rateLimiter = rateLimiter,
+                userId = userId,
+                venueId = thread.venueId,
+                tableSessionId = thread.tableSessionId,
+                endpoint = "support-message",
+                selector = { supportMessage },
+            )
+        }
+        val reply =
+            if (requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, detail.thread)) {
+                requireConfirmedPlatformGuestMutation(
+                    userId = userId,
+                    platformOwnerUserId = platformOwnerUserId,
+                    lifecycleRepository = lifecycleRepository,
+                    expectedVenueId = detail.thread.venueId,
+                    expectedTableId = detail.thread.tableId,
+                    expectedTableSessionId = detail.thread.tableSessionId,
+                    ttl = tableSessionConfig.ttl,
+                ) { connection, confirmed ->
+                    val locked =
+                        supportThreadRepository.lockGuestThread(connection, userId, detail.thread.id)
+                            ?: throw NotFoundException()
+                    requireConfirmedPlatformGuestThread(locked.thread, detail.thread, confirmed)
+                    supportThreadRepository.writeGuestMiniAppReply(
+                        connection,
+                        userId,
+                        locked.thread.id,
+                        key,
+                        messageText,
+                        beforeInsert,
+                    )
+                }
+            } else {
+                supportThreadRepository.writeGuestMiniAppReply(userId, detail.thread.id, key, messageText, beforeInsert)
+            } ?: throw NotFoundException()
+        if (reply.created) {
+            appendSupportReplyAuditBestEffort(
+                auditLogRepository = auditLogRepository,
+                actorUserId = userId,
+                oldThread = detail.thread,
+                refreshedThread = reply.thread,
+                source = "GUEST_MINIAPP",
+            )
+        }
+        return GuestThreadMessageResult(thread = reply.thread, message = reply.message, queued = false)
+    }
+
     if (!requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, detail.thread)) {
         if (detail.thread.threadType != SupportThreadType.BOOKING_THREAD) {
             requireThreadMessageAllowed(detail.thread)

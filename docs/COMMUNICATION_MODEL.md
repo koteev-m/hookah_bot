@@ -72,11 +72,16 @@ Current production NULL-author producer inventory (2026-08-18):
 ## Guest UX
 
 - Global nav visible label `Чаты` means all guest chats with venues, including booking chats and ordinary venue chats.
-- Global nav visible label `Помощь` means problems/support tickets and ticket status tracking.
-- `Чаты` copy: `Здесь все ваши чаты с заведениями: вопросы, брони и другие переписки. Проблемы и жалобы находятся в разделе Помощь.`
-- `Помощь` copy: `Здесь можно сообщить о проблеме и посмотреть статус обращений.`
-- Catalog cards expose `Задать вопрос`, which opens or creates `VENUE_CHAT`.
-- Venue detail exposes local `💬 Задать вопрос`, which opens or creates `VENUE_CHAT`.
+- `Помощь` in the guest profile and contextual recovery actions opens problems and support tickets.
+- The inbox shows active and completed threads. Opening a row navigates to its own conversation.
+  Returning to the list retains the selected filter and scroll position. Unsent replies remain in
+  the current guest session and stay scoped to the conversation.
+- Catalog and venue cards expose `Задать вопрос`. An explicit action opens or creates
+  `VENUE_CHAT`. Rendering the inbox or reopening a thread URL performs only reads.
+- Guest Mini App replies use an opaque client message ID for retries. The server checks current
+  guest ownership and replays only the same text for the same thread, author and source. Legacy
+  support and venue clients retain their existing contract. Booking reply notification rules
+  continue to follow the booking conversation contract.
 - If Owner/Manager later sends a manual reply from a feedback follow-up thread, Guest receives it in `Чаты`, not `Помощь` / Support.
 - Booking `Открыть переписку` loads the exact server-returned thread, including a resolved thread or
   one outside the current list window; it must never fall back to another active conversation.

@@ -209,6 +209,12 @@ data class BookingThreadLookupRecord(
     val thread: SupportThreadRecord?,
 )
 
+data class GuestMiniAppReply(
+    val thread: SupportThreadRecord,
+    val message: SupportMessageRecord,
+    val created: Boolean,
+)
+
 data class BookingThreadMessageRecord(
     val thread: SupportThreadRecord,
     val message: SupportMessageRecord,
@@ -599,6 +605,59 @@ open class SupportThreadRepository(
             clientMessageId = null,
             statusAfterInsert = statusAfterInsert,
         )
+    }
+
+    suspend fun writeGuestMiniAppReply(
+        userId: Long,
+        threadId: Long,
+        clientMessageId: String,
+        text: String,
+        beforeInsert: (SupportThreadRecord) -> Unit,
+    ): GuestMiniAppReply? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    inTransaction(connection) {
+                        writeGuestMiniAppReply(connection, userId, threadId, clientMessageId, text, beforeInsert)
+                    }
+                }
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
+
+    fun writeGuestMiniAppReply(
+        connection: Connection,
+        userId: Long,
+        threadId: Long,
+        clientMessageId: String,
+        text: String,
+        beforeInsert: (SupportThreadRecord) -> Unit,
+    ): GuestMiniAppReply? {
+        val thread = lockGuestThread(connection, userId, threadId)?.thread ?: return null
+        check(thread.threadType != SupportThreadType.BOOKING_THREAD)
+        val source = SupportMessageSource.GUEST_MINIAPP
+        selectMessageByClientDelivery(connection, threadId, userId, source, clientMessageId)?.let { message ->
+            if (message.text != text) throw BookingMessageIdempotencyPayloadMismatchException()
+            return GuestMiniAppReply(thread, message, created = false)
+        }
+        beforeInsert(thread)
+        val message =
+            addMessageAfterThreadLock(
+                connection = connection,
+                threadId = threadId,
+                authorUserId = userId,
+                authorRole = SupportMessageAuthorRole.GUEST,
+                source = source,
+                text = text,
+                telegramMessageId = null,
+                clientMessageId = clientMessageId,
+                statusAfterInsert = statusAfterMessage(SupportMessageAuthorRole.GUEST),
+            )
+        val updated = checkNotNull(selectGuestThread(connection, userId, threadId))
+        return GuestMiniAppReply(updated, message, created = true)
     }
 
     private fun addMessageAfterThreadLock(

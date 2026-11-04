@@ -5,7 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.ResultSet
 import java.sql.Timestamp
+import java.time.DateTimeException
 import java.time.Instant
+import java.time.MonthDay
 import javax.sql.DataSource
 
 data class GuestProfile(
@@ -177,6 +179,17 @@ class UserRepository(private val dataSource: DataSource?) {
 
     companion object {
         const val GUEST_DISPLAY_NAME_MAX_LENGTH = 40
+
+        fun parseGuestBirthday(value: String): MonthDay? {
+            val match = Regex("""^\s*(\d{2})\.(\d{2})\s*$""").matchEntire(value) ?: return null
+            val day = match.groupValues[1].toIntOrNull() ?: return null
+            val month = match.groupValues[2].toIntOrNull() ?: return null
+            return try {
+                MonthDay.of(month, day)
+            } catch (_: DateTimeException) {
+                null
+            }
+        }
 
         fun normalizeGuestDisplayName(value: String): String {
             require(!value.contains('\n') && !value.contains('\r')) { "guest display name must be single-line" }

@@ -56,7 +56,7 @@ type CartScreenOptions = {
   backendUrl: string
   isDebug: boolean
   onNavigateOrder: () => void
-  onNavigateMenu: () => void
+  onNavigateMenu: (focusHeading?: boolean) => void
   onNavigateOptionReplacement: (cartLineRef: string) => void
   initialFocusLineRef?: string | null
 }
@@ -591,23 +591,6 @@ export function renderCartScreen(options: CartScreenOptions) {
   } | null = null
   const disposables: Array<() => void> = []
 
-  const focusGuestMenuHeading = () => {
-    let remainingFrames = 3
-    const focusHeading = () => {
-      const heading = document.querySelector<HTMLElement>('.venue-screen .venue-header h3')
-      if (heading) {
-        heading.tabIndex = -1
-        heading.focus()
-        return
-      }
-      remainingFrames -= 1
-      if (remainingFrames > 0) {
-        window.requestAnimationFrame(focusHeading)
-      }
-    }
-    window.requestAnimationFrame(focusHeading)
-  }
-
   const finishItemMenuRecovery = (completedPreviewFingerprint: string | null) => {
     const pending = pendingItemMenuRecovery
     if (!pending) {
@@ -625,8 +608,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     pendingItemMenuRecovery = null
-    onNavigateMenu()
-    focusGuestMenuHeading()
+    onNavigateMenu(true)
   }
 
   const parseJoinTokenFromLocation = () => {

@@ -22,14 +22,16 @@ type TelegramScanQrPopup = (
 ) => void
 
 export type TelegramWebAppLike = {
+  colorScheme?: 'light' | 'dark'
+  themeParams?: Partial<Record<'bg_color' | 'secondary_bg_color' | 'text_color' | 'hint_color' | 'button_color' | 'button_text_color', string>>
   initData?: string
   initDataUnsafe?: TelegramInitDataUnsafe
   ready?: () => void
   expand?: () => void
   showScanQrPopup?: TelegramScanQrPopup
   closeScanQrPopup?: () => void
-  onEvent?: (event: 'scanQrPopupClosed', callback: () => void) => void
-  offEvent?: (event: 'scanQrPopupClosed', callback: () => void) => void
+  onEvent?: (event: 'scanQrPopupClosed' | 'themeChanged', callback: () => void) => void
+  offEvent?: (event: 'scanQrPopupClosed' | 'themeChanged', callback: () => void) => void
   sendData?: (data: string) => void
   openTelegramLink?: (url: string) => void
   showAlert?: (message: string) => void

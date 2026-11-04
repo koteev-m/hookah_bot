@@ -5029,6 +5029,19 @@ for actual results and candidate hashes. Separate authorized staging migration/d
 venue Telegram/iPhone smoke are required before acceptance. Verify Main Mini App independently of
 MenuButtonWebApp and verify the configured public origin routes `/v/*` to backend.
 
+## Guest experience local quality gate
+
+- Run the guest-experience Playwright scenarios with catalog, a direct venue entry, menu without a
+  table, a different venue during an active visit, QR outcomes, Back, chat retry, profile fields,
+  retention screens and protected media. Use 320, 360, 390 and 430 CSS pixels and inspect real
+  browser screenshots with large text and a dark Telegram theme.
+- Run `GuestExperienceRoutesTest` on both H2 and PostgreSQL 17. It checks ownership, write-once
+  birthday, concurrent reply replay, promotion visibility, booking and visit cursors, guest order
+  ownership, favorites and venue-scoped loyalty.
+- The separate iPhone Telegram smoke covers startapp entry, camera cancellation/denial/success,
+  table A while browsing venue B, Telegram Back, the keyboard in chat and profile, and PDF paging
+  and zoom. Browser fixtures provide local coverage. Physical-device acceptance is a release check.
+
 ## Venue draft publication and branded public origin
 
 `HT-VENUE-DIRECT-MINIAPP-LINK-01`: for the additive `telegramUrl` response field,

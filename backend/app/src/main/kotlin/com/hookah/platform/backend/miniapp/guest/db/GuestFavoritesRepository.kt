@@ -8,6 +8,8 @@ import kotlinx.coroutines.withContext
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
+import java.sql.Timestamp
+import java.time.Instant
 import javax.sql.DataSource
 
 class GuestFavoritesRepository(private val dataSource: DataSource?) {
@@ -125,10 +127,12 @@ class GuestFavoritesRepository(private val dataSource: DataSource?) {
     suspend fun listFavoriteVenues(
         userId: Long,
         limit: Int = 50,
+        before: FavoriteVenueCursor? = null,
     ): List<FavoriteVenue> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         val blockedStatuses = SubscriptionStatus.blockedDbValues
         val blockedPlaceholders = blockedStatuses.joinToString(",") { "?" }
+        val cursorCondition = if (before == null) "" else "AND (fv.created_at, v.id) < (?, ?)"
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
@@ -141,6 +145,7 @@ class GuestFavoritesRepository(private val dataSource: DataSource?) {
                         WHERE fv.user_id = ?
                           AND v.status = ?
                           AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
+                          $cursorCondition
                         ORDER BY fv.created_at DESC, v.id DESC
                         LIMIT ?
                         """.trimIndent(),
@@ -150,7 +155,12 @@ class GuestFavoritesRepository(private val dataSource: DataSource?) {
                         blockedStatuses.forEachIndexed { index, status ->
                             statement.setString(index + 3, status)
                         }
-                        statement.setInt(blockedStatuses.size + 3, limit.coerceIn(1, 50))
+                        var index = blockedStatuses.size + 3
+                        if (before != null) {
+                            statement.setTimestamp(index++, Timestamp.from(before.createdAt))
+                            statement.setLong(index++, before.venueId)
+                        }
+                        statement.setInt(index, limit.coerceIn(1, 50))
                         statement.executeQuery().use { rs ->
                             val result = mutableListOf<FavoriteVenue>()
                             while (rs.next()) {
@@ -396,11 +406,17 @@ class GuestFavoritesRepository(private val dataSource: DataSource?) {
         connection.metaData.databaseProductName.equals("H2", ignoreCase = true)
 }
 
+data class FavoriteVenueCursor(
+    val createdAt: Instant,
+    val venueId: Long,
+)
+
 data class FavoriteVenue(
     val venueId: Long,
     val name: String,
     val city: String?,
     val address: String?,
+    val createdAt: Instant? = null,
 )
 
 data class FavoriteMenuItem(
@@ -418,6 +434,7 @@ private fun ResultSet.toFavoriteVenue(): FavoriteVenue =
         name = getString("name"),
         city = getString("city"),
         address = getString("address"),
+        createdAt = getTimestamp("created_at").toInstant(),
     )
 
 private fun ResultSet.toFavoriteMenuItem(): FavoriteMenuItem =

@@ -64,6 +64,11 @@ fun Route.guestVenueRoutes(
         )
     }
 
+    get("/catalog/promotions") {
+        call.requireUserId()
+        call.respond(guestVenueReadService.getCatalogPromotions())
+    }
+
     get("/venue/{id}") {
         val userId = call.requireUserId()
         val rawId = call.parameters["id"] ?: throw InvalidInputException("id is required")

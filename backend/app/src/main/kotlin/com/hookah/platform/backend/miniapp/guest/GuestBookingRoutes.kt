@@ -89,6 +89,21 @@ fun Route.guestBookingRoutes(
         call.respond(GuestBookingListResponse(items = bookings))
     }
 
+    get("/bookings/archive") {
+        val userId = call.requireUserId()
+        val beforeId =
+            call.request.queryParameters["beforeId"]?.let {
+                it.toLongOrNull()?.takeIf { id -> id > 0 } ?: throw InvalidInputException("Invalid booking cursor")
+            }
+        val bookings = guestBookingRepository.listArchiveByUser(userId, limit = 20, beforeId = beforeId)
+        val zones = venueSettingsRepository.resolveZoneIds(bookings.map { it.venueId }, defaultBookingDisplayZoneId())
+        call.respond(
+            GuestBookingListResponse(
+                items = bookings.map { it.toResponse(zones[it.venueId] ?: defaultBookingDisplayZoneId()) },
+            ),
+        )
+    }
+
     route("/booking") {
         post("/create") {
             val request = call.receive<GuestBookingCreateRequest>()

@@ -1,3 +1,4 @@
+import './guestExperience.css'
 import { clearVenueBrowse, getVenueBrowseId, getVenueBrowsePayload, rememberVenueBrowse } from '../shared/state/venueBrowseContext'
 import { requestApi } from '../shared/api/request'
 import { getBackendBaseUrl } from '../shared/api/backend'
@@ -21,9 +22,10 @@ import { extractTableTokenFromScannedText, tableTokenQueryParamKeys } from '../s
 import { append, el, on } from '../shared/ui/dom'
 import { renderCatalogScreen } from './catalog'
 import { renderCartScreen } from './cart'
+import type { GuestProfileDraft } from './guestProfile'
 import { renderGuestAccountScreen } from './guestAccount'
 import { renderGuestBookingsScreen } from './guestBookings'
-import { renderGuestSupportThreadsScreen } from './guestSupportThreads'
+import { renderGuestSupportThreadsScreen, type GuestConversationState } from './guestSupportThreads'
 import { renderGuestVenueScreen } from './guestVenue'
 import { renderOrderScreen } from './order'
 
@@ -35,15 +37,12 @@ type RouteName = 'catalog' | 'venue' | 'cart' | 'order' | 'bookings' | 'account'
 type GuestActionId =
   | 'catalog'
   | 'qr'
-  | 'menu'
   | 'cart'
   | 'order'
   | 'staff'
   | 'leave'
   | 'account'
   | 'messages'
-  | 'support'
-  | 'refresh'
 type GuestTableMode = 'no-table' | 'active-table' | 'ended-table'
 
 type Route = {
@@ -56,6 +55,7 @@ type Route = {
 
 type GuestRefs = {
   app: HTMLDivElement
+  statusCard: HTMLDivElement
   statusTitle: HTMLParagraphElement
   statusDetails: HTMLParagraphElement
   primaryActions: HTMLDivElement
@@ -64,21 +64,12 @@ type GuestRefs = {
 }
 
 const tableContextQueryParamKeys = [...tableTokenQueryParamKeys, 'tableSessionId', 'table_session_id'] as const
-const primaryActionsByMode: Record<GuestTableMode, GuestActionId[]> = {
-  'no-table': ['qr'],
-  'ended-table': ['qr', 'catalog', 'refresh'],
-  'active-table': ['staff', 'leave']
-}
-const navActionsByMode: Record<GuestTableMode, GuestActionId[]> = {
-  'no-table': ['catalog', 'qr', 'messages', 'account', 'support'],
-  'ended-table': ['catalog', 'qr', 'messages', 'account', 'support'],
-  'active-table': ['menu', 'cart', 'order', 'messages', 'support', 'account']
-}
+const navigationActions: GuestActionId[] = ['catalog', 'qr', 'messages', 'account']
 
 function ensureDefaultHash() {
   const hash = window.location.hash
   if (!hash || hash === '#' || hash === '#/') {
-    window.location.hash = '#/catalog'
+    window.history.replaceState(window.history.state, '', '#/catalog')
   }
 }
 
@@ -129,32 +120,10 @@ function resolveRoute(): Route {
   return { name: route, venueId: null, threadId: null, openStaffCall: false, cartLineRef: null }
 }
 
-function resolveRouteNameFromHash(hash: string | null | undefined): RouteName | null {
-  if (!hash) {
-    return null
-  }
-  const raw = hash.replace(/^#/, '')
-  const cleaned = raw.startsWith('/') ? raw.slice(1) : raw
-  if (!cleaned) {
-    return 'catalog'
-  }
-  const [pathPart] = cleaned.split('?')
-  const segments = pathPart.split('/').filter(Boolean)
-  const route = segments[0] as RouteName | undefined
-  if (!route || !['catalog', 'venue', 'cart', 'order', 'bookings', 'account', 'messages', 'support'].includes(route)) {
-    return null
-  }
-  return route
-}
-
-function isTabFlowRoute(route: RouteName | null): boolean {
-  return route === 'venue' || route === 'cart' || route === 'order'
-}
-
 function clearTableContextSearchParams() {
   const nextUrl = new URL(window.location.href)
   tableContextQueryParamKeys.forEach((key) => nextUrl.searchParams.delete(key))
-  window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+  window.history.replaceState(window.history.state, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
 }
 
 function showTelegramAlert(message: string) {
@@ -166,28 +135,26 @@ function showTelegramAlert(message: string) {
 }
 
 function buildGuestShell(root: HTMLDivElement): GuestRefs {
-  const app = el('div', { className: 'app-shell' })
-  const header = el('header', { className: 'app-header' })
-  const brand = el('div', { className: 'app-brand' })
-  const title = el('h1', { text: 'Hookah Mini App' })
-  const subtitle = el('p', { className: 'app-subtitle', text: 'Гостевой режим' })
-  append(brand, title, subtitle)
-
+  const app = el('div', { className: 'app-shell guest-shell' })
+  const header = el('header', { className: 'guest-visit-header' })
   const statusCard = el('div', { className: 'table-status' })
   const statusTitle = el('p', { className: 'table-status-title', text: '' })
   const statusDetails = el('p', { className: 'table-status-details', text: '' })
   const primaryActions = el('div', { className: 'table-actions' }) as HTMLDivElement
   append(statusCard, statusTitle, statusDetails, primaryActions)
 
-  const nav = el('nav', { className: 'app-nav' })
-  append(header, brand, statusCard, nav)
+  const nav = el('nav', { className: 'guest-nav' })
+  nav.setAttribute('aria-label', 'Гостевая навигация')
+  statusDetails.setAttribute('role', 'status')
+  header.appendChild(statusCard)
 
   const content = el('div', { className: 'container app-content' })
-  append(app, header, content)
+  append(app, header, content, nav)
   root.replaceChildren(app)
 
   return {
     app,
+    statusCard,
     statusTitle,
     statusDetails,
     primaryActions,
@@ -212,14 +179,19 @@ function renderRouteContent(
   isDebug: boolean,
   onOpenVenue: (venueId: number) => void,
   onNavigateOrder: () => void,
-  onNavigateMenu: (venueId: number | null) => void,
+  onNavigateMenu: (venueId: number | null, focusHeading?: boolean) => void,
   onNavigateCatalog: () => void,
-  onNavigateSupportBack: () => void,
+  onBack: () => void,
   onOpenVenueStaffCall: () => void,
   onOpenSupportBot: () => { ok: true } | { ok: false; message: string },
-  onInternalBackStateChange: (handler: (() => void) | null) => void,
   tableSnapshot: ReturnType<typeof getTableContext>,
-  hasTableContext: boolean
+  hasTableContext: boolean,
+  profileDraft: GuestProfileDraft,
+  selectedVenueId: number | null,
+  conversations: Record<'messages' | 'support', GuestConversationState>,
+  onAskVenue: (venueId: number) => void,
+  navigate: (hash: string, options?: { replace?: boolean; focusVenue?: number }) => void,
+  startVenueChat: boolean
 ): () => void {
   const screenRoot = document.createElement('div')
   screenRoot.className = 'screen-root'
@@ -233,13 +205,15 @@ function renderRouteContent(
         isDebug,
         venueId: route.venueId,
         openStaffCall: route.openStaffCall,
+        focusHeading: window.history.state?.hookahFocusVenue === route.venueId,
         replaceCartLineRef: route.cartLineRef,
+        onOpenCatalog: onNavigateCatalog,
+        onOpenHelp: (venueId) => { window.location.hash = `#/support?venueId=${venueId}` },
+        onBack,
         onBookVenue: (venueId) => {
           window.location.hash = `#/bookings?venueId=${venueId}`
         },
-        onAskVenue: (venueId) => {
-          window.location.hash = `#/messages?venueId=${venueId}`
-        }
+        onAskVenue
       })
     case 'cart':
       return renderCartScreen({
@@ -248,7 +222,7 @@ function renderRouteContent(
         isDebug,
         onNavigateOrder,
         initialFocusLineRef: route.cartLineRef,
-        onNavigateMenu: () => onNavigateMenu(tableSnapshot.venueId),
+        onNavigateMenu: (focusHeading) => onNavigateMenu(tableSnapshot.venueId, focusHeading),
         onNavigateOptionReplacement: (cartLineRef) => {
           if (!tableSnapshot.venueId) return
           window.location.hash = `#/venue/${tableSnapshot.venueId}?cartLineRef=${encodeURIComponent(cartLineRef)}`
@@ -262,18 +236,17 @@ function renderRouteContent(
         backendUrl,
         isDebug,
         venueId: route.venueId,
-        onBack: route.venueId ? onNavigateCatalog : () => {
-          window.location.hash = '#/account'
-        }
+        onBack
       })
     case 'account':
       return renderGuestAccountScreen({
         root: screenRoot,
         backendUrl,
         isDebug,
-        hasTableContext,
+        profileDraft,
         tableContext: tableSnapshot,
-        onBack: onNavigateCatalog,
+        onBack,
+        onOpenHelp: () => { window.location.hash = '#/support' },
         onOpenBookings: () => {
           window.location.hash = '#/bookings'
         },
@@ -281,14 +254,11 @@ function renderRouteContent(
         onBookVenue: (venueId) => {
           window.location.hash = `#/bookings?venueId=${venueId}`
         },
-        onAskVenue: (venueId) => {
-          window.location.hash = `#/messages?venueId=${venueId}`
-        },
-        onOpenBot: onOpenSupportBot,
+        onAskVenue,
+        selectedVenueId,
         onNavigateCart: () => {
           window.location.hash = '#/cart'
-        },
-        onInternalBackStateChange
+        }
       })
     case 'messages':
       return renderGuestSupportThreadsScreen({
@@ -298,11 +268,16 @@ function renderRouteContent(
         screenMode: 'messages',
         hasTableContext,
         tableSnapshot,
-        onBack: onNavigateSupportBack,
+        onBack,
         onOpenVenueStaffCall,
         onOpenBot: onOpenSupportBot,
         initialThreadId: route.threadId,
-        createVenueChatVenueId: route.venueId
+        createVenueChatVenueId: route.venueId,
+        startVenueChat,
+        conversationState: conversations.messages,
+        onOpenThread: (threadId, replace) => navigate(`#/messages?threadId=${threadId}`, { replace }),
+        onOpenList: () => window.history.state?.hookahGuestPrevious === '#/messages'
+          ? onBack() : navigate('#/messages', { replace: true })
       })
     case 'support':
       return renderGuestSupportThreadsScreen({
@@ -312,11 +287,15 @@ function renderRouteContent(
         screenMode: 'tickets',
         hasTableContext,
         tableSnapshot,
-        onBack: onNavigateSupportBack,
+        onBack,
         onOpenVenueStaffCall,
         onOpenBot: onOpenSupportBot,
         initialThreadId: route.threadId,
-        prefillSupportVenueId: route.venueId
+        prefillSupportVenueId: route.venueId,
+        conversationState: conversations.support,
+        onOpenThread: (threadId) => navigate(`#/support?threadId=${threadId}`),
+        onOpenList: () => window.history.state?.hookahGuestPrevious?.startsWith('#/support')
+          ? onBack() : navigate('#/support', { replace: true })
       })
     case 'catalog':
     default:
@@ -328,9 +307,7 @@ function renderRouteContent(
         onBookVenue: (venueId) => {
           window.location.hash = `#/bookings?venueId=${venueId}`
         },
-        onAskVenue: (venueId) => {
-          window.location.hash = `#/messages?venueId=${venueId}`
-        }
+        onAskVenue
       })
   }
 }
@@ -365,121 +342,42 @@ function resolveTableMode(snapshot: ReturnType<typeof getTableContext>): GuestTa
   return 'no-table'
 }
 
-function dedupeActions(actions: GuestActionId[]): GuestActionId[] {
-  return actions.filter((action, index) => actions.indexOf(action) === index)
-}
-
-function formatActionLabel(
-  action: GuestActionId,
-  cartQty: number,
-  mode: GuestTableMode,
-  variant: 'primary' | 'nav',
-  staffCallActive: boolean
-): string {
-  switch (action) {
-    case 'catalog':
-      if (variant === 'nav') {
-        return 'Каталог'
-      }
-      return mode === 'ended-table' ? '🏠 В каталог' : '🏠 Каталог кальянных'
-    case 'qr':
-      return variant === 'nav' ? 'QR' : '🪑 Сканировать QR'
-    case 'menu':
-      return variant === 'nav' ? 'Меню' : '🍽 Меню'
-    case 'cart':
-      return cartQty > 0 ? `${variant === 'nav' ? 'Корзина' : '🧺 Корзина'} (${cartQty})` : variant === 'nav' ? 'Корзина' : '🧺 Корзина'
-    case 'order':
-      return variant === 'nav' ? 'Мой заказ' : '📄 Мой заказ'
-    case 'staff':
-      if (mode === 'active-table' && staffCallActive) {
-        return 'Вызов активен'
-      }
-      return '🛎 Вызвать персонал'
-    case 'leave':
-      return '🚪 Завершить визит'
-    case 'account':
-      return variant === 'nav' ? 'Профиль' : '👤 Профиль'
-    case 'messages':
-      return 'Чаты'
-    case 'support':
-      return 'Помощь'
-    case 'refresh':
-      return '🔄 Обновить'
-    default:
-      return action
-  }
-}
-
-function isActionActive(action: GuestActionId, route: Route, mode: GuestTableMode): boolean {
-  switch (action) {
-    case 'catalog':
-      return mode !== 'active-table' && route.name === 'catalog'
-    case 'menu':
-      return mode === 'active-table' && (route.name === 'venue' || route.name === 'catalog')
-    case 'cart':
-      return route.name === 'cart'
-    case 'order':
-      return route.name === 'order'
-    case 'account':
-      return route.name === 'account'
-    case 'messages':
-      return route.name === 'messages'
-    case 'support':
-      return route.name === 'support'
-    default:
-      return false
-  }
-}
-
-function renderActionSet(
-  container: HTMLElement,
-  actions: GuestActionId[],
-  buttonClassName: string,
-  cartQty: number,
-  route: Route,
-  mode: GuestTableMode,
-  variant: 'primary' | 'nav',
-  staffCallActive: boolean,
-  onAction: (action: GuestActionId) => void
-) {
-  const buttons = dedupeActions(actions).map((action) => {
-    const button = el('button', {
-      className: buttonClassName,
-      text: formatActionLabel(action, cartQty, mode, variant, staffCallActive)
-    }) as HTMLButtonElement
-    button.dataset.action = action
-    button.dataset.active = String(isActionActive(action, route, mode))
-    button.addEventListener('click', () => onAction(action))
-    return button
-  })
-  container.replaceChildren(...buttons)
-}
-
 function updateGuestShellActions(
   refs: GuestRefs,
-  mode: GuestTableMode,
   route: Route,
+  selectedVenue: number | null,
+  activeVisit: boolean,
   cartQty: number,
   staffCallActive: boolean,
   canLeaveTable: boolean,
   onAction: (action: GuestActionId) => void
 ) {
-  const primaryActions =
-    mode === 'active-table' && !canLeaveTable
-      ? primaryActionsByMode[mode].filter((action) => action !== 'leave')
-      : primaryActionsByMode[mode]
-  renderActionSet(
-    refs.primaryActions,
-    primaryActions,
-    'button-secondary',
-    cartQty,
-    route,
-    mode,
-    'primary',
-    staffCallActive,
-    onAction
-  )
-  renderActionSet(refs.nav, navActionsByMode[mode], 'nav-button', cartQty, route, mode, 'nav', staffCallActive, onAction)
+  const labels: Record<GuestActionId, string> = {
+    catalog: selectedVenue ? 'Заведение' : 'Заведения',
+    qr: 'QR',
+    messages: 'Чаты',
+    account: 'Профиль',
+    cart: cartQty > 0 ? `Корзина (${cartQty})` : 'Корзина',
+    order: 'Мой заказ',
+    staff: staffCallActive ? 'Вызов активен' : 'Вызвать персонал',
+    leave: 'Завершить визит'
+  }
+  const selected: Partial<Record<RouteName, GuestActionId>> = {
+    catalog: 'catalog', venue: 'catalog', cart: 'cart', order: 'order',
+    messages: 'messages', account: 'account', bookings: 'account', support: 'account'
+  }
+  const makeButton = (action: GuestActionId) => {
+    const button = el('button', { className: 'button-secondary', text: labels[action] })
+    button.type = 'button'
+    button.dataset.action = action
+    if (selected[route.name] === action) button.setAttribute('aria-current', 'page')
+    button.addEventListener('click', () => onAction(action))
+    return button
+  }
+  const visitActions: GuestActionId[] = activeVisit ? ['cart', 'order', 'staff'] : []
+  if (activeVisit && canLeaveTable) visitActions.push('leave')
+  refs.primaryActions.replaceChildren(...visitActions.map(makeButton))
+  refs.nav.replaceChildren(...navigationActions.map(makeButton))
 }
 
 export function mountGuestApp(options: GuestAppOptions): () => void {
@@ -530,20 +428,41 @@ function mountGuestScreens(options: GuestAppOptions) {
   const refs = buildGuestShell(root)
   let tableSnapshot = getTableContext()
   let currentRoute: Route = resolveRoute()
-  let catalogChosen = new URLSearchParams(window.location.search).get('venue_browse') === 'off' && window.location.hash === '#/catalog'
-  const browseBar = el('div', { className: 'card venue-browse-bar' })
-  refs.content.before(browseBar)
+  let catalogChosen = window.history.state?.hookahGuestCatalog === true && window.location.hash.startsWith('#/catalog')
+  let mounted = true
+  let selectedVenue = currentRoute.venueId ?? getVenueBrowseId()
+  const profileDraft: GuestProfileDraft = {}
+  let draftOwner = getTelegramContext().telegramUserId
+  const conversations: Record<'messages' | 'support', GuestConversationState> = {
+    messages: { filter: 'active', listScroll: 0, drafts: new Map() },
+    support: { filter: 'active', listScroll: 0, drafts: new Map() }
+  }
+  let pendingVenueChat: number | null = null
+  let visitExitPending = false
+  const visitReturn = el('button', { className: 'button-secondary guest-return-visit' })
+  visitReturn.hidden = true
+  refs.statusCard.after(visitReturn)
   let staffCallActive = false
   let canLeaveTable = false
   let handleGuestAction: (action: GuestActionId) => void = () => undefined
   const renderShellActions = () => {
+    const activeVisit = resolveTableMode(tableSnapshot) === 'active-table'
+    const differentVenue = currentRoute.venueId !== null && currentRoute.venueId !== tableSnapshot.venueId
+    const showVisit = activeVisit && !differentVenue && ['venue', 'cart', 'order'].includes(currentRoute.name)
+    const presentation = formatTableStatus(tableSnapshot)
+    refs.statusCard.hidden = !showVisit && !refs.statusDetails.textContent
+    refs.statusTitle.textContent = showVisit ? presentation.title : ''
+    refs.statusDetails.hidden = showVisit && !refs.statusDetails.textContent
+    visitReturn.hidden = !activeVisit || showVisit
+    visitReturn.textContent = `К столу · ${tableSnapshot.venueName ?? 'Текущее заведение'}`
     updateGuestShellActions(
       refs,
-      resolveTableMode(tableSnapshot),
       currentRoute,
+      selectedVenue ?? (activeVisit ? tableSnapshot.venueId : null),
+      showVisit,
       getCartSnapshot().totalQty,
       staffCallActive,
-      canLeaveTable,
+      canLeaveTable && !visitExitPending,
       (action) => handleGuestAction(action)
     )
   }
@@ -627,6 +546,7 @@ function mountGuestScreens(options: GuestAppOptions) {
     })()
   }
 
+  let resolvingQr = false
   const tableSubscription = subscribeTable((snapshot) => {
     const previousCanOpenOrder = canOpenActiveOrder(tableSnapshot)
     const previousMode = resolveTableMode(tableSnapshot)
@@ -635,8 +555,12 @@ function mountGuestScreens(options: GuestAppOptions) {
     const nextMode = resolveTableMode(snapshot)
     setCartTableToken(nextMode === 'active-table' ? snapshot.tableToken : null)
     const presentation = formatTableStatus(snapshot)
-    refs.statusTitle.textContent = presentation.title
-    refs.statusDetails.textContent = presentation.details ?? ''
+    if (!resolvingQr) {
+      const showTableMessage = nextMode === 'ended-table' || snapshot.status === 'resolving' || presentation.severity === 'error'
+      refs.statusDetails.textContent = showTableMessage
+        ? [presentation.title, presentation.details].filter(Boolean).join(' ')
+        : ''
+    }
     refs.app.dataset.tableSeverity = presentation.severity
     if (nextMode !== 'active-table') {
       staffCallActive = false
@@ -646,7 +570,7 @@ function mountGuestScreens(options: GuestAppOptions) {
     const routeName = resolveRoute().name
     if (
       rerenderForTableChange &&
-      (previousMode !== nextMode ||
+      (previousMode !== nextMode && routeName !== 'messages' && routeName !== 'account' ||
         ((routeName === 'cart' || routeName === 'order') && previousCanOpenOrder !== nextCanOpenOrder))
     ) {
       rerenderForTableChange()
@@ -654,6 +578,41 @@ function mountGuestScreens(options: GuestAppOptions) {
   })
 
   const disposables: Array<() => void> = []
+  const webApp = getTelegramContext().webApp
+  const updateTheme = () => {
+    const params = webApp?.themeParams
+    const colors = {
+      'bg': params?.bg_color, 'surface': params?.secondary_bg_color, 'text': params?.text_color,
+      'muted': params?.hint_color, 'accent': params?.button_color, 'on-accent': params?.button_text_color
+    }
+    for (const [name, color] of Object.entries(colors)) {
+      if (typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color)) refs.app.style.setProperty(`--guest-tg-${name}`, color)
+      else refs.app.style.removeProperty(`--guest-tg-${name}`)
+    }
+    refs.app.dataset.colorScheme = webApp?.colorScheme ?? ''
+  }
+  updateTheme()
+  if (webApp?.onEvent && webApp.offEvent) {
+    try {
+      webApp.onEvent('themeChanged', updateTheme)
+      disposables.push(() => webApp.offEvent?.('themeChanged', updateTheme))
+    } catch {
+      // Older Telegram clients still supply the initial theme.
+    }
+  }
+  const viewport = window.visualViewport
+  if (viewport) {
+    const updateKeyboard = () => {
+      const active = document.activeElement
+      const editing = active instanceof HTMLElement && refs.app.contains(active) &&
+        active.matches('textarea, input:not([type=button]):not([type=checkbox])')
+      const keyboardOpen = editing && viewport.scale === 1 && window.innerHeight - viewport.height > 120
+      refs.app.toggleAttribute('data-keyboard-open', keyboardOpen)
+      if (keyboardOpen) active.scrollIntoView({ block: 'nearest' })
+    }
+    viewport.addEventListener('resize', updateKeyboard)
+    disposables.push(() => viewport.removeEventListener('resize', updateKeyboard))
+  }
   const cartSubscription = subscribeCart(() => {
     renderShellActions()
   })
@@ -674,125 +633,75 @@ function mountGuestScreens(options: GuestAppOptions) {
   window.addEventListener('hookah:guest-staff-call-state', handleStaffCallState)
   disposables.push(() => window.removeEventListener('hookah:guest-staff-call-state', handleStaffCallState))
 
-  const historyStack: string[] = []
-  let replaceNextHistoryEntry = false
-  let suppressNextHistoryUpdate = false
-
-  const navigate = (hash: string, options?: { replace?: boolean }) => {
-    if (window.location.hash === hash) {
-      return
-    }
-    if (options?.replace) {
-      replaceNextHistoryEntry = true
-      const nextUrl = new URL(window.location.href)
-      nextUrl.hash = hash
-      window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
-      window.dispatchEvent(new Event('hashchange'))
-      return
-    }
-    window.location.hash = hash
+  // Browser and Telegram use the same history entries, including old hash links.
+  const historyKey = 'hookahGuestDepth'
+  const historyDepth = () => Number(window.history.state?.[historyKey] ?? 0)
+  if (!Number.isInteger(window.history.state?.[historyKey])) {
+    window.history.replaceState({ ...window.history.state, [historyKey]: 0 }, '')
   }
-
-  const navigateCatalogButton = () => {
-    const browseVenueId = getVenueBrowseId()
-    if (browseVenueId) {
-      navigate(`#/venue/${browseVenueId}`, { replace: true })
-      return
+  let currentDepth = historyDepth()
+  let currentHash = window.location.hash
+  const navigate = (hash: string, options?: { replace?: boolean; focusVenue?: number }) => {
+    if (window.location.hash === hash) return
+    const url = new URL(window.location.href)
+    url.hash = hash
+    const state = {
+      ...window.history.state,
+      [historyKey]: currentDepth + (options?.replace ? 0 : 1),
+      hookahFocusVenue: options?.focusVenue ?? null,
+      hookahGuestCatalog: hash.startsWith('#/catalog') && catalogChosen,
+      hookahGuestPrevious: options?.replace ? window.history.state?.hookahGuestPrevious : currentHash
     }
-    if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
-      navigate(`#/venue/${tableSnapshot.venueId}`, { replace: true })
-      return
-    }
-    navigate('#/catalog', { replace: true })
-  }
-  const navigateSecondaryGuestScreen = (hash: string) => {
-    const route = resolveRoute()
-    const shouldPushFromTableRoot = resolveTableMode(tableSnapshot) === 'active-table' && route.name === 'venue'
-    navigate(hash, shouldPushFromTableRoot ? undefined : { replace: true })
-  }
-  const resolveGuestRootHash = () => getVenueBrowseId() ? `#/venue/${getVenueBrowseId()}` : catalogChosen ? '#/catalog' :
-    resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId ? `#/venue/${tableSnapshot.venueId}` : '#/catalog'
-  const isCurrentGuestRoot = () => {
-    const route = resolveRoute()
-    if (new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('browseMenu') === '1') return false
-    if (getVenueBrowseId()) return route.name === 'venue' && route.venueId === getVenueBrowseId() && !route.openStaffCall
-    if (catalogChosen) return route.name === 'catalog'
-    if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
-      return route.name === 'venue' && route.venueId === tableSnapshot.venueId && !route.openStaffCall
-    }
-    return route.name === 'catalog'
-  }
-  const replaceHashWithoutHistoryUpdate = (targetHash: string) => {
-    if (window.location.hash === targetHash) {
-      return
-    }
-    suppressNextHistoryUpdate = true
-    const nextUrl = new URL(window.location.href)
-    nextUrl.hash = targetHash
-    window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+    if (options?.replace) window.history.replaceState(state, '', url)
+    else window.history.pushState(state, '', url)
     window.dispatchEvent(new Event('hashchange'))
   }
+  const askVenue = (venueId: number) => {
+    pendingVenueChat = venueId
+    navigate(`#/messages?venueId=${venueId}`)
+  }
+  const openCatalog = () => {
+    if (getVenueBrowseId()) clearVenueBrowse()
+    catalogChosen = true
+    navigate('#/catalog')
+  }
+  const openVisit = () => {
+    if (!tableSnapshot.venueId) return
+    selectedVenue = tableSnapshot.venueId
+    navigate(`#/venue/${tableSnapshot.venueId}`)
+  }
+  visitReturn.addEventListener('click', openVisit)
 
   const routeListeners = new Set<() => void>()
-  const notifyRouteChange = () => {
-    routeListeners.forEach((listener) => listener())
-  }
-  let internalBackHandler: (() => void) | null = null
-  const setInternalBackHandler = (handler: (() => void) | null) => {
-    internalBackHandler = handler
-    notifyRouteChange()
-  }
-
-  const updateHistory = (hash: string) => {
-    if (!hash || hash === '#') {
-      return
+  const notifyRouteChange = () => routeListeners.forEach((listener) => listener())
+  const fallbackBackHash = () => {
+    if (currentRoute.name === 'venue' && /[?&](browseMenu|media)=/.test(window.location.hash)) {
+      return `#/venue/${currentRoute.venueId}`
     }
-    if (suppressNextHistoryUpdate) {
-      suppressNextHistoryUpdate = false
-      return
-    }
-    if (replaceNextHistoryEntry) {
-      replaceNextHistoryEntry = false
-      if (historyStack.length === 0) {
-        historyStack.push(hash)
-        return
+    if (currentRoute.name === 'catalog') return '#/catalog'
+    if (currentRoute.name === 'account' && window.location.hash !== '#/account') {
+      const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+      if (params.has('visit')) {
+        params.delete('visit')
+        return `#/account/history${params.size ? `?${params}` : ''}`
       }
-      const nextRoute = resolveRouteNameFromHash(hash)
-      const lastRoute = resolveRouteNameFromHash(historyStack[historyStack.length - 1])
-      const prevRoute = resolveRouteNameFromHash(historyStack[historyStack.length - 2])
-      if (isTabFlowRoute(nextRoute) && isTabFlowRoute(lastRoute) && !isTabFlowRoute(prevRoute)) {
-        historyStack.push(hash)
-        return
-      }
-      historyStack[historyStack.length - 1] = hash
-      const prev = historyStack[historyStack.length - 2]
-      if (prev === hash) {
-        historyStack.pop()
-      }
-      return
+      return '#/account'
     }
-    if (historyStack.length === 0) {
-      historyStack.push(hash)
-      return
-    }
-    const last = historyStack[historyStack.length - 1]
-    if (hash === last) {
-      return
-    }
-    const prev = historyStack[historyStack.length - 2]
-    if (prev === hash) {
-      historyStack.pop()
-      return
-    }
-    historyStack.push(hash)
+    if (currentRoute.name === 'support' || (currentRoute.name === 'bookings' && !currentRoute.venueId)) return '#/account'
+    if (currentRoute.name === 'messages' && (currentRoute.threadId || currentRoute.venueId)) return '#/messages'
+    return selectedVenue && currentRoute.name !== 'venue' ? `#/venue/${selectedVenue}` : '#/catalog'
   }
+  const canFallBack = () => window.location.hash !== '#/catalog' &&
+    !(currentRoute.name === 'venue' && currentRoute.venueId === (getVenueBrowseId() ?? tableSnapshot.venueId) &&
+      !window.location.hash.includes('?'))
 
   let cancelQrScan: (() => void) | null = null
-  let resolvingQr = false
   disposables.push(() => cancelQrScan?.())
   const openQrScanner = () => {
-    if (resolvingQr) return
-    cancelQrScan?.()
+    if (resolvingQr || visitExitPending) return
+    if (cancelQrScan) return
+    refs.statusDetails.textContent = ''
+    renderShellActions()
     const telegramContext = getTelegramContext()
     const webApp = telegramContext.webApp
     const scanQr = getTelegramQrScanner(webApp)
@@ -800,6 +709,7 @@ function mountGuestScreens(options: GuestAppOptions) {
       'Откройте камеру телефона и отсканируйте QR на столе или нажмите «Я за столом / У меня QR» в боте.'
     if (!scanQr) {
       refs.statusDetails.textContent = fallbackMessage
+      renderShellActions()
       webApp?.showAlert?.(fallbackMessage)
       return
     }
@@ -831,25 +741,24 @@ function mountGuestScreens(options: GuestAppOptions) {
         }
         void refreshTableContext({ scannedToken: token })
           .then((snapshot) => {
-            if (!snapshot) return
+            if (!mounted || !snapshot) return
             if (!snapshot.orderAllowed) {
               const failure = formatTableStatus(snapshot)
-              showTelegramAlert([failure.title, failure.details].filter(Boolean).join(' '))
+              const message = [failure.title, failure.details].filter(Boolean).join(' ')
+              refs.statusDetails.textContent = message
+              renderShellActions()
+              showTelegramAlert(message)
               return
             }
-            if (getVenueBrowseId() !== null) {
-              clearVenueBrowse()
-              catalogChosen = false
-            }
+            if (getVenueBrowseId() !== null) clearVenueBrowse()
+            catalogChosen = false
             const nextUrl = new URL(window.location.href)
             tableContextQueryParamKeys.forEach((key) => nextUrl.searchParams.delete(key))
             nextUrl.searchParams.set('table_token', token)
-            window.history.replaceState(null, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
-            if (resolveRoute().name !== 'catalog') {
-              return
-            }
+            window.history.replaceState(window.history.state, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
             if (snapshot.status === 'resolved' && snapshot.venueId && snapshot.tableSessionActive) {
-              navigate(`#/venue/${snapshot.venueId}`)
+              selectedVenue = snapshot.venueId
+              navigate(`#/venue/${snapshot.venueId}`, { replace: true })
             }
           })
           .catch(() => showTelegramAlert('Не удалось загрузить стол. Попробуйте позже.'))
@@ -859,10 +768,12 @@ function mountGuestScreens(options: GuestAppOptions) {
     } catch {
       finishScan()
       refs.statusDetails.textContent = fallbackMessage
+      renderShellActions()
       webApp?.showAlert?.('Не удалось открыть QR-сканер.')
     }
   }
   const endTableVisit = () => {
+    if (visitExitPending) return
     const snapshot = tableSnapshot
     if (
       resolveTableMode(snapshot) !== 'active-table' ||
@@ -877,7 +788,9 @@ function mountGuestScreens(options: GuestAppOptions) {
       navigate('#/catalog', { replace: true })
       return
     }
+    visitExitPending = true
     refs.statusDetails.textContent = 'Завершаем визит…'
+    renderShellActions()
     void guestEndTableSession(
       backendUrl,
       {
@@ -887,6 +800,8 @@ function mountGuestScreens(options: GuestAppOptions) {
       { isDebug, getAccessToken, clearSession }
     )
       .then((result) => {
+        if (!mounted || tableSnapshot.tableToken !== snapshot.tableToken ||
+          tableSnapshot.tableSessionId !== snapshot.tableSessionId) return
         if (!result.ok) {
           if (result.error.status === 403 || result.error.status === 404) {
             const message = 'Контекст стола уже недоступен. Отсканируйте QR заново.'
@@ -924,37 +839,32 @@ function mountGuestScreens(options: GuestAppOptions) {
         refs.statusDetails.textContent = message
         showTelegramAlert(message)
       })
+      .finally(() => { visitExitPending = false; renderShellActions() })
   }
   handleGuestAction = (action) => {
     switch (action) {
-      case 'catalog':
-        if (getVenueBrowseId()) {
-          clearVenueBrowse()
-          catalogChosen = true
-          navigate('#/catalog', { replace: true })
-          return
+      case 'catalog': {
+        const venue = selectedVenue ?? (resolveTableMode(tableSnapshot) === 'active-table' ? tableSnapshot.venueId : null)
+        if (venue) {
+          const showingActiveMenu = tableSnapshot.venueId === venue && tableSnapshot.orderAllowed && getVenueBrowseId() !== venue
+          navigate(`#/venue/${venue}${showingActiveMenu ? '?browseMenu=0' : ''}`)
+        } else {
+          openCatalog()
         }
-        navigateCatalogButton()
         return
-      case 'menu':
-        if (getVenueBrowseId()) {
-          navigate(`#/venue/${getVenueBrowseId()}?browseMenu=1`, { replace: true })
-          return
-        }
-        navigateCatalogButton()
-        return
+      }
       case 'qr':
         openQrScanner()
         return
       case 'cart':
-        navigateSecondaryGuestScreen('#/cart')
+        navigate('#/cart')
         return
       case 'order':
-        navigateSecondaryGuestScreen('#/order')
+        navigate('#/order')
         return
       case 'staff':
         if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
-          navigateSecondaryGuestScreen(`#/venue/${tableSnapshot.venueId}?staff=1`)
+          navigate(`#/venue/${tableSnapshot.venueId}?staff=1`)
           return
         }
         navigate('#/catalog', { replace: true })
@@ -963,20 +873,10 @@ function mountGuestScreens(options: GuestAppOptions) {
         endTableVisit()
         return
       case 'account':
-        navigateSecondaryGuestScreen('#/account')
+        navigate('#/account')
         return
       case 'messages':
-        navigateSecondaryGuestScreen('#/messages')
-        return
-      case 'support':
-        if (currentRoute.name === 'venue' && currentRoute.venueId && resolveTableMode(tableSnapshot) !== 'active-table') {
-          navigateSecondaryGuestScreen(`#/support?venueId=${currentRoute.venueId}`)
-          return
-        }
-        navigateSecondaryGuestScreen('#/support')
-        return
-      case 'refresh':
-        void refreshTableContext()
+        navigate('#/messages')
         return
       default:
         return
@@ -1005,25 +905,10 @@ function mountGuestScreens(options: GuestAppOptions) {
     getRouteName: () => currentRoute.name,
     navigate,
     back: () => {
-      if (internalBackHandler) {
-        internalBackHandler()
-        return
-      }
-      if (historyStack.length > 1) {
-        historyStack.pop()
-        const targetHash = historyStack[historyStack.length - 1]
-        replaceHashWithoutHistoryUpdate(targetHash)
-        return
-      }
-      if (!isCurrentGuestRoot()) {
-        const rootHash = resolveGuestRootHash()
-        historyStack.splice(0, historyStack.length, rootHash)
-        replaceHashWithoutHistoryUpdate(rootHash)
-        return
-      }
-      getTelegramContext().webApp?.close?.()
+      if (currentDepth > 0) window.history.back()
+      else if (canFallBack()) navigate(fallbackBackHash(), { replace: true })
     },
-    canGoBack: () => internalBackHandler !== null || historyStack.length > 1 || !isCurrentGuestRoot(),
+    canGoBack: () => currentDepth > 0 || canFallBack(),
     subscribe: (handler: () => void) => {
       routeListeners.add(handler)
       return () => routeListeners.delete(handler)
@@ -1035,30 +920,29 @@ function mountGuestScreens(options: GuestAppOptions) {
   const render = () => {
     const route = resolveRoute()
     currentRoute = route
-    browseBar.replaceChildren()
-    const browsingVenue = getVenueBrowseId()
-    const showVisitReturn = tableSnapshot.tableSessionActive && tableSnapshot.venueId && route.name === 'venue' && route.venueId !== tableSnapshot.venueId
-    browseBar.hidden = !browsingVenue && !showVisitReturn
-    if (browsingVenue) {
-      const all = el('button', { className: 'button-secondary', text: 'Все заведения Hookah Tootah' })
-      all.addEventListener('click', () => { clearVenueBrowse(); catalogChosen = true; navigate('#/catalog') })
-      browseBar.appendChild(all)
+    const guestId = getTelegramContext().telegramUserId
+    if (guestId !== draftOwner) {
+      draftOwner = guestId
+      delete profileDraft.name
+      delete profileDraft.birthday
+      Object.values(conversations).forEach((state) => {
+        state.drafts.clear()
+        state.filter = 'active'
+        state.listScroll = 0
+      })
     }
-    if (showVisitReturn) {
-      const visit = el('button', { text: `Вернуться к посещению: ${tableSnapshot.venueName ?? 'текущее заведение'}` })
-      visit.addEventListener('click', () => { clearVenueBrowse(); catalogChosen = false; navigate(`#/venue/${tableSnapshot.venueId}`) })
-      append(browseBar, el('p', { text: 'Вы просматриваете другое заведение. Визит, корзина и счёт остаются в текущем заведении.' }), visit)
-    }
+    if (route.name === 'venue' && route.venueId) selectedVenue = route.venueId
+    if (route.name === 'catalog' && (catalogChosen || window.location.hash === '#/catalog/promotions')) selectedVenue = null
     renderShellActions()
     refreshVisitExitAvailability()
     currentDispose?.()
-    if (route.name === 'catalog' && !catalogChosen && !getVenueBrowseId() && resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
+    if (route.name === 'catalog' && window.location.hash !== '#/catalog/promotions' && !catalogChosen && !getVenueBrowseId() && resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
       navigate(`#/venue/${tableSnapshot.venueId}`, { replace: true })
       return
     }
     const endedTableSession =
       tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && !tableSnapshot.tableSessionActive
-    if (((route.name === 'venue' && !getVenueBrowseId()) || route.name === 'cart' || route.name === 'order') && endedTableSession) {
+    if ((route.name === 'cart' || route.name === 'order') && endedTableSession) {
       currentDispose = renderCatalogScreen({
         root: refs.content,
         backendUrl,
@@ -1076,6 +960,8 @@ function mountGuestScreens(options: GuestAppOptions) {
       )
       return
     }
+    const startVenueChat = route.name === 'messages' && route.venueId !== null && pendingVenueChat === route.venueId
+    pendingVenueChat = null
     currentDispose = renderRouteContent(
       route,
       refs.content,
@@ -1087,21 +973,17 @@ function mountGuestScreens(options: GuestAppOptions) {
       () => {
         navigate('#/order')
       },
-      (venueId) => {
+      (venueId, focusHeading) => {
         if (venueId) {
-          navigate(`#/venue/${venueId}`)
+          navigate(`#/venue/${venueId}${getVenueBrowseId() === venueId ? '?browseMenu=1' : ''}`, {
+            focusVenue: focusHeading ? venueId : undefined
+          })
           return
         }
-        navigate('#/catalog')
+        openCatalog()
       },
-      () => navigate('#/catalog'),
-      () => {
-        if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
-          navigate(`#/venue/${tableSnapshot.venueId}`)
-          return
-        }
-        navigate('#/catalog')
-      },
+      openCatalog,
+      router.back,
       () => {
         if (resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
           navigate(`#/venue/${tableSnapshot.venueId}?staff=1`)
@@ -1125,33 +1007,37 @@ function mountGuestScreens(options: GuestAppOptions) {
             : 'Не удалось открыть чат автоматически. Откройте чат с ботом вручную.'
         }
       },
-      setInternalBackHandler,
       tableSnapshot,
-      resolveTableMode(tableSnapshot) === 'active-table'
+      resolveTableMode(tableSnapshot) === 'active-table',
+      profileDraft,
+      selectedVenue ?? tableSnapshot.venueId,
+      conversations,
+      askVenue,
+      navigate,
+      startVenueChat
     )
   }
   rerenderForTableChange = render
 
   const onHashChange = () => {
-    updateHistory(window.location.hash || '#/catalog')
-    render()
-    if (isCurrentGuestRoot()) {
-      const rootHash = resolveGuestRootHash()
-      historyStack.splice(0, historyStack.length, rootHash)
+    if (!Number.isInteger(window.history.state?.[historyKey])) {
+      window.history.replaceState({
+        ...window.history.state, [historyKey]: currentDepth + 1, hookahGuestPrevious: currentHash
+      }, '')
     }
+    currentDepth = historyDepth()
+    currentHash = window.location.hash
+    refs.statusDetails.textContent = ''
+    render()
     notifyRouteChange()
   }
 
   window.addEventListener('hashchange', onHashChange)
-  updateHistory(window.location.hash || '#/catalog')
   render()
-  if (isCurrentGuestRoot()) {
-    const rootHash = resolveGuestRootHash()
-    historyStack.splice(0, historyStack.length, rootHash)
-  }
   notifyRouteChange()
 
   return () => {
+    mounted = false
     window.removeEventListener('hashchange', onHashChange)
     exitCheckAbort?.abort()
     currentDispose?.()

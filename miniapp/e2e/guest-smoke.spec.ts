@@ -10328,21 +10328,26 @@ test('pre-QR guest card shows info/photo menu and hides structured order menu', 
   const api = await mockGuestApi(page)
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await expect(page.getByRole('heading', { name: 'Hookah Mini App' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Hookah Mini App' })).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button')).toHaveText(['Заведения', 'QR', 'Чаты', 'Профиль'])
   await expect(page.getByText('График не указан')).toBeVisible()
   await page.getByRole('button', { name: 'Открыть карточку' }).click()
 
   await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
   await expect(page.getByText('График не указан')).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'ℹ️ Информация' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '📖 Фото-меню' })).toBeVisible()
-  await expect(page.getByText('Заказное меню и корзина доступны после сканирования QR-кода на столе.')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Построить маршрут' })).toBeVisible()
+  await page.getByText('Как добраться', { exact: true }).click()
+  await expect(page.getByRole('link', { name: 'Яндекс Карты' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Apple Maps' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Забронировать' })).toBeVisible()
-  await expect(page.getByAltText('📖 Фото-меню 1')).toBeVisible()
+  await expect(page.getByAltText('📖 Фото-меню')).toBeVisible()
   await expect(page.getByText('Кальянное меню')).toHaveCount(0)
   expect(api.getStructuredMenuCalls()).toBe(0)
+  await page.getByRole('button', { name: 'Меню', exact: true }).click()
+  await expect(page.getByText('Для заказа отсканируйте QR на столе.')).toBeVisible()
+  await page.goBack()
+  await expect(page.getByRole('heading', { name: '📖 Фото-меню' })).toBeVisible()
 })
 
 test('guest venue card shows today staff without private linkage fields', async ({ page }) => {
@@ -10467,26 +10472,30 @@ test('guest favorite venues stay consistent across catalog venue detail and acco
   await expect(page.getByRole('button', { name: 'В избранном' })).toBeEnabled()
 
   await page.getByRole('button', { name: 'Профиль' }).click()
-  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
-  await expect(page.getByRole('heading', { name: 'Избранные заведения' })).toBeVisible()
+  await page.getByRole('button', { name: 'Избранное' }).click()
+  await expect(page.getByRole('heading', { name: 'Избранное' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Открыть заведение' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Забронировать' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Задать вопрос' })).toBeVisible()
 
+  await page.setViewportSize({ width: 390, height: 820 })
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: test.info().outputPath('guest-favorites-390.png') })
+
   await page.getByRole('button', { name: 'Открыть заведение' }).click()
   await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/venue/1')
   await page.evaluate(() => { window.location.hash = '#/account' })
-  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
+  await page.getByRole('button', { name: 'Избранное' }).click()
   await page.getByRole('button', { name: 'Забронировать' }).click()
   await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/bookings?venueId=1')
   await page.evaluate(() => { window.location.hash = '#/account' })
-  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
+  await page.getByRole('button', { name: 'Избранное' }).click()
   await page.getByRole('button', { name: 'Задать вопрос' }).click()
   await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/messages?venueId=1')
 
   await page.evaluate(() => { window.location.hash = '#/account' })
-  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
+  await page.getByRole('button', { name: 'Избранное' }).click()
   await page.getByRole('button', { name: 'Удалить из избранного' }).click()
   await expect(page.locator('.favorite-venue-list .button-danger')).toBeDisabled()
   await expect(page.getByText('Пока нет избранных заведений. Добавляйте их из каталога или карточки заведения.')).toBeVisible()
@@ -10494,11 +10503,9 @@ test('guest favorite venues stay consistent across catalog venue detail and acco
   api.setFavoriteVenueIds(123456789, [1])
   api.setVenueAvailable(false)
   await page.reload()
-  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
   await expect(page.getByText('Пока нет избранных заведений. Добавляйте их из каталога или карточки заведения.')).toBeVisible()
   api.setVenueAvailable(true)
   await page.reload()
-  await page.getByRole('button', { name: '⭐ Избранные заведения' }).click()
   await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
 })
 
@@ -10636,7 +10643,7 @@ test('guest opens my bookings from profile and manages booking actions', async (
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Профиль' }).click()
   await expect(page.getByRole('heading', { name: 'Профиль' })).toBeVisible()
-  await page.getByRole('button', { name: '📅 Мои брони' }).click()
+  await page.getByRole('button', { name: 'Мои брони' }).click()
 
   await expect(page.getByRole('heading', { name: 'Мои брони' })).toBeVisible()
   const rows = page.locator('.venue-order-row')
@@ -10709,7 +10716,8 @@ test('guest booking cards open stable isolated conversations and preserve messag
   await expect(firstCard.locator('.guest-booking-conversation-status')).toHaveText('Открываем переписку…')
   conversationApi.releaseFirstOpen()
 
-  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Чаты', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'К чатам' })).toBeVisible()
   const firstThread = conversationApi.getThreadForBooking(501)
   expect(firstThread).not.toBeNull()
   await expect(page).toHaveURL(new RegExp(`#\/messages[?]threadId=${firstThread?.threadId}$`))
@@ -10733,7 +10741,8 @@ test('guest booking cards open stable isolated conversations and preserve messag
   })
   await expect(page.getByRole('heading', { name: 'Мои брони' })).toBeVisible()
   await page.locator('.guest-booking-card').filter({ hasText: 'Бронь №12' }).getByRole('button', { name: 'Открыть переписку' }).click()
-  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Чаты', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'К чатам' })).toBeVisible()
   const secondThread = conversationApi.getThreadForBooking(502)
   expect(secondThread).not.toBeNull()
   expect(secondThread?.threadId).not.toBe(firstThread?.threadId)
@@ -10799,10 +10808,10 @@ test('guest history empty state is shown from profile', async ({ page }) => {
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Профиль' }).click()
-  await page.getByRole('button', { name: '🕘 История' }).click()
+  await page.getByRole('button', { name: 'История' }).click()
 
   await expect(page.getByRole('heading', { name: 'История' })).toBeVisible()
-  await expect(page.getByText('История пока пустая.')).toBeVisible()
+  await expect(page.getByText('Состоявшихся посещений пока нет.')).toBeVisible()
 })
 
 test('guest history shows completed visits and safe closed order detail', async ({ page }) => {
@@ -11091,9 +11100,9 @@ test('guest history shows completed visits and safe closed order detail', async 
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Профиль' }).click()
-  await page.getByRole('button', { name: '🕘 История' }).click()
+  await page.getByRole('button', { name: 'История' }).click()
 
-  const bookingOnlyVisit = page.locator('article.card').filter({ hasText: 'Было бронирование' })
+  const bookingOnlyVisit = page.locator('article.card').filter({ hasText: 'Посещение по брони' })
   const closedOrderVisit = page.locator('article.card').filter({ hasText: 'Заказы: №42' })
   const legacyClosedOrderVisit = page.locator('article.card').filter({ hasText: 'Заказы: №7' })
   const noReviewLinkVisit = page.locator('article.card').filter({ hasText: 'Заказы: №8' })
@@ -11327,7 +11336,7 @@ test('guest repeats eligible history lines into the current cart only after conf
     `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
   )
   await page.getByRole('button', { name: 'Профиль' }).click()
-  await page.getByRole('button', { name: '🕘 История' }).click()
+  await page.getByRole('button', { name: 'История' }).click()
   await page.getByRole('button', { name: 'Подробнее' }).click()
 
   const repeatButton = page.getByRole('button', { name: 'Повторить заказ' })
@@ -11353,10 +11362,10 @@ test('guest repeats eligible history lines into the current cart only after conf
   await addButton.click()
   await addButton.click({ force: true })
   await expect(page.getByText('Доступные позиции добавлены в корзину.')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Корзина (2)' })).toBeVisible()
   expect(api.getAddBatchRequests()).toHaveLength(0)
 
   await page.getByRole('button', { name: 'Перейти в корзину' }).click()
+  await expect(page.getByRole('button', { name: 'Корзина (2)' })).toBeVisible()
   const repeatedLine = page.locator('.cart-item').filter({ hasText: 'Вариант: Ягодный' })
   await expect(repeatedLine).toContainText('Пожелание: покрепче')
   await expect(repeatedLine.locator('input')).toHaveValue('2')
@@ -11405,7 +11414,7 @@ test('guest repeat blocks a current table context from another venue', async ({ 
     `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
   )
   await page.getByRole('button', { name: 'Профиль' }).click()
-  await page.getByRole('button', { name: '🕘 История' }).click()
+  await page.getByRole('button', { name: 'История' }).click()
   await page.getByRole('button', { name: 'Подробнее' }).click()
   await page.getByRole('button', { name: 'Повторить заказ' }).click()
 
@@ -11420,11 +11429,10 @@ test('table context with active order opens category-first order menu and hides 
 
   await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
-  await page.getByRole('button', { name: 'Меню', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
   await expect(page.getByText('Вы за столом №4').last()).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Построить маршрут' })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Яндекс Карты' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Забронировать' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /Продление работы заведения/ })).toHaveCount(0)
@@ -12088,7 +12096,7 @@ for (const scenario of [
     await expect(teaLine).toBeFocused()
     releaseRemainingCartPreview()
     await expect(page).toHaveURL(/#\/venue\/1$/)
-    const guestMenuHeading = page.locator('.venue-header h3')
+    const guestMenuHeading = page.locator('.venue-header h1')
     await expect(guestMenuHeading).toBeFocused()
     await expect(page.locator('.menu-category-button').filter({ hasText: 'Напитки' })).toBeVisible()
     await expect(page.locator('.menu-item')).toHaveCount(0)
@@ -13251,7 +13259,7 @@ test('persisted gift facts are visible in the active order and guest history', a
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Профиль' }).click()
-  await page.getByRole('button', { name: '🕘 История' }).click()
+  await page.getByRole('button', { name: 'История' }).click()
   await page.getByRole('button', { name: 'Подробнее' }).click()
   const historyGiftLine = page.getByText(/Подарок по акции · Чай/)
   await expect(historyGiftLine).toContainText(/обычная стоимость 450,00\s*₽/)
@@ -13420,7 +13428,7 @@ test('coupled gift trigger cancel and exclude stay out of the active bill and re
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Профиль' }).click()
-  await page.getByRole('button', { name: '🕘 История' }).click()
+  await page.getByRole('button', { name: 'История' }).click()
   await page.getByRole('button', { name: 'Подробнее' }).click()
 
   const canceledOrder = page.locator('.card').filter({ hasText: 'Заказ №71' })
@@ -13455,7 +13463,7 @@ test('table context without active order hides pre-visit actions and extension e
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
   await expect(page.getByText('Вы за столом №4').last()).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Построить маршрут' })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Яндекс Карты' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Забронировать' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /Продление работы заведения/ })).toHaveCount(0)
@@ -13469,8 +13477,8 @@ test('table context leave session clears current guest restore state', async ({ 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
-  await expect(page.getByRole('button', { name: '🚪 Завершить визит' })).toBeVisible()
-  await page.getByRole('button', { name: '🚪 Завершить визит' }).click()
+  await expect(page.getByRole('button', { name: 'Завершить визит' })).toBeVisible()
+  await page.getByRole('button', { name: 'Завершить визит' }).click()
 
   expect(api.getTableSessionEndRequests()).toHaveLength(1)
   const endRequest = api.getTableSessionEndRequests()[0]
@@ -13478,11 +13486,11 @@ test('table context leave session clears current guest restore state', async ({ 
   expect(endRequest.method).toBe('POST')
   expect(endRequest.contentType).toContain('application/json')
   expect(endRequest.body).toEqual({ tableToken, tableSessionId: 77 })
-  await expect(page.getByText('Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.')).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'QR' })).toBeVisible()
   await expect(page.getByText('Вы за столом №4 · Микс')).toHaveCount(0)
 
   await page.reload()
-  await expect(page.getByText('Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.')).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'QR' })).toBeVisible()
   await expect(page.getByText('Вы за столом №4 · Микс')).toHaveCount(0)
 })
 
@@ -13500,7 +13508,7 @@ test('table context with active order hides leave session action', async ({ page
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
-  await expect(page.getByRole('button', { name: '🚪 Завершить визит' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Завершить визит' })).toHaveCount(0)
   expect(api.getTableSessionEndRequests()).toHaveLength(0)
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Мой заказ' })).toBeVisible()
@@ -13541,12 +13549,12 @@ test('guest creates staff call from active table and sees lifecycle status', asy
 
   await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await expect(page.getByRole('button', { name: '🛎 Вызвать персонал' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Вызвать персонал', exact: true })).toBeVisible()
   await expect(page.locator('.staff-call-overlay')).toBeHidden()
   await expect(page.locator('.staff-call-status')).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
 
-  await page.getByRole('button', { name: '🛎 Вызвать персонал' }).first().click()
+  await page.getByRole('button', { name: 'Вызвать персонал', exact: true }).first().click()
   await expect(page.getByText('Причина')).toBeVisible()
   await expect(page.locator('select.staff-select option').filter({ hasText: 'Счёт' })).toHaveCount(0)
   const staffReasonValues = await page.locator('select.staff-select').evaluate((node) =>
@@ -13607,7 +13615,7 @@ test('guest creates staff call from active table and sees lifecycle status', asy
   ])
   await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await expect(page.locator('.staff-call-status[data-tone="done"]')).toContainText('Вызов выполнен')
-  await expect(page.getByRole('button', { name: '🛎 Вызвать персонал' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Вызвать персонал', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Вызов активен' })).toHaveCount(0)
 })
 
@@ -13785,7 +13793,7 @@ test('guest creates shift extension request and sees pending then confirmed stat
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Построить маршрут' })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Яндекс Карты' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Забронировать' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /Продление работы заведения/ })).toBeVisible()
@@ -16765,12 +16773,14 @@ test('venue manager configures public profile card settings', async ({ page }) =
     window.location.hash = '#/venue/1'
   })
   await expect(page.getByText('Санкт-Петербург, Литейный проспект, 7')).toBeVisible()
+  await page.getByText('Как добраться', { exact: true }).click()
   await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toBeVisible()
-  const routeLink = page.getByRole('link', { name: 'Построить маршрут' })
-  await expect(routeLink).toHaveAttribute(
-    'href',
-    buildTextRouteUrl('Микс', 'RU', 'Санкт-Петербург', 'Литейный проспект, 7')
-  )
+  const routeLink = page.getByRole('link', { name: 'Яндекс Карты' })
+  const routeUrl = new URL((await routeLink.getAttribute('href'))!)
+  expect(routeUrl.origin).toBe('https://yandex.ru')
+  expect(routeUrl.searchParams.get('rtext')).toBe('~Санкт-Петербург, Литейный проспект, 7')
+  const appleLink = page.getByRole('link', { name: 'Apple Maps' })
+  expect(new URL((await appleLink.getAttribute('href'))!).searchParams.get('daddr')).toBe('Санкт-Петербург, Литейный проспект, 7')
 })
 
 test('venue owner configures public review link settings', async ({ page }) => {
@@ -18227,27 +18237,26 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
   await expect(page.getByRole('button', { name: 'Активные' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Завершённые' })).toBeVisible()
   const guestThreadCard = page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №12' })
-  await expect(guestThreadCard).toBeVisible()
   await expect(guestThreadCard).toContainText('Микс')
-  await expect(guestThreadCard).toContainText('В работе')
   await expect(guestThreadCard).toContainText('На 19:00 все столы заняты')
-  await expect(guestThreadCard.locator('.menu-item-badge')).toHaveCount(0)
-  await expect(page.locator('.venue-messages-detail').getByText(/На 19:00 все столы заняты/)).toBeVisible()
+  await expect(guestThreadCard.locator('.menu-item-badge')).toHaveText('Новых: 1')
+  await expect(page.locator('.venue-messages-detail')).toBeEmpty()
   await page.getByRole('button', { name: 'Завершённые' }).click()
-  await expect(page.getByText('Пока нет чатов. Вы можете задать вопрос заведению из каталога или карточки заведения.')).toBeVisible()
+  await expect(page.getByText('Завершённых переписок пока нет.')).toBeVisible()
   await page.getByRole('button', { name: 'Активные' }).click()
-  await expect(guestThreadCard).toBeVisible()
+  await guestThreadCard.getByRole('button', { name: /Открыть/ }).click()
+  await expect(page.locator('.venue-messages-detail').getByText(/На 19:00 все столы заняты/)).toBeVisible()
+  await expect(guestThreadCard).toHaveCount(0)
+  page.once('dialog', dialog => void dialog.accept())
   await page.getByRole('button', { name: 'Завершить переписку' }).click()
   await expect(page.locator('.venue-messages-detail').getByText('Переписка завершена.')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Возобновить переписку' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Завершённые' })).toHaveAttribute('data-active', 'true')
-  await page.getByRole('button', { name: 'Активные' }).click()
-  await expect(page.getByText('Пока нет чатов. Вы можете задать вопрос заведению из каталога или карточки заведения.')).toBeVisible()
+  await page.getByRole('button', { name: 'К чатам' }).click()
+  await expect(page.getByText('Пока нет чатов.', { exact: false })).toBeVisible()
   await page.getByRole('button', { name: 'Завершённые' }).click()
-  await expect(guestThreadCard).toBeVisible()
+  await guestThreadCard.getByRole('button', { name: /Открыть/ }).click()
+  await expect(page.getByRole('button', { name: 'Возобновить переписку' })).toBeVisible()
   await page.getByRole('button', { name: 'Возобновить переписку' }).click()
   await expect(page.getByRole('button', { name: 'Завершить переписку' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Активные' })).toHaveAttribute('data-active', 'true')
   await page.getByPlaceholder('Напишите ответ заведению.').fill('Да, 20:30 подходит.')
   await page.getByRole('button', { name: 'Отправить' }).click()
   await expect(
@@ -18303,11 +18312,11 @@ test('guest opens venue chat from catalog and venue card question actions', asyn
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByRole('button', { name: 'Чаты' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Помощь' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Помощь' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Задать вопрос' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Задать вопрос' }).click()
-  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Чаты', exact: true })).toHaveCount(0)
   await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: 'Чат с Микс' })).toBeVisible()
   expect(createCalls).toBe(1)
 
@@ -18315,8 +18324,8 @@ test('guest opens venue chat from catalog and venue card question actions', asyn
     window.location.hash = '#/catalog'
   })
   await page.getByRole('button', { name: 'Открыть карточку' }).click()
-  await expect(page.getByRole('button', { name: '💬 Задать вопрос' })).toBeVisible()
-  await page.getByRole('button', { name: '💬 Задать вопрос' }).click()
+  await expect(page.getByRole('button', { name: 'Задать вопрос' })).toBeVisible()
+  await page.getByRole('button', { name: 'Задать вопрос' }).click()
   await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: 'Чат с Микс' })).toBeVisible()
   expect(createCalls).toBe(2)
 })
@@ -18331,7 +18340,7 @@ test('guest conversation deep link rejects support ticket without clearing unrea
     `?mode=guest#/messages?threadId=${api.ticketThreadId}&surface=SUPPORT`
   )
 
-  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Чаты', exact: true })).toHaveCount(0)
   await expect(page.locator('.booking-thread-reconciliation-error')).toContainText(
     'Не удалось загрузить сообщения. Черновик сохранён; обновите переписку.'
   )
@@ -18364,7 +18373,7 @@ test('guest support deep links reject booking and venue chats without clearing u
   await page.goto(
     `?mode=guest#/support?threadId=${api.bookingThreadId}&surface=CONVERSATIONS`
   )
-  await expect(page.getByRole('heading', { name: 'Мои обращения' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'К обращениям' })).toBeVisible()
   await expect(page.locator('.booking-thread-reconciliation-error')).toBeVisible()
   await expect(page.locator('.venue-messages-detail')).not.toContainText(api.bookingMessage)
   expect(api.getRawMarker(api.bookingThreadId)).toEqual(bookingMarkerBefore)
@@ -18385,6 +18394,8 @@ test('guest support deep links reject booking and venue chats without clearing u
   await page.evaluate((threadId) => {
     window.location.hash = `#/messages?threadId=${threadId}&surface=SUPPORT`
   }, api.ticketThreadId)
+  await expect(page.locator('.booking-thread-reconciliation-error')).toBeVisible()
+  await page.getByRole('button', { name: 'К чатам' }).click()
   const bookingCard = page.locator(
     `.venue-message-thread-card[data-thread-id="${api.bookingThreadId}"]`
   )
@@ -18407,6 +18418,7 @@ test('guest exact surface deep links clear only the opened thread unread marker'
   await page.goto(`?mode=guest#/support?threadId=${api.ticketThreadId}&surface=SUPPORT`)
 
   await expect(page.locator('.venue-messages-detail')).toContainText(api.ticketMessage)
+  await page.getByRole('button', { name: 'К обращениям' }).click()
   const ticketCard = page.locator(
     `.venue-message-thread-card[data-thread-id="${api.ticketThreadId}"]`
   )
@@ -18425,6 +18437,7 @@ test('guest exact surface deep links clear only the opened thread unread marker'
     window.location.hash = `#/messages?threadId=${threadId}&surface=CONVERSATIONS`
   }, api.bookingThreadId)
   await expect(page.locator('.venue-messages-detail')).toContainText(api.bookingMessage)
+  await page.getByRole('button', { name: 'К чатам' }).click()
   const bookingCard = page.locator(
     `.venue-message-thread-card[data-thread-id="${api.bookingThreadId}"]`
   )
@@ -18461,11 +18474,11 @@ test('guest ignores a late detail response from the previous surface', async ({ 
     window.location.hash = `#/messages?threadId=${threadId}&surface=CONVERSATIONS`
   }, api.bookingThreadId)
 
-  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'К чатам' })).toBeVisible()
   await expect(page.locator('.venue-messages-detail')).toContainText(api.bookingMessage)
   api.releaseDeferredDetail()
   await api.waitForDeferredDetailSettled()
-  await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'К чатам' })).toBeVisible()
   await expect(page.locator('.venue-messages-detail')).toContainText(api.bookingMessage)
   await expect(page.locator('.venue-messages-detail')).not.toContainText(api.ticketMessage)
   expect(api.getDetailRequests()).toEqual(
@@ -18584,9 +18597,9 @@ test('guest support tickets stay list-first and open detail only by choice or cr
   await expect(page.getByRole('button', { name: '💬 Связаться с заведением' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Чаты' }).click()
   await expect(page.getByRole('heading', { name: 'Чаты' })).toBeVisible()
-  await expect(page.getByText('Здесь все ваши чаты с заведениями: вопросы, брони и другие переписки. Проблемы и жалобы находятся в разделе Помощь.')).toBeVisible()
-
-  await page.getByRole('button', { name: 'Помощь' }).click()
+  await expect(page.getByText('Пока нет чатов.', { exact: false })).toBeVisible()
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Помощь', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Мои обращения' })).toBeVisible()
   const existingTicket = page.locator('.venue-message-thread-card').filter({ hasText: 'Нужна помощь по заказу' })
   await expect(existingTicket).toBeVisible()
@@ -18594,6 +18607,7 @@ test('guest support tickets stay list-first and open detail only by choice or cr
 
   await existingTicket.getByRole('button', { name: 'Открыть' }).click()
   await expect(page.locator('.venue-messages-detail').getByText('Нужна помощь по заказу')).toBeVisible()
+  await page.getByRole('button', { name: 'К обращениям' }).click()
 
   await page.getByPlaceholder('Опишите проблему. Для срочного вопроса по столу используйте вызов персонала.').fill('Не открывается заказ')
   await page.getByRole('button', { name: 'Создать обращение' }).click()
@@ -22447,7 +22461,7 @@ test('my order after restored table context keeps table scope', async ({ page })
   await expect(plainItemRow).not.toContainText('к оплате')
   await expect(page.getByText('Сумма до скидок')).toHaveCount(0)
   await expect(page.getByText('К оплате', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '🚪 Завершить визит' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Завершить визит' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Заказ №900' })).toHaveCount(0)
   await expect(page.getByText('Заявка №333')).toHaveCount(0)
   await expect(page.getByText('Общий счёт #88')).toHaveCount(0)
@@ -22594,7 +22608,7 @@ test('account switch does not reuse previous user cart or table restore state', 
   }, otherMockInitData)
   await page.goto(`?mode=guest&smokeUser=other#tgWebAppData=${encodeURIComponent(otherMockInitData)}`)
 
-  await expect(page.getByText('Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.')).toBeVisible()
+  await expect(page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'QR' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Корзина (1)' })).toHaveCount(0)
 })
 
@@ -22616,8 +22630,12 @@ async function installQrScanner(page: Page) {
     scannerWindow.__qrCloseCount = 0
     scannerWindow.__qrAppCloseCount = 0
     Object.assign(scannerWindow.Telegram.WebApp, {
-      onEvent: (_event: string, callback: () => void) => { scannerWindow.__qrCancel = callback },
-      offEvent: () => { scannerWindow.__qrCancel = undefined },
+      onEvent: (event: string, callback: () => void) => {
+        if (event === 'scanQrPopupClosed') scannerWindow.__qrCancel = callback
+      },
+      offEvent: (event: string) => {
+        if (event === 'scanQrPopupClosed') scannerWindow.__qrCancel = undefined
+      },
       showScanQrPopup: (_params: unknown, callback: (text: string) => boolean | void) => {
         scannerWindow.__qrScan = callback
       },
@@ -22643,7 +22661,7 @@ test('QR scanner resolves the real exported bot QR once and stays inside Mini Ap
     if (request.url().includes('/api/guest/table/resolve?')) resolves.push(new URL(request.url()))
   })
   await page.goto(`?mode=guest&tgWebAppBotUsername=${tableQrFixture.botUsername}`)
-  await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).first().click()
+  await page.getByRole('button', { name: 'QR', exact: true }).first().click()
   await scanQr(page, tableQrFixture.qrText, 2)
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   expect(resolves).toHaveLength(1)
@@ -22692,7 +22710,7 @@ for (const scenario of ['invalid', 'foreign', 'conflict', 'revoked', 'forbidden'
       }
     })
     await page.goto(`?mode=guest&tgWebAppBotUsername=${tableQrFixture.botUsername}`)
-    await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+    await page.getByRole('button', { name: 'QR', exact: true }).click()
     releaseRestore()
     await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
     await page.getByRole('button', { name: /Кальянное меню/ }).click()
@@ -22730,7 +22748,7 @@ test('QR scanner unavailable keeps the existing camera and bot fallback', async 
   await installTelegramWebApp(page, 123456789)
   await mockGuestApi(page)
   await page.goto('?mode=guest')
-  await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+  await page.getByRole('button', { name: 'QR', exact: true }).click()
   await expect(page.getByText('Откройте камеру телефона и отсканируйте QR на столе или нажмите «Я за столом / У меня QR» в боте.')).toBeVisible()
 })
 
@@ -22753,7 +22771,7 @@ test('QR scanner resolution survives focus after the native camera closes', asyn
     await route.fulfill(jsonResponse(buildRestoreContext({ tableNumber: '5' })))
   })
   await page.goto('?mode=guest')
-  await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+  await page.getByRole('button', { name: 'QR', exact: true }).click()
   releaseRestore()
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await scanQr(page, tableQrFixture.qrText, 2)
@@ -22795,18 +22813,18 @@ test('QR scanner late resolution cannot restore a context after visit exit', asy
     await route.fulfill(jsonResponse(buildRestoreContext({ tableNumber: '5' })))
   })
   await page.goto('?mode=guest')
-  await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+  await page.getByRole('button', { name: 'QR', exact: true }).click()
   releaseRestore()
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await scanQr(page, tableQrFixture.qrText)
   await resolutionStarted
-  await page.getByRole('button', { name: '🚪 Завершить визит' }).click()
-  const noTableCopy = 'Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.'
-  await expect(page.getByText(noTableCopy)).toBeVisible()
+  await page.getByRole('button', { name: 'Завершить визит' }).click()
+  const qrEntry = page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'QR' })
+  await expect(qrEntry).toBeVisible()
   releaseResolve()
   await resolutionSettled
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
-  await expect(page.getByText(noTableCopy)).toBeVisible()
+  await expect(qrEntry).toBeVisible()
   expect(new URL(page.url()).searchParams.has('table_token')).toBe(false)
   expect(await page.evaluate(() => window.sessionStorage.getItem('hookah_guest_table_session_context:user:123456789'))).toBeNull()
   expect(await page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts)).toEqual([
@@ -22844,23 +22862,23 @@ for (const status of [404, 403, 500]) {
     await page.goto('?mode=guest')
     await restoring
     await expect(page.getByText('Загрузка стола…', { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+    await page.getByRole('button', { name: 'QR', exact: true }).click()
     await scanQr(page, tableQrFixture.qrText, 2)
     await expect.poll(() => page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts)).toEqual([
       status === 404 ? 'Стол не найден. Обновите QR.'
         : status === 403 ? 'Требуется новое подтверждение входа Откройте QR-код ещё раз и подтвердите вход в Telegram.'
         : 'Не удалось загрузить стол. Попробуйте позже.'
     ])
-    const noTableCopy = 'Чтобы заказать к столику или вызвать персонал, отсканируйте QR-код на столе.'
-    await expect(page.getByText(noTableCopy)).toBeVisible()
+    const qrEntry = page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'QR' })
+    await expect(qrEntry).toBeVisible()
     await expect(page.getByText('Загрузка стола…', { exact: true })).toHaveCount(0)
     expect(resolutions).toBe(1)
     releaseRestore()
     await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
-    await expect(page.getByText(noTableCopy)).toBeVisible()
+    await expect(qrEntry).toBeVisible()
     expect(new URL(page.url()).searchParams.has('table_token')).toBe(false)
     expect(await page.evaluate(() => window.sessionStorage.getItem('hookah_guest_table_session_context:user:123456789'))).toBeNull()
-    await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).click()
+    await page.getByRole('button', { name: 'QR', exact: true }).click()
     await scanQr(page, tableQrFixture.qrText, 2)
     await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
     expect(resolutions).toBe(2)
@@ -26429,6 +26447,8 @@ test('venue card media guide STAFF has no settings entry or direct route', async
 
 for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
   test(`venue card media image and PDF delivery ${mode}`, async ({ page }) => {
+    // Keep both attachments in range so this test counts delivery without an observer exit/re-entry.
+    await page.setViewportSize({ width: 1000, height: 3000 })
     await installTelegramWebApp(page, 123456789)
     const prefix = mode === 'PRIVATE_DRAFT' ? '/api/venue/1/guest-preview' : '/api/guest/venue/1'
     const section: VenueGuestPreviewInfoSectionFixture = {
@@ -26453,14 +26473,14 @@ for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
     await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
     if (mode === 'guest') await page.getByRole('button', { name: 'Открыть карточку' }).click()
     else await openVenueSection(page, 'Предпросмотр для гостя')
-    await page.locator('.venue-info-media-image').scrollIntoViewIfNeeded()
-    const image = page.getByRole('img', { name: '📖 Фото-меню 1', exact: true })
+    const pdf = page.locator('.venue-info-media-pdf')
+    await expect(page.locator('.venue-info-media-image')).toBeInViewport()
+    await expect(pdf).toBeInViewport()
+    const image = page.getByRole('img', { name: mode === 'guest' ? '📖 Фото-меню · 1' : '📖 Фото-меню 1', exact: true })
     await expect(image).toBeVisible()
     await expect.poll(() => image.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
-    const pdf = page.locator('.venue-info-media-pdf')
-    await pdf.scrollIntoViewIfNeeded()
     await expect(pdf).toHaveAttribute('data-state', 'ready')
-    await expect(pdf.getByRole('img')).toHaveAttribute('aria-label', '📖 Фото-меню 2 · страница 1 из 2')
+    await expect(pdf.getByRole('img')).toHaveAttribute('aria-label', mode === 'guest' ? '📖 Фото-меню · 2 · страница 1 из 2' : '📖 Фото-меню 2 · страница 1 из 2')
     await expect(page.locator('a[href^="blob:"]')).toHaveCount(0)
     expect(requests).toEqual([{ method: 'GET', authorization: mode === 'guest' ? undefined : 'Bearer e2e-session-token' }])
     await expect(page.getByTestId('venue-card-info-media')).toHaveCount(0)
@@ -26590,6 +26610,8 @@ test('direct venue info media disabled runtime and invalid file have actionable 
 
 for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
   test(`direct venue info media opaque delivery ${mode}`, async ({ page }) => {
+    // Keep both attachments in range so this test counts delivery without an observer exit/re-entry.
+    await page.setViewportSize({ width: 1000, height: 3000 })
     await installTelegramWebApp(page, 123456789)
     const imageId = '12121212-1212-4121-8121-121212121212';const pdfId = '34343434-3434-4343-8343-343434343434'
     const prefix = mode === 'PRIVATE_DRAFT' ? '/api/venue/1/guest-preview' : '/api/guest/venue/1'
@@ -26612,15 +26634,18 @@ for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
     await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
     if (mode === 'guest') await page.getByRole('button', { name: 'Открыть карточку' }).click()
     else await openVenueSection(page, 'Предпросмотр для гостя')
-    await page.locator('.venue-info-media-image').scrollIntoViewIfNeeded()
-    const image = page.getByRole('img', { name: '📖 Фото-меню 1', exact: true })
-    await expect.poll(() => image.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
     const pdf = page.locator('.venue-info-media-pdf')
-    await pdf.scrollIntoViewIfNeeded()
+    await expect(page.locator('.venue-info-media-image')).toBeInViewport()
+    await expect(pdf).toBeInViewport()
+    const image = page.getByRole('img', { name: mode === 'guest' ? '📖 Фото-меню · 1' : '📖 Фото-меню 1', exact: true })
+    await expect.poll(() => image.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
     await expect(pdf).toHaveAttribute('data-state', 'ready')
     await expect(page.locator('a[href^="blob:"]')).toHaveCount(0)
-    expect(reads).toHaveLength(2)
-    expect(reads.every((r) => r.authorization === (mode === 'guest' ? undefined : 'Bearer e2e-session-token'))).toBe(true)
+    const authorization = mode === 'guest' ? undefined : 'Bearer e2e-session-token'
+    expect(reads.sort((a, b) => a.media.localeCompare(b.media))).toEqual([
+      { media: imageId, authorization },
+      { media: pdfId, authorization }
+    ])
     await expect(page.getByRole('button', { name: 'Удалить вложение', exact: true })).toHaveCount(0)
   })
 }
@@ -27592,7 +27617,7 @@ for (const entry of ['startapp', 'fallback'] as const) {
     await expect(page.locator('.venue-location').first()).toContainText('Казань, Баумана, 2')
     await expect(page).toHaveURL(/#\/venue\/2$/)
     await expect(page.locator('.venue-shell, .platform-shell')).toHaveCount(0)
-    await page.getByRole('button', { name: 'Меню заведения', exact: true }).click()
+    await page.getByRole('button', { name: 'Меню', exact: true }).click()
     await expect(page).toHaveURL(/browseMenu=1/)
     await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
     await expect(page.getByText('Другой Double Apple', { exact: true })).toBeVisible()
@@ -27604,7 +27629,7 @@ for (const entry of ['startapp', 'fallback'] as const) {
     await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
     await page.screenshot({ path: test.info().outputPath('personal-venue-mobile.png'), fullPage: true })
     expect(calls.filter(path => path === '/api/guest/table/resolve')).toHaveLength(0)
-    await page.getByRole('button', { name: entry === 'startapp' ? 'Каталог' : 'Все заведения Hookah Tootah', exact: true }).click()
+    await page.getByRole('button', { name: 'Другие заведения', exact: true }).click()
     await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
     await expectNoHorizontalOverflow(page)
     expect(await page.evaluate(() => (window as any).__e2eTelegramSendDataPayloads)).toEqual([])
@@ -27621,21 +27646,49 @@ test('personal links browse B retain visit cart and order A and explicit catalog
   page.on('request', request => { if (request.method() === 'POST' && !request.url().includes('/auth/')) mutations.push(request.url()) })
   await page.goto('?mode=home&startapp=venue_2')
   await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
-  await expect(page.getByText('Визит, корзина и счёт остаются в текущем заведении.', { exact: false })).toBeVisible()
-  await page.getByRole('button', { name: 'Меню заведения', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'К столу · Микс' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Корзина/ })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Меню', exact: true }).click()
   await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
   await expect(page.locator('.menu-item-controls button').first()).toBeDisabled()
-  await page.getByRole('button', { name: 'Вернуться к посещению: Микс', exact: true }).click()
+  await page.getByRole('button', { name: 'К столу · Микс', exact: true }).click()
   await expect(page).toHaveURL(/#\/venue\/1$/)
   await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Добавить', exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
   await page.goto('?mode=home&startapp=venue_2')
   await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
+  await page.getByRole('button', { name: 'К столу · Микс', exact: true }).click()
   await page.getByRole('button', { name: /^Корзина/ }).first().click()
   await expect(page).toHaveURL(/#\/cart/)
   await expect(page.getByText('Double Apple', { exact: true }).first()).toBeVisible()
-  await page.getByRole('button', { name: 'Все заведения Hookah Tootah', exact: true }).click()
+  await page.goBack()
+  let releaseB!: () => void
+  const pendingB = new Promise<void>(resolve => { releaseB = resolve })
+  let finishB!: () => void
+  const finishedB = new Promise<void>(resolve => { finishB = resolve })
+  let requestedB = false
+  await page.route('**/api/guest/venue/2', async route => {
+    requestedB = true
+    await pendingB
+    try {
+      await route.fallback()
+    } finally {
+      finishB()
+    }
+  })
+  try {
+    await page.evaluate(() => { location.hash = '#/venue/2' })
+    await expect.poll(() => requestedB).toBe(true)
+    await page.getByRole('button', { name: 'К столу · Микс', exact: true }).click()
+    await expect(page).toHaveURL(/#\/venue\/1$/)
+  } finally {
+    releaseB()
+  }
+  await finishedB
+  await expect(page.getByText(/Баумана, 2/)).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /^Корзина/ }).first()).toBeVisible()
+  await page.getByRole('button', { name: 'Другие заведения', exact: true }).click()
   await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
   expect(api.getTableSessionEndRequests()).toHaveLength(0)
   expect(mutations.filter(url => !url.includes('/cart/preview'))).toEqual([])
@@ -27883,20 +27936,20 @@ test('personal links P2 successful QR supersedes browsing B and Menu opens A', a
   await page.goto(`?mode=home&venue_entry=venue_2&tgWebAppBotUsername=${tableQrFixture.botUsername}`)
   await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
   await expect.poll(() => page.evaluate(() => localStorage.getItem('hookah_browse_venue:user:123456789'))).toBe('venue_2')
-  await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).first().click()
+  await page.getByRole('button', { name: 'QR', exact: true }).first().click()
   await scanQr(page, tableQrFixture.qrText)
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   expect(await page.evaluate(() => localStorage.getItem('hookah_browse_venue:user:123456789'))).toBeNull()
-  await page.getByRole('button', { name: 'Меню', exact: true }).click()
   await expect(page).toHaveURL(/#\/venue\/1$/)
+  await page.screenshot({ path: test.info().outputPath('guest-active-visit-390.png') })
   await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
   await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
   const before = await personalLinkProtectedState(page)
-  await page.getByRole('button', { name: 'Карточка заведения', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'ℹ️ Информация', exact: true })).toBeVisible()
+  await page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'Заведение', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
   expect(await personalLinkProtectedState(page)).toEqual(before)
   await page.getByRole('button', { name: 'Меню', exact: true }).click()
-  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await expect(page).toHaveURL(/#\/venue\/1\?browseMenu=1$/)
   await expect(page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true })).toBeVisible()
   expect(api.getTableSessionEndRequests()).toEqual([])
   expect(api.getAddBatchRequests()).toEqual([])
@@ -27920,7 +27973,7 @@ for (const outcome of ['denied', 'error', 'unavailable', 'invalid', 'cancel'] as
     })
     await page.goto(`?mode=home&venue_entry=venue_2&tgWebAppBotUsername=${tableQrFixture.botUsername}`)
     await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
-    await page.getByRole('button', { name: '🪑 Сканировать QR', exact: true }).first().click()
+    await page.getByRole('button', { name: 'QR', exact: true }).first().click()
     const before = await personalLinkProtectedState(page)
     const storageBefore = await page.evaluate(() => ({ url: location.href, local: { ...localStorage } }))
     if (outcome === 'cancel') await page.evaluate(() => (window as unknown as ScannerWindow).__qrCancel?.())
@@ -27929,7 +27982,7 @@ for (const outcome of ['denied', 'error', 'unavailable', 'invalid', 'cancel'] as
     expect(resolves).toHaveLength(outcome === 'invalid' || outcome === 'cancel' ? 0 : 1)
     expect(await personalLinkProtectedState(page)).toEqual(before)
     expect(await page.evaluate(() => ({ url: location.href, local: { ...localStorage } }))).toEqual(storageBefore)
-    await page.getByRole('button', { name: 'Меню заведения', exact: true }).click()
+    await page.getByRole('button', { name: 'Меню', exact: true }).click()
     await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
     await expect(page.getByText('Другой Double Apple', { exact: true })).toBeVisible()
     await expect(page.locator('.menu-item-controls button').first()).toBeDisabled()
@@ -27946,20 +27999,20 @@ for (const activeVisit of [true, false]) {
     await mockHomeRoles(page)
     await page.route('**/api/guest/venue-entry/venue_1', route => route.fulfill(jsonResponse({ venueId: 1 })))
     await page.goto('?mode=home&venue_entry=venue_1')
-    await expect(page.getByRole('heading', { name: 'ℹ️ Информация', exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Меню заведения', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Меню', exact: true }).click()
     await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
     if (activeVisit) await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
     else await expect(page.locator('.menu-item-controls button').first()).toBeDisabled()
     const before = await personalLinkProtectedState(page)
     await page.getByRole('button', { name: 'Карточка заведения', exact: true }).click()
     await expect(page).toHaveURL(/#\/venue\/1\?browseMenu=0$/)
-    await expect(page.getByRole('heading', { name: 'ℹ️ Информация', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
     expect(await personalLinkProtectedState(page)).toEqual(before)
-    await page.getByRole('button', { name: 'Меню заведения', exact: true }).click()
+    await page.getByRole('button', { name: 'Меню', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true })).toBeVisible()
     await clickTelegramBackButton(page)
-    await expect(page.getByRole('heading', { name: 'ℹ️ Информация', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
     expect(await personalLinkProtectedState(page)).toEqual(before)
     expect(api.getTableSessionEndRequests()).toEqual([])
     expect(api.getAddBatchRequests()).toEqual([])
@@ -28099,3 +28152,276 @@ for (const scenario of [
     await expectNoHorizontalOverflow(page)
   })
 }
+
+for (const width of [320, 360, 390, 430]) {
+  test(`guest experience mobile card and safe menu at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 820 })
+    await page.emulateMedia({ colorScheme: width === 360 ? 'dark' : 'light' })
+    await installTelegramWebApp(page, 123456789)
+    if (width === 360) {
+      await page.addInitScript(() => {
+        Object.assign((window as unknown as ScannerWindow).Telegram.WebApp, {
+          colorScheme: 'dark',
+          themeParams: { bg_color: '#151922', secondary_bg_color: '#202633', text_color: '#f1f3fa' }
+        })
+      })
+    }
+    await mockGuestApi(page)
+    const venueName = 'Гостиная на Набережной — кальянная с длинным названием'
+    await page.route('**/api/guest/venue/1', route => route.fulfill(jsonResponse({ venue: {
+      id: 1, name: venueName, status: 'PUBLISHED', isFavorite: false,
+      displayAddress: 'Санкт-Петербург, набережная реки Фонтанки, 190',
+      cardDescription: 'Кальяны, чай и тихие столики у окна.',
+      latitude: 59.928, longitude: 30.313, timezone: 'Europe/Moscow',
+      todaySchedule: { statusLabel: 'Открыто сейчас', isConfigured: true, timeLabel: '14:00–02:00' },
+      weeklyHours: [{ weekday: 1, opensAt: '14:00', closesAt: '02:00', isClosed: false }],
+      dateExceptions: [{ serviceDate: '2030-12-31', isClosed: true, guestNote: 'Праздничный выходной' }]
+    } })))
+    await page.goto('?mode=guest#/venue/1')
+    await expect(page.getByRole('heading', { name: venueName })).toBeVisible()
+    await expect(page.getByText('Открыто сейчас · 14:00–02:00')).toBeVisible()
+    if (width === 360) await expect(page.locator('.guest-shell')).toHaveCSS('background-color', 'rgb(21, 25, 34)')
+    if (width === 320) await page.addStyleTag({ content: ':root { font-size: 20px }' })
+    await expectNoHorizontalOverflow(page)
+    await page.screenshot({ path: testInfo.outputPath(`guest-card-${width}.png`) })
+    await page.getByText('График работы', { exact: true }).click()
+    await expect(page.getByText('Праздничный выходной')).toBeVisible()
+    await page.getByText('Как добраться', { exact: true }).click()
+    const apple = page.getByRole('link', { name: 'Apple Maps' })
+    expect(new URL((await apple.getAttribute('href'))!).searchParams.get('daddr')).toBe('59.928,30.313')
+    await page.getByRole('button', { name: 'Меню', exact: true }).click()
+    await page.getByRole('button', { name: /Кальянное меню ·/ }).click()
+    await expect(page.getByText('Для заказа отсканируйте QR на столе.')).toBeVisible()
+    await expect(page.locator('.menu-item-controls button').first()).toBeDisabled()
+    await expectNoHorizontalOverflow(page)
+    if (width === 390) await page.screenshot({ path: testInfo.outputPath('guest-menu-390.png') })
+    await page.goBack()
+    await expect(page.getByRole('heading', { name: venueName })).toBeVisible()
+  })
+}
+
+test('guest experience PDF opens a separate viewer, zooms, paginates and returns', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 820 })
+  await observeInlineMediaResources(page)
+  const api = await mockInlinePdfPreview(page, { mode: 'guest', count: 2 })
+  const thumbnail = page.locator('[data-mode="thumbnail"]').first()
+  await expect(thumbnail).toHaveAttribute('data-state', 'ready')
+  await expect(thumbnail.getByRole('button', { name: 'Следующая страница' })).toHaveCount(0)
+  const open = page.getByRole('button', { name: /Открыть документ/ }).first()
+  await open.click()
+  await expect(page).toHaveURL(/media=0\.0$/)
+  const viewer = page.locator('[data-mode="viewer"]')
+  await expect(viewer).toHaveAttribute('data-state', 'ready')
+  await expect(viewer.getByRole('button', { name: 'Предыдущая страница' })).toBeDisabled()
+  await viewer.getByRole('button', { name: 'Следующая страница' }).click()
+  await expect(viewer).toHaveAttribute('data-state', 'ready')
+  await expect(viewer.locator('canvas')).toHaveAttribute('aria-label', /страница 2 из 2/)
+  await viewer.getByRole('button', { name: 'Увеличить' }).click()
+  await expect(viewer.locator('.info-media-zoomed')).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: testInfo.outputPath('guest-pdf-390.png') })
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await expect(page.locator('[data-mode="thumbnail"]')).toHaveCount(2)
+  expect(api.reads.every(url => url.includes('/api/guest/venue/1/info-sections/10/media/'))).toBe(true)
+  await expect.poll(async () => (await inlineResourceCounts(page)).workers).toBe(0)
+})
+
+test('guest experience profile keeps an unsaved draft and submits only supported fields', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 820 })
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  const profile: { displayName: string; birthday: string | null } = { displayName: 'Александр', birthday: null }
+  const payloads: unknown[] = []
+  await page.route('**/api/guest/profile**', async route => {
+    const request = route.request()
+    expect(request.headers().authorization).toBe('Bearer e2e-session-token')
+    if (request.method() === 'PUT') {
+      const payload = request.postDataJSON()
+      payloads.push(payload)
+      if (request.url().endsWith('/name')) profile.displayName = payload.displayName
+      else profile.birthday = payload.birthday
+    }
+    await route.fulfill(jsonResponse(profile))
+  })
+  await page.goto('?mode=guest#/account')
+  await expect(page.getByRole('heading', { name: 'Профиль' })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('guest-profile-390.png') })
+  await page.getByRole('button', { name: 'Личные данные' }).click()
+  const name = page.getByRole('textbox', { name: 'Имя', exact: true })
+  await expect(name).toHaveValue('Александр')
+  await name.fill('Временное имя')
+  await expect(page.getByText('Есть несохранённые изменения.')).toBeVisible()
+  await page.goBack()
+  await page.getByRole('button', { name: 'Личные данные' }).click()
+  await expect(name).toHaveValue('Временное имя')
+  await page.getByRole('button', { name: 'Отменить изменения' }).click()
+  await expect(name).toHaveValue('Александр')
+  await name.fill('Саша')
+  await page.getByRole('button', { name: 'Сохранить имя' }).click()
+  await expect(page.getByText('Имя сохранено.')).toBeVisible()
+  const birthday = page.getByRole('textbox', { name: 'День рождения', exact: true })
+  await birthday.fill('29.02')
+  await page.getByRole('button', { name: 'Сохранить дату' }).click()
+  await expect(birthday).toHaveAttribute('readonly', '')
+  expect(payloads).toEqual([{ displayName: 'Саша' }, { birthday: '29.02' }])
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: testInfo.outputPath('guest-personal-data-390.png') })
+})
+
+test('guest experience chat list is separate, retains its tab and reuses the send attempt', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 820 })
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  let thread: SupportThreadFixture = {
+    threadId: 7044, venueId: 1, venueName: 'Микс', threadType: 'VENUE_CHAT', assigneeScope: 'VENUE',
+    category: 'OTHER', title: 'Чат с Микс', status: 'IN_PROGRESS', statusLabel: 'В работе',
+    lastMessagePreview: 'До встречи!', unreadCount: 1, lastMessageAt: '2030-01-10T18:00:00Z'
+  }
+  const messages: SupportMessageFixture[] = [{
+    messageId: 1, threadId: thread.threadId, authorRole: 'VENUE', source: 'VENUE_MINIAPP',
+    text: 'До встречи!', createdAt: '2030-01-10T18:00:00Z'
+  }]
+  const attempts: string[] = []
+  let opens = 0
+  await page.route('**/api/guest/support/**', async route => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (url.pathname.endsWith('/venue-chats')) {
+      opens += 1
+      return route.fulfill(jsonResponse({ thread, messages }))
+    }
+    if (url.pathname.endsWith('/messages')) {
+      const payload = request.postDataJSON()
+      attempts.push(payload.clientMessageId)
+      if (attempts.length !== 2) {
+        messages.push({ messageId: messages.length + 1, threadId: thread.threadId, authorRole: 'GUEST', source: 'GUEST_MINIAPP',
+          text: payload.message, createdAt: '2030-01-10T18:02:00Z' })
+      }
+      if (attempts.length === 1 || attempts.length === 3) return route.abort('failed')
+      return route.fulfill(jsonResponse({ thread, message: messages.at(-1) }))
+    }
+    if (url.pathname.endsWith('/resolve')) {
+      thread = { ...thread, status: 'RESOLVED', statusLabel: 'Решено' }
+      return route.fulfill(jsonResponse({ thread, messages }))
+    }
+    if (url.pathname.endsWith('/threads')) {
+      const filter = url.searchParams.get('filter')
+      return route.fulfill(jsonResponse({ items: !filter || (filter === 'resolved') === (thread.status === 'RESOLVED') ? [thread] : [] }))
+    }
+    return route.fulfill(jsonResponse({ thread, messages }))
+  })
+  await page.goto('?mode=guest#/messages')
+  const row = page.getByRole('button', { name: 'Открыть · Чат с Микс' })
+  await expect(row).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Сообщение' })).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('guest-chats-390.png') })
+  await row.click()
+  await expect(row).toHaveCount(0)
+  const input = page.getByRole('textbox', { name: 'Сообщение' })
+  await input.fill('Можно столик у окна?')
+  await page.getByRole('button', { name: 'Отправить' }).click()
+  await expect(page.getByText(/повторите отправку без изменений/i)).toBeVisible()
+  await clickTelegramBackButton(page)
+  await row.click()
+  await expect(input).toHaveValue('Можно столик у окна?')
+  await page.getByRole('button', { name: 'Отправить' }).click()
+  await expect(input).toHaveValue('')
+  await expect(page.locator('.venue-support-messages').getByText(/Можно столик у окна/)).toHaveCount(1)
+  expect(attempts).toHaveLength(2)
+  expect(attempts[0]).toBe(attempts[1])
+  expect(opens).toBe(0)
+  await page.screenshot({ path: testInfo.outputPath('guest-chat-390.png') })
+  await input.fill('Будем в восемь.')
+  await page.getByRole('button', { name: 'Отправить' }).click()
+  await expect(page.getByText(/повторите отправку без изменений/i)).toBeVisible()
+  await input.fill('Уточнение: будем в девять.')
+  await page.getByRole('button', { name: 'Отправить' }).click()
+  await expect(input).toHaveValue('')
+  await expect(page.locator('.venue-support-messages').getByText('Уточнение: будем в девять.')).toHaveCount(1)
+  expect(attempts).toHaveLength(4)
+  expect(new Set([attempts[0], attempts[2], attempts[3]]).size).toBe(3)
+  page.once('dialog', dialog => void dialog.accept())
+  await page.getByRole('button', { name: 'Завершить переписку' }).click()
+  await expect(page.getByText('Переписка завершена.', { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: 'К чатам' }).click()
+  await expect(page.getByRole('button', { name: 'Активные' })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Завершённые' }).click()
+  await expect(row).toBeVisible()
+  await row.click()
+  await page.goBack()
+  await expect(page.getByRole('button', { name: 'Завершённые' })).toHaveAttribute('aria-pressed', 'true')
+  await expectNoHorizontalOverflow(page)
+})
+
+test('guest experience catalog promotions, history categories and loyalty use separate reads', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 820 })
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { visitHistory: { items: [], details: {} } })
+  await page.route('**/api/guest/catalog/promotions', route => route.fulfill(jsonResponse({ items: [{
+    venueId: 1, venueName: 'Микс', timezone: 'Europe/Moscow', promotion: {
+      id: 12, title: 'Чай по будням', description: 'Чай к кальяну', terms: 'До 18:00',
+      endsAt: '2030-01-10T15:00:00Z'
+    }
+  }] })))
+  await page.route('**/api/guest/bookings/archive', route => route.fulfill(jsonResponse({ items: [{
+    ...buildGuestBooking({ bookingId: 112, venueName: 'Микс', displayLabel: 'Бронь №12' }),
+    status: 'no_show', statusLabel: 'Не пришли'
+  }] })))
+  await page.route('**/api/guest/loyalty**', route => route.fulfill(jsonResponse({ items: [{
+    venueId: 1, venueName: 'Микс', programType: 'NTH_HOOKAH_FREE', nthValue: 5, progressCount: 3,
+    rewardsAvailable: 2, rewardsReserved: 1, earnTargets: [{ type: 'CATEGORY_TYPE', name: null }],
+    rewardTargets: [{ type: 'MENU_ITEM', name: 'Мятный кальян' }]
+  }] })))
+  await page.goto('?mode=guest#/catalog')
+  await page.getByRole('button', { name: 'Акции', exact: true }).click()
+  await expect(page.getByText('Чай по будням')).toBeVisible()
+  await expect(page.getByText(/Действует до .*18:00/)).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('guest-promotions-390.png') })
+  await page.getByRole('button', { name: 'Открыть заведение' }).click()
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Акции', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'История', exact: true }).click()
+  await expect(page.getByText('Состоявшихся посещений пока нет.')).toBeVisible()
+  await page.getByRole('button', { name: 'Бронирования' }).click()
+  await expect(page.getByText('Бронь №12')).toBeVisible()
+  await expect(page.getByText(/Не пришли/)).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('guest-history-390.png') })
+  const ordersRequest = page.waitForRequest(request => request.url().includes('/visits?') && request.url().includes('withOrders=true'))
+  await page.getByRole('button', { name: 'Заказы' }).click()
+  await ordersRequest
+  await expect(page.getByText('Завершённых заказов пока нет.')).toBeVisible()
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Лояльность' }).click()
+  await expect(page.getByText('Оплачено по программе · 3 из 4')).toBeVisible()
+  await expect(page.getByText('Доступно наград · 2')).toBeVisible()
+  await expect(page.getByText('Зарезервировано в заказах · 1')).toBeVisible()
+  await expect(page.getByText(/Мятный кальян/)).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: testInfo.outputPath('guest-loyalty-390.png') })
+})
+
+test('guest experience retention read failures show retry instead of an empty state', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  for (const scenario of [
+    { screen: 'catalog/promotions', api: 'catalog/promotions', result: { items: [] },
+      error: 'Не удалось загрузить акции. Попробуйте ещё раз.', empty: 'Сейчас в каталоге нет действующих акций.' },
+    { screen: 'account/history', api: 'visits?**', result: { items: [] },
+      error: 'Не удалось загрузить историю.', empty: 'Состоявшихся посещений пока нет.' },
+    { screen: 'account/favorites', api: 'favorites/venues**', result: { venues: [] },
+      error: 'Не удалось загрузить избранное.', empty: /Пока нет избранных заведений/ }
+  ]) {
+    let requests = 0
+    await page.route(`**/api/guest/${scenario.api}`, route => ++requests === 1
+      ? route.fulfill({ status: 503, contentType: 'application/json', body: '{}' })
+      : route.fulfill(jsonResponse(scenario.result)))
+    await page.goto(`?mode=guest#/${scenario.screen}`)
+    await expect(page.getByText(scenario.error, { exact: true })).toBeVisible()
+    await expect(page.getByText(scenario.empty)).toHaveCount(0)
+    await page.getByRole('button', { name: 'Повторить', exact: true }).click()
+    await expect(page.getByText(scenario.empty)).toBeVisible()
+    expect(requests).toBe(2)
+  }
+})
