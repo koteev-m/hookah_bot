@@ -5,6 +5,7 @@ import { append, el } from '../shared/ui/dom'
 type LinkSettings = {
   venueId: number; name: string; address: string; slug: string | null
   catalogListed: boolean; canManage: boolean; guestAvailable: boolean; url: string | null
+  telegramUrl?: string | null
 }
 
 export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDebug: boolean, venueId: number, onChange?: () => void) {
@@ -12,11 +13,12 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
   const section = el('section', { className: 'card venue-public-link' })
   const title = el('h3', { text: 'Ссылка заведения' })
   const identity = el('p')
-  const link = document.createElement('input')
-  link.readOnly = true
-  link.className = 'venue-input'
-  link.setAttribute('aria-label', 'Персональная ссылка заведения')
-  const copy = el('button', { text: 'Скопировать ссылку' })
+  const telegramLink = document.createElement('input')
+  telegramLink.readOnly = true
+  telegramLink.className = 'venue-input'
+  telegramLink.setAttribute('aria-label', 'Прямая ссылка для Telegram')
+  const copyTelegram = el('button', { text: 'Скопировать ссылку' })
+  const telegramHint = el('p')
   const status = el('p', { text: 'Загружаем ссылку…' })
   status.setAttribute('role', 'status')
   const availability = el('p')
@@ -34,7 +36,7 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
   const hint = el('p', { text: 'Не показывать в каталоге: заведение остаётся доступно по ссылке при выполнении условий публикации. Ссылка не даёт права заказывать к столу.' })
   const save = el('button', { text: 'Сохранить настройки ссылки' })
   append(extra, slug, label, hint, save)
-  append(section, title, identity, link, copy, status, availability, extra)
+  append(section, title, identity, telegramLink, copyTelegram, telegramHint, status, availability, extra)
   save.disabled = true
   root.appendChild(section)
   let settings: LinkSettings | null = null
@@ -48,28 +50,39 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
       ? 'Гостевой доступ сейчас закрыт. Создание ссылки не публикует заведение.'
       : data.catalogListed ? 'Заведение доступно гостям и показывается в каталоге.' : 'Не показывать в каталоге. Гости могут открыть заведение по ссылке.'
   }
+  const showLinks = (data: LinkSettings) => {
+    telegramLink.value = data.telegramUrl ?? ''
+    telegramLink.hidden = !data.telegramUrl
+    copyTelegram.disabled = !data.telegramUrl || !data.guestAvailable
+    telegramHint.textContent = !data.telegramUrl
+      ? 'Ссылка для гостей ещё не активирована. Администратор платформы включит её после обновления приложения.'
+      : !data.guestAvailable ? 'Ссылка для Telegram станет доступна, когда откроется гостевой доступ к заведению.'
+        : 'Открывает это заведение прямо в Mini App внутри Telegram.'
+  }
   const show = (data: LinkSettings) => {
     settings = data
     identity.textContent = savedIdentity ?? `${data.name} · ${data.address || 'Адрес пока не указан'}`
-    link.value = data.url ?? ''
-    copy.disabled = !data.url
+    showLinks(data)
     slug.value = data.slug ?? ''
     listed.checked = data.catalogListed
     extra.hidden = !data.canManage
     save.disabled = !data.canManage
     showAvailability(data)
-    status.textContent = data.url ? '' : 'Ссылка ещё недоступна. Настройку адреса платформы выполняет администратор платформы.'
+    status.textContent = ''
   }
-  copy.disabled = true
-  copy.addEventListener('click', async () => {
-    if (!settings?.url) return
+  copyTelegram.disabled = true
+  telegramLink.hidden = true
+  const copyUrl = async (url: string, input: HTMLInputElement) => {
     try {
-      await navigator.clipboard.writeText(settings.url)
+      await navigator.clipboard.writeText(url)
       status.textContent = 'Ссылка скопирована.'
     } catch {
-      link.focus(); link.select()
+      input.focus(); input.select()
       status.textContent = 'Выделили ссылку. Нажмите и удерживайте поле, затем выберите «Скопировать».'
     }
+  }
+  copyTelegram.addEventListener('click', async () => {
+    if (settings?.telegramUrl && settings.guestAvailable) await copyUrl(settings.telegramUrl, telegramLink)
   })
   save.addEventListener('click', async () => {
     if (!settings?.canManage || saving) return
@@ -95,7 +108,11 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
     const result = await requestApi<LinkSettings>(backendUrl, path, { signal: controller.signal }, deps)
     if (controller.signal.aborted || id !== requestId || saving) return
     if (result.ok) {
-      if (settings) showAvailability(result.data)
+      if (settings) {
+        settings = { ...settings, url: result.data.url, telegramUrl: result.data.telegramUrl, guestAvailable: result.data.guestAvailable }
+        showLinks(result.data)
+        showAvailability(result.data)
+      }
       else show(result.data)
     } else if (settings) {
       availability.textContent = 'Не удалось обновить доступность ссылки.'

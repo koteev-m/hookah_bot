@@ -5031,6 +5031,27 @@ MenuButtonWebApp and verify the configured public origin routes `/v/*` to backen
 
 ## Venue draft publication and branded public origin
 
+`HT-VENUE-DIRECT-MINIAPP-LINK-01`: for the additive `telegramUrl` response field,
+run `VenuePublicLinksTest`/`VenuePublicLinksRoutesTest`, Telegram auth and venue-payload
+fallback tests, compile/lint, HT70 portable tests, Mini App build and the targeted
+`personal links`/`venue publication` Playwright cases. Check absent Main Mini App
+configuration, exact server-generated payload for two venues, authenticated entry,
+lifecycle/subscription denial, path-only ID/slug/payload selection despite conflicting
+query parameters, unchanged HTTPS/aliases/fallback and clipboard denial. Registry/DB logic and frontend guest
+navigation are unchanged; browser auth mocks do not prove signed Telegram launch
+or BotFather configuration.
+
+`HT-VENUE-SINGLE-TELEGRAM-LINK-01`: the owner confirmed Main Mini App configuration
+and direct Микс launch on iPhone on 2026-11-04; do not repeat BotFather setup. The
+final owner block has exactly one **Скопировать ссылку** action and a Telegram URL.
+Assert exact server-returned links for two selected venues, no HTTPS field or copy
+fallback, disabled copy for absent/null `telegramUrl` and closed guest access,
+publication refresh and clipboard fallback. Reuse backend/HT70 evidence only after
+matching source/test hashes; rerun Mini App build and focused personal-link/publication
+smoke for UI changes. Post-release iPhone acceptance still covers the new copy UI,
+another venue and preserved existing visit/QR/HTTPS links. Runtime activation remains
+separate from the already completed external Telegram setup.
+
 Local acceptance: run `VenuePublicationRoutesTest` (H2 with authenticated HTTP), `VenuePublicationPostgresTest`
 (real PostgreSQL and venue-row contention), the `VenuePublicLinks*`, Guest Preview, Venue RBAC,
 Platform lifecycle and Telegram router/keyboard suites, Kotlin compile/lint, Mini App build, and

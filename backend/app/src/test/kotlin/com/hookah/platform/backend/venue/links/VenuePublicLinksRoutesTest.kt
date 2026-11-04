@@ -14,6 +14,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
@@ -33,9 +34,14 @@ class VenuePublicLinksRoutesTest {
     fun `subdomain issuance and landing share registry and availability with old paths`() =
         verifyPublicEntry(branded = true, subdomains = true)
 
+    @Test
+    fun `confirmed Main Mini App issues direct venue links and preserves fallback and access guards`() =
+        verifyPublicEntry(branded = true, subdomains = true, mainMiniApp = true)
+
     private fun verifyPublicEntry(
         branded: Boolean,
         subdomains: Boolean = false,
+        mainMiniApp: Boolean = false,
     ) {
         testApplication {
             h2().use { ds ->
@@ -60,6 +66,9 @@ class VenuePublicLinksRoutesTest {
                         }
                         if (subdomains) {
                             put("venue.publicLinkFormat", "subdomain")
+                        }
+                        if (mainMiniApp) {
+                            put("telegram.mainMiniAppConfigured", "true")
                         }
                     }
                 environment { this.config = config }
@@ -86,12 +95,17 @@ class VenuePublicLinksRoutesTest {
 
                 val expectedHost = if (branded) rootHost else stagingHost
                 val management =
-                    client.get("/api/venue/$id/public-link") {
+                    client.get("/api/venue/$id/public-link?venueId=$other&payload=${venuePayload(other)}") {
                         header(HttpHeaders.Authorization, "Bearer $token")
                         header(HttpHeaders.Host, "evil.example")
                         header("X-Forwarded-Host", "evil.example")
                     }
                 assertEquals(HttpStatusCode.OK, management.status)
+                assertEquals(
+                    if (mainMiniApp) "https://t.me/ExampleBot?startapp=${venuePayload(id)}" else null,
+                    Json.parseToJsonElement(management.bodyAsText())
+                        .jsonObject["telegramUrl"]?.jsonPrimitive?.contentOrNull,
+                )
                 assertEquals(
                     if (subdomains) "https://new-dym.$rootHost" else "https://$expectedHost/v/new-dym",
                     Json.parseToJsonElement(management.bodyAsText()).jsonObject["url"]?.jsonPrimitive?.content,
@@ -104,17 +118,22 @@ class VenuePublicLinksRoutesTest {
                     }
                 assertEquals(HttpStatusCode.OK, otherManagement.status)
                 assertEquals(
+                    if (mainMiniApp) "https://t.me/ExampleBot?startapp=${venuePayload(other)}" else null,
+                    Json.parseToJsonElement(otherManagement.bodyAsText())
+                        .jsonObject["telegramUrl"]?.jsonPrimitive?.contentOrNull,
+                )
+                assertEquals(
                     if (subdomains) "https://$otherHost" else "https://$expectedHost/v/${otherSettings.slug}",
                     Json.parseToJsonElement(otherManagement.bodyAsText()).jsonObject["url"]?.jsonPrimitive?.content,
                 )
                 val foreignManagement =
-                    client.get("/api/venue/$other/public-link") {
+                    client.get("/api/venue/$other/public-link?venueId=$id") {
                         header(HttpHeaders.Authorization, "Bearer $manager")
                         header(HttpHeaders.Host, otherHost)
                     }
                 assertEquals(HttpStatusCode.Forbidden, foreignManagement.status)
                 val foreignUpdate =
-                    client.put("/api/venue/$other/public-link") {
+                    client.put("/api/venue/$other/public-link?venueId=$id") {
                         header(HttpHeaders.Authorization, "Bearer $manager")
                         header(HttpHeaders.ContentType, "application/json")
                         setBody("""{"expectedSlug":"${otherSettings.slug}","confirmed":true,"slug":"stolen"}""")
@@ -185,7 +204,7 @@ class VenuePublicLinksRoutesTest {
                 repeat(2) {
                     for ((slug, host) in listOf(settings.slug to stagingHost, "new-dym" to expectedHost)) {
                         val page =
-                            client.get("/v/$slug?redirect=https://evil.example") {
+                            client.get("/v/$slug?slug=${otherSettings.slug}") {
                                 header(HttpHeaders.Host, host)
                                 header("X-Forwarded-Host", "evil.example")
                             }
@@ -194,18 +213,28 @@ class VenuePublicLinksRoutesTest {
                         assertTrue(body.contains("&lt;Дым &amp; Mix&gt;"))
                         assertTrue(body.contains("Арбат, 1"))
                         assertTrue(body.contains("https://t.me/ExampleBot?start=${venuePayload(id)}"))
+                        assertEquals(mainMiniApp, body.contains("https://t.me/ExampleBot?startapp=${venuePayload(id)}"))
                         assertFalse(body.contains("evil.example"))
                         assertFalse(body.contains("<Дым"))
                         assertEquals("no-store", page.headers[HttpHeaders.CacheControl])
                     }
                     val entry =
-                        client.get("/api/guest/venue-entry/${venuePayload(id)}") {
+                        client.get("/api/guest/venue-entry/${venuePayload(id)}?payload=${venuePayload(other)}") {
                             header(HttpHeaders.Authorization, "Bearer $token")
                         }
                     assertEquals(HttpStatusCode.OK, entry.status)
                     assertEquals(
                         id.toString(),
                         Json.parseToJsonElement(entry.bodyAsText()).jsonObject["venueId"]?.jsonPrimitive?.content,
+                    )
+                    val otherEntry =
+                        client.get("/api/guest/venue-entry/${venuePayload(other)}") {
+                            header(HttpHeaders.Authorization, "Bearer $token")
+                        }
+                    assertEquals(HttpStatusCode.OK, otherEntry.status)
+                    assertEquals(
+                        other.toString(),
+                        Json.parseToJsonElement(otherEntry.bodyAsText()).jsonObject["venueId"]?.jsonPrimitive?.content,
                     )
                     val catalog =
                         client.get(
@@ -234,12 +263,17 @@ class VenuePublicLinksRoutesTest {
                     val legacySettings = Json.parseToJsonElement(legacyManagement.bodyAsText()).jsonObject
                     assertEquals("https://$legacyHost", legacySettings["url"]?.jsonPrimitive?.content)
                     val renamed =
-                        client.put("/api/venue/$legacy/public-link") {
+                        client.put("/api/venue/$legacy/public-link?venueId=$id") {
                             header(HttpHeaders.Authorization, "Bearer $token")
                             header(HttpHeaders.ContentType, "application/json")
                             setBody("""{"expectedSlug":"www","confirmed":true,"slug":"permskij-dym"}""")
                         }
                     assertEquals(HttpStatusCode.OK, renamed.status)
+                    assertEquals(
+                        if (mainMiniApp) "https://t.me/ExampleBot?startapp=${venuePayload(legacy)}" else null,
+                        Json.parseToJsonElement(renamed.bodyAsText())
+                            .jsonObject["telegramUrl"]?.jsonPrimitive?.contentOrNull,
+                    )
                     assertEquals(
                         "https://permskij-dym.$rootHost",
                         Json.parseToJsonElement(renamed.bodyAsText()).jsonObject["url"]?.jsonPrimitive?.content,
@@ -279,7 +313,7 @@ class VenuePublicLinksRoutesTest {
                         "/v/${settings.slug}",
                         "/v/new-dym",
                         "/api/guest/venue/$id",
-                        "/api/guest/venue-entry/${venuePayload(id)}",
+                        "/api/guest/venue-entry/${venuePayload(id)}?payload=${venuePayload(other)}",
                     )) {
                         assertEquals(
                             HttpStatusCode.NotFound,
@@ -302,7 +336,7 @@ class VenuePublicLinksRoutesTest {
                     "/v/${settings.slug}",
                     "/v/new-dym",
                     "/api/guest/venue/$id",
-                    "/api/guest/venue-entry/${venuePayload(id)}",
+                    "/api/guest/venue-entry/${venuePayload(id)}?payload=${venuePayload(other)}",
                 )) {
                     assertEquals(
                         HttpStatusCode.NotFound,
