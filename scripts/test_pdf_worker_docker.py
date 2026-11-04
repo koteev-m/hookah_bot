@@ -91,6 +91,7 @@ class Proof:
             '--label', 'com.docker.compose.service=pdf-worker', '--label', 'com.docker.compose.project.working_dir=' + str(self.root),
             '--network', 'none', '--user', '10001:10001', '--read-only', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges:true', '--init', '--ulimit', 'core=0:0', '--memory', str(staging.PDF_MEMORY),
+            '--annotation', 'org.systemd.property.MemorySwapMax=uint64 0',
             '--memory-swap', str(staging.PDF_MEMORY), '--cpus', '1', '--pids-limit', '64',
             '--mount', 'type=volume,src=' + self.volume + ',dst=' + staging.PDF_IPC,
             '--health-cmd', '/app/app/bin/pdf-worker probe', '--health-interval', '10s', '--health-timeout', '3s', '--health-retries', '3', '--health-start-period', '5s',
@@ -206,6 +207,7 @@ done'''
         info = self.owned(self.worker)
         observer = object.__new__(staging.Staging)
         observer.root, observer.project = self.root, self.token
+        observer.compose_file = self.root / 'compose.json'
         observer.run = lambda args, **kwargs: run(args, **kwargs).stdout
         base = json.loads(run(['docker', 'image', 'inspect', self.image]).stdout)[0]
         staging.Staging.observe_pdf_worker(observer, info, {'id': self.image,

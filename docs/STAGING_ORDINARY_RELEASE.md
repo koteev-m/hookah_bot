@@ -658,3 +658,90 @@ from synthetic current-schema historical state to exactly three services retaine
 system ID, configuration, volume/network binding and sentinel row. Implicit transition and CPU drift
 were refused. This is not initial V126 enrollment, live CI/provenance, Linux host/SSH admission or a
 server deploy. No local task output authorizes staging configuration or deployment.
+
+### PDF worker: persistent zero swap (HT-PDF-WORKER-DURABLE-SWAP-FIX-01)
+
+With runc 1.5.2 / opencontainers/cgroups 0.1.0, equal positive `mem_limit` and
+`memswap_limit` set the kernel limit to zero but omit `MemorySwapMax=0` from the
+systemd scope. `daemon-reload` can restore infinity
+([upstream #74](https://github.com/opencontainers/cgroups/issues/74)). HT70 therefore
+adds only to `pdf-worker`:
+
+```yaml
+annotations:
+  org.systemd.property.MemorySwapMax: "uint64 0"
+```
+
+The value uses runc's [typed systemd annotation contract](https://github.com/opencontainers/runc/blob/v1.5.2/docs/systemd.md#auxiliary-properties).
+The memory/swap totals stay 384 MiB; CPU/PIDs/UID/seccomp, image, mounts, topology,
+runtime and schema stay unchanged. No global Docker configuration, parent slice,
+host-wide drop-in, cgroup write or application-isolation exception is introduced.
+Direct cgroup writes, `docker update` of the same limits and recreation alone do not
+fix the missing systemd property. A drop-in tied to one container ID does not cover
+the next container. A shared-runtime upgrade is a separate host-wide decision.
+
+Observation requires the exact declared annotation map, reads the actual worker's
+`memory.swap.max` with a bounded, shell-free `docker exec ... /bin/cat`, and checks
+`MemorySwapMax=0` for annotated workers on systemd. A cached Docker `healthy` state
+cannot conceal a nonzero kernel limit. Missing/unreadable scope data fails closed.
+Historical managed Compose without annotations remains observable **only while its
+existing health/isolation checks and actual zero swap pass**. Its stored Compose and
+runtime hashes are not rewritten by observation. A subsequent ordinary same-runtime
+deploy generates the annotation and records the new Compose hash through the existing
+durable-intent protocol. No new runtime key or `--apply-config` exception is needed.
+
+Verification boundary (2026-11-04, **HT-PDF-WORKER-SYSTEMD-PROOF-01**): an empty,
+temporary Lima 2.2.1 VZ VM passed the real Compose → Docker → OCI → runc → systemd
+proof with **Docker 29.9.2, Compose 2.40.3, runc 1.5.2 (29dd3dc2), containerd 2.4.2**,
+cgroup v2/systemd driver and Ubuntu systemd **255.4-1ubuntu8.17**. Both kernel
+`memory.swap.max` and scope `MemorySwapMax` stayed **0** at creation, after
+`daemon-reload`, after worker recreation and after another reload. Each snapshot
+passed the native HT70 observer and worker health probe; memory384MiB, CPU1, PIDs64,
+UID10001 and other isolation guards held. A separate canary retained its ID, OCI
+spec and nonzero 32MiB swap allowance throughout.
+
+This proves the mechanism on **ARM64 / Linux 6.8.0-142**, using a local Hookah test
+image. The VPS is amd64 with a different kernel/systemd package revision; it was
+not accessed or recovered by this proof. This is not live release/PDF acceptance.
+Controller SHA-256: `812cb1bab038baa77c01e7d7e42bb62be26a434e4afecd2fd3ad7ff154474ae5`.
+Evidence: `/private/tmp/HT-PDF-WORKER-SYSTEMD-PROOF-01/systemd-proof/{result,snapshots}.json`;
+portable checks: 69 HT70 + 17 PDF contract tests passed. Preserve those artifacts
+with the future PR handoff; temporary local paths are not CI artifacts. No new
+full audit is required; publication and live recovery still need separate authorization.
+
+The same isolated VM also reproduced the legacy failure: unannotated worker had
+kernel0/systemd-infinity initially, then kernel-max/unhealthy after reload. One
+`systemctl set-property --runtime` on that exact scope restored kernel0/systemd0,
+healthy and native HT70 observation without restarting it, changing Compose or
+removing IPC. Canary remained unchanged. Evidence: the task's
+`bootstrap-evidence/{result,snapshots}.json`. This validates the bootstrap sequence
+below in isolation; it does not make that one-ID repair durable across recreation.
+
+Future recovery plan, after publication and separate execution authorization:
+
+1. Pin the released controller and current admitted image/candidate; keep the image,
+   runtime and migration manifest unchanged. Under the existing shared Docker lock,
+   verify exact old state/config/Compose hashes, worker ID/scope, all other guards,
+   PostgreSQL binding/V130, neighbor health and absence of unfinished operations.
+   Preserve protected copies of controller/config/Compose/result metadata and follow
+   the existing backup gates. Do not hand-edit HT70 result hashes.
+2. The currently unhealthy old worker cannot pass ordinary deploy admission. A separately
+   authorized bootstrap can set **only its freshly verified active scope** using
+   `systemctl set-property --runtime docker-<exact-container-ID>.scope MemorySwapMax=0`.
+   This updates the systemd owner of the limit without `daemon-reload`. Observe kernel
+   zero, systemd zero and native healthy probes; if not confirmed, stop without retry.
+   This current-ID bootstrap alone is **not** durable across recreation/reboot.
+3. Run native read-only observation, then one separately authorized ordinary HT70 deploy
+   of the **same admitted image**, with unchanged config and the fixed controller.
+   Keep one operator process inside native `shared_lock` through bootstrap, observation
+   and `Staging.apply('deploy', ...)`; do not start a second locking CLI inside that lock.
+   It creates the annotated worker and records Compose/state normally. Current HT70
+   also recreates backend: the authorization must explicitly include that brief restart.
+   It does not recreate PostgreSQL or Clubs. If a worker-only restart is mandatory,
+   stop for an explicitly designed HT70 state transition; do not emulate one by editing
+   Compose/result files or bypassing health admission.
+4. Confirm new worker ID, annotation in Docker/OCI, kernel/systemd zero, unchanged
+   limits, successful health/IPC, exact image/runtime, PG binding/V130 and Hookah/Clubs
+   smoke. Test reload/recreate durability only on the isolated VM, never by reloading
+   the shared host for acceptance. FAILED/UNKNOWN stops without replay or rollback.
+   Do not resume subdomain rollout as part of PDF recovery.

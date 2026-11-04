@@ -42,6 +42,7 @@ PDF_FLAG = "VENUE_INFO_PDF_WORKER_ENABLED"
 PDF_IPC = "/run/hookah-pdf"
 PDF_MEMORY = 384 * 1024 * 1024
 PDF_VOLUME_OPTIONS = {"type": "tmpfs", "device": "tmpfs", "o": "size=12m,uid=10001,gid=10001,mode=0700"}
+PDF_SYSTEMD_ANNOTATIONS = {'org.systemd.property.MemorySwapMax': 'uint64 0'}
 PUBLIC_LINK_ORIGIN_KEY = 'VENUE_PUBLIC_LINK_ORIGIN'
 PUBLIC_LINK_FORMAT_KEY = 'VENUE_PUBLIC_LINK_FORMAT'
 STAGING_BRANDED_ORIGIN = 'https://hookahtootah.club'
@@ -361,6 +362,9 @@ class Staging:
                 'security_opt': ['no-new-privileges:true'], 'init': True,
                 'ulimits': {'core': {'soft': 0, 'hard': 0}},
                 'mem_limit': PDF_MEMORY, 'memswap_limit': PDF_MEMORY, 'cpus': 1.0, 'pids_limit': 64,
+                # runc/cgroups otherwise omits explicit zero from the systemd scope;
+                # daemon-reload can then undo the cgroupfs zero-swap limit.
+                'annotations': dict(PDF_SYSTEMD_ANNOTATIONS),
                 'volumes': [{'type': 'volume', 'source': 'pdf_ipc', 'target': PDF_IPC}],
                 'healthcheck': {'test': ['CMD', '/app/app/bin/pdf-worker', 'probe'],
                                 'interval': '10s', 'timeout': '3s', 'retries': 3, 'start_period': '5s'}}
@@ -516,6 +520,33 @@ class Staging:
         self.pdf_mount(worker['Mounts'], writable=True)
         require(cfg.get('Labels', {}).get('com.docker.compose.project.working_dir') == str(self.root),
                 'COMPOSE_DIRECTORY_MISMATCH')
+        # Old managed Compose hashes remain valid before an ordinary update. Only
+        # the declared old absence is compatible; an annotated worker must match
+        # exactly, and every worker must enforce zero swap in the kernel now.
+        expected = PDF_SYSTEMD_ANNOTATIONS
+        if self.compose_file.exists():
+            expected = private_json(self.compose_file)['services']['pdf-worker'].get('annotations', {})
+        require(expected in ({}, PDF_SYSTEMD_ANNOTATIONS)
+                and (host.get('Annotations') or {}) == expected, 'PDF_WORKER_ANNOTATIONS_MISMATCH')
+        limits = self.pdf_swap_state(worker)
+        require(limits['cgroup'] == '0', 'PDF_WORKER_SWAP_NOT_ZERO')
+        if expected and limits['driver'] == 'systemd':
+            require(limits['systemd'] == '0', 'PDF_WORKER_SYSTEMD_SWAP_NOT_ZERO')
+
+    def pdf_swap_state(self, worker):
+        # Read only a fixed kernel file in the exact inspected worker; never run
+        # a shell or modify its cgroup. This also catches a stale healthy status.
+        cid = worker.get('Id', '')
+        require(isinstance(cid, str) and re.fullmatch(r'[0-9a-f]{64}', cid), 'PDF_WORKER_ID_INVALID')
+        driver = self.run(['docker', 'info', '--format', '{{.CgroupDriver}}'], timeout=10).decode().strip()
+        require(driver in ('systemd', 'cgroupfs'), 'PDF_WORKER_CGROUP_DRIVER_UNKNOWN')
+        actual = self.run(['docker', 'exec', cid, '/bin/cat', '/sys/fs/cgroup/memory.swap.max'], timeout=5).decode().strip()
+        systemd = None
+        if driver == 'systemd':
+            systemd = self.run(['systemctl', 'show', 'docker-' + cid + '.scope',
+                                '--property=MemorySwapMax', '--value'], timeout=5).decode().strip()
+            require(systemd != '', 'PDF_WORKER_SYSTEMD_SCOPE_UNKNOWN')
+        return {'driver': driver, 'cgroup': actual, 'systemd': systemd}
 
     def ready(self, image):
         deadline = time.monotonic() + self.readiness_seconds
