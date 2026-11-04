@@ -213,6 +213,15 @@ Derived responsibilities:
 MUST:
 - Bot + Mini App. Guest/Venue/Platform modes in Mini App.
 - Fallback chat flow for ordering/booking when Mini App fails.
+- Guest navigation exposes `Заведение` (or `Заведения` without a selected venue), `QR`, `Чаты` and
+  `Профиль`. Help lives in the profile and on relevant recovery screens. Browser Back and Telegram
+  Back share the guest route history.
+- The venue card leads with name, address, today's schedule and `Меню`. It keeps booking and
+  venue-question actions, secondary map choices and the full schedule. Card media previews open
+  dedicated image and PDF views that reuse the existing access and rendering pipeline.
+- `Личные данные` reads and edits the same profile as the bot. Only the guest's display name and
+  day/month birthday are supported. Birthday is write-once, and no Telegram contact or role can be
+  changed through these endpoints.
 SHOULD:
 - Deep links to open venue or table context.
 

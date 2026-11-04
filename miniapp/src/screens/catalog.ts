@@ -1,8 +1,10 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
+import { requestApi } from '../shared/api/request'
+import { renderGuestPromotion } from './guestPromotions'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { guestAddFavoriteVenue, guestGetCatalog, guestRemoveFavoriteVenue } from '../shared/api/guestApi'
-import type { CatalogVenueDto, VenueTodayScheduleDto } from '../shared/api/guestDtos'
+import type { CatalogVenueDto, GuestVenuePromotionDto, VenueTodayScheduleDto } from '../shared/api/guestDtos'
 import type { ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
@@ -55,6 +57,54 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
   })
 }
 
+function catalogHeader(promotions: boolean) {
+  const header = el('section', { className: 'card guest-catalog-header' })
+  const tabs = el('div', { className: 'venue-inline-actions guest-section-tabs' })
+  for (const [label, showPromotions] of [['Заведения', false], ['Акции', true]] as const) {
+    const tab = el('button', { className: 'button-secondary button-small', text: label })
+    tab.setAttribute('aria-pressed', String(promotions === showPromotions))
+    tab.addEventListener('click', () => { window.location.hash = showPromotions ? '#/catalog/promotions' : '#/catalog' })
+    tabs.appendChild(tab)
+  }
+  append(header, el('h1', { text: promotions ? 'Акции' : 'Заведения' }), tabs)
+  return header
+}
+
+function renderCatalogPromotions(root: HTMLDivElement, { backendUrl, isDebug, onOpenVenue }: CatalogScreenOptions) {
+  const controller = new AbortController()
+  const wrapper = el('div', { className: 'catalog-screen' })
+  const status = el('p', { className: 'status' })
+  status.setAttribute('role', 'status')
+  const retry = el('button', { className: 'button-secondary button-small', text: 'Повторить' })
+  const list = el('div', { className: 'guest-promotion-feed' })
+  append(wrapper, catalogHeader(true), status, retry, list)
+  root.replaceChildren(wrapper)
+  const load = async () => {
+    retry.hidden = true
+    status.textContent = 'Загружаем акции…'
+    const result = await requestApi<{ items: Array<{
+      venueId: number; venueName: string; timezone: string; promotion: GuestVenuePromotionDto
+    }> }>(backendUrl, '/api/guest/catalog/promotions', { signal: controller.signal }, buildApiDeps(isDebug))
+    if (controller.signal.aborted) return
+    if (!result.ok) {
+      status.textContent = 'Не удалось загрузить акции. Попробуйте ещё раз.'
+      retry.hidden = false
+      return
+    }
+    status.textContent = result.data.items.length ? '' : 'Сейчас в каталоге нет действующих акций.'
+    list.replaceChildren(...result.data.items.map(({ venueId, venueName, timezone, promotion }) => {
+      const card = el('article', { className: 'card' })
+      const open = el('button', { className: 'button-secondary button-small', text: 'Открыть заведение' })
+      open.addEventListener('click', () => onOpenVenue(venueId))
+      append(card, el('h2', { text: venueName }), renderGuestPromotion(promotion, timezone), open)
+      return card
+    }))
+  }
+  retry.addEventListener('click', () => void load())
+  void load()
+  return () => controller.abort()
+}
+
 function buildCatalogDom(root: HTMLDivElement): CatalogRefs {
   const wrapper = el('div', { className: 'catalog-screen' })
   const controls = el('div', { className: 'catalog-controls' })
@@ -94,7 +144,7 @@ function buildCatalogDom(root: HTMLDivElement): CatalogRefs {
 
   const list = el('ul', { className: 'catalog-list' })
 
-  append(wrapper, controls, status, error, list)
+  append(wrapper, catalogHeader(false), controls, status, error, list)
   root.replaceChildren(wrapper)
 
   return {
@@ -214,6 +264,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
   const { root, backendUrl, isDebug, onOpenVenue, onBookVenue, onAskVenue } = options
   if (!root) return () => undefined
 
+  if (window.location.hash === '#/catalog/promotions') return renderCatalogPromotions(root, options)
   const refs = buildCatalogDom(root)
   let disposed = false
   let catalogAbort: AbortController | null = null

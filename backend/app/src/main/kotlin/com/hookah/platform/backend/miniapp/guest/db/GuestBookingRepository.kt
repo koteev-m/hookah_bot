@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.telegram.TelegramOutboundClaimScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Timestamp
@@ -1173,28 +1174,7 @@ class GuestBookingRepository(
                             val holdMinutesByVenue = mutableMapOf<Long, Int>()
                             buildList {
                                 while (rs.next()) {
-                                    add(
-                                        UserBookingSummaryRecord(
-                                            id = rs.getLong("id"),
-                                            venueId = rs.getLong("venue_id"),
-                                            venueName = rs.getString("venue_name"),
-                                            scheduledAt = rs.getTimestamp("scheduled_at").toInstant(),
-                                            partySize = rs.getInt("party_size").let { if (rs.wasNull()) null else it },
-                                            comment = rs.getString("comment"),
-                                            status =
-                                                BookingStatus.fromDb(rs.getString("status"))
-                                                    ?: BookingStatus.PENDING,
-                                            displayNumber =
-                                                rs.getInt("display_number").let { if (rs.wasNull()) null else it },
-                                            displayDate = rs.getDate("display_date")?.toLocalDate(),
-                                            arrivalDeadlineAt = rs.getTimestamp("arrival_deadline_at")?.toInstant(),
-                                            lastGuestConfirmationAt =
-                                                rs.getTimestamp("last_guest_confirmation_at")?.toInstant(),
-                                            venueConfirmedAt = rs.getTimestamp("venue_confirmed_at")?.toInstant(),
-                                            lastRescheduledAt = rs.getTimestamp("last_rescheduled_at")?.toInstant(),
-                                            guestDisplayName = rs.getString("guest_display_name"),
-                                        ),
-                                    )
+                                    add(rs.toUserBookingSummary())
                                 }
                             }.filter { booking ->
                                 val holdMinutes =
@@ -1211,6 +1191,69 @@ class GuestBookingRepository(
             throw DatabaseUnavailableException()
         }
     }
+
+    suspend fun listArchiveByUser(
+        userId: Long,
+        limit: Int,
+        beforeId: Long?,
+    ): List<UserBookingSummaryRecord> {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        try {
+            return withContext(Dispatchers.IO) {
+                ds.connection.use { connection ->
+                    val cursorClause = if (beforeId == null) "" else "AND b.id < ?"
+                    connection.prepareStatement(
+                        """
+                        SELECT b.id, b.venue_id, v.name AS venue_name, b.scheduled_at, b.party_size, b.comment,
+                               b.status, b.display_number, b.display_date, b.arrival_deadline_at,
+                               b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at, u.guest_display_name
+                        FROM bookings b
+                        JOIN venues v ON v.id = b.venue_id
+                        LEFT JOIN users u ON u.telegram_user_id = b.user_id
+                        WHERE b.user_id = ? AND b.status IN ('SEATED', 'CANCELED', 'EXPIRED', 'NO_SHOW')
+                        $cursorClause
+                        ORDER BY b.id DESC
+                        LIMIT ?
+                        """.trimIndent(),
+                    ).use { statement ->
+                        var index = 1
+                        statement.setLong(index++, userId)
+                        if (beforeId != null) statement.setLong(index++, beforeId)
+                        statement.setInt(index, limit)
+                        statement.executeQuery().use { rs ->
+                            buildList {
+                                while (rs.next()) add(rs.toUserBookingSummary())
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: SQLException) {
+            throw DatabaseUnavailableException()
+        }
+    }
+
+    private fun ResultSet.toUserBookingSummary(): UserBookingSummaryRecord =
+        UserBookingSummaryRecord(
+            id = getLong("id"),
+            venueId = getLong("venue_id"),
+            venueName = getString("venue_name"),
+            scheduledAt = getTimestamp("scheduled_at").toInstant(),
+            partySize = getInt("party_size").let { if (wasNull()) null else it },
+            comment = getString("comment"),
+            status =
+                BookingStatus.fromDb(getString("status"))
+                    ?: BookingStatus.PENDING,
+            displayNumber =
+                getInt("display_number").let { if (wasNull()) null else it },
+            displayDate = getDate("display_date")?.toLocalDate(),
+            arrivalDeadlineAt = getTimestamp("arrival_deadline_at")?.toInstant(),
+            lastGuestConfirmationAt =
+                getTimestamp("last_guest_confirmation_at")?.toInstant(),
+            venueConfirmedAt = getTimestamp("venue_confirmed_at")?.toInstant(),
+            lastRescheduledAt = getTimestamp("last_rescheduled_at")?.toInstant(),
+            guestDisplayName = getString("guest_display_name"),
+        )
 
     suspend fun listActiveByVenue(
         venueId: Long,

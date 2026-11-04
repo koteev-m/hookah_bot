@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class GuestFavoriteVenuesResponse(
     val venues: List<GuestFavoriteVenueDto>,
+    val nextCursor: String? = null,
 )
 
 @Serializable

@@ -749,6 +749,7 @@ export type GuestVisitPromotionDiscountDto = {
 
 export type GuestFavoriteVenuesResponse = {
   venues: GuestFavoriteVenueDto[]
+  nextCursor?: string | null
 }
 
 export type GuestFavoriteMutationResponse = {

@@ -60,7 +60,13 @@ fun Route.guestVisitRoutes(
             val userId = call.requireUserId()
             val limit = parseLimit(call.request.queryParameters["limit"])
             val cursor = parseOptionalLong(call.request.queryParameters["cursor"], "cursor")
-            val visits = visitRepository.listGuestVisitHistory(userId = userId, limit = limit, cursor = cursor)
+            val visits =
+                visitRepository.listGuestVisitHistory(
+                    userId = userId,
+                    limit = limit,
+                    cursor = cursor,
+                    withOrders = call.request.queryParameters["withOrders"] == "true",
+                )
             call.respond(GuestVisitListResponse(items = visits.map { it.toDto() }))
         }
 

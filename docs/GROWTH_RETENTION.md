@@ -33,7 +33,10 @@ Current implementation is **partial**:
   - merged/deduped visit when booking seated + order closed represent the same real visit.
 - `CANCELED`, `NO_SHOW`, `EXPIRED`, `PENDING` and `CHANGED` bookings are excluded from History as visits. Legacy invalid rows are preserved in storage and hidden by query/filtering; no cleanup migration is required for the closed bugfix.
 - Closed order detail opens for the current guest, including old closed orders that do not have `promotionDiscounts`, options, notes or complete item fields. Backend returns `promotionDiscounts: []`; Mini App tolerates missing optional `promotionDiscounts`, `items`, `itemName`/`itemId`/`qty`, options and notes.
-- History detail keeps the safe error state `Не удалось загрузить детали истории.` for real 404/errors, has `← Назад к истории`, and Telegram BackButton inside detail returns to the History list instead of app home.
+- Mini App `История` separates `Бронирования`, `Посещения` and `Заказы`. The booking archive uses
+  terminal booking rows. Orders use closed-order history filtered by current-guest billable
+  batches, and the visit list paginates by occurrence time and visit ID. Both Back controls return
+  from details to the originating history list. Loading failures have a separate retry state.
 - Privacy filters remain strict: foreign visit detail returns 404, another guest's personal tab/order detail is hidden, and shared-tab-only members do not see чужие personal/order details.
 - Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**. `POST /api/guest/visits/{visitId}/repeat-plan` builds a transient, server-owned plan for one completed order; it never creates an order, batch, notification or persistent template. Required two-venue/real-QR/tab/privacy/Bot parity checks are not marked passed and remain canonical in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001).
 - One shared `RepeatOrderResolver` serves Guest Mini App and Telegram. It scopes History to the authenticated user, requires an active same-venue table session and an authorized personal/shared tab, checks guest venue availability, and re-resolves current menu items, option IDs, availability, item prices and option deltas.
@@ -41,7 +44,8 @@ Current implementation is **partial**:
 - Unavailable items, missing/unavailable options, legacy selected options without a reliable option ID and excluded/rejected/canceled lines are not substituted. A bad selected option skips the whole historical line. Reliable historical base-price snapshots are not available for every legacy line, so the MVP shows current prices without a universal old-vs-current price-change badge.
 - Guest Favorites Phase 1 is **DONE / MVP / STAGING-SMOKE-PASSED** for favorite venues only: authenticated catalog/detail DTOs expose current-user `isFavorite`; catalog resolves favorite IDs in one batch query; Mini App catalog, venue detail and Account add/remove/read the shared `GuestFavoritesRepository` source used by Telegram bot.
 - Favorites preserve current-user isolation and idempotency. Only guest-available `PUBLISHED` venues are addable/listed; hidden, paused, suspended, archived, deleted and subscription-blocked venues disclose no favorite card data. The row survives temporary unavailability and returns after republish; physical venue deletion keeps the existing cascade behavior.
-- Account shows only `Избранные заведения` in Phase 1, with open/book/ask/remove actions and the specified empty state. Legacy favorite-item storage/routes remain compatible but are not exposed in this UI.
+- Account `Избранное` lists favorite venues with open/book/ask/remove actions and paginates the
+  shared source by favorite creation time and venue ID. Legacy favorite-item storage/routes remain compatible but are not exposed in this UI.
 - Telegram Bot exposes the same venue favorites from both Catalog and Profile. Back navigation is source-aware: a Catalog-opened list returns to Catalog and a Profile-opened list returns to Profile.
 - Closure evidence includes focused backend favorites tests, `compileKotlin`, `ktlintCheck`, Mini App build, full browser e2e smoke `62/62`, green GitHub Actions and manual staging smoke for catalog/detail/Account, two-user isolation, unavailable filtering/restoration, Bot/Mini App synchronization and both Telegram entrypoints.
 - Booking `SEATED`, order close and table-session close signals exist as foundations for visit history; no-show remains a non-visit booking outcome.
@@ -55,6 +59,9 @@ Current implementation is **partial**:
   template and status with neutral archived copy, are read-only, and have no lifecycle actions or
   publication-readiness validation. A full archived rule-configuration viewer is not implemented.
 - The tabs use the existing management response only. Its existing current/archive collection limit `100` remains unchanged; database-wide totals, pagination, `hasMore`, cursor, server-side filtering or a separate/lazy archive endpoint require separate product evidence and are not implied by this frontend slice.
+- Catalog `Акции` reads up to 50 current offers through `GET /api/guest/catalog/promotions`, with
+  the public catalog visibility and subscription guards and venue-local date display. A venue's
+  own card retains its direct-link access rules.
 - Guest venue detail shows only `ACTIVE` promotions inside their current period after the existing `PUBLISHED` venue and guest/subscription availability checks. Draft, paused, archived, future and expired promotions are not disclosed.
 - Mini App and Telegram reuse the existing `venue_promotions` schema and `VenuePromotionRepository`; no migration, parallel model or discount engine was added. Informational promotions do not change order totals or send marketing notifications.
 - Promotion creation audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Every successful Mini App or Telegram parent creation routes through one repository transaction and appends exactly one `VENUE_PROMOTION_CREATED` for entity `venue_promotion` before commit.
@@ -77,6 +84,10 @@ Current implementation is **partial**:
 - Staff profiles / today on shift are a separate Phase 1 staff visibility module, not a growth
   campaign. They are done/local-smoke-passed in `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. Staff tips
   are future and must not be treated as guest order online payment.
+- Mini App `Лояльность` reads existing venue-scoped `NTH_HOOKAH_FREE` progress, earn/reward
+  targets and distinct available/reserved reward counts. The selected venue can show an active
+  program before the first qualifying order. A reward is applied through the existing eligible
+  cart preview and batch submission during the appropriate table visit and tab.
 - Persistent template storage, promo codes, points/cashback/tier loyalty, referrals, campaign segmentation and paid-ad productization remain future. Current code already contains favorite-item, Nth Hookah loyalty and manual placement foundations; their exact remaining outcomes and release status are `GROWTH-FAVORITE-MENU-001`, `GROWTH-LOYALTY-PRODUCTIZE-001`, `PLATFORM-PLACEMENTS-PARITY-001` and `GROWTH-PAID-PLACEMENT-001` in the master inventory.
 
 ## Promotion Compatibility Policy

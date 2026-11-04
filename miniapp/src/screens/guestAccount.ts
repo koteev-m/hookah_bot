@@ -1,5 +1,6 @@
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
+import { requestApi } from '../shared/api/request'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import {
   guestBuildVisitRepeatPlan,
@@ -11,6 +12,7 @@ import {
   guestSubmitVisitFeedback
 } from '../shared/api/guestApi'
 import type {
+  GuestBookingListResponse,
   GuestFavoriteVenueDto,
   GuestVisitFeedbackDto,
   GuestVisitDetailDto,
@@ -25,9 +27,11 @@ import { updateItemCache } from '../shared/state/itemCache'
 import type { TableContextSnapshot } from '../shared/state/tableContext'
 import { append, el, on } from '../shared/ui/dom'
 import { formatPrice } from '../shared/ui/price'
+import { renderGuestProfile, type GuestProfileDraft } from './guestProfile'
+import { renderGuestLoyalty } from './guestLoyalty'
+import { parsePositiveInt } from '../shared/parse'
 
-type AccountSection = 'home' | 'profile' | 'history' | 'favorites' | 'promotions' | 'loyalty'
-type OpenBotResult = { ok: true } | { ok: false; message: string }
+type AccountSection = 'home' | 'profile' | 'history' | 'favorites' | 'loyalty'
 
 const FEEDBACK_TAGS: Array<{ slug: string; label: string }> = [
   { slug: 'service', label: 'Сервис' },
@@ -44,16 +48,16 @@ export type GuestAccountScreenOptions = {
   root: HTMLDivElement | null
   backendUrl: string
   isDebug: boolean
-  hasTableContext: boolean
+  profileDraft: GuestProfileDraft
+  onOpenHelp: () => void
   tableContext: TableContextSnapshot
   onBack: () => void
   onOpenBookings: () => void
   onOpenVenue: (venueId: number) => void
   onBookVenue: (venueId: number) => void
   onAskVenue: (venueId: number) => void
-  onOpenBot: () => OpenBotResult
   onNavigateCart: () => void
-  onInternalBackStateChange?: (handler: (() => void) | null) => void
+  selectedVenueId: number | null
 }
 
 function requestDeps(isDebug: boolean) {
@@ -87,110 +91,34 @@ function errorText(error: ApiErrorInfo): string {
   return 'Не удалось загрузить данные. Попробуйте ещё раз.'
 }
 
-function renderLoading(root: HTMLElement, title: string): HTMLParagraphElement {
-  const section = el('section', { className: 'card' })
-  const heading = el('h2', { text: title })
-  const message = el('p', { className: 'venue-order-sub', text: 'Загружаем данные...' })
-  append(section, heading, message)
-  root.replaceChildren(section)
-  return message
-}
-
-function renderErrorSection(root: HTMLElement, title: string, body: string, onBack: () => void) {
-  const section = el('section', { className: 'card' })
-  const heading = el('h2', { text: title })
-  const text = el('p', { text: body })
-  const backButton = el('button', { text: 'К профилю' }) as HTMLButtonElement
-  append(section, heading, text, backButton)
-  root.replaceChildren(section)
-  const dispose = on(backButton, 'click', onBack)
-  return () => dispose()
-}
-
-function renderHistoryDetailError(root: HTMLElement, onBack: () => void) {
-  const section = el('section', { className: 'card' })
-  const heading = el('h2', { text: 'История' })
-  const text = el('p', { text: 'Не удалось загрузить детали истории.' })
-  const backButton = el('button', { text: '← Назад к истории' }) as HTMLButtonElement
-  append(section, heading, text, backButton)
-  root.replaceChildren(section)
-  const dispose = on(backButton, 'click', onBack)
-  return () => dispose()
-}
-
-function renderBotOnlySection(
-  root: HTMLElement,
-  title: string,
-  body: string,
-  onBack: () => void,
-  onOpenBot: () => OpenBotResult
-) {
-  const section = el('section', { className: 'card' })
-  const heading = el('h2', { text: title })
-  const text = el('p', { text: body })
-  const hint = el('p', {
-    className: 'venue-order-sub',
-    text: 'Mini App не показывает здесь фейковые данные и не обещает недоступные действия.'
-  })
-  const message = el('p', { className: 'staff-message', text: '' })
-  message.hidden = true
-  const actions = el('div', { className: 'venue-inline-actions' })
-  const botButton = el('button', { className: 'button-secondary', text: 'Открыть чат с ботом' }) as HTMLButtonElement
-  const backButton = el('button', { text: 'К профилю' }) as HTMLButtonElement
-  append(actions, botButton, backButton)
-  append(section, heading, text, hint, message, actions)
-  root.replaceChildren(section)
-
-  const disposables = [
-    on(botButton, 'click', () => {
-      const result = onOpenBot()
-      message.hidden = false
-      message.textContent = result.ok ? 'Открываем чат с ботом.' : result.message
-    }),
-    on(backButton, 'click', onBack)
-  ]
-  return () => disposables.forEach((dispose) => dispose())
-}
-
 function renderAccountHome(
   root: HTMLElement,
-  openSection: (section: AccountSection) => void,
-  onBack: () => void,
-  onOpenBookings: () => void
+  onOpenBookings: () => void,
+  onOpenHelp: () => void
 ) {
-  const wrapper = el('div', { className: 'venue-settings' })
-  const card = el('section', { className: 'card' })
-  const heading = el('h2', { text: 'Профиль' })
-  const body = el('p', {
-    text: 'Здесь собраны гостевые разделы: брони, история, избранные заведения, акции и лояльность.'
-  })
-  const actions = el('div', { className: 'venue-inline-actions' })
-  const buttons: Array<[AccountSection, string]> = [
-    ['profile', '👤 Профиль'],
-    ['history', '🕘 История'],
-    ['favorites', '⭐ Избранные заведения'],
-    ['promotions', '🎁 Акции'],
-    ['loyalty', '🎁 Лояльность']
+  const section = el('section', { className: 'card guest-account-home' })
+  const rows: Array<[string, () => void]> = [
+    ['Личные данные', () => { window.location.hash = '#/account/profile' }],
+    ['Мои брони', onOpenBookings],
+    ['История', () => { window.location.hash = '#/account/history' }],
+    ['Избранное', () => { window.location.hash = '#/account/favorites' }],
+    ['Лояльность', () => { window.location.hash = '#/account/loyalty' }],
+    ['Помощь', onOpenHelp]
   ]
-  const disposables: Array<() => void> = []
-  const bookingsButton = el('button', { className: 'button-secondary', text: '📅 Мои брони' }) as HTMLButtonElement
-  append(actions, bookingsButton)
-  disposables.push(on(bookingsButton, 'click', onOpenBookings))
-  buttons.forEach(([section, label]) => {
-    const button = el('button', { className: 'button-secondary', text: label }) as HTMLButtonElement
-    append(actions, button)
-    disposables.push(on(button, 'click', () => openSection(section)))
-  })
-  const backButton = el('button', { text: 'Назад' }) as HTMLButtonElement
-  append(actions, backButton)
-  disposables.push(on(backButton, 'click', onBack))
-  append(card, heading, body, actions)
-  append(wrapper, card)
-  root.replaceChildren(wrapper)
-  return () => disposables.forEach((dispose) => dispose())
+  section.appendChild(el('h1', { text: 'Профиль' }))
+  for (const [label, action] of rows) {
+    const button = el('button', { className: 'button-secondary guest-account-row', text: label })
+    const arrow = el('span', { text: '›' })
+    arrow.setAttribute('aria-hidden', 'true')
+    button.appendChild(arrow)
+    button.addEventListener('click', action)
+    section.appendChild(button)
+  }
+  root.replaceChildren(section)
+  return () => undefined
 }
 
-function renderVisitSummary(item: GuestVisitListItemDto, onOpen: (visitId: number) => void) {
+function renderVisitSummary(item: GuestVisitListItemDto, onOpen: (visitId: number) => void, orderHistory: boolean) {
   const card = el('article', { className: 'card' })
   const title = el('h3', { text: item.venueName })
   const date = el('p', { className: 'venue-order-sub', text: formatDateTime(item.occurredAt) })
@@ -199,11 +127,11 @@ function renderVisitSummary(item: GuestVisitListItemDto, onOpen: (visitId: numbe
     item.venueCity ? `Город: ${item.venueCity}` : null,
     total ? `Итого: ${total}` : null,
     item.orderLabels.length > 0 ? `Заказы: ${item.orderLabels.join(', ')}` : null,
-    item.hasBooking ? 'Было бронирование' : null
+    !orderHistory && item.hasBooking ? 'Посещение по брони' : null
   ].filter((value): value is string => Boolean(value))
-  const meta = el('p', { className: 'venue-order-sub', text: details.length > 0 ? details.join(' · ') : 'Детали визита доступны внутри.' })
+  const meta = el('p', { className: 'venue-order-sub', text: details.join(' · ') })
   const openButton = el('button', { className: 'button-secondary', text: 'Подробнее' }) as HTMLButtonElement
-  append(card, title, date, meta, openButton)
+  append(card, title, date, meta.textContent ? meta : null, openButton)
   return {
     card,
     dispose: on(openButton, 'click', () => onOpen(item.visitId))
@@ -725,7 +653,8 @@ function renderVisitDetail(
   signal: AbortSignal,
   tableContext: TableContextSnapshot,
   onNavigateCart: () => void,
-  onBack: () => void
+  onBack: () => void,
+  orderHistory: boolean
 ) {
   const wrapper = el('div', { className: 'venue-settings' })
   const header = el('section', { className: 'card' })
@@ -741,7 +670,7 @@ function renderVisitDetail(
   append(header, heading, meta, backButton)
   append(wrapper, header)
   const feedbackBlock = renderVisitFeedbackBlock(visit, backendUrl, isDebug, signal)
-  if (!feedbackBlock.hidden) {
+  if (!orderHistory && !feedbackBlock.hidden) {
     append(wrapper, feedbackBlock.element)
   }
   const repeatBlocks = visit.orders.map((order) => {
@@ -778,91 +707,99 @@ function renderHistorySection(
   isDebug: boolean,
   tableContext: TableContextSnapshot,
   onNavigateCart: () => void,
-  onBack: () => void,
-  onInternalBackStateChange?: (handler: (() => void) | null) => void
+  onBack: () => void
 ) {
   const controller = new AbortController()
-  let nestedDispose: (() => void) | null = null
-  renderLoading(root, 'История')
   const deps = requestDeps(isDebug)
-
-  const loadList = async () => {
-    onInternalBackStateChange?.(onBack)
-    nestedDispose?.()
-    nestedDispose = null
-    const result = await guestGetVisits(backendUrl, { limit: 20 }, deps, controller.signal)
-    if (!result.ok) {
-      if (result.error.code === REQUEST_ABORTED_CODE) return
-      nestedDispose = renderErrorSection(root, 'История', errorText(result.error), onBack)
-      return
-    }
-    const wrapper = el('div', { className: 'venue-settings' })
-    const header = el('section', { className: 'card' })
-    const heading = el('h2', { text: 'История' })
-    const body = el('p', {
-      className: 'venue-order-sub',
-      text: 'Визиты и итоговые суммы приходят из backend-истории. Mini App не пересчитывает деньги.'
-    })
-    const backButton = el('button', { text: 'К профилю' }) as HTMLButtonElement
-    append(header, heading, body, backButton)
-    append(wrapper, header)
-    const disposables: Array<() => void> = [on(backButton, 'click', onBack)]
-    if (result.data.items.length === 0) {
-      append(wrapper, el('section', { className: 'card', text: 'История пока пустая.' }))
-    }
-    result.data.items.forEach((item) => {
-      const rendered = renderVisitSummary(item, (visitId) => {
-        void loadDetail(visitId)
-      })
-      append(wrapper, rendered.card)
-      disposables.push(rendered.dispose)
-    })
-    root.replaceChildren(wrapper)
-    nestedDispose = () => disposables.forEach((dispose) => dispose())
+  const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+  const kind = params.get('kind') === 'orders' ? 'orders' : params.get('kind') === 'bookings' ? 'bookings' : 'visits'
+  const visitId = parsePositiveInt(params.get('visit'))
+  const historyHash = (visit?: number) => {
+    const query = new URLSearchParams()
+    if (kind !== 'visits') query.set('kind', kind)
+    if (visit) query.set('visit', String(visit))
+    return `#/account/history${query.size ? `?${query}` : ''}`
   }
+  const wrapper = el('div', { className: 'venue-settings' })
+  const header = el('section', { className: 'card' })
+  const back = el('button', { text: visitId ? '← Назад к истории' : 'К профилю', className: 'button-secondary button-small' })
+  back.addEventListener('click', onBack)
+  const tabs = el('div', { className: 'venue-inline-actions guest-section-tabs' })
+  for (const [id, label] of [['bookings', 'Бронирования'], ['visits', 'Посещения'], ['orders', 'Заказы']] as const) {
+    const button = el('button', { text: label, className: 'button-secondary button-small' })
+    button.setAttribute('aria-pressed', String(kind === id))
+    button.addEventListener('click', () => { window.location.hash = id === 'visits' ? '#/account/history' : `#/account/history?kind=${id}` })
+    tabs.appendChild(button)
+  }
+  const status = el('p', { className: 'status' })
+  status.setAttribute('role', 'status')
+  const list = el('div', { className: 'venue-settings' })
+  const more = el('button', { text: 'Показать ещё', className: 'button-secondary button-small' })
+  append(header, back, el('h1', { text: 'История' }), visitId ? null : tabs)
+  append(wrapper, header, status, list, more)
+  root.replaceChildren(wrapper)
+  let cursor: number | null = null
+  let detailDispose: (() => void) | undefined
+  let loading = false
 
-  const loadDetail = async (visitId: number) => {
-    onInternalBackStateChange?.(() => {
-      void loadList()
-    })
-    nestedDispose?.()
-    nestedDispose = null
-    renderLoading(root, 'История')
-    try {
+  const load = async () => {
+    if (loading) return
+    loading = true
+    more.hidden = true
+    status.textContent = 'Загружаем историю…'
+    if (visitId) {
       const result = await guestGetVisitDetail(backendUrl, visitId, deps, controller.signal)
-      if (!result.ok) {
-        if (result.error.code === REQUEST_ABORTED_CODE) return
-        nestedDispose = renderHistoryDetailError(root, () => {
-          void loadList()
-        })
+      if (controller.signal.aborted) return
+      if (result.ok) {
+        detailDispose = renderVisitDetail(root, result.data.visit, backendUrl, isDebug,
+          controller.signal, tableContext, onNavigateCart, onBack, kind === 'orders')
         return
       }
-      nestedDispose = renderVisitDetail(
-        root,
-        result.data.visit,
-        backendUrl,
-        isDebug,
-        controller.signal,
-        tableContext,
-        onNavigateCart,
-        () => {
-          void loadList()
+    } else if (kind === 'bookings') {
+      const suffix = cursor === null ? '' : `?beforeId=${cursor}`
+      const result = await requestApi<GuestBookingListResponse>(backendUrl, `/api/guest/bookings/archive${suffix}`, { signal: controller.signal }, deps)
+      if (controller.signal.aborted) return
+      if (result.ok) {
+        for (const booking of result.data.items) {
+          const card = el('article', { className: 'card' })
+          append(card,
+            el('h3', { text: booking.venueName || 'Заведение' }),
+            el('p', { text: booking.displayLabel || 'Бронь' }),
+            el('p', { className: 'status', text: [booking.scheduledAtDisplay || formatDateTime(booking.scheduledAt), booking.statusLabel].filter(Boolean).join(' · ') })
+          )
+          list.appendChild(card)
         }
-      )
-    } catch {
-      nestedDispose = renderHistoryDetailError(root, () => {
-        void loadList()
-      })
+        cursor = result.data.items.at(-1)?.bookingId ?? cursor
+        finish(result.data.items.length, 'Здесь появятся завершённые и отменённые брони.')
+        return
+      }
+    } else {
+      const result = await guestGetVisits(backendUrl, { limit: 20, cursor, withOrders: kind === 'orders' }, deps, controller.signal)
+      if (controller.signal.aborted) return
+      if (result.ok) {
+        for (const item of result.data.items) {
+          const summary = renderVisitSummary(item, (id) => { window.location.hash = historyHash(id) }, kind === 'orders')
+          list.appendChild(summary.card)
+        }
+        cursor = result.data.items.at(-1)?.visitId ?? cursor
+        finish(result.data.items.length, kind === 'orders' ? 'Завершённых заказов пока нет.' : 'Состоявшихся посещений пока нет.')
+        return
+      }
     }
+    loading = false
+    status.textContent = visitId ? 'Не удалось загрузить детали истории.' : 'Не удалось загрузить историю.'
+    more.textContent = 'Повторить'
+    more.hidden = false
   }
-
-  void loadList()
-
-  return () => {
-    controller.abort()
-    nestedDispose?.()
-    onInternalBackStateChange?.(null)
+  const finish = (count: number, empty: string) => {
+    loading = false
+    status.textContent = list.childElementCount === 0 ? empty : ''
+    more.textContent = 'Показать ещё'
+    more.hidden = count < 20
   }
+  more.addEventListener('click', () => void load())
+  void load()
+  return () => { controller.abort(); detailDispose?.() }
 }
 
 function renderFavoriteVenue(
@@ -914,13 +851,12 @@ function renderFavoritesSection(
   onAskVenue: (venueId: number) => void
 ) {
   const controller = new AbortController()
-  renderLoading(root, 'Избранные заведения')
   const deps = requestDeps(isDebug)
-  let staticDisposables: Array<() => void> = []
   let cardDisposables: Array<() => void> = []
-  let errorDispose: (() => void) | null = null
   let disposed = false
   let venues: GuestFavoriteVenueDto[] = []
+  let cursor: string | null = null
+  let loading = false
   const pendingVenueIds = new Set<number>()
   const mutationControllers = new Set<AbortController>()
   const wrapper = el('div', { className: 'venue-settings' })
@@ -974,130 +910,65 @@ function renderFavoritesSection(
     renderList()
   }
 
-  void guestGetFavoriteVenues(backendUrl, deps, controller.signal).then((venuesResult) => {
+  const header = el('section', { className: 'card' })
+  const backButton = el('button', { text: 'К профилю', className: 'button-secondary button-small' })
+  const more = el('button', { text: 'Показать ещё', className: 'button-secondary button-small' })
+  message.setAttribute('role', 'status')
+  append(header, backButton, el('h1', { text: 'Избранное' }))
+  append(wrapper, header, message, list, more)
+  root.replaceChildren(wrapper)
+  backButton.addEventListener('click', onBack)
+  const loadPage = async () => {
+    if (loading) return
+    loading = true
+    more.hidden = true
+    message.textContent = 'Загружаем избранное…'
+    const result = await guestGetFavoriteVenues(backendUrl, deps, controller.signal, cursor)
     if (disposed) return
-    if (!venuesResult.ok) {
-      if (venuesResult.error.code === REQUEST_ABORTED_CODE) return
-      errorDispose = renderErrorSection(root, 'Избранные заведения', errorText(venuesResult.error), onBack)
+    loading = false
+    if (!result.ok) {
+      message.textContent = 'Не удалось загрузить избранное.'
+      more.textContent = 'Повторить'
+      more.hidden = false
       return
     }
-
-    const header = el('section', { className: 'card' })
-    const heading = el('h2', { text: 'Избранные заведения' })
-    const body = el('p', {
-      className: 'venue-order-sub',
-      text: 'Список синхронизирован с избранным в Telegram-боте.'
-    })
-    const backButton = el('button', { text: 'К профилю' }) as HTMLButtonElement
-    append(header, heading, body, backButton)
-    append(wrapper, header, message, list)
-    staticDisposables = [on(backButton, 'click', onBack)]
-    venues = venuesResult.data.venues
+    message.textContent = ''
+    const existing = new Set(venues.map((venue) => venue.venueId))
+    venues = [...venues, ...result.data.venues.filter((venue) => !existing.has(venue.venueId))]
+    cursor = result.data.nextCursor ?? null
+    more.textContent = 'Показать ещё'
+    more.hidden = cursor === null
     renderList()
-    root.replaceChildren(wrapper)
-  })
+  }
+  more.addEventListener('click', () => void loadPage())
+  void loadPage()
 
   return () => {
     disposed = true
     controller.abort()
     mutationControllers.forEach((mutationController) => mutationController.abort())
-    errorDispose?.()
     cardDisposables.forEach((dispose) => dispose())
-    staticDisposables.forEach((dispose) => dispose())
   }
 }
 
 export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
   const {
-    root,
-    backendUrl,
-    isDebug,
-    hasTableContext,
-    tableContext,
-    onBack,
-    onOpenBookings,
-    onOpenVenue,
-    onBookVenue,
-    onAskVenue,
-    onOpenBot,
-    onNavigateCart,
-    onInternalBackStateChange
+    root, backendUrl, isDebug, profileDraft, onOpenHelp, tableContext, onBack, onOpenBookings,
+    onOpenVenue, onBookVenue, onAskVenue, onNavigateCart, selectedVenueId
   } = options
   if (!root) return () => undefined
 
-  let currentDispose: (() => void) | null = null
-  const renderSection = (section: AccountSection) => {
-    currentDispose?.()
-    currentDispose = null
-    const goHome = () => renderSection('home')
-    switch (section) {
-      case 'profile':
-        onInternalBackStateChange?.(goHome)
-        currentDispose = renderBotOnlySection(
-          root,
-          'Профиль',
-          'Редактирование имени, контактов и других персональных данных пока доступно в Telegram-боте.',
-          goHome,
-          onOpenBot
-        )
-        break
-      case 'history':
-        currentDispose = renderHistorySection(
-          root,
-          backendUrl,
-          isDebug,
-          tableContext,
-          onNavigateCart,
-          goHome,
-          onInternalBackStateChange
-        )
-        break
-      case 'favorites':
-        onInternalBackStateChange?.(goHome)
-        currentDispose = renderFavoritesSection(
-          root,
-          backendUrl,
-          isDebug,
-          goHome,
-          onOpenVenue,
-          onBookVenue,
-          onAskVenue
-        )
-        break
-      case 'promotions':
-        onInternalBackStateChange?.(goHome)
-        currentDispose = renderBotOnlySection(
-          root,
-          'Акции',
-          hasTableContext
-            ? 'Акции текущего заведения пока открываются в Telegram-боте. В корзине Mini App применимые скидки учитываются автоматически.'
-            : 'Акции заведений пока открываются в Telegram-боте и в карточках заведений.',
-          goHome,
-          onOpenBot
-        )
-        break
-      case 'loyalty':
-        onInternalBackStateChange?.(goHome)
-        currentDispose = renderBotOnlySection(
-          root,
-          'Лояльность',
-          'Прогресс по лояльности пока доступен в профиле Telegram-бота. Mini App не показывает здесь неполные данные.',
-          goHome,
-          onOpenBot
-        )
-        break
-      case 'home':
-      default:
-        onInternalBackStateChange?.(null)
-        currentDispose = renderAccountHome(root, renderSection, onBack, onOpenBookings)
-        break
-    }
-  }
-
-  renderSection('home')
-
-  return () => {
-    currentDispose?.()
-    onInternalBackStateChange?.(null)
+  const section = (window.location.hash.split('/')[2]?.split('?')[0] ?? 'home') as AccountSection
+  switch (section) {
+    case 'profile':
+      return renderGuestProfile(root, backendUrl, isDebug, profileDraft, onBack)
+    case 'history':
+      return renderHistorySection(root, backendUrl, isDebug, tableContext, onNavigateCart, onBack)
+    case 'favorites':
+      return renderFavoritesSection(root, backendUrl, isDebug, onBack, onOpenVenue, onBookVenue, onAskVenue)
+    case 'loyalty':
+      return renderGuestLoyalty(root, backendUrl, isDebug, selectedVenueId, tableContext, onBack, onOpenVenue)
+    default:
+      return renderAccountHome(root, onOpenBookings, onOpenHelp)
   }
 }

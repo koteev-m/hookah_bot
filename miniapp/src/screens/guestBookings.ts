@@ -436,6 +436,7 @@ function renderBookings(
     }
     if (canConfirmAttendance(booking)) {
       const confirmButton = el('button', { className: 'button-small', text: '✅ Я приду' }) as HTMLButtonElement
+      confirmButton.disabled = reconciliation.status === 'LOADING'
       confirmButton.addEventListener('click', () => onConfirm(booking))
       actions.appendChild(confirmButton)
     }
@@ -479,6 +480,7 @@ function renderBookings(
     )
     if (canChangeBooking(booking)) {
       const changeButton = el('button', { className: 'button-small button-secondary', text: 'Перенести' }) as HTMLButtonElement
+      changeButton.disabled = reconciliation.status === 'LOADING'
       changeButton.addEventListener('click', () => {
         changeForm.hidden = false
         changeButton.disabled = true
@@ -487,6 +489,7 @@ function renderBookings(
     }
     if (canCancelBooking(booking)) {
       const cancelButton = el('button', { className: 'button-small button-secondary', text: 'Отменить бронь' }) as HTMLButtonElement
+      cancelButton.disabled = reconciliation.status === 'LOADING'
       cancelButton.addEventListener('click', () => onCancel(booking))
       actions.appendChild(cancelButton)
     }

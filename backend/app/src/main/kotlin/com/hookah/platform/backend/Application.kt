@@ -65,7 +65,9 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.guest.guestBookingRoutes
 import com.hookah.platform.backend.miniapp.guest.guestFavoritesRoutes
+import com.hookah.platform.backend.miniapp.guest.guestLoyaltyRoutes
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
+import com.hookah.platform.backend.miniapp.guest.guestProfileRoutes
 import com.hookah.platform.backend.miniapp.guest.guestStaffCallRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTableResolveRoutes
 import com.hookah.platform.backend.miniapp.guest.guestTabsRoutes
@@ -1382,6 +1384,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     stagingMaintenancePolicy.active,
                 )
                 route("/guest") {
+                    guestProfileRoutes(userRepository)
+                    guestLoyaltyRoutes(loyaltyRepository, guestVenueRepository, subscriptionRepository)
                     guestVenueRoutes(
                         guestVenueRepository = guestVenueRepository,
                         guestFavoritesRepository = guestFavoritesRepository,

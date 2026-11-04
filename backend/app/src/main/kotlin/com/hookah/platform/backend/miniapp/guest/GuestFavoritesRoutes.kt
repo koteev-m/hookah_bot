@@ -9,6 +9,7 @@ import com.hookah.platform.backend.miniapp.guest.api.GuestFavoriteVenueDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestFavoriteVenuesResponse
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteMenuItem
 import com.hookah.platform.backend.miniapp.guest.db.FavoriteVenue
+import com.hookah.platform.backend.miniapp.guest.db.FavoriteVenueCursor
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import io.ktor.server.application.call
@@ -18,6 +19,7 @@ import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import java.time.Instant
 
 fun Route.guestFavoritesRoutes(guestFavoritesRepository: GuestFavoritesRepository) {
     route("/favorites") {
@@ -25,8 +27,23 @@ fun Route.guestFavoritesRoutes(guestFavoritesRepository: GuestFavoritesRepositor
             get {
                 val userId = call.requireUserId()
                 val limit = parseFavoritesLimit(call.request.queryParameters["limit"])
-                val venues = guestFavoritesRepository.listFavoriteVenues(userId = userId, limit = limit)
-                call.respond(GuestFavoriteVenuesResponse(venues = venues.map { it.toDto() }))
+                val before =
+                    call.request.queryParameters["cursor"]?.let { raw ->
+                        val parts = raw.split('@', limit = 2)
+                        val id = parts.getOrNull(1)?.toLongOrNull()?.takeIf { it > 0 }
+                        val time = runCatching { Instant.parse(parts.first()) }.getOrNull()
+                        if (id == null || time == null) throw InvalidInputException("Invalid favorites cursor")
+                        FavoriteVenueCursor(time, id)
+                    }
+                val venues =
+                    guestFavoritesRepository.listFavoriteVenues(
+                        userId = userId,
+                        limit = limit,
+                        before = before,
+                    )
+                val last = venues.lastOrNull()?.takeIf { venues.size == limit }
+                val next = last?.createdAt?.let { "$it@${last.venueId}" }
+                call.respond(GuestFavoriteVenuesResponse(venues = venues.map { it.toDto() }, nextCursor = next))
             }
 
             post("/{venueId}") {

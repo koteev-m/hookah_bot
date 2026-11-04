@@ -490,10 +490,12 @@ class VenuePromotionRepository(
     suspend fun listActivePromotionsForGuest(
         limit: Int = 20,
         now: Instant = Instant.now(),
+        catalogOnly: Boolean = false,
     ): List<VenuePromotion> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         val blockedStatuses = SubscriptionStatus.blockedDbValues
         val blockedPlaceholders = blockedStatuses.joinToString(",") { "?" }
+        val catalogCondition = if (catalogOnly) "AND v.catalog_listed = TRUE" else ""
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
@@ -508,6 +510,7 @@ class VenuePromotionRepository(
                           AND (p.ends_at IS NULL OR p.ends_at >= ?)
                           AND v.status = ?
                           AND (vs.status IS NULL OR LOWER(vs.status) NOT IN ($blockedPlaceholders))
+                          $catalogCondition
                         ORDER BY COALESCE(p.starts_at, p.created_at) DESC, p.updated_at DESC, p.id DESC
                         LIMIT ?
                         """.trimIndent(),

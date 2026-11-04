@@ -4,6 +4,8 @@ import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.location.VenueLocationDisplay
 import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
 import com.hookah.platform.backend.location.formatVenueDisplayAddress
+import com.hookah.platform.backend.miniapp.guest.api.GuestPromotionFeedItemDto
+import com.hookah.platform.backend.miniapp.guest.api.GuestPromotionFeedResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestTodayStaffDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVenueDateExceptionDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestVenuePromotionDto
@@ -124,6 +126,22 @@ class GuestVenueReadService(
                     promotions = promotions.map { it.toGuestDto() },
                     isFavorite = isFavorite,
                 ),
+        )
+    }
+
+    suspend fun getCatalogPromotions(): GuestPromotionFeedResponse {
+        val promotions =
+            venuePromotionRepository.listActivePromotionsForGuest(
+                limit = 50,
+                now = clock.instant(),
+                catalogOnly = true,
+            )
+        val fallback = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE)
+        val zones = venueSettingsRepository.resolveZoneIds(promotions.map { it.venueId }, fallback)
+        return GuestPromotionFeedResponse(
+            promotions.map {
+                GuestPromotionFeedItemDto(it.venueId, it.venueName, (zones[it.venueId] ?: fallback).id, it.toGuestDto())
+            },
         )
     }
 

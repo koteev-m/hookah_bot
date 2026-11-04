@@ -18,9 +18,14 @@ function serial<T>(signal: AbortSignal, action: () => Promise<T>): Promise<T> {
   return result
 }
 
-export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, load: InfoMediaLoader) {
+export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, load: InfoMediaLoader, mode?: 'thumbnail' | 'viewer') {
   const element = el('div', { className: `info-media-preview venue-info-media-${type}` })
   element.setAttribute('aria-label', label)
+  if (mode) element.dataset.mode = mode
+  const zoomOut = el('button', { className: 'button-secondary button-small', text: 'Уменьшить' })
+  const zoomIn = el('button', { className: 'button-secondary button-small', text: 'Увеличить' })
+  const zoomControls = el('div', { className: 'info-media-controls' })
+  append(zoomControls, zoomOut, zoomIn)
   const surface = el('div', { className: 'info-media-surface' })
   const canvas = el('canvas')
   canvas.width = canvas.height = 0
@@ -28,7 +33,7 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
   const image = el('img')
   image.alt = label
   image.decoding = 'async'
-  const status = el('p', { className: 'status', text: 'Предпросмотр появится при прокрутке к файлу.' })
+  const status = el('p', { className: 'status', text: mode ? 'Загрузка файла…' : 'Предпросмотр появится при прокрутке к файлу.' })
   status.setAttribute('aria-live', 'polite')
   const controls = el('div', { className: 'info-media-controls' })
   const previous = el('button', { className: 'button-small button-secondary', text: 'Назад' })
@@ -39,7 +44,7 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
   const retry = el('button', { className: 'button-small button-secondary', text: 'Повторить просмотр' })
   const download = el('button', { className: 'button-small button-secondary', text: 'Скачать файл' })
   for (const button of [previous, next, retry, download]) button.type = 'button'
-  controls.hidden = type !== 'pdf'
+  controls.hidden = type !== 'pdf' || mode === 'thumbnail'
   previous.disabled = next.disabled = true
   counter.textContent = '—'
   retry.hidden = download.hidden = true
@@ -47,6 +52,17 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
   append(controls, previous, counter, next)
   append(surface, type === 'pdf' ? canvas : image)
   append(element, surface, status, controls, retry, download)
+  if (mode === 'viewer') element.appendChild(zoomControls)
+  let zoom = 1
+  const updateZoom = () => {
+    surface.style.setProperty('--guest-media-zoom', String(zoom))
+    surface.classList.toggle('info-media-zoomed', zoom > 1)
+    zoomOut.disabled = zoom === 1
+    zoomIn.disabled = zoom === 3
+  }
+  zoomOut.addEventListener('click', () => { zoom -= 0.5; updateZoom() })
+  zoomIn.addEventListener('click', () => { zoom += 0.5; updateZoom() })
+  updateZoom()
 
   let page = 1; let pages = 0; let disposed = false; let visible = false; let ready = false
   let active: AbortController | null = null
@@ -67,7 +83,7 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
     imageUrl = null
   }
   const updateControls = (busy: boolean) => {
-    controls.hidden = type !== 'pdf'
+    controls.hidden = type !== 'pdf' || mode === 'thumbnail'
     previous.disabled = busy || page <= 1
     next.disabled = busy || page >= pages
     counter.textContent = pages ? `${page} из ${pages}` : '—'
@@ -134,7 +150,7 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
   const suspend = () => {
     active?.abort(); active = null
     clear(); revokeDownload()
-    status.textContent = 'Предпросмотр появится при прокрутке к файлу.'
+    status.textContent = mode ? 'Загрузка файла…' : 'Предпросмотр появится при прокрутке к файлу.'
     retry.hidden = download.hidden = true
     updateControls(true)
     element.setAttribute('aria-busy', 'false')

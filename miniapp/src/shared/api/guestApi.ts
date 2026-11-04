@@ -843,7 +843,7 @@ export async function guestCreateTabInvite(
 
 export async function guestGetVisits(
   backendUrl: string,
-  params: { limit?: number; cursor?: number | null },
+  params: { limit?: number; cursor?: number | null; withOrders?: boolean },
   deps: RequestDependencies,
   signal?: AbortSignal
 ): Promise<ApiResult<GuestVisitListResponse>> {
@@ -854,6 +854,7 @@ export async function guestGetVisits(
   if (params.cursor !== undefined && params.cursor !== null) {
     search.set('cursor', String(params.cursor))
   }
+  if (params.withOrders) search.set('withOrders', 'true')
   const suffix = search.toString()
   return requestApi<GuestVisitListResponse>(backendUrl, `/api/guest/visits${suffix ? `?${suffix}` : ''}`, { signal }, deps)
 }
@@ -940,9 +941,11 @@ export async function guestSubmitVisitFeedback(
 export async function guestGetFavoriteVenues(
   backendUrl: string,
   deps: RequestDependencies,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  cursor?: string | null
 ): Promise<ApiResult<GuestFavoriteVenuesResponse>> {
-  return requestApi<GuestFavoriteVenuesResponse>(backendUrl, '/api/guest/favorites/venues', { signal }, deps)
+  const search = cursor ? `?${new URLSearchParams({ cursor })}` : ''
+  return requestApi<GuestFavoriteVenuesResponse>(backendUrl, `/api/guest/favorites/venues${search}`, { signal }, deps)
 }
 
 export async function guestAddFavoriteVenue(

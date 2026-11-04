@@ -332,13 +332,14 @@ class VisitRepository(private val dataSource: DataSource?) {
         userId: Long,
         limit: Int = 20,
         cursor: Long? = null,
+        withOrders: Boolean = false,
     ): List<GuestVisitHistoryItem> {
         val normalizedLimit = limit.coerceIn(1, 50)
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val visits = loadGuestVisitHeaders(connection, userId, normalizedLimit, cursor)
+                    val visits = loadGuestVisitHeaders(connection, userId, normalizedLimit, cursor, withOrders)
                     visits.map { visit ->
                         val orders = loadGuestVisitOrders(connection, visit, userId)
                         val total = combineOrderTotals(orders)
@@ -399,8 +400,33 @@ class VisitRepository(private val dataSource: DataSource?) {
         userId: Long,
         limit: Int,
         cursor: Long?,
+        withOrders: Boolean,
     ): List<GuestVisitHeader> {
-        val cursorCondition = if (cursor == null) "" else "AND v.id < ?"
+        val cursorCondition =
+            if (cursor == null) {
+                ""
+            } else {
+                """
+                AND (v.occurred_at, v.id) < (
+                    SELECT c.occurred_at, c.id FROM visits c WHERE c.id = ? AND c.user_id = ?
+                )
+                """.trimIndent()
+            }
+        val orderCondition =
+            if (!withOrders) {
+                ""
+            } else {
+                """
+                AND EXISTS (
+                    SELECT 1
+                    FROM orders o
+                    JOIN order_batches ob ON ob.order_id = o.id
+                    WHERE o.status = 'CLOSED'
+                      AND (o.table_session_id = v.table_session_id OR (v.table_session_id IS NULL AND o.id = v.order_id))
+                      AND ${validGuestBatchPredicate("ob")}
+                )
+                """.trimIndent()
+            }
         return connection.prepareStatement(
             """
             SELECT v.id,
@@ -419,13 +445,21 @@ class VisitRepository(private val dataSource: DataSource?) {
             WHERE v.user_id = ?
               AND (v.booking_id IS NULL OR b.status = 'SEATED')
               $cursorCondition
+              $orderCondition
             ORDER BY v.occurred_at DESC, v.id DESC
             LIMIT ?
             """.trimIndent(),
         ).use { statement ->
             var index = 1
             statement.setLong(index++, userId)
-            if (cursor != null) statement.setLong(index++, cursor)
+            if (cursor != null) {
+                statement.setLong(index++, cursor)
+                statement.setLong(index++, userId)
+            }
+            if (withOrders) {
+                bindGuestBatchPredicate(statement, index, userId)
+                index += 3
+            }
             statement.setInt(index, limit)
             statement.executeQuery().use { rs ->
                 buildList {

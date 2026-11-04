@@ -90,7 +90,8 @@ Actor rules:
 Entry points:
 - catalog card or venue detail action `Забронировать`;
 - account/profile booking list, such as `Мои брони`;
-- booking history where implemented.
+- `История → Бронирования` for seated, canceled, expired and no-show bookings. The archive is
+  read-only and scoped to the current guest. It does not create visit records.
 
 Form fields:
 - date;
