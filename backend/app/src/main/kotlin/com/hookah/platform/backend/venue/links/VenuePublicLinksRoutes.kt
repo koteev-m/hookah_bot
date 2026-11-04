@@ -54,6 +54,8 @@ data class VenuePublicLinkConfig(
         main: Boolean = mainMiniAppConfigured,
     ): String = "https://t.me/$botUsername?${if (main) "startapp" else "start"}=${venuePayload(venueId)}"
 
+    fun directMiniAppUrl(venueId: Long): String? = if (mainMiniAppConfigured) telegramUrl(venueId) else null
+
     companion object {
         private const val VENUE_ZONE = "hookahtootah.club"
         private const val STAGING_BRANDED_ORIGIN = "https://$VENUE_ZONE"
@@ -195,7 +197,7 @@ fun Route.venuePublicEntryRoutes(
     }
 
     get("/v/{slug}") {
-        call.entry { call.parameters["slug"]?.let { links.resolveSlug(it) } }
+        call.entry { call.pathParameters["slug"]?.let { links.resolveSlug(it) } }
     }
     if (config?.canResolveSubdomains == true) {
         get("/") {
@@ -215,23 +217,35 @@ fun Route.venuePublicLinkApiRoutes(
 ) {
     get("/guest/venue-entry/{payload}") {
         call.requireUserId()
-        val id = parseVenuePayload(call.parameters["payload"]) ?: throw NotFoundException()
+        val id = parseVenuePayload(call.pathParameters["payload"]) ?: throw NotFoundException()
         ensureGuestBrowseAvailableReadOnly(id, venues, subscriptions)
         call.respond(mapOf("venueId" to id))
     }
     get("/venue/{venueId}/public-link") {
-        val id = call.parameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
+        val id = call.pathParameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
         val settings = links.settings(id, call.requireUserId())
         val available = !maintenanceActive && isPublicLinkGuestAvailable(id, venues, subscriptions)
         val url = settings.slug?.let { config?.publicUrl(settings.venueId, it) }
-        call.respond(settings.copy(guestAvailable = available, url = url))
+        call.respond(
+            settings.copy(
+                guestAvailable = available,
+                url = url,
+                telegramUrl = config?.directMiniAppUrl(settings.venueId),
+            ),
+        )
     }
     put("/venue/{venueId}/public-link") {
-        val id = call.parameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
+        val id = call.pathParameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
         val settings = links.update(id, call.requireUserId(), call.receive())
         val available = !maintenanceActive && isPublicLinkGuestAvailable(id, venues, subscriptions)
         val url = settings.slug?.let { config?.publicUrl(settings.venueId, it) }
-        call.respond(settings.copy(guestAvailable = available, url = url))
+        call.respond(
+            settings.copy(
+                guestAvailable = available,
+                url = url,
+                telegramUrl = config?.directMiniAppUrl(settings.venueId),
+            ),
+        )
     }
 }
 

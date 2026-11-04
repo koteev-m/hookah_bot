@@ -45,8 +45,9 @@ PDF_VOLUME_OPTIONS = {"type": "tmpfs", "device": "tmpfs", "o": "size=12m,uid=100
 PDF_SYSTEMD_ANNOTATIONS = {'org.systemd.property.MemorySwapMax': 'uint64 0'}
 PUBLIC_LINK_ORIGIN_KEY = 'VENUE_PUBLIC_LINK_ORIGIN'
 PUBLIC_LINK_FORMAT_KEY = 'VENUE_PUBLIC_LINK_FORMAT'
+MAIN_MINI_APP_KEY = 'TELEGRAM_MAIN_MINI_APP_CONFIGURED'
 STAGING_BRANDED_ORIGIN = 'https://hookahtootah.club'
-OPTIONAL_RUNTIME_KEYS = PHOTO_RUNTIME_KEYS | {PDF_FLAG, PUBLIC_LINK_ORIGIN_KEY, PUBLIC_LINK_FORMAT_KEY}
+OPTIONAL_RUNTIME_KEYS = PHOTO_RUNTIME_KEYS | {PDF_FLAG, PUBLIC_LINK_ORIGIN_KEY, PUBLIC_LINK_FORMAT_KEY, MAIN_MINI_APP_KEY}
 RUNTIME_KEYS = BASE_RUNTIME_KEYS | OPTIONAL_RUNTIME_KEYS
 REQUIRED_JOBS = {'backend-ktlint', 'backend-compile', 'backend-archive-reproducibility',
                  'backend-release-critical-routes', 'backend-venue-booking-rbac',
@@ -285,6 +286,7 @@ def validate_config(c):
     require(PUBLIC_LINK_ORIGIN_KEY not in e or e[PUBLIC_LINK_ORIGIN_KEY] == STAGING_BRANDED_ORIGIN,
             'VENUE_PUBLIC_LINK_ORIGIN_INVALID')
     require(e.get(PUBLIC_LINK_FORMAT_KEY, 'path') in ('path', 'subdomain'), 'VENUE_PUBLIC_LINK_FORMAT_INVALID')
+    require(e.get(MAIN_MINI_APP_KEY, 'false') in ('true', 'false'), 'TELEGRAM_MAIN_MINI_APP_CONFIGURED_INVALID')
     require(e.get('STAFF_PHOTOS_R2_ENABLED', 'false') in ('true', 'false'), 'R2_FLAG_INVALID')
     require(e.get('VENUE_INFO_MEDIA_R2_ENABLED', 'false') in ('true', 'false'), 'INFO_MEDIA_FLAG_INVALID')
     if e.get('STAFF_PHOTOS_R2_ENABLED') == 'true' or e.get('VENUE_INFO_MEDIA_R2_ENABLED') == 'true' or R2_CONNECTION_KEYS & set(e):

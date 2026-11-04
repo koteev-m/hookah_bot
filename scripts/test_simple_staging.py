@@ -236,6 +236,63 @@ class PublicLinkOriginTests(unittest.TestCase):
                 self.assertEqual(r.state()[name], legacy_state[name])
 
 
+class MainMiniAppConfigTests(unittest.TestCase):
+    key = 'TELEGRAM_MAIN_MINI_APP_CONFIGURED'
+
+    def test_flag_is_explicit_and_strict(self):
+        legacy = config()
+        before = copy.deepcopy(legacy)
+        s.validate_config(legacy)
+        self.assertEqual(legacy, before)
+        self.assertNotIn(self.key, legacy['runtime'])
+        for value in ('true', 'false'):
+            c = config(); c['runtime'][self.key] = value
+            s.validate_config(c)
+        for value in ('', 'TRUE', '1', 'yes', 'true ', True):
+            with self.subTest(value=value):
+                c = config(); c['runtime'][self.key] = value
+                with self.assertRaises(s.Refused):
+                    s.validate_config(c)
+
+    def test_apply_config_preserves_other_runtime_db_and_old_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = RuntimeStaging(Path(tmp).resolve())
+            candidate = record(image())
+            r.config['runtime']['VENUE_PUBLIC_LINK_FORMAT'] = 'subdomain'
+            r.apply('install', candidate)
+            old_state, old_env = r.state(), copy.deepcopy(r.app_env)
+            db, neighbor = copy.deepcopy(r.pg), copy.deepcopy(r.neighbor)
+            for value in ('true', 'false', None):
+                if value is None:
+                    del r.config['runtime'][self.key]
+                else:
+                    r.config['runtime'][self.key] = value
+                s.validate_config(r.config)
+                state, compose, calls = r.state(), r.compose_file.read_bytes(), len(r.calls)
+                with self.assertRaisesRegex(s.Refused, 'RUNTIME_CONFIG_CHANGED_USE_APPLY_CONFIG'):
+                    r.apply('deploy', candidate)
+                self.assertEqual((r.state(), r.compose_file.read_bytes(), len(r.calls)), (state, compose, calls))
+                self.assertEqual(r.apply('deploy', candidate, apply_config=True)['status'], 'SUCCESS')
+                self.assertEqual(r.app_env, dict(old_env, **{self.key: value}) if value is not None else old_env)
+                self.assertEqual((r.pg, r.neighbor), (db, neighbor))
+                self.assertEqual(r.calls[calls:],
+                                 [['up', '-d', '--no-build', '--pull', 'never', '--no-deps', '--force-recreate', 'backend']])
+            for key in ('runtime_hash', 'compose_hash', 'config_binding'):
+                self.assertEqual(r.state()[key], old_state[key])
+
+    def test_untracked_live_main_mini_app_flag_blocks_activation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = RuntimeStaging(Path(tmp).resolve())
+            candidate = record(image())
+            r.apply('install', candidate)
+            r.app_env[self.key] = 'true'
+            r.config['runtime'][self.key] = 'true'
+            before, calls = r.state(), len(r.calls)
+            with self.assertRaisesRegex(s.Refused, 'BACKEND_RUNTIME_CONFIG_MISMATCH'):
+                r.apply('deploy', candidate, apply_config=True)
+            self.assertEqual((r.state(), len(r.calls)), (before, calls))
+
+
 class R2ConfigTests(unittest.TestCase):
     def test_old_runtime_is_unchanged_and_r2_defaults_off(self):
         c = config(); original = copy.deepcopy(c)

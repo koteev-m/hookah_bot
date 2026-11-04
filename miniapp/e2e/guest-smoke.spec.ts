@@ -1745,7 +1745,7 @@ async function mockGuestSurfaceGuardApi(
   }
 }
 
-async function installTelegramWebApp(page: Page, userId: number) {
+async function installTelegramWebApp(page: Page, userId: number, startParam?: string) {
   await page.route('https://telegram.org/js/telegram-web-app.js', async (route) => {
     await route.fulfill({
       status: 200,
@@ -1769,7 +1769,7 @@ async function installTelegramWebApp(page: Page, userId: number) {
         const telegramApi = {
           WebApp: {
             initData: nextInitData,
-            initDataUnsafe: { user: { id: nextUserId } },
+            initDataUnsafe: { user: { id: nextUserId }, start_param: ${JSON.stringify(startParam)} },
             ready: () => undefined,
             expand: () => undefined,
             close: () => undefined,
@@ -27670,21 +27670,22 @@ test('personal links owner copies the selected venue and manager sees read only 
     if (route.request().method() === 'PUT') updates.push(route.request().postDataJSON())
     await route.fulfill(jsonResponse({ venueId: id, name: 'Микс', address: id === 1 ? 'Москва, Арбат, 1' : 'Казань, Баумана, 2',
       slug: id === 1 ? 'mix' : 'mix-kazan', catalogListed: true, canManage: true, guestAvailable: id === 2,
-      url: `https://stage.example.org/v/${id === 1 ? 'mix' : 'mix-kazan'}` }))
+      url: `https://stage.example.org/v/${id === 1 ? 'mix' : 'mix-kazan'}`,
+      telegramUrl: `https://t.me/hookah_tootah_bot?startapp=venue_${id}` }))
   })
   await page.goto('?mode=venue&venueId=1#/settings/card')
   const block = page.locator('.venue-public-link')
   await expect(block).toContainText('Москва, Арбат, 1')
   await expect(block).toContainText('Создание ссылки не публикует заведение.')
-  await block.getByRole('button', { name: 'Скопировать ссылку', exact: true }).click()
-  await expect(block.getByRole('status')).toHaveText('Ссылка скопирована.')
-  expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBe('https://stage.example.org/v/mix')
+  await expect(block.getByRole('button', { name: 'Скопировать ссылку', exact: true })).toBeDisabled()
+  await expect(block.getByRole('button', { name: /^Скопировать/ })).toHaveCount(1)
+  expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBeUndefined()
   const selector = page.locator('select').filter({ has: page.locator('option', { hasText: 'Дымный берег' }) })
   await selector.selectOption('2')
   await page.goto('?mode=venue&venueId=2#/settings/card')
   await expect(block).toContainText('Казань, Баумана, 2')
   await block.getByRole('button', { name: 'Скопировать ссылку', exact: true }).click()
-  expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBe('https://stage.example.org/v/mix-kazan')
+  expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBe('https://t.me/hookah_tootah_bot?startapp=venue_2')
   await block.getByText('Дополнительные настройки ссылки', { exact: true }).click()
   await block.getByLabel('Адрес ссылки', { exact: true }).fill('mix-kazan-new')
   page.once('dialog', dialog => dialog.dismiss())
@@ -27695,14 +27696,15 @@ test('personal links owner copies the selected venue and manager sees read only 
   await expect.poll(() => updates.length).toBe(1)
   expect(updates[0]).toMatchObject({ expectedSlug: 'mix-kazan', slug: 'mix-kazan-new', confirmed: true })
   await page.route('**/api/venue/2/public-link', route => route.fulfill(jsonResponse({ venueId: 2, name: 'Микс', address: 'Казань, Баумана, 2',
-    slug: 'mix-kazan', catalogListed: true, canManage: false, guestAvailable: true, url: 'https://stage.example.org/v/mix-kazan' })))
+    slug: 'mix-kazan', catalogListed: true, canManage: false, guestAvailable: true, url: 'https://stage.example.org/v/mix-kazan',
+    telegramUrl: 'https://t.me/hookah_tootah_bot?startapp=venue_2' })))
   await page.reload()
   await expect(block.getByRole('button', { name: 'Скопировать ссылку', exact: true })).toBeEnabled()
   await expect(block.locator('details')).toBeHidden()
   await expectNoHorizontalOverflow(page)
 })
 
-test('personal links copy the activated subdomain for the selected venue', async ({ page }) => {
+test('personal links copy only the confirmed Telegram link for each selected venue', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await mockGuestApi(page)
   await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
@@ -27717,18 +27719,143 @@ test('personal links copy the activated subdomain for the selected venue', async
     const slug = id === 1 ? 'miks' : 'miks-kazan'
     return route.fulfill(jsonResponse({
       venueId: id, name: 'Микс', address: id === 1 ? 'Москва, Арбат, 1' : 'Казань, Баумана, 2',
-      slug, catalogListed: false, canManage: true, guestAvailable: true, url: `https://${slug}.hookahtootah.club`
+      slug, catalogListed: false, canManage: true, guestAvailable: true, url: `https://${slug}.hookahtootah.club`,
+      telegramUrl: `https://t.me/hookah_tootah_bot?startapp=venue_${id}`
     }))
   })
-  for (const [id, slug] of [[1, 'miks'], [2, 'miks-kazan']] as const) {
+  for (const id of [1, 2]) {
     await page.goto(`?mode=venue&venueId=${id}#/settings/card`)
     const block = page.locator('.venue-public-link')
-    const url = `https://${slug}.hookahtootah.club`
-    await expect(block.getByLabel('Персональная ссылка заведения')).toHaveValue(url)
+    const telegramUrl = `https://t.me/hookah_tootah_bot?startapp=venue_${id}`
+    await expect(block.getByLabel('Прямая ссылка для Telegram')).toHaveValue(telegramUrl)
     await block.getByRole('button', { name: 'Скопировать ссылку', exact: true }).click()
+    expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBe(telegramUrl)
+    await expect(block.getByRole('button', { name: /^Скопировать/ })).toHaveCount(1)
+    await expect(block.getByLabel('Персональная ссылка заведения')).toHaveCount(0)
+    await expect(block.locator('input[readonly]')).toHaveCount(1)
     await expect(block.getByRole('status')).toHaveText('Ссылка скопирована.')
-    expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBe(url)
+    await expectNoHorizontalOverflow(page)
+    if (id === 1) await block.screenshot({ path: test.info().outputPath('single-telegram-link-mobile.png') })
   }
+})
+
+test('personal links single copy waits for server activation without falling back to HTTPS', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockGuestApi(page)
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await mockOwnerUx(page)
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async (text: string) => { (window as any).__copiedPersonalLink = text }
+    } })
+  })
+  let omitField = true
+  await page.route('**/api/venue/1/public-link', route => route.fulfill(jsonResponse({
+    venueId: 1, name: 'Микс', address: 'Москва', slug: 'miks', catalogListed: true, canManage: true,
+    guestAvailable: true, url: 'https://miks.hookahtootah.club', ...(omitField ? {} : { telegramUrl: null })
+  })))
+  for (const omit of [true, false]) {
+    omitField = omit
+    await page.goto('?mode=venue&venueId=1#/settings/card')
+    const block = page.locator('.venue-public-link')
+    const copy = block.getByRole('button', { name: 'Скопировать ссылку', exact: true })
+    await expect(copy).toBeDisabled()
+    await expect(block.getByRole('button', { name: /^Скопировать/ })).toHaveCount(1)
+    await expect(block.getByLabel('Прямая ссылка для Telegram')).toBeHidden()
+    await expect(block.getByLabel('Персональная ссылка заведения')).toHaveCount(0)
+    await expect(block).toContainText('Ссылка для гостей ещё не активирована.')
+    await copy.dispatchEvent('click')
+    expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBeUndefined()
+    await expectNoHorizontalOverflow(page)
+    if (omit) await block.screenshot({ path: test.info().outputPath('single-link-pending-activation.png') })
+  }
+})
+
+for (const id of [1, 2]) {
+  test(`personal links Main Mini App start_param opens venue ${id} only after authentication`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789, `venue_${id}`)
+    await mockGuestApi(page)
+    await mockHomeRoles(page)
+    await mockPersonalVenue(page, id)
+    let release: () => void = () => undefined
+    const authPending = new Promise<void>(resolve => { release = resolve })
+    let authRequested = false
+    await page.route('**/api/auth/telegram', async route => {
+      authRequested = true
+      await authPending
+      await route.fallback()
+    })
+    const entries: string[] = []
+    await page.route('**/api/guest/venue-entry/*', async route => {
+      expect(route.request().headers().authorization).toBe('Bearer e2e-session-token')
+      entries.push(new URL(route.request().url()).pathname)
+      await route.fallback()
+    })
+    try {
+      await page.goto('./')
+      await expect(page.getByText('Авторизация...', { exact: true })).toBeVisible()
+      await expect.poll(() => authRequested).toBe(true)
+      expect(entries).toEqual([])
+    } finally { release() }
+    await expect(page).toHaveURL(new RegExp(`#/venue/${id}$`))
+    await expect(page.locator('.venue-location').first()).toContainText('Казань, Баумана, 2')
+    expect(entries).toEqual([`/api/guest/venue-entry/venue_${id}`])
+    expect(await page.evaluate(() => (window as any).__e2eTelegramSendDataPayloads)).toEqual([])
+  })
+}
+
+test('personal links Main Mini App rejected authentication never resolves a venue', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789, 'venue_2')
+  await mockGuestApi(page)
+  await page.route('**/api/auth/telegram', route => route.fulfill(jsonResponse({ error: { code: 'UNAUTHORIZED' } }, 401)))
+  const entries: string[] = []
+  page.on('request', request => { if (request.url().includes('/venue-entry/')) entries.push(request.url()) })
+  await page.goto('./')
+  await expect(page.getByRole('heading', { name: 'Сессия истекла', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Перезапустить', exact: true })).toBeVisible()
+  expect(entries).toEqual([])
+  await expect(page.locator('.venue-location')).toHaveCount(0)
+})
+
+for (const reason of ['DRAFT', 'SUBSCRIPTION_SUSPENDED']) {
+  test(`personal links Main Mini App ${reason} denial does not open another venue`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789, 'venue_2')
+    await mockGuestApi(page)
+    await mockHomeRoles(page)
+    await page.route('**/api/guest/venue-entry/venue_2', route => route.fulfill(jsonResponse({ error: { code: 'NOT_FOUND' } }, 404)))
+    await page.goto('./')
+    await expect(page.getByText('Заведение недоступно. Проверьте ссылку или попробуйте позже.', { exact: true })).toBeVisible()
+    await expect(page.locator('.venue-location')).toHaveCount(0)
+    await expect(page.getByRole('searchbox')).toHaveCount(0)
+  })
+}
+
+test('personal links Telegram copy stays disabled for closed venue and clipboard failure selects exact link', async ({ page }) => {
+  await mockGuestApi(page)
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  await mockOwnerUx(page)
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async () => { throw new Error('clipboard denied') }
+    } })
+  })
+  let available = false
+  const telegramUrl = 'https://t.me/hookah_tootah_bot?startapp=venue_1'
+  await page.route('**/api/venue/1/public-link', route => route.fulfill(jsonResponse({
+    venueId: 1, name: 'Микс', address: 'Москва', slug: 'miks', catalogListed: false, canManage: true,
+    guestAvailable: available, url: 'https://miks.hookahtootah.club', telegramUrl
+  })))
+  await page.goto('?mode=venue&venueId=1#/settings/card')
+  const block = page.locator('.venue-public-link')
+  await expect(block.getByRole('button', { name: 'Скопировать ссылку', exact: true })).toBeDisabled()
+  await expect(block).toContainText('Ссылка для Telegram станет доступна, когда откроется гостевой доступ')
+  available = true
+  await page.reload()
+  await block.getByRole('button', { name: 'Скопировать ссылку', exact: true }).click()
+  await expect(block.getByRole('status')).toContainText('Выделили ссылку.')
+  const input = block.getByLabel('Прямая ссылка для Telegram')
+  await expect(input).toBeFocused()
+  expect(await input.evaluate((element: HTMLInputElement) => element.value.slice(element.selectionStart!, element.selectionEnd!))).toBe(telegramUrl)
 })
 
 async function personalLinkProtectedState(page: Page) {
@@ -27867,7 +27994,8 @@ test('venue publication mobile owner checks saved data previews confirms and ref
   })
   await page.route('**/api/venue/1/public-link', route => route.fulfill(jsonResponse({
     venueId: 1, name: 'Микс', address: 'Москва, Арбат, 1', slug: 'mix', catalogListed: false, canManage: true,
-    guestAvailable: status === 'PUBLISHED', url: 'https://stage.example.org/v/mix'
+    guestAvailable: status === 'PUBLISHED', url: 'https://stage.example.org/v/mix',
+    telegramUrl: 'https://t.me/hookah_tootah_bot?startapp=venue_1'
   })))
   await page.route('**/api/venue/1/guest-preview', async route => {
     previews.push(route.request().method())
@@ -27928,7 +28056,7 @@ test('venue publication mobile owner checks saved data previews confirms and ref
   const link = page.locator('.venue-public-link')
   await expect(link).toContainText('Гости могут открыть заведение по ссылке')
   await expect(link.getByRole('button', { name: 'Скопировать ссылку' })).toBeEnabled()
-  await expect(link.getByLabel('Персональная ссылка заведения')).toHaveValue('https://stage.example.org/v/mix')
+  await expect(link.getByLabel('Прямая ссылка для Telegram')).toHaveValue('https://t.me/hookah_tootah_bot?startapp=venue_1')
   await expect(page).toHaveURL(/#\/settings\/card$/)
   expect(posts).toEqual([{ confirmed: true }])
   expect(checks).toEqual(['GET', 'GET', 'GET'])

@@ -45,6 +45,7 @@ class VenuePublicLinksTest {
             assertNotNull(VenuePublicLinkConfig.from("https://stage.example.org/miniapp/?mode=home", "ExampleBot"))
         assertEquals("https://stage.example.org/v/dym", config.publicUrl(1, "dym"))
         assertEquals("https://t.me/ExampleBot?start=venue_1", config.telegramUrl(1))
+        assertNull(config.directMiniAppUrl(1))
         assertEquals("https://t.me/ExampleBot?startapp=venue_1", config.telegramUrl(1, true))
     }
 
@@ -70,6 +71,8 @@ class VenuePublicLinksTest {
             )
         assertEquals("$branded/v/dym", config.publicUrl(1, "dym"))
         assertEquals("https://t.me/ExampleBot?startapp=venue_1", config.telegramUrl(1))
+        assertEquals("https://t.me/ExampleBot?startapp=venue_1", config.directMiniAppUrl(1))
+        assertEquals("https://t.me/ExampleBot?startapp=venue_10", config.directMiniAppUrl(36))
         assertEquals("https://t.me/ExampleBot?start=venue_1", config.telegramUrl(1, false))
         assertNull(VenuePublicLinkConfig.from(null, "ExampleBot", true, branded, "production"))
         for (invalid in listOf(

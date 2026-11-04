@@ -12,6 +12,56 @@ changes the origin in generated links only. The same backend serves both hosts a
 uses the same venue registry, aliases, availability checks and Telegram targets.
 Request Host and forwarded headers cannot choose the generated origin.
 
+## Direct Main Mini App links for Telegram
+
+`GET/PUT /api/venue/{venueId}/public-link` retains `url` for the personal HTTPS
+address and adds nullable `telegramUrl`. The server generates the latter from the
+authorized venue's ID as `https://t.me/<bot>?startapp=venue_<base36-id>`, only when
+`TELEGRAM_MAIN_MINI_APP_CONFIGURED=true`. Absence/false returns no direct link;
+Venue Mode has one **Скопировать ссылку** button, which copies only `telegramUrl`
+for the selected venue. While the flag is absent/false, it stays disabled with an
+activation explanation; there is no HTTPS fallback copy action. Closed guest access
+also disables copying. The HTTPS field/button are not shown in the owner link block;
+existing HTTPS routes, aliases and QR remain available. Link availability never publishes a venue.
+
+The guest resolves the payload through the authenticated venue-entry API after
+normal Telegram authorization. Query/SDK launch values are navigation hints, not
+authorization; server lifecycle/subscription checks still apply. Public-link routes
+read ID, slug and payload from path parameters only, so an identically named query
+parameter cannot select another venue. No table visit,
+QR context, membership or ordering right comes from the payload. HTTPS landing,
+aliases and the explicit `?start=venue_…` bot-chat fallback remain supported.
+
+Owner confirmation, **2026-11-04** (`HT-VENUE-SINGLE-TELEGRAM-LINK-01`): Main Mini App
+for `@hookah_tootah_bot` is configured with
+`https://staging.hookahtootah.club/miniapp/`. The owner tested
+`https://t.me/hookah_tootah_bot?startapp=venue_1` on iPhone: it opens Микс directly
+inside Telegram, without Safari, a `/start` message or an intermediate bot button.
+This is owner-provided device evidence, not a browser mock. No repeat BotFather
+setup is required. It does not activate the server runtime flag or publish this UI.
+
+Remaining activation after a separately authorized code/controller release:
+
+1. Add only `"TELEGRAM_MAIN_MINI_APP_CONFIGURED": "true"` to private HT70 runtime
+   and apply through the existing `deploy --apply-config` with an admitted candidate.
+   Preserve `VENUE_PUBLIC_LINK_FORMAT`, origin, APP_ENV, Mini App URL and all other
+   settings; retain all ordinary CI, runtime/schema, shared-lock and backup gates.
+2. In Venue Mode, verify that the single **Скопировать ссылку** action copies the
+   selected venue's server-issued Telegram URL. Test a second venue, closed access,
+   current visit preservation and the previously shared HTTPS/alias/QR links.
+   This final owner-copy UI requires post-release iPhone smoke; the earlier direct
+   launch test does not prove the unpublished UI. No DNS/Caddy/BotFather changes
+   are needed for this activation.
+
+To stop issuing direct links, remove the optional flag (or set it to `false`)
+through the same separately authorized config activation. The copy action becomes unavailable; existing HTTPS and chat fallback
+routes remain available; already shared startapp links depend on Telegram's Main Mini App
+configuration.
+
+Official references: [Main Mini App direct links and start_param](https://core.telegram.org/bots/webapps#launching-the-main-mini-app),
+[BotFather configuration](https://core.telegram.org/bots/webapps#november-17-2024),
+[server validation of initData](https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app).
+
 The public preflight on 2026-11-03 found Porkbun parking on the root domain (A
 `207.207.210.107` and `207.207.210.229`), `www` forwarding to the root, and
 staging at `178.20.209.5`. Recheck those observations, confirm the actual Hookah
@@ -52,8 +102,9 @@ and the existing runtime, Compose and database binding checks.
 
    Follow the ordinary compatibility and backup rules if the selected candidate
    changes the schema. This feature adds no migration.
-5. **E — Acceptance.** Confirm Venue Mode copies the root link. Open it and the
-   previously shared staging link in Telegram on mobile. Check a known alias and
+5. **E — Acceptance.** Confirm the API `url` retains the root link. Venue Mode
+   copies the direct Telegram link only after Main Mini App runtime activation.
+   Open the root and previously shared staging link in Telegram on mobile. Check a known alias and
    an unlisted test venue by direct link if fixtures exist. Verify the bot
    `/start` fallback opens the same venue, the Mini App and a working printed
    table QR still open correctly, and Clubs passes its existing public smoke.
@@ -196,8 +247,9 @@ enable unrestricted On-Demand TLS. See [Caddy On-Demand TLS](https://caddyserver
    private HT70 `config.json`, then use `deploy --apply-config` as
    documented above with the admitted candidate. Keep
    `VENUE_PUBLIC_LINK_ORIGIN` as configured for path fallback.
-   In Venue Mode verify the displayed and copied URL for the selected
-   venue. Open old and new links in Telegram on mobile, including
+   Verify the API `url` for the selected venue; Venue Mode keeps its single
+   Telegram copy action, gated separately by Main Mini App configuration.
+   Open old and new HTTPS links in Telegram on mobile, including
    `/start` fallback, and verify an existing printed table QR.
 
 To roll back issuance, remove the format key and use `deploy --apply-config`
