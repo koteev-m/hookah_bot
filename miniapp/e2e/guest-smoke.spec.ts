@@ -8858,7 +8858,8 @@ test('owner UX published metrics, unread badge, switching and portfolio history'
   await expect(page.locator('.venue-summary')).toContainText('Чат персонала:привязан')
   await expect(page.locator('.venue-owner-actions a')).toHaveText(['ЗаказыОчередь заказов', 'Бронирования', 'Вызовы гостей', 'Переписки3', 'Запросы продления', 'График смен', 'Стоп-лист и меню'])
   await expect(page.getByRole('link', { name: 'Переписки, непрочитанных: 3', exact: true })).toBeVisible()
-  await expect(page.locator('[data-owner-messages] .nav-unread-badge')).toHaveCSS('color', 'rgb(255, 255, 255)')
+  await expect(page.locator('[data-owner-messages] .nav-unread-badge')).toHaveCSS('color', await page.locator(':root').evaluate(el => getComputedStyle(el).getPropertyValue('--app-on-danger').trim()))
+  await expectUnifiedContrast(page)
   await page.screenshot({ path: testInfo.outputPath('owner-published-390.png'), fullPage: true, animations: 'disabled' })
   await page.getByRole('combobox', { name: 'Выбрать заведение' }).selectOption('2')
   await expect(page.locator('.venue-header')).toContainText('Дымный берег')
@@ -10337,19 +10338,20 @@ test('pre-QR guest card shows info/photo menu and hides structured order menu', 
 
   await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
   await expect(page.getByText('График не указан')).toBeVisible()
-  await expect(page.getByRole('heading', { name: '📖 Фото-меню' })).toBeVisible()
+  await expect(page.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' })).toBeVisible()
   await page.getByText('Как добраться', { exact: true }).click()
   await expect(page.getByRole('link', { name: 'Яндекс Карты' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Apple Maps' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Скопировать адрес' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Забронировать' })).toBeVisible()
+  await page.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' }).click()
   await expect(page.getByAltText('📖 Фото-меню')).toBeVisible()
   await expect(page.getByText('Кальянное меню')).toHaveCount(0)
   expect(api.getStructuredMenuCalls()).toBe(0)
   await page.getByRole('button', { name: 'Меню', exact: true }).click()
   await expect(page.getByText('Для заказа отсканируйте QR на столе.')).toBeVisible()
   await page.goBack()
-  await expect(page.getByRole('heading', { name: '📖 Фото-меню' })).toBeVisible()
+  await expect(page.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' })).toBeVisible()
 })
 
 test('guest venue card shows today staff without private linkage fields', async ({ page }) => {
@@ -15882,10 +15884,11 @@ test('venue owner opens the published guest preview with public read-only conten
   await expect(preview).toContainText('13.01.2030')
   await expect(preview).toContainText('Специальный график')
 
-  await expect(preview.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
+  await expect(preview.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' })).toBeVisible()
+  await preview.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' }).click()
   await expect(preview).toContainText('Ознакомительное меню в опубликованной карточке.')
   await preview.locator('.venue-info-media-image').scrollIntoViewIfNeeded()
-  await expect(preview.getByRole('img', { name: '📖 Фото-меню 1' })).toBeVisible()
+  await expect(preview.getByRole('img', { name: '📖 Фото-меню' })).toBeVisible()
 
   await expect(preview.getByRole('heading', { name: 'Сегодня работают', exact: true })).toBeVisible()
   await expect(preview).toContainText('Анна')
@@ -16069,13 +16072,14 @@ test('venue owner and manager open saved draft previews through the shared read-
   await expect(preview).toContainText('Москва, Черновая, 1')
   await expect(preview).toContainText('Сохранённое публичное описание.')
   await expect(preview).toContainText('Контакт: +7 900 555-10-20')
+  await preview.locator('.venue-info-section > summary').filter({ hasText: 'О заведении' }).click()
   await expect(preview).toContainText('Только видимый сохранённый раздел.')
   await expect(preview.getByRole('heading', { name: 'Сегодня работают', exact: true })).toBeVisible()
   await expect(preview).toContainText('Анна')
   await expect(preview.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
   await expect(preview).toContainText('Чай в подарок')
   await preview.locator('.venue-info-media-image').first().scrollIntoViewIfNeeded()
-  await expect(preview.getByRole('img', { name: 'О заведении 1' })).toBeVisible()
+  await expect(preview.getByRole('img', { name: 'О заведении · 1' })).toBeVisible()
   await expect(preview.getByRole('button', { name: /Забронировать|В избранное|Задать вопрос|Вызвать персонал/ })).toHaveCount(0)
   await expect(preview.getByRole('button', { name: /Сохранить|Опубликовать|Удалить/ })).toHaveCount(0)
   expect(api.getPreviewRequests()).toEqual([{ venueId: 1, method: 'GET' }])
@@ -26490,14 +26494,15 @@ for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
     await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
     if (mode === 'guest') await page.getByRole('button', { name: 'Открыть', exact: true }).click()
     else await openVenueSection(page, 'Предпросмотр для гостя')
+    await page.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' }).click()
     const pdf = page.locator('.venue-info-media-pdf')
     await expect(page.locator('.venue-info-media-image')).toBeInViewport()
     await expect(pdf).toBeInViewport()
-    const image = page.getByRole('img', { name: mode === 'guest' ? '📖 Фото-меню · 1' : '📖 Фото-меню 1', exact: true })
+    const image = page.getByRole('img', { name: '📖 Фото-меню · 1', exact: true })
     await expect(image).toBeVisible()
     await expect.poll(() => image.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
     await expect(pdf).toHaveAttribute('data-state', 'ready')
-    await expect(pdf.getByRole('img')).toHaveAttribute('aria-label', mode === 'guest' ? '📖 Фото-меню · 2 · страница 1 из 2' : '📖 Фото-меню 2 · страница 1 из 2')
+    await expect(pdf.getByRole('img')).toHaveAttribute('aria-label', '📖 Фото-меню · 2 · страница 1 из 2')
     await expect(page.locator('a[href^="blob:"]')).toHaveCount(0)
     expect(requests).toEqual([{ method: 'GET', authorization: mode === 'guest' ? undefined : 'Bearer e2e-session-token' }])
     await expect(page.getByTestId('venue-card-info-media')).toHaveCount(0)
@@ -26651,10 +26656,11 @@ for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
     await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
     if (mode === 'guest') await page.getByRole('button', { name: 'Открыть', exact: true }).click()
     else await openVenueSection(page, 'Предпросмотр для гостя')
+    await page.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' }).click()
     const pdf = page.locator('.venue-info-media-pdf')
     await expect(page.locator('.venue-info-media-image')).toBeInViewport()
     await expect(pdf).toBeInViewport()
-    const image = page.getByRole('img', { name: mode === 'guest' ? '📖 Фото-меню · 1' : '📖 Фото-меню 1', exact: true })
+    const image = page.getByRole('img', { name: '📖 Фото-меню · 1', exact: true })
     await expect.poll(() => image.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
     await expect(pdf).toHaveAttribute('data-state', 'ready')
     await expect(page.locator('a[href^="blob:"]')).toHaveCount(0)
@@ -26676,9 +26682,9 @@ test('direct venue info media private preview refuses a foreign opaque attachmen
   await page.route(`**/api/venue/2/guest-preview/info-sections/10/media/${id}`, async (route) => { foreignReads++; await route.fulfill({ status: 200, contentType: 'image/png', body: syntheticStaffPng }) })
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await openVenueSection(page, 'Предпросмотр для гостя')
-  await expect(page.getByRole('heading', { name: 'О заведении', exact: true })).toBeVisible()
+  await page.locator('.venue-info-section > summary').filter({ hasText: 'О заведении' }).click()
   await page.locator('.venue-info-media-image').scrollIntoViewIfNeeded()
-  await expect(page.getByText(/^Не удалось загрузить изображение/)).toBeVisible()
+  await expect(page.getByText(/^Не удалось показать материал/)).toBeVisible()
   expect(foreignReads).toBe(0)
 })
 
@@ -26798,7 +26804,7 @@ test('direct venue info media UNKNOWN cannot discard its key and SUCCESS refresh
 
 async function mockInlinePdfPreview(page: Page, options: {
   mode?: 'guest' | 'PRIVATE_DRAFT' | 'PUBLISHED_PUBLIC'; count?: number; pages?: number;
-  status?: number; body?: Buffer; urls?: string[]; theme?: PolishTheme
+  status?: number; body?: Buffer; urls?: string[]; theme?: PolishTheme; expand?: boolean
 } = {}) {
   const mode = options.mode ?? 'PRIVATE_DRAFT'
   await installTelegramWebApp(page, 123456789)
@@ -26825,6 +26831,7 @@ async function mockInlinePdfPreview(page: Page, options: {
   const open = async () => {
     if (mode === 'guest') await page.getByRole('button', { name: 'Открыть', exact: true }).click()
     else await openVenueSection(page, 'Предпросмотр для гостя')
+    if (options.expand !== false) await page.locator('details.venue-info-section').filter({ has: page.locator('summary', { hasText: 'О заведении' }) }).locator('summary').click()
   }
   await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await open()
@@ -26970,7 +26977,7 @@ for (const status of [403, 404, 503]) {
     const pdf = page.locator('.venue-info-media-pdf')
     await pdf.scrollIntoViewIfNeeded()
     await expect(pdf).toHaveAttribute('data-state', 'error')
-    await expect(pdf).toContainText('PDF недоступен')
+    await expect(pdf).toContainText('Не удалось показать материал')
     await expect(pdf.getByRole('button', { name: 'Повторить просмотр' })).toBeVisible()
     await expect(pdf.getByRole('button', { name: 'Скачать файл' })).toBeHidden()
     await expect(pdf.locator('canvas')).toBeHidden()
@@ -26978,19 +26985,17 @@ for (const status of [403, 404, 503]) {
   })
 }
 
-test('PDF inline malformed document has explicit fallback with a fresh visibility check', async ({ page }) => {
+test('PDF inline malformed document retries with a fresh visibility check and no download', async ({ page }) => {
   const api = await mockInlinePdfPreview(page, { body: Buffer.from('%PDF-1.4\ninvalid\n%%EOF') })
   const pdf = page.locator('.venue-info-media-pdf')
-  await pdf.scrollIntoViewIfNeeded()
   await expect(pdf).toHaveAttribute('data-state', 'error')
-  await expect(pdf).toContainText('Не удалось показать файл')
-  await expect(pdf.getByRole('button', { name: 'Скачать файл' })).toBeVisible()
+  await expect(pdf).toContainText('Не удалось показать материал')
+  await expect(pdf.getByRole('button', { name: 'Скачать файл' })).toHaveCount(0)
   let checks = 0
-  await page.route(`**${api.prefix}/info-sections/10/media/*`, async (route) => { checks++; await route.fulfill({ status: 404 }) })
-  await pdf.getByRole('button', { name: 'Скачать файл' }).click()
-  await expect(pdf).toContainText('Файл недоступен. Обновите список')
+  await page.route(`**${api.prefix}/info-sections/10/media/*`, async route => { checks++; await route.fulfill({ status: 404 }) })
+  await pdf.getByRole('button', { name: 'Повторить просмотр' }).click()
+  await expect(pdf).toHaveAttribute('data-state', 'error')
   expect(checks).toBe(1)
-  await expect(pdf.getByRole('button', { name: 'Скачать файл' })).toBeHidden()
   await expect(page.locator('a[href^="blob:"]')).toHaveCount(0)
 })
 
@@ -27119,6 +27124,7 @@ test('PDF inline preserves JPEG and PNG and does not load a renderer without PDF
   page.on('request', (request) => { if (/pdfPageRenderer|pdf.worker/.test(request.url())) rendererRequests.push(request.url()) })
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+  await page.locator('details.venue-info-section > summary').filter({ hasText: 'О заведении' }).click()
   const images = page.locator('.venue-info-media-image')
   for (let index = 0; index < 2; index++) {
     await images.nth(index).scrollIntoViewIfNeeded()
@@ -27964,7 +27970,7 @@ test('personal links P2 successful QR supersedes browsing B and Menu opens A', a
   await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
   const before = await personalLinkProtectedState(page)
   await page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'Заведение', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
+  await expect(page.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' })).toBeVisible()
   expect(await personalLinkProtectedState(page)).toEqual(before)
   await page.getByRole('button', { name: 'Меню', exact: true }).click()
   await expect(page).toHaveURL(/#\/venue\/1\?browseMenu=1$/)
@@ -28017,7 +28023,7 @@ for (const activeVisit of [true, false]) {
     await mockHomeRoles(page)
     await page.route('**/api/guest/venue-entry/venue_1', route => route.fulfill(jsonResponse({ venueId: 1 })))
     await page.goto('?mode=home&venue_entry=venue_1')
-    await expect(page.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
+    await expect(page.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' })).toBeVisible()
     await page.getByRole('button', { name: 'Меню', exact: true }).click()
     await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
     if (activeVisit) await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
@@ -28025,12 +28031,12 @@ for (const activeVisit of [true, false]) {
     const before = await personalLinkProtectedState(page)
     await page.getByRole('button', { name: 'Карточка заведения', exact: true }).click()
     await expect(page).toHaveURL(/#\/venue\/1\?browseMenu=0$/)
-    await expect(page.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
+    await expect(page.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' })).toBeVisible()
     expect(await personalLinkProtectedState(page)).toEqual(before)
     await page.getByRole('button', { name: 'Меню', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true })).toBeVisible()
     await clickTelegramBackButton(page)
-    await expect(page.getByRole('heading', { name: '📖 Фото-меню', exact: true })).toBeVisible()
+    await expect(page.locator('.venue-info-section > summary').filter({ hasText: '📖 Фото-меню' })).toBeVisible()
     expect(await personalLinkProtectedState(page)).toEqual(before)
     expect(api.getTableSessionEndRequests()).toEqual([])
     expect(api.getAddBatchRequests()).toEqual([])
@@ -28218,31 +28224,21 @@ for (const width of [320, 360, 390, 430]) {
   })
 }
 
-test('guest experience PDF opens a separate viewer, zooms, paginates and returns', async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 390, height: 820 })
+test('guest experience materials paginate inline and Back keeps the card history', async ({ page }) => {
   await observeInlineMediaResources(page)
   const api = await mockInlinePdfPreview(page, { mode: 'guest', count: 2 })
-  const thumbnail = page.locator('[data-mode="thumbnail"]').first()
-  await expect(thumbnail).toHaveAttribute('data-state', 'ready')
-  await expect(thumbnail.getByRole('button', { name: 'Следующая страница' })).toHaveCount(0)
-  const open = page.getByRole('button', { name: /Открыть документ/ }).first()
-  await open.click()
-  await expect(page).toHaveURL(/media=0\.0$/)
-  const viewer = page.locator('[data-mode="viewer"]')
-  await expect(viewer).toHaveAttribute('data-state', 'ready')
-  await expect(viewer.getByRole('button', { name: 'Предыдущая страница' })).toBeDisabled()
-  await viewer.getByRole('button', { name: 'Следующая страница' }).click()
-  await expect(viewer).toHaveAttribute('data-state', 'ready')
-  await expect(viewer.locator('canvas')).toHaveAttribute('aria-label', /страница 2 из 2/)
-  await viewer.getByRole('button', { name: 'Увеличить' }).click()
-  await expect(viewer.locator('.info-media-zoomed')).toBeVisible()
-  await expectNoHorizontalOverflow(page)
-  await page.screenshot({ path: testInfo.outputPath('guest-pdf-390.png') })
-  await clickTelegramBackButton(page)
-  await expect(page).toHaveURL(/#\/venue\/1$/)
-  await expect(page.locator('[data-mode="thumbnail"]')).toHaveCount(2)
+  const initialUrl = page.url()
+  const media = page.locator('[data-mode="inline"]').first()
+  await expect(media).toHaveAttribute('data-state', 'ready')
+  await media.getByRole('button', { name: 'Следующая страница' }).click()
+  await expect(media.locator('canvas')).toHaveAttribute('aria-label', /страница 2 из 2/)
+  expect(page.url()).toBe(initialUrl)
+  await expect(page.getByRole('button', { name: /Открыть документ|Увеличить|Скачать файл/ })).toHaveCount(0)
+  await page.locator('details.venue-info-section > summary').filter({ hasText: 'О заведении' }).click()
+  await expect.poll(async () => (await inlineResourceCounts(page)).pixels).toBe(0)
   expect(api.reads.every(url => url.includes('/api/guest/venue/1/info-sections/10/media/'))).toBe(true)
-  await expect.poll(async () => (await inlineResourceCounts(page)).workers).toBe(0)
+  await clickTelegramBackButton(page)
+  await expect(page.getByRole('searchbox')).toBeVisible()
 })
 
 test('guest experience profile keeps an unsaved draft and submits only supported fields', async ({ page }, testInfo) => {
@@ -28572,10 +28568,10 @@ for (const theme of ['light', 'dark', 'custom'] as const) {
 
       if (width === 430 && theme === 'light') {
         await page.evaluate(() => (window as any).__polishTheme('dark'))
-        await expect(page.locator('.guest-shell')).toHaveAttribute('data-color-scheme', 'dark')
+        await expect(page.locator(':root')).toHaveAttribute('data-color-scheme', 'dark')
         await expectGuestContrast(page)
         await page.evaluate(() => (window as any).__polishTheme('custom'))
-        await expect(page.locator('.guest-shell')).toHaveAttribute('data-color-scheme', 'light')
+        await expect(page.locator(':root')).toHaveAttribute('data-color-scheme', 'light')
         await expectGuestContrast(page)
       }
       expect(api.getTableSessionEndRequests()).toHaveLength(0)
@@ -28618,57 +28614,44 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(page.locator('.venue-owner-home')).toBeVisible()
   })
 
-  test(`guest polish five tall PDF pages fit width zoom and return ${theme}`, async ({ page }, testInfo) => {
+  test(`guest inline five tall pages preserve width paging collapse and return ${theme}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 844 })
     await observeInlineMediaResources(page)
     const api = await mockInlinePdfPreview(page, { mode: 'guest', theme, body: infoMediaPdf(5, false, false, [300, 1800]) })
-    const thumbnail = page.locator('[data-mode="thumbnail"]')
-    await expect(thumbnail).toHaveAttribute('data-state', 'ready')
-    const thumbBox = await thumbnail.locator('.info-media-surface').boundingBox()
-    expect(thumbBox!.height).toBeLessThanOrEqual(210)
-    await expect(thumbnail).toContainText('5 стр.')
-    await thumbnail.scrollIntoViewIfNeeded()
-    await thumbnail.evaluate(el => el.closest('.venue-info-section')!.scrollIntoView({ block: 'start' }))
-    await expect(thumbnail).toHaveAttribute('data-state', 'ready')
-    await expect.poll(() => thumbnail.locator('canvas').evaluate(canvas => {
-      const pixel = canvas.getContext('2d')!.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height * .03), 1, 1).data
-      return pixel[0] > 150 && pixel[1] < 100 && pixel[2] < 100
-    })).toBe(true)
-    await page.screenshot({ path: testInfo.outputPath(`polish-pdf-preview-${theme}.png`) })
-    await page.getByRole('button', { name: /Открыть документ/ }).click()
-    const viewer = page.locator('[data-mode="viewer"]')
-    await expect(viewer).toHaveAttribute('data-state', 'ready')
-    const canvas = viewer.locator('canvas')
+    const material = page.locator('[data-mode="inline"]')
+    const section = page.locator('details.venue-info-section').filter({ has: material })
+    const initialUrl = page.url()
+    await expect(material).toHaveAttribute('data-state', 'ready')
+    await expect(section.locator('summary')).toContainText('5 страниц')
+    const canvas = material.locator('canvas')
     const fitted = await canvas.boundingBox()
-    const surface = await viewer.locator('.info-media-surface').boundingBox()
+    const surface = await material.locator('.info-media-surface').boundingBox()
     expect(Math.abs(fitted!.width - surface!.width)).toBeLessThan(2)
     expect(fitted!.height / fitted!.width).toBeCloseTo(6, 1)
     expect(await canvas.evaluate(c => c.width * c.height)).toBeLessThanOrEqual(1_500_000)
     expect(await canvas.evaluate(c => Math.max(c.width, c.height))).toBeLessThanOrEqual(2048)
+    await section.evaluate(el => el.scrollIntoView({ block: 'start' }))
+    await page.screenshot({ path: testInfo.outputPath(`inline-five-pages-${theme}.png`) })
     for (let number = 2; number <= 5; number++) {
-      await viewer.getByRole('button', { name: 'Следующая страница' }).click()
-      await expect(viewer).toHaveAttribute('data-state', 'ready')
+      await material.getByRole('button', { name: 'Следующая страница' }).click()
       await expect(canvas).toHaveAttribute('aria-label', new RegExp(`страница ${number} из 5`))
+      expect((await material.boundingBox())!.y).toBeGreaterThanOrEqual(-2)
     }
-    await expect(viewer.getByRole('button', { name: 'Следующая страница' })).toBeDisabled()
-    await viewer.getByRole('button', { name: 'Предыдущая страница' }).click()
+    await expect(material.getByRole('button', { name: 'Следующая страница' })).toBeDisabled()
+    await material.getByRole('button', { name: 'Предыдущая страница' }).click()
     await expect(canvas).toHaveAttribute('aria-label', /страница 4 из 5/)
-    const pixels = await canvas.evaluate(c => c.width * c.height)
-    await viewer.getByRole('button', { name: 'Увеличить', exact: true }).click()
-    await expect(viewer.locator('.info-media-zoomed')).toBeVisible()
-    await viewer.locator('.info-media-surface').evaluate(el => { el.scrollTop = 200; el.scrollLeft = 20 })
-    expect(await viewer.locator('.info-media-surface').evaluate(el => el.scrollTop)).toBeGreaterThan(0)
-    expect(await canvas.evaluate(c => c.width * c.height)).toBe(pixels)
-    await viewer.getByRole('button', { name: 'По ширине', exact: true }).click()
-    await expect(viewer.getByRole('button', { name: 'По ширине', exact: true })).toHaveAttribute('aria-pressed', 'true')
-    expect(await viewer.locator('.info-media-surface').evaluate(el => el.scrollTop)).toBe(0)
-    await expect(viewer.getByRole('button', { name: 'Скачать файл' })).toBeVisible()
+    await page.evaluate(() => window.scrollBy(0, 700))
+    const controls = material.locator('.info-media-controls')
+    await expect(controls).toBeInViewport()
+    const controlBox = await controls.boundingBox(); const nav = await page.locator('.guest-nav').boundingBox()
+    expect(controlBox!.y + controlBox!.height).toBeLessThan(nav!.y)
+    expect(page.url()).toBe(initialUrl)
+    await expect(page.getByRole('button', { name: /Открыть документ|Открыть фото|Увеличить|Уменьшить|По ширине|Скачать файл/ })).toHaveCount(0)
     await expectNoHorizontalOverflow(page)
-    await page.screenshot({ path: testInfo.outputPath(`polish-pdf-open-${theme}.png`) })
-    await clickTelegramBackButton(page)
-    await expect(page).toHaveURL(/#\/venue\/1$/)
-    await expect.poll(async () => (await inlineResourceCounts(page)).workers).toBe(0)
-    expect(api.reads.length).toBeGreaterThanOrEqual(6)
+    await section.locator('summary').click()
+    await expect.poll(async () => await inlineResourceCounts(page)).toMatchObject({ workers: 0, pixels: 0, urls: 0 })
+    await page.screenshot({ path: testInfo.outputPath(`inline-closed-${theme}.png`), fullPage: true })
+    expect(api.reads.length).toBe(6)
     await expect(page.locator('iframe, object, embed')).toHaveCount(0)
   })
 }
@@ -28679,7 +28662,7 @@ for (const shape of [
   { name: 'square', width: 700, height: 700 },
   { name: 'tall', width: 300, height: 2000 }
 ]) {
-  test(`guest polish phone photo preserves ${shape.name} proportions and gesture zoom`, async ({ page }, testInfo) => {
+  test(`guest polish phone photo preserves ${shape.name} proportions inline without cropping`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 844 })
     await installTelegramWebApp(page, 123456789)
     await observeInlineMediaResources(page)
@@ -28703,44 +28686,24 @@ for (const shape of [
     for (const theme of ['light', 'dark'] as const) {
       await page.emulateMedia({ colorScheme: theme })
       await page.goto('?mode=guest#/venue/1')
-      const preview = page.locator('[data-mode="thumbnail"]')
-      await preview.scrollIntoViewIfNeeded()
+      const section = page.locator('details.venue-info-section').filter({ hasText: 'Фотографии' })
+      await expect(section).not.toHaveAttribute('open', '')
+      await section.locator('summary').click()
+      const preview = section.locator('[data-mode="inline"]')
       await expect(preview).toHaveAttribute('data-state', 'ready')
-      await expect(preview).toHaveAttribute('data-orientation', shape.name)
       const imageBox = await preview.locator('img').boundingBox()
       const previewBox = await preview.locator('.info-media-surface').boundingBox()
       expect(Math.abs(imageBox!.width - previewBox!.width)).toBeLessThan(2)
       expect(imageBox!.width / imageBox!.height).toBeCloseTo(shape.width / shape.height, 2)
-      if (shape.name === 'tall') await expect(preview).toContainText('Фрагмент длинного фото')
-      if (shape.name === 'portrait') {
-        await preview.evaluate(el => el.closest('.venue-info-section')!.scrollIntoView({ block: 'start' }))
-        await page.screenshot({ path: testInfo.outputPath(`polish-photo-preview-${theme}.png`) })
+      expect(Math.abs(imageBox!.height - previewBox!.height)).toBeLessThan(2)
+      await expect(preview.getByRole('button')).toHaveCount(0)
+      if (shape.name === 'portrait' || shape.name === 'landscape') {
+        await section.evaluate(el => el.scrollIntoView({ block: 'start' }))
+        await page.screenshot({ path: testInfo.outputPath(`inline-photo-${shape.name}-${theme}.png`) })
       }
-      await page.getByRole('button', { name: /Открыть фото/ }).click()
-      const viewer = page.locator('[data-mode="viewer"]')
-      await expect(viewer).toHaveAttribute('data-state', 'ready')
-      const fullImage = viewer.locator('img')
-      const fullBox = await fullImage.boundingBox()
-      const fullSurface = await viewer.locator('.info-media-surface').boundingBox()
-      expect(Math.abs(fullBox!.width - fullSurface!.width)).toBeLessThan(2)
-      expect(fullBox!.width / fullBox!.height).toBeCloseTo(shape.width / shape.height, 2)
-      await viewer.locator('.info-media-surface').evaluate(surface => {
-        const send = (type: string, touches: Array<{ clientX: number; clientY: number }>) => {
-          const event = new Event(type, { bubbles: true, cancelable: true })
-          Object.defineProperty(event, 'touches', { value: touches })
-          surface.dispatchEvent(event)
-        }
-        const rect = surface.getBoundingClientRect()
-        send('touchstart', [{ clientX: rect.left + 60, clientY: rect.top + 100 }, { clientX: rect.left + 180, clientY: rect.top + 100 }])
-        send('touchmove', [{ clientX: rect.left + 30, clientY: rect.top + 100 }, { clientX: rect.left + 210, clientY: rect.top + 100 }])
-        send('touchend', [])
-      })
-      await expect(viewer.locator('.info-media-zoomed')).toBeVisible()
-      expect(await fullImage.evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThan(fullBox!.width * 1.4)
-      await viewer.getByRole('button', { name: 'По ширине' }).click()
-      if (shape.name === 'portrait') await page.screenshot({ path: testInfo.outputPath(`polish-photo-open-${theme}.png`), fullPage: true })
       await expectNoHorizontalOverflow(page)
-      await clickTelegramBackButton(page)
+      await section.locator('summary').click()
+      await expect.poll(async () => (await inlineResourceCounts(page)).urls).toBe(0)
       await page.goto('?mode=guest#/account')
       await expect(page.getByRole('heading', { name: 'Профиль', exact: true })).toBeVisible()
       await expect.poll(async () => (await inlineResourceCounts(page)).urls).toBe(0)
@@ -28793,9 +28756,9 @@ for (const theme of ['light', 'dark'] as const) {
     const picker = editor.getByLabel('Добавить файлы: О заведении')
     await expect(picker).toBeEnabled()
     const hint = editor.locator('.venue-info-format-help')
-    await expect(hint).toContainText('Фотографии будут видны в карточке заведения.')
-    await expect(hint).toContainText('Гость сможет открыть их в большом размере')
-    await expect(hint).toContainText('В карточке появится превью документа.')
+    await expect(hint).toContainText('Фотографии будут видны внутри раскрытого раздела')
+    await expect(hint).toContainText('на всю доступную ширину')
+    await expect(hint).toContainText('Документ появится внутри раскрытого раздела.')
     await expect(hint).toContainText('загрузите соответствующие JPEG/PNG отдельно')
     await expect(hint).toContainText('до 10 МБ на файл · до 10 вложений на раздел')
     await expect(hint).toContainText('HEIC/HEIF экспортируйте в JPEG')
@@ -28808,7 +28771,7 @@ for (const theme of ['light', 'dark'] as const) {
   })
 }
 
-test('guest polish photo decode failure retries and download rechecks revoked access', async ({ page }) => {
+test('guest inline photo decode failure retries and rechecks revoked visibility', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   await observeInlineMediaResources(page)
   await mockGuestApi(page)
@@ -28816,27 +28779,27 @@ test('guest polish photo decode failure retries and download rechecks revoked ac
     id: 10, type: 'about', title: 'Фотографии', displayTitle: 'Фотографии', text: '', mediaCount: 1,
     media: [{ id: 100, mediaType: 'image', sortOrder: 0, url: '/api/guest/venue/1/info-sections/10/media/100' }]
   }] })))
-  let invalid = true
-  let denied = false
-  await page.route('**/api/guest/venue/1/info-sections/10/media/100', route => route.fulfill({
-    status: denied ? 403 : 200, contentType: 'image/png',
-    body: invalid ? Buffer.from('invalid-image') : syntheticStaffPng
-  }))
-  await page.goto('?mode=guest#/venue/1?media=0.0')
-  const viewer = page.locator('[data-mode="viewer"]')
-  await expect(viewer).toHaveAttribute('data-state', 'error')
-  await expect(viewer).toContainText('Не удалось показать файл.')
+  let invalid = true; let denied = false; let reads = 0
+  await page.route('**/api/guest/venue/1/info-sections/10/media/100', route => {
+    reads++
+    return route.fulfill({ status: denied ? 403 : 200, contentType: 'image/png', body: invalid ? Buffer.from('invalid-image') : syntheticStaffPng })
+  })
+  await page.goto('?mode=guest#/venue/1')
+  const section = page.locator('details.venue-info-section').filter({ hasText: 'Фотографии' })
+  await section.locator('summary').click()
+  const preview = section.locator('[data-mode="inline"]')
+  await expect(preview).toHaveAttribute('data-state', 'error')
+  await expect(preview).toContainText('Не удалось показать материал')
   invalid = false
-  await viewer.getByRole('button', { name: 'Повторить просмотр' }).click()
-  await expect(viewer).toHaveAttribute('data-state', 'ready')
+  await preview.getByRole('button', { name: 'Повторить просмотр' }).click()
+  await expect(preview).toHaveAttribute('data-state', 'ready')
   denied = true
-  const downloads: unknown[] = []
-  page.on('download', download => downloads.push(download))
-  await viewer.getByRole('button', { name: 'Скачать файл' }).click()
-  await expect(viewer).toContainText('Файл недоступен. Обновите список материалов и повторите просмотр.')
-  await expect(viewer.getByRole('button', { name: 'Скачать файл' })).toBeHidden()
-  expect(downloads).toEqual([])
-  await page.goto('?mode=guest#/account')
+  await section.locator('summary').click(); await expect(preview).toHaveCount(0)
+  await section.locator('summary').click()
+  await expect(preview).toHaveAttribute('data-state', 'error')
+  await expect(preview.locator('img')).toBeHidden()
+  await expect(preview).not.toContainText(/скача/i)
+  expect(reads).toBe(3)
   await expect.poll(async () => (await inlineResourceCounts(page)).urls).toBe(0)
 })
 
@@ -28849,10 +28812,10 @@ test('guest polish system theme changes and invalid Telegram colors use readable
   })
   await mockGuestApi(page, { restoreContext: buildRestoreContext() })
   await page.goto('?mode=guest')
-  await expect(page.locator('.guest-shell')).toHaveAttribute('data-color-scheme', 'light')
+  await expect(page.locator(':root')).toHaveAttribute('data-color-scheme', 'light')
   await expectGuestContrast(page)
   await page.emulateMedia({ colorScheme: 'dark' })
-  await expect(page.locator('.guest-shell')).toHaveAttribute('data-color-scheme', 'dark')
+  await expect(page.locator(':root')).toHaveAttribute('data-color-scheme', 'dark')
   await expectGuestContrast(page)
 })
 
@@ -28906,3 +28869,244 @@ test('guest polish Telegram safe area updates and keyboard leave content usable'
   expect(await page.locator('.guest-visit-header').evaluate(el => parseFloat(getComputedStyle(el).paddingTop))).toBe(56)
   await expectNoHorizontalOverflow(page)
 })
+
+async function expectUnifiedContrast(page: Page) {
+  const values = await page.locator('#app').evaluate(root => {
+    const rgb = (text: string) => (text.match(/[\d.]+/g) ?? []).map(Number)
+    const lum = (c: number[]) => c.slice(0, 3).map(v => { const x = v / 255; return x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4 }).reduce((a, v, i) => a + v * [.2126, .7152, .0722][i], 0)
+    const background = (el: Element | null): number[] => {
+      if (!el) return [255, 255, 255]
+      const c = rgb(getComputedStyle(el).backgroundColor); const alpha = c.length === 4 ? c[3] : 1
+      const parent = alpha < 1 ? background(el.parentElement) : [0, 0, 0]
+      return c.slice(0, 3).map((v, i) => v * alpha + parent[i] * (1 - alpha))
+    }
+    return [...root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,p,span,strong,label,summary,button,a,td,th,input,textarea,select')]
+      .filter(el => el.getClientRects().length && (el.textContent?.trim() || el.matches('input, textarea')) &&
+        ([...el.childNodes].some(n => n.nodeType === Node.TEXT_NODE && n.textContent?.trim()) || el.matches('input,textarea,select')) &&
+        !el.matches('input[type=checkbox], input[type=radio], input[type=file]'))
+      .flatMap(el => { const style = getComputedStyle(el); const a = lum(rgb(style.color)); const b = lum(background(el)); const label = `${el.tagName}.${el.className}: ${(el.textContent || el.getAttribute('placeholder') || '').trim().slice(0, 55)}`; const values = [{
+        label, ratio: (Math.max(a, b) + .05) / (Math.min(a, b) + .05), minimum: 4.5
+      }]
+        if (el.matches('input:not(:disabled), textarea:not(:disabled), select:not(:disabled)') && parseFloat(style.borderTopWidth)) {
+          const edge = lum(rgb(style.borderTopColor)); const outside = lum(background(el.parentElement))
+          values.push({ label: `${label} control boundary`, ratio: (Math.max(edge, outside) + .05) / (Math.min(edge, outside) + .05), minimum: 3 })
+        }
+        return values
+      })
+  })
+  expect(values.length).toBeGreaterThan(3)
+  for (const item of values) expect(item.ratio, item.label).toBeGreaterThanOrEqual(item.minimum)
+}
+
+async function mockUnifiedWorkRole(page: Page, role: 'OWNER' | 'MANAGER' | 'STAFF' | 'PLATFORM') {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  if (role === 'PLATFORM') {
+    await mockPlatformOwnershipApi(page)
+    await mockPlatformBillingApi(page)
+  } else {
+    const permissions = role === 'STAFF'
+      ? ['ORDER_QUEUE_VIEW', 'ORDER_STATUS_UPDATE', 'BOOKING_VIEW', 'MENU_VIEW', 'TABLE_VIEW', 'STAFF_SCHEDULE_VIEW', 'SHIFT_EXTENSION_VIEW', 'FEEDBACK_VIEW', 'STAFF_PROFILE_EDIT_OWN']
+      : [...ownerUxPermissions, 'MENU_MANAGE', 'MENU_AVAILABILITY_MANAGE', 'STAFF_SCHEDULE_MANAGE', 'STAFF_PROFILE_EDIT_OWN']
+    await mockVenueStatsApi(page, { role, permissions })
+    if (role !== 'STAFF') await mockVenuePromotionsApi(page, { role })
+    if (role === 'OWNER') await mockVenueBillingApi(page, { role, permissions })
+    if (role === 'OWNER') await mockOwnerUx(page, 'PUBLISHED')
+    if (role === 'OWNER') await mockVenueStaffChatApi(page, { role })
+    else await mockStaffPhotoApi(page, role)
+    await mockVenueStaffScheduleApi(page, { accesses: [{ venueId: 1, venueName: 'Микс', venueCity: 'Москва', venueStatus: 'PUBLISHED', role, permissions }] })
+    await mockVenueBookingsApi(page, { role, permissions })
+    await mockVenueMenuApi(page, { role, permissions })
+    await mockVenueStaffCallsApi(page, { role, permissions })
+    await mockVenueShiftExtensionApi(page, { role, permissions })
+    if (role !== 'STAFF') {
+      await mockDirectVenueInfoMedia(page)
+      await page.route('**/api/venue/1/support/unread-count', route => route.fulfill(jsonResponse({ unreadCount: 3 })))
+      await page.route('**/api/venue/1/publication**', route => route.fulfill(jsonResponse({
+        status: 'PUBLISHED', name: 'Микс', ownerCanPublish: false, guestAccess: 'AVAILABLE', missing: []
+      })))
+      await page.route('**/api/venue/1/public-link', route => route.fulfill(jsonResponse({
+        venueId: 1, name: 'Микс', address: 'Москва, Арбат, 1', slug: 'miks', catalogListed: true,
+        canManage: true, guestAvailable: true, url: 'https://miks.hookahtootah.club',
+        telegramUrl: 'https://t.me/hookah_tootah_bot?startapp=venue_1'
+      })))
+    }
+  }
+}
+
+for (const role of ['GUEST', 'OWNER', 'MANAGER', 'STAFF', 'PLATFORM'] as const) {
+  for (const theme of ['light', 'dark', 'custom'] as const) {
+    for (const width of [320, 360, 390, 430]) {
+      test(`unified theme ${role} ${theme} ${width}px across working screens`, async ({ page }, testInfo) => {
+        await page.setViewportSize({ width, height: 844 })
+        if (role === 'GUEST') {
+          await installTelegramWebApp(page, 123456789); await mockGuestApi(page)
+          await page.route('**/api/guest/profile', route => {
+            expect(route.request().headers().authorization).toBe('Bearer e2e-session-token')
+            return route.fulfill(jsonResponse({ displayName: 'Александр', birthday: null }))
+          })
+        }
+        else await mockUnifiedWorkRole(page, role)
+        await installPolishTheme(page, theme)
+        await page.addInitScript(large => document.addEventListener('DOMContentLoaded', () => {
+          if (large) document.documentElement.style.fontSize = '20px'
+        }), width === 320)
+        const mode = role === 'GUEST' ? 'guest' : role === 'PLATFORM' ? 'platform' : 'venue'
+        const routes = role === 'GUEST' ? ['catalog', 'venue/1', 'account', 'account/profile', 'messages']
+          : role === 'PLATFORM' ? ['venues', 'venue/1', 'create', 'applications', 'application/701', 'owners', 'owner/501', 'placements', 'analytics', 'support']
+          : role === 'STAFF' ? ['dashboard', 'orders', 'bookings', 'calls', 'menu', 'shifts', 'my-profile']
+          : ['dashboard', 'orders', 'bookings', 'menu', 'settings', 'settings/card', 'settings/hours', 'staff', 'shifts', 'calls', 'extensions', 'messages', 'stats', 'feedback', 'promotions', 'support', ...(role === 'OWNER' ? ['ownership', 'subscription'] : ['my-profile'])]
+        for (const route of routes) {
+          await page.goto(`?mode=${mode}#/${route}`)
+          await expect(page.locator(role === 'GUEST' ? '.guest-shell' : role === 'PLATFORM' ? '.platform-shell' : '.venue-shell')).toBeVisible()
+          await expect(page.locator('.app-content,.venue-content')).not.toBeEmpty()
+          await expect(page.locator('.app-content,.venue-content')).not.toContainText(/Загрузка\.\.\.|Загружаем|Проверяем доступ/)
+          if (route === 'catalog') {
+            const open = page.locator('.catalog-item').first().getByRole('button', { name: 'Открыть', exact: true })
+            expect(await open.evaluate(el => { const range = document.createRange(); range.selectNodeContents(el); return range.getClientRects().length })).toBe(1)
+          }
+          if (route === 'menu') await page.getByText('Редактирование меню', { exact: true }).click()
+          if (route === 'settings/card') await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+          if (route === 'my-profile') await expect(page.locator('.staff-own-photos')).toContainText('Алексей')
+          if (route === 'account/profile') await expect(page.getByRole('textbox', { name: 'Имя', exact: true })).toHaveValue('Александр')
+          await expectUnifiedContrast(page)
+          for (const height of await page.locator('select:visible:not([multiple])').evaluateAll(elements => elements.map(el => el.getBoundingClientRect().height))) {
+            expect(height, 'select touch target').toBeGreaterThanOrEqual(44)
+          }
+          await expectNoHorizontalOverflow(page)
+          if (width === 390 && theme !== 'custom') {
+            await page.screenshot({ path: testInfo.outputPath(`unified-${role.toLowerCase()}-${route.replaceAll('/', '-')}-${theme}.png`), fullPage: true })
+            if (route === 'settings/card') await page.locator('.venue-info-editor').screenshot({ path: testInfo.outputPath(`unified-${role.toLowerCase()}-materials-${theme}.png`) })
+          }
+        }
+        await page.evaluate(() => (window as any).__polishTheme('dark'))
+        await expect(page.locator(':root')).toHaveAttribute('data-color-scheme', 'dark')
+        await expectUnifiedContrast(page)
+        await page.evaluate(() => (window as any).__polishTheme('light'))
+        await expectUnifiedContrast(page)
+      })
+    }
+  }
+}
+
+for (const theme of ['light', 'dark', 'custom'] as const) {
+  test(`unified theme stays identical across Guest Venue Platform switching ${theme}`, async ({ page }) => {
+    await mockUnifiedWorkRole(page, 'OWNER')
+    await mockPlatformBillingApi(page)
+    await mockHomeRoles(page, { role: 'OWNER', platform: true })
+    await installPolishTheme(page, theme)
+    page.on('dialog', dialog => dialog.accept())
+    await page.goto('?mode=home&entry=guest')
+    const palette = () => page.locator(':root').evaluate(el => ['bg','surface','text','accent','on-accent','soft','danger'].map(name => getComputedStyle(el).getPropertyValue(`--app-${name}`)))
+    const initial = await palette()
+    for (const [name, shell] of [['Заведение', '.venue-shell'], ['Платформа', '.platform-shell'], ['Гость', '.guest-shell']]) {
+      await page.getByRole('navigation', { name: 'Режим приложения' }).getByRole('button', { name, exact: true }).click()
+      await expect(page.locator(shell)).toBeVisible()
+      expect(await palette()).toEqual(initial)
+      await expectUnifiedContrast(page)
+    }
+  })
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`guest inline single page is collapsed lazy and has no technical labels ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await observeInlineMediaResources(page)
+    const api = await mockInlinePdfPreview(page, { mode: 'guest', theme, pages: 1, expand: false })
+    const section = page.locator('details.venue-info-section').filter({ has: page.locator('summary', { hasText: 'О заведении' }) })
+    await expect(section).not.toHaveAttribute('open', '')
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    expect(api.reads).toHaveLength(0)
+    await expect(section.locator('canvas, img')).toHaveCount(0)
+    await section.locator('summary').click()
+    await expect(section.locator('canvas')).toHaveAttribute('aria-label', /страница 1 из 1/)
+    await expect(section.locator('.info-media-controls')).toBeHidden()
+    await expect(section).not.toContainText(/PDF|JPEG|PNG|Документ PDF|Скачать|Увеличить|Открыть документ/)
+    const originalUrl = page.url()
+    await section.evaluate(el => el.scrollIntoView({ block: 'start' }))
+    await page.screenshot({ path: testInfo.outputPath(`inline-single-${theme}.png`) })
+    await section.locator('summary').click()
+    await expect(section.locator('canvas')).toHaveCount(0)
+    await expect.poll(async () => await inlineResourceCounts(page)).toMatchObject({ workers: 0, pixels: 0, urls: 0 })
+    const before = api.reads.length
+    await section.evaluate(el => { for (let i = 0; i < 8; i++) { (el as HTMLDetailsElement).open = true; (el as HTMLDetailsElement).open = false } })
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    expect(api.reads.length).toBe(before)
+    await section.locator('summary').click()
+    await expect(section.locator('canvas')).toHaveAttribute('aria-label', /страница 1 из 1/)
+    expect(api.reads.length).toBe(before + 1)
+    expect(page.url()).toBe(originalUrl)
+  })
+}
+
+test('guest inline collapse aborts pending media and reopening rejects the stale result', async ({ page }) => {
+  await observeInlineMediaResources(page)
+  const api = await mockInlinePdfPreview(page, { mode: 'guest', pages: 1, expand: false })
+  const section = page.locator('details.venue-info-section').filter({ has: page.locator('summary', { hasText: 'О заведении' }) })
+  const originalUrl = page.url()
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  let reads = 0
+  const failures: string[] = []
+  page.on('requestfailed', request => { if (request.url().includes('/info-sections/10/media/100')) failures.push(request.url()) })
+  await page.route(`**${api.prefix}/info-sections/10/media/100`, async route => {
+    reads++
+    if (reads === 1) {
+      await held
+      await route.fulfill({ contentType: 'application/pdf', body: infoMediaPdf(5) }).catch(() => undefined)
+    } else await route.fulfill({ contentType: 'application/pdf', body: infoMediaPdf(1) })
+  })
+  try {
+    await section.locator('summary').click()
+    await expect.poll(() => reads).toBe(1)
+    await section.locator('summary').click()
+    await expect(section.locator('canvas')).toHaveCount(0)
+    await expect.poll(() => failures.length).toBe(1)
+    await section.locator('summary').click()
+    await expect(section.locator('canvas')).toHaveAttribute('aria-label', /страница 1 из 1/)
+    release()
+    await expect(section.locator('.info-media-controls')).toBeHidden()
+    await expect(section.locator('.info-media-preview')).toHaveAttribute('data-state', 'ready')
+    expect(reads).toBe(2)
+    expect(page.url()).toBe(originalUrl)
+    await section.locator('summary').click()
+    await expect.poll(async () => await inlineResourceCounts(page)).toMatchObject({ workers: 0, pixels: 0, urls: 0 })
+  } finally { release() }
+})
+
+for (const role of ['OWNER', 'PLATFORM'] as const) {
+  test(`unified theme ${role} safe area and keyboard protect working forms`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 })
+    await mockUnifiedWorkRole(page, role)
+    await installPolishTheme(page, 'dark')
+    await page.goto(role === 'OWNER' ? '?mode=venue#/settings/card' : '?mode=platform#/create')
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty('--tg-safe-area-inset-top', '24px')
+      document.documentElement.style.setProperty('--tg-content-safe-area-inset-top', '44px')
+      document.documentElement.style.setProperty('--tg-safe-area-inset-left', '26px')
+      document.documentElement.style.setProperty('--tg-content-safe-area-inset-bottom', '8px')
+    })
+    const header = page.locator('.venue-header').first()
+    expect(await header.evaluate(el => parseFloat(getComputedStyle(el).paddingTop))).toBe(68)
+    const content = page.locator('.venue-content')
+    expect(await content.evaluate(el => parseFloat(getComputedStyle(el).paddingLeft))).toBe(26)
+    const fields = content.locator('input:not([type=checkbox]):not([type=radio]):not([readonly]):visible')
+    const field = fields.first()
+    await field.focus()
+    await page.evaluate(() => {
+      const viewport = window.visualViewport!
+      Object.defineProperty(viewport, 'height', { configurable: true, get: () => window.innerHeight - 300 })
+      viewport.dispatchEvent(new Event('resize'))
+    })
+    await expect(page.locator(':root')).toHaveAttribute('data-keyboard-open', '')
+    await expect(field).toBeFocused()
+    const nextField = fields.nth(1)
+    await nextField.focus()
+    await expect(nextField).toBeFocused()
+    await expect(page.locator(':root')).toHaveAttribute('data-keyboard-open', '')
+    await nextField.blur()
+    await expect(page.locator(':root')).not.toHaveAttribute('data-keyboard-open', '')
+    await expectNoHorizontalOverflow(page)
+    await expectUnifiedContrast(page)
+  })
+}

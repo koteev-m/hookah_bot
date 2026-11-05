@@ -45,6 +45,28 @@ ambient DOCKER_/COMPOSE_ overrides; чужих Compose resources он не из�
 
 ### Подготовка образа после зелёного CI
 
+#### Два CI на изменение
+
+В локально подготовленном `.github/workflows/ci.yml` остаются только `pull_request`
+в `main` и `push` в `main`. Push обычной feature-ветки не запускает третий CI.
+Этот порядок станет действующим только после отдельного merge изменения workflow;
+локальная правка сама по себе не меняет GitHub Actions.
+
+Порядок: **Codex реализует → один отдельно разрешённый commit/push → подтверждение
+точного remote SHA и STOP → ChatGPT/GitHub создаёт PR отдельным действием → PR CI →
+пользователь делает merge → main CI → отдельно разрешённый штатный HT70 deploy**.
+Для создания PR не нужен второй запуск Codex. Имена jobs, тесты, main-only GHCR
+publication и release admission сохраняются. Изменение triggers не разрешает
+пропускать CI для точного release SHA или следить за CI после push из Codex.
+
+Проверка GitHub для `HT-UNIFIED-THEME-INLINE-MEDIA-CI-01`: metadata `branches/main`
+возвращает `protected: false`, required status checks выключены; rulesets с
+`includes_parents=true` — пустой список. CLI protection endpoint подтверждает
+`Branch not protected` (404); connector того же endpoint не имеет administration
+доступа (403). Все 16 checks опубликованного CI для `b3496fe1` успешны. Это snapshot,
+не изменение защиты: перед публикацией отдельно сверить актуальные правила, если
+они появились. Все существующие 16 jobs workflow и их имена остаются неизменными.
+
 Основной путь: **GitHub main → CI → GHCR → candidate.json → отдельно разрешённый
 install/deploy**. Job `publish-ghcr` в `.github/workflows/ci.yml` запускается только
 на `push` в `refs/heads/main` репозитория `koteev-m/hookah_bot`, после success всех

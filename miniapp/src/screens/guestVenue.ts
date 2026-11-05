@@ -659,45 +659,56 @@ function renderInfoSection(
   section: VenueInfoSectionDto,
   loadMedia: (url: string) => InfoMediaLoader,
   disposables: Array<() => void>,
-  openMedia?: (index: number) => void
+  initiallyOpen = false
 ) {
-  const sectionCard = el('section', { className: 'card venue-info-section' })
+  const sectionCard = el('details', { className: 'card venue-info-section' })
   const title = section.displayTitle?.trim() || section.title?.trim() || 'Материалы заведения'
-  sectionCard.appendChild(el('h4', { text: title }))
-  if (section.text?.trim()) sectionCard.appendChild(el('p', { text: section.text.trim() }))
-  const mediaItems = normalizeInfoMedia(section)
-  if (mediaItems.length) {
+  const summary = el('summary')
+  const pageCount = el('span', { className: 'venue-info-count' })
+  append(summary, el('span', { text: title }), pageCount)
+  const content = el('div', { className: 'venue-info-content' })
+  append(sectionCard, summary, content)
+  let previews: Array<() => void> = []
+  let disposed = false
+  let mounted = false
+  const clear = () => { mounted = false; previews.forEach(dispose => dispose()); previews = []; content.replaceChildren() }
+  const render = () => {
+    if (disposed || sectionCard.open && mounted) return
+    clear()
+    if (!sectionCard.open) return
+    mounted = true
+    if (section.text?.trim()) content.appendChild(el('p', { text: section.text.trim() }))
+    const mediaItems = normalizeInfoMedia(section)
     const list = el('div', { className: 'venue-info-media-list' })
     mediaItems.forEach((media, index) => {
       const type = media.mediaType?.toLowerCase() ?? ''
-      const number = typeof media.sortOrder === 'number' ? media.sortOrder + 1 : index + 1
       const pdf = type === 'pdf' || type === 'application/pdf'
       if (!pdf && !['image', 'photo', 'image/jpeg', 'image/png'].includes(type)) {
-        list.appendChild(el('p', { className: 'status', text: 'Этот формат нельзя показать. Обратитесь к заведению.' }))
+        list.appendChild(el('p', { className: 'status', text: 'Этот материал нельзя показать. Обратитесь к заведению.' }))
         return
       }
-      const card = el('div', { className: 'venue-info-document' })
-      const label = !openMedia ? `${title} ${number}` : mediaItems.length > 1 ? `${title} · ${number}` : title
-      if (!openMedia && pdf) card.appendChild(el('p', { className: 'info-media-title', text: `PDF ${number}` }))
-      if (openMedia && pdf) card.appendChild(el('p', { className: 'info-media-title', text: `Документ · ${label}` }))
-      const preview = createInfoMediaPreview(pdf ? 'pdf' : 'image', label, loadMedia(media.url!), openMedia ? 'thumbnail' : undefined)
-      disposables.push(preview.dispose)
-      card.appendChild(preview.element)
-      if (openMedia) {
-        const open = el('button', {
-          className: 'button-secondary button-small',
-          text: pdf ? 'Открыть документ' : 'Открыть фото'
-        })
-        open.setAttribute('aria-label', `${open.textContent} · ${label}`)
-        open.addEventListener('click', () => openMedia(index))
-        card.appendChild(open)
-      }
-      list.appendChild(card)
+      const label = mediaItems.length > 1 ? `${title} · ${index + 1}` : title
+      const preview = createInfoMediaPreview(pdf ? 'pdf' : 'image', label, loadMedia(media.url!), 'inline')
+      preview.element.dataset.mediaIndex = String(index)
+      previews.push(preview.dispose)
+      list.appendChild(preview.element)
     })
-    sectionCard.appendChild(list)
-  } else if (resolveInfoMediaCount(section, mediaItems) > 0) {
-    sectionCard.appendChild(el('p', { className: 'status', text: 'Медиа пока не удалось показать.' }))
+    if (!mediaItems.length && resolveInfoMediaCount(section, mediaItems) > 0) {
+      list.appendChild(el('p', { className: 'status', text: 'Материал пока не удалось показать.' }))
+    }
+    content.appendChild(list)
   }
+  const knownPages = new Map<number, number>()
+  sectionCard.addEventListener('info-media-pages', event => {
+    const count = (event as CustomEvent<number>).detail
+    if (count > 0 && event.target instanceof HTMLElement) knownPages.set(Number(event.target.dataset.mediaIndex), count)
+    const total = Math.max(0, ...knownPages.values())
+    const form = new Intl.PluralRules('ru').select(total)
+    pageCount.textContent = total > 1 ? `${total} ${form === 'one' ? 'страница' : form === 'few' ? 'страницы' : 'страниц'}` : ''
+  })
+  sectionCard.addEventListener('toggle', render)
+  if (initiallyOpen) sectionCard.open = true
+  disposables.push(() => { disposed = true; clear() })
   return sectionCard
 }
 
@@ -1008,7 +1019,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const shouldShowOrderMenu = () => {
     if (readOnlyPreview) return false
     const explicitMenu = routeParams.get('browseMenu')
-    return !mediaKey && (explicitMenu === '1' || Boolean(replaceCartLineRef) ||
+    return (explicitMenu === '1' || Boolean(replaceCartLineRef) ||
       (explicitMenu !== '0' && getVenueBrowseId() !== venueId && canPlaceOrders()))
   }
 
@@ -1225,7 +1236,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const renderVenueInfo = (venue: VenueDto) => {
     currentIsFavorite = venue.isFavorite
     updateFavoriteButton()
-    refs.header.hidden = Boolean(mediaKey)
+    refs.header.hidden = false
     refs.venueTitle.textContent = venue.name
     if (focusHeading) {
       refs.venueTitle.tabIndex = -1
@@ -1282,7 +1293,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         showToast('Не удалось скопировать адрес. Его можно выделить в карточке.')
       }
     }
-    const promotions = menuOpen || mediaKey ? null : renderGuestPromotions(venue.promotions ?? [], venue.timezone)
+    const promotions = menuOpen ? null : renderGuestPromotions(venue.promotions ?? [], venue.timezone)
     refs.promotionsSlot.replaceChildren()
     refs.promotionsSlot.hidden = !promotions
     if (promotions) {
@@ -1291,7 +1302,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     clearStaffPhotos()
     staffPhotoAbort = new AbortController()
     const photoSignal = staffPhotoAbort.signal
-    const todayStaff = renderTodayStaff(mediaKey ? [] : (venue.todayStaff ?? []), (person, avatar) => {
+    const todayStaff = renderTodayStaff(venue.todayStaff ?? [], (person, avatar) => {
       const prefix = `/api/guest/venue/${venueId}/staff/${person.id}/photos/`
       if (!person.photoUrl?.startsWith(prefix) || !/^[a-f0-9-]{36}$/.test(person.photoUrl.slice(prefix.length))) return
       void requestBinary(backendUrl, person.photoUrl, { signal: photoSignal }, buildApiDeps(isDebug)).then((result) => {
@@ -1319,28 +1330,6 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     itemDisposables.forEach((dispose) => dispose())
     itemDisposables = []
 
-    if (mediaKey) {
-      const [sectionIndex, mediaIndex] = mediaKey.split('.').map(Number)
-      const section = sections[sectionIndex]
-      const media = section ? normalizeInfoMedia(section)[mediaIndex] : undefined
-      const title = section?.displayTitle?.trim() || section?.title?.trim() || 'Материалы заведения'
-      const viewer = el('section', { className: 'card guest-media-viewer' })
-      const back = el('button', { className: 'button-secondary button-small', text: 'К карточке заведения' })
-      back.addEventListener('click', () => options.onBack?.())
-      append(viewer, back, el('h1', { text: title }))
-      const type = media?.mediaType?.toLowerCase() ?? ''
-      const pdf = type === 'pdf' || type === 'application/pdf'
-      if (media?.url && (pdf || ['image', 'photo', 'image/jpeg', 'image/png'].includes(type))) {
-        const preview = createInfoMediaPreview(pdf ? 'pdf' : 'image', title, loadInfoMedia(media.url), 'viewer')
-        infoMediaDisposables.push(preview.dispose)
-        viewer.appendChild(preview.element)
-      } else {
-        viewer.appendChild(el('p', { text: 'Файл недоступен. Проверьте материалы в карточке заведения.' }))
-      }
-      refs.menuBody.appendChild(viewer)
-      return
-    }
-
     const description = venue.cardDescription?.trim()
     const contact = venue.guestContact?.trim()
     if (description || contact) {
@@ -1356,10 +1345,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       refs.menuBody.appendChild(el('p', { text: 'Информация пока не заполнена.' }))
     }
     sections.forEach((section, sectionIndex) => {
-      const openMedia = readOnlyPreview ? undefined : (mediaIndex: number) => {
-        window.location.hash = `#/venue/${venueId}?media=${sectionIndex}.${mediaIndex}`
-      }
-      refs.menuBody.appendChild(renderInfoSection(section, loadInfoMedia, infoMediaDisposables, openMedia))
+      // Existing saved media links reveal their section without a separate viewer.
+      refs.menuBody.appendChild(renderInfoSection(section, loadInfoMedia, infoMediaDisposables,
+        mediaKey?.split('.')[0] === String(sectionIndex)))
     })
   }
 
@@ -1765,8 +1753,8 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.header.hidden = true
     refs.maps.hidden = true
     refs.maps.open = false
-    refs.retryButton.hidden = Boolean(mediaKey)
-    catalogButton.hidden = Boolean(mediaKey) || !options.onOpenCatalog
+    refs.retryButton.hidden = false
+    catalogButton.hidden = !options.onOpenCatalog
     refs.promotionsSlot.replaceChildren()
     refs.promotionsSlot.hidden = true
     refs.todayStaffSlot.replaceChildren()

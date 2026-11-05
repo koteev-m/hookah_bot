@@ -39,7 +39,7 @@ function readable(color: Color, backgrounds: Color[], minimum: number): Color {
 }
 
 // Keep Telegram's palette when readable, and repair conflicting custom theme pairs locally.
-export function bindGuestTheme(element: HTMLElement): () => void {
+export function bindAppTheme(element: HTMLElement): () => void {
   const webApp = getTelegramContext().webApp
   const system = window.matchMedia('(prefers-color-scheme: dark)')
   const update = () => {
@@ -59,28 +59,45 @@ export function bindGuestTheme(element: HTMLElement): () => void {
     const soft = contrast(text, tinted) >= 4.5 ? tinted : surface
     const backgrounds = [bg, surface, soft]
     const muted = readable(parseColor(params?.hint_color) ?? mix(surface, text, .7), backgrounds, 4.5)
-    const accent = readable(parseColor(params?.button_color) ?? parseColor(dark ? '#a6c9bc' : '#24584f')!, backgrounds, 3)
+    const accent = readable(parseColor(params?.button_color) ?? parseColor(dark ? '#a6c9bc' : '#24584f')!, backgrounds, 4.5)
     const onAccent = readable(parseColor(params?.button_text_color) ?? [255, 255, 255], [accent], 4.5)
     const danger = readable(parseColor(dark ? '#f2afa4' : '#a32d26')!, backgrounds, 4.5)
     const onDanger = readable([255, 255, 255], [danger], 4.5)
+    const success = readable(parseColor(dark ? '#a4c9b0' : '#296240')!, backgrounds, 4.5)
+    const warning = readable(parseColor(dark ? '#e3c18c' : '#85551b')!, backgrounds, 4.5)
     const values = {
       bg, surface, text, muted, accent, 'on-accent': onAccent, soft,
       border: mix(surface, text, .14), 'control-border': readable(mix(surface, text, .45), backgrounds, 3),
-      danger, 'on-danger': onDanger
+      danger, 'on-danger': onDanger, success, warning,
+      'danger-soft': soft, 'success-soft': soft, 'warning-soft': soft
     }
     for (const [name, value] of Object.entries(values)) {
-      element.style.setProperty(`--guest-${name}`, `rgb(${value.join(', ')})`)
+      element.style.setProperty(`--app-${name}`, `rgb(${value.join(', ')})`)
     }
     element.dataset.colorScheme = luminance(bg) < .18 ? 'dark' : 'light'
     element.style.colorScheme = element.dataset.colorScheme
   }
   update()
+  const viewport = window.visualViewport
+  const keyboard = () => {
+    const active = document.activeElement
+    const editing = active instanceof HTMLElement && active.matches('textarea, input:not([type=button]):not([type=checkbox]):not([type=radio]):not([type=file])')
+    const open = Boolean(editing && viewport && viewport.scale === 1 && window.innerHeight - viewport.height > 120)
+    element.toggleAttribute('data-keyboard-open', open)
+    if (open) active?.scrollIntoView({ block: 'nearest' })
+  }
+  viewport?.addEventListener('resize', keyboard)
+  document.addEventListener('focusin', keyboard)
+  document.addEventListener('focusout', keyboard)
   system.addEventListener('change', update)
   let listening = false
   if (webApp?.onEvent && webApp.offEvent) {
     try { webApp.onEvent('themeChanged', update); listening = true } catch { /* initial palette remains available */ }
   }
   return () => {
+    viewport?.removeEventListener('resize', keyboard)
+    document.removeEventListener('focusin', keyboard)
+    document.removeEventListener('focusout', keyboard)
     system.removeEventListener('change', update)
     if (listening) webApp?.offEvent?.('themeChanged', update)
   }

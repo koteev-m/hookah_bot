@@ -217,8 +217,9 @@ MUST:
   `Профиль`. Help lives in the profile and on relevant recovery screens. Browser Back and Telegram
   Back share the guest route history.
 - The venue card leads with name, address, today's schedule and `Меню`. It keeps booking and
-  venue-question actions, secondary map choices and the full schedule. Card media previews open
-  dedicated image and PDF views that reuse the existing access and rendering pipeline.
+  venue-question actions, secondary map choices and the full schedule. Additional information
+  sections start collapsed. Expanding a section shows its text and materials inline, under the
+  venue's section name, without technical file-format labels or a separate media route.
 - `Личные данные` reads and edits the same profile as the bot. Only the guest's display name and
   day/month birthday are supported. Birthday is write-once, and no Telegram contact or role can be
   changed through these endpoints.
@@ -226,15 +227,19 @@ MUST:
   available work surface opens directly; multiple work surfaces require a choice. Roles and the
   active visit are checked again on a mode change. Explicit venue and table payloads enter Guest.
   A stored guest browsing choice alone does not select Guest for a work-role launch.
-- Guest colors follow Telegram theme changes or the system theme. Unreadable custom foreground/
-  background pairs use contrast-safe fallbacks within Guest Mode. Catalog rows lead to the venue
+- All modes share one palette and control system driven by Telegram themeParams, colorScheme
+  and themeChanged, with a system fallback. Unreadable custom foreground/background pairs use
+  contrast-safe fallbacks in Guest, Venue and Platform alike. Catalog rows lead to the venue
   card and keep one compact favorite action. Booking and questions remain on the venue card.
 - Active-visit actions show the venue and table above the menu. Leaving an eligible visit requires
   confirmation explaining the table/cart exit and the need to scan QR again; cancelling sends no request.
-- Guest media viewers fit the available width and preserve aspect ratios. PDF thumbnails and
-  exceptionally tall photo thumbnails are explicitly previews; the full viewer scrolls, zooms and
-  keeps existing page, resource and access limits. The owner file picker explains the presentation
-  of images and multi-page PDFs.
+- Inline guest photos preserve their full aspect ratio at the section width. PDFs render one
+  page at a time at that width, including tall pages with vertical scrolling. Multi-page files
+  expose previous/current/next controls in the section; single-page files need no controls.
+  There are no guest open, zoom or download buttons. This UI does not prevent saving material
+  by other means. Collapse cancels loading and releases canvas, worker and object-URL resources.
+  Existing PDF.js safety, memory, visibility and access limits remain; errors offer an inline
+  retry. The separate owner editor retains upload, replacement and visibility controls.
 SHOULD:
 - Deep links to open venue or table context.
 

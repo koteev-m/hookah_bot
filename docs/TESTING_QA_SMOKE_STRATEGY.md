@@ -5039,19 +5039,44 @@ MenuButtonWebApp and verify the configured public origin routes `/v/*` to backen
   birthday, concurrent reply replay, promotion visibility, booking and visit cursors, guest order
   ownership, favorites and venue-scoped loyalty.
 - The separate iPhone Telegram smoke covers startapp entry, camera cancellation/denial/success,
-  table A while browsing venue B, Telegram Back, the keyboard in chat and profile, and PDF paging
-  and zoom. Browser fixtures provide local coverage. Physical-device acceptance is a release check.
+  table A while browsing venue B, Telegram Back, the keyboard in chat and profile, and inline
+  material paging. Browser fixtures provide local coverage. Physical-device acceptance is a release check.
 - Guest UI and role-entry changes also run ordinary no-mode launches for Guest, Owner, Manager,
   Staff and Platform Owner, multiple-role choice, revoked/incomplete access and a stale guest
   browsing preference. Retain explicit QR/venue entry, active-visit isolation and unsaved work
   guards. Inspect light/dark screenshots at 320/360/390/430 CSS pixels with large text, Telegram
   custom colors and live theme changes. Measure normal text at 4.5:1 and meaningful control
   boundaries at 3:1, including the active table header.
-- Media layout coverage includes a five-page narrow/tall PDF, width fit, bounded canvas allocation,
-  page navigation, zoom, Back and revoked download access, plus portrait, landscape, square and
-  unusually tall photos. Inspect the owner picker guidance next to the input. The opt-in
+- Media layout coverage includes initially collapsed sections with no media requests, single-page
+  and five-page narrow/tall PDFs, width fit, bounded canvas allocation, inline page navigation,
+  rapid collapse/reopen, cancellation and revoked access. Assert no guest open/zoom/download
+  buttons or technical file-format labels. Include portrait, landscape, square and unusually tall
+  photos without cropping, plus owner editor regression checks. The opt-in
   `MINIAPP_E2E_ANDROID=true` project uses Chromium's Pixel 7 profile; it and the WebKit iPhone
   profile provide browser emulation. Verify actual gestures, keyboard and safe areas on devices.
+
+### Unified theme and inline materials: manual acceptance
+
+Run in real Telegram on iOS and Android after a separately authorized release. Use test roles and
+published test materials; do not create real orders or modify profiles as an incidental smoke step.
+For each row, PASS requires every expected result; any mismatch is FAIL with device/theme/step
+and screenshot. An unavailable role or fixture is NOT RUN, not PASS.
+
+| Action | Expected result |
+| --- | --- |
+| Open Main Mini App as Guest, Owner, Manager, Staff and Platform Owner; switch available modes without changing Telegram settings. Repeat with light, dark and custom colors, then change Telegram theme while open. | Correct authorized mode; same background, surfaces, text and button palette across modes; live update, readable controls; no forced light Venue/Platform. |
+| Visit working screens: venue dashboard/orders/bookings/menu/settings/card/hours/staff/shifts as permitted; staff calls/profile; platform venues/create/applications/owners/support. | Existing navigation and permissions remain; forms, errors and selected states are readable, no white panels in dark theme or horizontal scrolling. |
+| Open catalog, a direct venue startapp and an old HTTPS venue link at 320–430 CSS px; increase text and open keyboard in chat/profile. | Venue/card/context retained; safe areas and focused fields remain usable; navigation does not cover content; old links still resolve. |
+| Scan test QR, open menu and inspect active table; browse B while visiting A, then return. | Menu opens directly; venue/table/status readable; cart and bill remain bound to A; no unintended request or visit transfer. |
+| Open a venue card with collapsed “О заведении” and other published sections; expand/collapse repeatedly. | Section names remain visible without format labels; materials load only on expansion; closing removes rendered resources; reopening has no stale result. |
+| Expand one-page, five-page and very tall documents; scroll down and use arrows, then Back. | One full-width page at a time, natural height, readable vertical scrolling; N из M and arrows only for multi-page files, accessible without covering bottom navigation; next page starts at its top; no separate viewer/open/zoom/download buttons. Back retains guest context. |
+| Expand portrait, landscape, square and very long photos. Temporarily lose access/network and retry. | Full content at section width with original proportions, no crop or empty fixed-height frame; safe inline error/retry, no download suggestion or private URL. |
+| Open owner materials editor and file picker; inspect existing entries and upload guidance without saving changes. | Existing upload/replace/hide controls retained; hints explain inline photos and arrow paging; existing formats and limits unchanged. |
+
+Automated theme coverage measures text contrast (4.5:1), control boundaries (3:1), overflow,
+themeChanged and cross-mode token equality. Inspect actual Chromium/WebKit screenshots in both
+themes; viewport reports alone do not replace visual review. Browser emulation does not establish
+physical Telegram camera, keyboard, BackButton or native safe-area behavior.
 
 ## Venue draft publication and branded public origin
 

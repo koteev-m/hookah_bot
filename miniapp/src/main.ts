@@ -1,5 +1,7 @@
 import { getExplicitVenueBrowsePayload } from './shared/state/venueBrowseContext'
 import './style.css'
+import './theme.css'
+import { bindAppTheme } from './shared/ui/appTheme'
 import { mountHomeApp } from './screens/homeApp'
 import { mountGuestApp } from './screens/guestApp'
 import { mountPlatformApp } from './screens/platformApp'
@@ -7,6 +9,8 @@ import { mountVenueApp } from './screens/venueApp'
 import { getBackendBaseUrl } from './shared/api/backend'
 import { mountAuthGate } from './shared/authGate'
 import { getTelegramContext } from './shared/telegram'
+
+bindAppTheme(document.documentElement)
 
 const root = document.querySelector<HTMLDivElement>('#app')
 const backendUrl = getBackendBaseUrl()
