@@ -1,4 +1,5 @@
 import './guestExperience.css'
+import { bindGuestTheme } from '../shared/ui/guestTheme'
 import { clearVenueBrowse, getVenueBrowseId, getVenueBrowsePayload, rememberVenueBrowse } from '../shared/state/venueBrowseContext'
 import { requestApi } from '../shared/api/request'
 import { getBackendBaseUrl } from '../shared/api/backend'
@@ -6,6 +7,7 @@ import { clearSession, getAccessToken } from '../shared/api/auth'
 import { guestEndTableSession, guestGetActiveOrder, guestGetStaffCallStatus, guestGetTabs } from '../shared/api/guestApi'
 import { isDebugEnabled } from '../shared/debug'
 import {
+  cancelPendingTableRefresh,
   clearCurrentTableContext,
   formatTableStatus,
   getTableContext,
@@ -57,6 +59,7 @@ type GuestRefs = {
   app: HTMLDivElement
   statusCard: HTMLDivElement
   statusTitle: HTMLParagraphElement
+  visitState: HTMLParagraphElement
   statusDetails: HTMLParagraphElement
   primaryActions: HTMLDivElement
   nav: HTMLElement
@@ -139,9 +142,11 @@ function buildGuestShell(root: HTMLDivElement): GuestRefs {
   const header = el('header', { className: 'guest-visit-header' })
   const statusCard = el('div', { className: 'table-status' })
   const statusTitle = el('p', { className: 'table-status-title', text: '' })
+  const visitState = el('p', { className: 'guest-visit-state', text: 'Активное посещение' })
+  visitState.hidden = true
   const statusDetails = el('p', { className: 'table-status-details', text: '' })
   const primaryActions = el('div', { className: 'table-actions' }) as HTMLDivElement
-  append(statusCard, statusTitle, statusDetails, primaryActions)
+  append(statusCard, visitState, statusTitle, statusDetails, primaryActions)
 
   const nav = el('nav', { className: 'guest-nav' })
   nav.setAttribute('aria-label', 'Гостевая навигация')
@@ -156,6 +161,7 @@ function buildGuestShell(root: HTMLDivElement): GuestRefs {
     app,
     statusCard,
     statusTitle,
+    visitState,
     statusDetails,
     primaryActions,
     nav,
@@ -358,8 +364,8 @@ function updateGuestShellActions(
     messages: 'Чаты',
     account: 'Профиль',
     cart: cartQty > 0 ? `Корзина (${cartQty})` : 'Корзина',
-    order: 'Мой заказ',
-    staff: staffCallActive ? 'Вызов активен' : 'Вызвать персонал',
+    order: 'Мои заказы',
+    staff: staffCallActive ? 'Вызов активен' : 'Персонал',
     leave: 'Завершить визит'
   }
   const selected: Partial<Record<RouteName, GuestActionId>> = {
@@ -452,6 +458,8 @@ function mountGuestScreens(options: GuestAppOptions) {
     const presentation = formatTableStatus(tableSnapshot)
     refs.statusCard.hidden = !showVisit && !refs.statusDetails.textContent
     refs.statusTitle.textContent = showVisit ? presentation.title : ''
+    refs.statusCard.dataset.activeVisit = String(showVisit && tableSnapshot.tableSessionActive)
+    refs.visitState.hidden = !showVisit
     refs.statusDetails.hidden = showVisit && !refs.statusDetails.textContent
     visitReturn.hidden = !activeVisit || showVisit
     visitReturn.textContent = `К столу · ${tableSnapshot.venueName ?? 'Текущее заведение'}`
@@ -578,28 +586,7 @@ function mountGuestScreens(options: GuestAppOptions) {
   })
 
   const disposables: Array<() => void> = []
-  const webApp = getTelegramContext().webApp
-  const updateTheme = () => {
-    const params = webApp?.themeParams
-    const colors = {
-      'bg': params?.bg_color, 'surface': params?.secondary_bg_color, 'text': params?.text_color,
-      'muted': params?.hint_color, 'accent': params?.button_color, 'on-accent': params?.button_text_color
-    }
-    for (const [name, color] of Object.entries(colors)) {
-      if (typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color)) refs.app.style.setProperty(`--guest-tg-${name}`, color)
-      else refs.app.style.removeProperty(`--guest-tg-${name}`)
-    }
-    refs.app.dataset.colorScheme = webApp?.colorScheme ?? ''
-  }
-  updateTheme()
-  if (webApp?.onEvent && webApp.offEvent) {
-    try {
-      webApp.onEvent('themeChanged', updateTheme)
-      disposables.push(() => webApp.offEvent?.('themeChanged', updateTheme))
-    } catch {
-      // Older Telegram clients still supply the initial theme.
-    }
-  }
+  disposables.push(bindGuestTheme(refs.app))
   const viewport = window.visualViewport
   if (viewport) {
     const updateKeyboard = () => {
@@ -788,7 +775,10 @@ function mountGuestScreens(options: GuestAppOptions) {
       navigate('#/catalog', { replace: true })
       return
     }
+    if (!window.confirm(`Завершить визит: ${snapshot.venueName ?? 'заведение'}, стол №${snapshot.tableNumber ?? '—'}? Вы выйдете из текущей сессии стола и корзины. Для нового заказа понадобится снова отсканировать QR.`)) return
     visitExitPending = true
+    cancelQrScan?.()
+    cancelPendingTableRefresh()
     refs.statusDetails.textContent = 'Завершаем визит…'
     renderShellActions()
     void guestEndTableSession(
@@ -884,7 +874,7 @@ function mountGuestScreens(options: GuestAppOptions) {
   }
   renderShellActions()
   const refreshResolvedTableContext = () => {
-    if (!resolvingQr && tableSnapshot.status === 'resolved' && tableSnapshot.tableToken) {
+    if (!resolvingQr && !visitExitPending && tableSnapshot.status === 'resolved' && tableSnapshot.tableToken) {
       void refreshTableContext()
     }
   }

@@ -24,8 +24,9 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
   if (mode) element.dataset.mode = mode
   const zoomOut = el('button', { className: 'button-secondary button-small', text: 'Уменьшить' })
   const zoomIn = el('button', { className: 'button-secondary button-small', text: 'Увеличить' })
+  const fitWidth = el('button', { className: 'button-secondary button-small', text: 'По ширине' })
   const zoomControls = el('div', { className: 'info-media-controls' })
-  append(zoomControls, zoomOut, zoomIn)
+  append(zoomControls, zoomOut, fitWidth, zoomIn)
   const surface = el('div', { className: 'info-media-surface' })
   const canvas = el('canvas')
   canvas.width = canvas.height = 0
@@ -43,7 +44,7 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
   const counter = el('span')
   const retry = el('button', { className: 'button-small button-secondary', text: 'Повторить просмотр' })
   const download = el('button', { className: 'button-small button-secondary', text: 'Скачать файл' })
-  for (const button of [previous, next, retry, download]) button.type = 'button'
+  for (const button of [previous, next, retry, download, zoomOut, fitWidth, zoomIn]) button.type = 'button'
   controls.hidden = type !== 'pdf' || mode === 'thumbnail'
   previous.disabled = next.disabled = true
   counter.textContent = '—'
@@ -52,17 +53,58 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
   append(controls, previous, counter, next)
   append(surface, type === 'pdf' ? canvas : image)
   append(element, surface, status, controls, retry, download)
-  if (mode === 'viewer') element.appendChild(zoomControls)
+  if (mode === 'viewer') {
+    const toolbar = el('div', { className: 'info-media-toolbar' })
+    append(toolbar, controls, zoomControls, download)
+    element.prepend(toolbar)
+  }
   let zoom = 1
-  const updateZoom = () => {
+  const updateZoom = (value: number, anchorX = surface.clientWidth / 2,
+    anchorY = Math.min(surface.clientHeight, window.innerHeight) / 2) => {
+    const previousZoom = zoom
+    zoom = Math.min(3, Math.max(1, Math.round(value * 100) / 100))
+    const x = (surface.scrollLeft + anchorX) / previousZoom
+    const y = (surface.scrollTop + anchorY) / previousZoom
     surface.style.setProperty('--guest-media-zoom', String(zoom))
     surface.classList.toggle('info-media-zoomed', zoom > 1)
-    zoomOut.disabled = zoom === 1
-    zoomIn.disabled = zoom === 3
+    surface.scrollLeft = x * zoom - anchorX
+    surface.scrollTop = y * zoom - anchorY
+    zoomOut.disabled = zoom <= 1
+    zoomIn.disabled = zoom >= 3
+    fitWidth.setAttribute('aria-pressed', String(zoom === 1))
   }
-  zoomOut.addEventListener('click', () => { zoom -= 0.5; updateZoom() })
-  zoomIn.addEventListener('click', () => { zoom += 0.5; updateZoom() })
-  updateZoom()
+  zoomOut.addEventListener('click', () => updateZoom(zoom - .5))
+  zoomIn.addEventListener('click', () => updateZoom(zoom + .5))
+  fitWidth.addEventListener('click', () => { updateZoom(1); surface.scrollTo(0, 0) })
+  updateZoom(1)
+  let pinch: { distance: number; zoom: number } | null = null
+  const touchPair = (event: TouchEvent) => {
+    if (event.touches.length !== 2) return null
+    const [first, second] = Array.from(event.touches)
+    const box = surface.getBoundingClientRect()
+    return {
+      distance: Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY),
+      x: (first.clientX + second.clientX) / 2 - box.left,
+      y: (first.clientY + second.clientY) / 2 - box.top
+    }
+  }
+  if (mode === 'viewer') {
+    surface.addEventListener('touchstart', event => {
+      const pair = touchPair(event)
+      if (!pair || pair.distance === 0) return
+      event.preventDefault()
+      pinch = { distance: pair.distance, zoom }
+    }, { passive: false })
+    surface.addEventListener('touchmove', event => {
+      const pair = touchPair(event)
+      if (!pair || !pinch) return
+      event.preventDefault()
+      updateZoom(pinch.zoom * pair.distance / pinch.distance, pair.x, pair.y)
+    }, { passive: false })
+    const endPinch = () => { pinch = null }
+    surface.addEventListener('touchend', endPinch)
+    surface.addEventListener('touchcancel', endPinch)
+  }
 
   let page = 1; let pages = 0; let disposed = false; let visible = false; let ready = false
   let active: AbortController | null = null
@@ -120,13 +162,18 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
           image.src = imageUrl
           await abortable(image.decode(), signal)
           signal.throwIfAborted()
+          const ratio = image.naturalWidth / image.naturalHeight
+          element.dataset.orientation = ratio < .35 ? 'tall' : ratio < .9 ? 'portrait' : ratio > 1.1 ? 'landscape' : 'square'
           image.hidden = false
         }
       })
       if (active !== controller || disposed) return
       ready = true
       element.dataset.state = 'ready'
-      status.textContent = type === 'pdf' ? `Страница ${page} из ${pages}` : ''
+      status.textContent = type === 'pdf'
+        ? mode === 'thumbnail' ? `Превью · ${pages} стр. Откройте документ для чтения.` : `Страница ${page} из ${pages}`
+        : mode === 'thumbnail' && element.dataset.orientation === 'tall' ? 'Фрагмент длинного фото. Откройте, чтобы увидеть целиком.' : ''
+      download.hidden = mode !== 'viewer'
     } catch {
       if (active !== controller || disposed || (signal.aborted && !timedOut)) return
       clear()
@@ -158,7 +205,7 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
   }
   const turn = (delta: number) => {
     if (active || page + delta < 1 || page + delta > pages) return
-    page += delta; clear(); void start()
+    page += delta; clear(); surface.scrollTo(0, 0); void start()
   }
   previous.addEventListener('click', () => turn(-1))
   next.addEventListener('click', () => turn(1))

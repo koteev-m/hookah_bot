@@ -4,6 +4,14 @@ let dismissed = false
 let selectedVenueId: number | null = null
 const key = () => `hookah_browse_venue:user:${getTelegramContext().telegramUserId ?? 'unknown'}`
 
+export function getExplicitVenueBrowsePayload(): string | null {
+  if (dismissed || new URLSearchParams(window.location.search).get('venue_browse') === 'off') return null
+  const ctx = getTelegramContext()
+  if (ctx.tableTokenAutoResolve) return null
+  return new URLSearchParams(window.location.search).get('venue_entry')
+    ?? (ctx.startParam?.startsWith('venue_') && ctx.startParam.length <= 19 ? ctx.startParam : null)
+}
+
 export function getVenueBrowsePayload(): string | null {
   if (dismissed) return null
   if (new URLSearchParams(window.location.search).get('venue_browse') === 'off') return null
@@ -13,8 +21,7 @@ export function getVenueBrowsePayload(): string | null {
     try { localStorage.removeItem(key()) } catch { /* explicit QR supersedes a browsing choice */ }
     return null
   }
-  const explicit = new URLSearchParams(window.location.search).get('venue_entry')
-    ?? (ctx.startParam?.startsWith('venue_') && ctx.startParam.length <= 19 ? ctx.startParam : null)
+  const explicit = getExplicitVenueBrowsePayload()
   if (explicit !== null) return explicit
   try { return localStorage.getItem(key()) } catch { return null }
 }

@@ -156,10 +156,17 @@ function forgetTableSessionContext(tableToken?: string | null) {
   }
 }
 
-export function clearCurrentTableContext(): void {
+// Cancel an in-flight QR/refresh while retaining the confirmed visit if ending it fails.
+export function cancelPendingTableRefresh(): void {
   activeController?.abort()
   activeController = null
   requestCounter += 1
+  inFlight = null
+  if (currentSnapshot.status === 'resolving') updateSnapshot(stableSnapshot)
+}
+
+export function clearCurrentTableContext(): void {
+  cancelPendingTableRefresh()
   const tableToken = currentSnapshot.tableToken
   if (currentSnapshot.tableSessionId) {
     setSelectedGuestTabId(currentSnapshot.tableSessionId, null)

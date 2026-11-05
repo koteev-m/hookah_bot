@@ -140,6 +140,18 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
     input.addEventListener('change', () => { select(section, Array.from(input.files ?? []), media?.id); input.value = '' })
     const label = el('label', { className: 'venue-info-file-label' })
     append(label, el('span', { text: media ? 'Заменить это вложение' : 'Добавить JPEG, PNG или PDF' }), input)
+    if (!media) {
+      const hint = el('div', { className: 'venue-info-format-help' })
+      hint.id = `venue-info-format-help-${venueId}-${section.id}`
+      append(hint,
+        el('p', { text: 'Фотографии будут видны в карточке заведения. Гость сможет открыть их в большом размере.' }),
+        el('p', { text: 'В карточке появится превью документа. Чтобы посмотреть все страницы, гость откроет документ и сможет листать и увеличивать его.' }),
+        el('p', { text: 'Чтобы показать отдельные страницы сразу как изображения, загрузите соответствующие JPEG/PNG отдельно.' }),
+        el('p', { text: 'JPEG, PNG или PDF · до 10 МБ на файл · до 10 вложений на раздел. HEIC/HEIF экспортируйте в JPEG. Для многостраничного PDF действуют ограничения структуры и ресурсов.' })
+      )
+      input.setAttribute('aria-describedby', hint.id)
+      label.appendChild(hint)
+    }
     return label
   }
   const renderContents = () => {

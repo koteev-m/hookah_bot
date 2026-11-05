@@ -1,4 +1,4 @@
-import { getVenueBrowsePayload, clearVenueBrowse } from '../shared/state/venueBrowseContext'
+import { getExplicitVenueBrowsePayload, clearVenueBrowse } from '../shared/state/venueBrowseContext'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { guestRestoreTable } from '../shared/api/guestApi'
 import { platformGetMe } from '../shared/api/platformApi'
@@ -8,6 +8,7 @@ import { tableTokenQueryParamKeys } from '../shared/validation/tableToken'
 import { getTelegramContext } from '../shared/telegram'
 import { getTableContext, subscribe } from '../shared/state/tableContext'
 import { append, el } from '../shared/ui/dom'
+import { bindGuestTheme } from '../shared/ui/guestTheme'
 import { mountGuestApp } from './guestApp'
 import { mountPlatformApp } from './platformApp'
 import { mountVenueApp } from './venueApp'
@@ -28,7 +29,10 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
   const actions = el('nav', { className: 'home-modes' })
   actions.setAttribute('aria-label', 'Режим приложения')
   const content = el('div')
-  root.replaceChildren(status, actions, content)
+  const frame = el('div', { className: 'home-entry' })
+  append(frame, status, actions, content)
+  root.replaceChildren(frame)
+  const disposeTheme = bindGuestTheme(frame)
 
   const fail = (message: string) => {
     status.textContent = message
@@ -47,15 +51,26 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
       fail('Не удалось проверить доступ или посещение. Повторите попытку; если сессия истекла, откройте приложение из Telegram заново.')
       return
     }
+    const userId = getTelegramContext().telegramUserId
+    const venueAccessValid = !venue.ok || (venue.data?.userId === userId && Array.isArray(venue.data.venues) &&
+      venue.data.venues.every(item => item != null && Number.isSafeInteger(item.venueId) && item.venueId > 0 &&
+        ['OWNER', 'MANAGER', 'STAFF'].includes(item.role) && Array.isArray(item.permissions) &&
+        item.permissions.every(permission => typeof permission === 'string')))
+    const platformAccessValid = !platform.ok || (platform.data?.ok === true && platform.data.ownerUserId === userId)
+    if (!venueAccessValid || !platformAccessValid) {
+      fail('Не удалось подтвердить доступные роли. Откройте приложение из Telegram заново.')
+      return
+    }
     const allowed: Mode[] = ['guest']
     if (venue.ok && venue.data.venues.length) allowed.push('venue')
     if (platform.ok && platform.data.ok) allowed.push('platform')
     const explicitTable = getTelegramContext().tableTokenStatus !== 'missing'
     const activeVisit = visit.data.context?.tableSessionActive === true
     const requested = new URLSearchParams(window.location.search).get('entry')
-    const selected: Mode = explicitTable || activeVisit || getVenueBrowsePayload() !== null ? 'guest'
+    const workModes = allowed.filter(mode => mode !== 'guest')
+    const selected: Mode | null = explicitTable || activeVisit || getExplicitVenueBrowsePayload() !== null ? 'guest'
       : requested && allowed.includes(requested as Mode) ? requested as Mode
-      : allowed.includes('platform') ? 'platform' : allowed.includes('venue') ? 'venue' : 'guest'
+      : workModes.length > 1 ? null : workModes[0] ?? 'guest'
     status.textContent = ''
     status.hidden = true
     let switching = false
@@ -81,7 +96,7 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
           return
         }
 
-        if (!window.confirm('Перейти в другой режим? Несохранённые изменения на текущем экране будут потеряны.') || !canLeaveMode()) {
+        if (selected !== null && (!window.confirm('Перейти в другой режим? Несохранённые изменения на текущем экране будут потеряны.') || !canLeaveMode())) {
           status.hidden = false
           status.textContent = 'Переход отменён. Завершите текущую операцию или сохраните изменения перед сменой режима.'
           switching = false
@@ -109,7 +124,14 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
       status.hidden = false
       status.textContent = 'Выбранный режим больше недоступен. Доступные режимы проверены заново.'
     }
-    if (selected === 'guest') {
+    if (selected === null) {
+      frame.classList.add('home-mode-picker')
+      const choice = el('section', { className: 'home-mode-choice' })
+      append(choice, el('h1', { text: 'Как открыть приложение?' }),
+        el('p', { text: 'У вас несколько рабочих ролей. Выберите заведение или управление платформой. В гостевом режиме можно открыть меню и свой визит.' }))
+      content.replaceChildren(choice)
+      choice.appendChild(actions)
+    } else if (selected === 'guest') {
       disposeApp = mountGuestApp({ root: content })
       unsubscribe = subscribe(snapshot => {
         if (snapshot.tableSessionActive && allowed.length > 1) {
@@ -132,5 +154,6 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
     controller.abort()
     unsubscribe?.()
     disposeApp?.()
+    disposeTheme()
   }
 }

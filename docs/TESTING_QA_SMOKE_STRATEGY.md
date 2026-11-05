@@ -5041,6 +5041,17 @@ MenuButtonWebApp and verify the configured public origin routes `/v/*` to backen
 - The separate iPhone Telegram smoke covers startapp entry, camera cancellation/denial/success,
   table A while browsing venue B, Telegram Back, the keyboard in chat and profile, and PDF paging
   and zoom. Browser fixtures provide local coverage. Physical-device acceptance is a release check.
+- Guest UI and role-entry changes also run ordinary no-mode launches for Guest, Owner, Manager,
+  Staff and Platform Owner, multiple-role choice, revoked/incomplete access and a stale guest
+  browsing preference. Retain explicit QR/venue entry, active-visit isolation and unsaved work
+  guards. Inspect light/dark screenshots at 320/360/390/430 CSS pixels with large text, Telegram
+  custom colors and live theme changes. Measure normal text at 4.5:1 and meaningful control
+  boundaries at 3:1, including the active table header.
+- Media layout coverage includes a five-page narrow/tall PDF, width fit, bounded canvas allocation,
+  page navigation, zoom, Back and revoked download access, plus portrait, landscape, square and
+  unusually tall photos. Inspect the owner picker guidance next to the input. The opt-in
+  `MINIAPP_E2E_ANDROID=true` project uses Chromium's Pixel 7 profile; it and the WebKit iPhone
+  profile provide browser emulation. Verify actual gestures, keyboard and safe areas on devices.
 
 ## Venue draft publication and branded public origin
 

@@ -76,7 +76,7 @@ Current production NULL-author producer inventory (2026-08-18):
 - The inbox shows active and completed threads. Opening a row navigates to its own conversation.
   Returning to the list retains the selected filter and scroll position. Unsent replies remain in
   the current guest session and stay scoped to the conversation.
-- Catalog and venue cards expose `Задать вопрос`. An explicit action opens or creates
+- Catalog rows open the venue card, where `Задать вопрос` is available. An explicit action opens or creates
   `VENUE_CHAT`. Rendering the inbox or reopening a thread URL performs only reads.
 - Guest Mini App replies use an opaque client message ID for retries. The server checks current
   guest ownership and replays only the same text for the same thread, author and source. Legacy
