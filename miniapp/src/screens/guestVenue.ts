@@ -679,6 +679,7 @@ function renderInfoSection(
       const card = el('div', { className: 'venue-info-document' })
       const label = !openMedia ? `${title} ${number}` : mediaItems.length > 1 ? `${title} · ${number}` : title
       if (!openMedia && pdf) card.appendChild(el('p', { className: 'info-media-title', text: `PDF ${number}` }))
+      if (openMedia && pdf) card.appendChild(el('p', { className: 'info-media-title', text: `Документ · ${label}` }))
       const preview = createInfoMediaPreview(pdf ? 'pdf' : 'image', label, loadMedia(media.url!), openMedia ? 'thumbnail' : undefined)
       disposables.push(preview.dispose)
       card.appendChild(preview.element)

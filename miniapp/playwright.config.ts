@@ -28,6 +28,7 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] }
     },
-    ...(process.env.MINIAPP_E2E_WEBKIT === 'true' ? [{ name: 'webkit', use: { ...devices['iPhone 13'] } }] : [])
+    ...(process.env.MINIAPP_E2E_WEBKIT === 'true' ? [{ name: 'webkit', use: { ...devices['iPhone 13'] } }] : []),
+    ...(process.env.MINIAPP_E2E_ANDROID === 'true' ? [{ name: 'android', use: { ...devices['Pixel 7'] } }] : [])
   ]
 })

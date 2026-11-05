@@ -131,3 +131,22 @@ test('table context late restore and scan responses cannot restore a visit after
   expect(h.selectedTabs).toEqual([])
   expect(h.storage.size).toBe(0)
 })
+
+test('table context cancelling pending QR keeps the confirmed visit and permits a later scan', async () => {
+  const h = createContext()
+  h.context.initTableContext()
+  h.restores[0].complete({ ok: true, data: { context: { ...table, tableToken: 'synthetic-current', tabId: 71 } } })
+  await h.context.ensureResolved()
+  const before = h.context.getTableContext()
+  const stored = [...h.storage]
+  const scan = h.context.refresh({ scannedToken: 'synthetic-pending' })
+  h.context.cancelPendingTableRefresh()
+  expect(h.resolves[0].signal.aborted).toBe(true)
+  h.resolves[0].complete({ ok: true, data: { ...table, tableSessionId: 999 } })
+  expect(await scan).toBeNull()
+  expect(h.context.getTableContext()).toEqual(before)
+  expect([...h.storage]).toEqual(stored)
+  const retry = h.context.refresh({ scannedToken: 'synthetic-next' })
+  h.resolves[1].complete({ ok: true, data: { ...table, tableSessionId: 72 } })
+  expect((await retry)?.tableSessionId).toBe(72)
+})

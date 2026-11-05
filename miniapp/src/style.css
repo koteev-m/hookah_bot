@@ -3752,6 +3752,8 @@ input[type="number"] {
 .venue-info-upload-file[data-state=failed], .venue-info-upload-file[data-state=unknown] { border-color: #b45309; background: #fffbeb; }
 .venue-info-upload-file progress { display: block; width: 100%; margin-bottom: 12px; }
 .info-media-title { font-weight: 600; overflow-wrap: anywhere; }
+.venue-info-format-help { display: grid; gap: .5rem; max-width: 48rem; margin-block: .5rem; font-size: .875rem; font-weight: 400; line-height: 1.5; color: #334155; }
+.venue-info-format-help p { margin: 0; }
 .info-media-preview { min-width: 0; overflow: hidden; border: 1px solid #e5e7f2; border-radius: 10px; background: #f8fafc; color: #243247; }
 .info-media-surface { height: clamp(220px, 90vw, 480px); display: flex; align-items: center; justify-content: center; overflow: hidden; background: #eef2f7; }
 .info-media-surface canvas, .info-media-surface img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }

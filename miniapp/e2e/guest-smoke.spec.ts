@@ -10188,9 +10188,9 @@ test('guest catalog sends debounced backend search and city filters then resets'
   expect(combinedRequest).toMatchObject({ q: 'Микс & чай', city: 'Москва' })
   expect(combinedRequest.url).toContain(encodeURIComponent('Москва'))
   const filteredCard = page.locator('.catalog-item').filter({ hasText: 'Микс & чай' })
-  await expect(filteredCard.getByRole('button', { name: 'Открыть карточку' })).toBeVisible()
-  await expect(filteredCard.getByRole('button', { name: 'Задать вопрос' })).toBeVisible()
-  await expect(filteredCard.getByRole('button', { name: 'Забронировать' })).toBeVisible()
+  await expect(filteredCard.getByRole('button', { name: 'Открыть', exact: true })).toBeVisible()
+  await expect(filteredCard.getByRole('button', { name: 'Задать вопрос' })).toHaveCount(0)
+  await expect(filteredCard.getByRole('button', { name: 'Забронировать' })).toHaveCount(0)
 
   await reset.click()
   await expect.poll(() => api.getCatalogRequests()).toHaveLength(initialRequestCount + 3)
@@ -10201,15 +10201,17 @@ test('guest catalog sends debounced backend search and city filters then resets'
   await expect(page.locator('.catalog-item')).toHaveCount(5)
 
   const resetMixCard = page.locator('.catalog-item').filter({ hasText: 'Микс & чай' })
-  await resetMixCard.getByRole('button', { name: 'Забронировать' }).click()
+  await resetMixCard.getByRole('button', { name: 'Открыть', exact: true }).click()
+  await page.getByRole('button', { name: 'Забронировать', exact: true }).click()
   await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/bookings?venueId=1')
   await page.evaluate(() => { window.location.hash = '#/catalog' })
   await expect(search).toBeEnabled()
-  await page.locator('.catalog-item').filter({ hasText: 'Микс & чай' }).getByRole('button', { name: 'Задать вопрос' }).click()
+  await page.locator('.catalog-item').filter({ hasText: 'Микс & чай' }).getByRole('button', { name: 'Открыть', exact: true }).click()
+  await page.getByRole('button', { name: 'Задать вопрос', exact: true }).click()
   await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/messages?venueId=1')
   await page.evaluate(() => { window.location.hash = '#/catalog' })
   await expect(search).toBeEnabled()
-  await page.locator('.catalog-item').filter({ hasText: 'Микс & чай' }).getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.locator('.catalog-item').filter({ hasText: 'Микс & чай' }).getByRole('button', { name: 'Открыть', exact: true }).click()
   await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/venue/1')
 })
 
@@ -10304,12 +10306,12 @@ test('guest catalog favorite override survives stale reload and an off-result mu
   const mixCard = page.locator('.catalog-item').filter({ hasText: 'Микс' })
   await mixCard.getByRole('button', { name: 'В избранное' }).click()
   await expect.poll(() => api.getFavoriteMutationRequests()).toEqual([{ venueId: 1, method: 'POST' }])
-  await expect(mixCard.getByRole('button', { name: 'В избранном' })).toBeDisabled()
+  await expect(mixCard.getByRole('button', { name: 'Удалить из избранного · Микс', exact: true })).toBeDisabled()
 
   const requestsBeforeReload = api.getCatalogRequests().length
   await page.getByRole('button', { name: 'Обновить', exact: true }).click()
   await expect.poll(() => api.getCatalogRequests()).toHaveLength(requestsBeforeReload + 1)
-  await expect(mixCard.getByRole('button', { name: 'В избранном' })).toBeDisabled()
+  await expect(mixCard.getByRole('button', { name: 'Удалить из избранного · Микс', exact: true })).toBeDisabled()
 
   await page.getByRole('combobox', { name: 'Город' }).selectOption('Казань')
   await expect(page.getByText('Казанский зал', { exact: true })).toBeVisible()
@@ -10319,8 +10321,8 @@ test('guest catalog favorite override survives stale reload and an off-result mu
 
   await page.getByRole('button', { name: 'Сбросить поиск и фильтр' }).click()
   const restoredMixCard = page.locator('.catalog-item').filter({ hasText: 'Микс' })
-  await expect(restoredMixCard.getByRole('button', { name: 'В избранном' })).toBeEnabled()
-  await expect(restoredMixCard.getByRole('button', { name: 'В избранном' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(restoredMixCard.getByRole('button', { name: 'Удалить из избранного · Микс', exact: true })).toBeEnabled()
+  await expect(restoredMixCard.getByRole('button', { name: 'Удалить из избранного · Микс', exact: true })).toHaveAttribute('aria-pressed', 'true')
 })
 
 test('pre-QR guest card shows info/photo menu and hides structured order menu', async ({ page }) => {
@@ -10331,7 +10333,7 @@ test('pre-QR guest card shows info/photo menu and hides structured order menu', 
   await expect(page.getByRole('heading', { name: 'Hookah Mini App' })).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button')).toHaveText(['Заведения', 'QR', 'Чаты', 'Профиль'])
   await expect(page.getByText('График не указан')).toBeVisible()
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: 'Микс' })).toBeVisible()
   await expect(page.getByText('График не указан')).toBeVisible()
@@ -10375,7 +10377,7 @@ test('guest venue card shows today staff without private linkage fields', async 
   })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
 
   const todayStaff = page.locator('.guest-today-staff')
   await expect(todayStaff).toContainText('Сегодня работают')
@@ -10424,7 +10426,7 @@ test('guest sees active happy hours in venue detail and no cart discount outside
   })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
 
   const promotions = page.locator('.guest-venue-promotions')
   await expect(promotions.getByRole('heading', { name: 'Акции', exact: true })).toBeVisible()
@@ -10452,17 +10454,15 @@ test('guest favorite venues stay consistent across catalog venue detail and acco
   const api = await mockGuestApi(page, { favoriteMutationDelayMs: 250 })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  const catalogFavorite = page.getByRole('button', { name: 'В избранное' })
+  const catalogFavorite = page.locator('.catalog-item .favorite-toggle')
   await expect(catalogFavorite).toHaveAttribute('aria-pressed', 'false')
   await catalogFavorite.click()
-  await expect(page.getByRole('button', { name: 'В избранном' })).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'В избранном' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByRole('button', { name: 'В избранном' })).toBeEnabled()
-  expect(
-    await page.getByRole('button', { name: 'В избранном' }).evaluate((button) => getComputedStyle(button).backgroundColor)
-  ).not.toBe('rgb(255, 255, 255)')
+  await expect(catalogFavorite).toBeDisabled()
+  await expect(catalogFavorite).toHaveAttribute('aria-pressed', 'true')
+  await expect(catalogFavorite).toBeEnabled()
+  await expect(catalogFavorite).toHaveText('♥')
 
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
   const detailFavorite = page.getByRole('button', { name: 'В избранном' })
   await expect(detailFavorite).toHaveAttribute('aria-pressed', 'true')
   await detailFavorite.click()
@@ -10514,10 +10514,10 @@ test('guest favorite mutation rolls back and shows safe error', async ({ page })
   await mockGuestApi(page, { favoriteMutationDelayMs: 150, favoriteMutationFailureOnce: true })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'В избранное' }).click()
-  await expect(page.getByRole('button', { name: 'В избранном' })).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'В избранное' })).toBeEnabled()
-  await expect(page.getByRole('button', { name: 'В избранное' })).toHaveAttribute('aria-pressed', 'false')
+  await page.locator('.catalog-item .favorite-toggle').click()
+  await expect(page.locator('.catalog-item .favorite-toggle')).toBeDisabled()
+  await expect(page.locator('.catalog-item .favorite-toggle')).toBeEnabled()
+  await expect(page.locator('.catalog-item .favorite-toggle')).toHaveAttribute('aria-pressed', 'false')
   await expect(page.getByText('Не удалось изменить избранное.')).toBeVisible()
 })
 
@@ -10526,8 +10526,8 @@ test('guest favorite venues are isolated between accounts', async ({ page }) => 
   const api = await mockGuestApi(page, { isolateFavoriteUsers: true })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'В избранное' }).click()
-  await expect(page.getByRole('button', { name: 'В избранном' })).toBeEnabled()
+  await page.locator('.catalog-item .favorite-toggle').click()
+  await expect(page.locator('.catalog-item .favorite-toggle')).toBeEnabled()
   expect(api.getFavoriteVenueIds(123456789)).toEqual([1])
   const firstUserRequestCount = api.getCatalogRequests().length
   await page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' }).fill('Мик')
@@ -10543,7 +10543,7 @@ test('guest favorite venues are isolated between accounts', async ({ page }) => 
   await page.reload()
   await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toHaveValue('')
   await expect(page.getByRole('combobox', { name: 'Город' })).toHaveValue('')
-  await expect(page.getByRole('button', { name: 'В избранное' })).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('.catalog-item .favorite-toggle')).toHaveAttribute('aria-pressed', 'false')
   expect(api.getFavoriteVenueIds(987654321)).toEqual([])
 
   await page.evaluate(({ userId, initData }) => {
@@ -10553,7 +10553,7 @@ test('guest favorite venues are isolated between accounts', async ({ page }) => 
   await page.reload()
   await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toHaveValue('')
   await expect(page.getByRole('combobox', { name: 'Город' })).toHaveValue('')
-  await expect(page.getByRole('button', { name: 'В избранном' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.catalog-item .favorite-toggle')).toHaveAttribute('aria-pressed', 'true')
 })
 
 test('guest booking closed date shows human message and keeps selected date', async ({ page }) => {
@@ -13250,7 +13250,7 @@ test('persisted gift facts are visible in the active order and guest history', a
   await page.goto(
     `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
   )
-  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
   const activeGiftLine = page.locator('.order-item-promotion-reward').filter({ hasText: 'Чай' })
   await expect(activeGiftLine).toContainText('Подарок по акции')
   await expect(activeGiftLine).toContainText(/450,00\s*₽/)
@@ -13416,7 +13416,7 @@ test('coupled gift trigger cancel and exclude stay out of the active bill and re
   await page.goto(
     `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
   )
-  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
   const activeBill = page.locator('.order-screen')
   await expect(activeBill.getByText('Double Apple', { exact: true })).toBeVisible()
   await expect(activeBill.locator('.order-item-promotion-reward')).toHaveCount(0)
@@ -13478,6 +13478,7 @@ test('table context leave session clears current guest restore state', async ({ 
 
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Завершить визит' })).toBeVisible()
+  page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: 'Завершить визит' }).click()
 
   expect(api.getTableSessionEndRequests()).toHaveLength(1)
@@ -13511,7 +13512,7 @@ test('table context with active order hides leave session action', async ({ page
   await expect(page.getByRole('button', { name: 'Завершить визит' })).toHaveCount(0)
   expect(api.getTableSessionEndRequests()).toHaveLength(0)
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Мой заказ' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Мои заказы' })).toBeVisible()
 })
 
 test('guest fallback chat order sends supported quick order payload through Telegram sendData', async ({ page }) => {
@@ -13549,12 +13550,12 @@ test('guest creates staff call from active table and sees lifecycle status', asy
 
   await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
-  await expect(page.getByRole('button', { name: 'Вызвать персонал', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Персонал', exact: true })).toBeVisible()
   await expect(page.locator('.staff-call-overlay')).toBeHidden()
   await expect(page.locator('.staff-call-status')).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Вызвать персонал', exact: true }).first().click()
+  await page.getByRole('button', { name: 'Персонал', exact: true }).first().click()
   await expect(page.getByText('Причина')).toBeVisible()
   await expect(page.locator('select.staff-select option').filter({ hasText: 'Счёт' })).toHaveCount(0)
   const staffReasonValues = await page.locator('select.staff-select').evaluate((node) =>
@@ -13615,7 +13616,7 @@ test('guest creates staff call from active table and sees lifecycle status', asy
   ])
   await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
   await expect(page.locator('.staff-call-status[data-tone="done"]')).toContainText('Вызов выполнен')
-  await expect(page.getByRole('button', { name: 'Вызвать персонал', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Персонал', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Вызов активен' })).toHaveCount(0)
 })
 
@@ -13841,7 +13842,7 @@ test('guest creates shift extension request and sees pending then confirmed stat
   await page.getByRole('button', { name: 'Обновить' }).click()
 
   await expect(page.getByText('Продление подтверждено до 23:00. Сумма добавлена в счёт.')).toBeVisible()
-  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
   await expect(page.getByText('Продление работы на 1 час')).toBeVisible()
   await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
 })
@@ -18265,7 +18266,7 @@ test('guest replies to booking thread from Mini App messages', async ({ page }) 
   expect(messages.map((message) => message.text)).toContain('Да, 20:30 подходит.')
 })
 
-test('guest opens venue chat from catalog and venue card question actions', async ({ page }) => {
+test('guest opens venue chat through the catalog card and the direct venue card', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   await mockGuestApi(page, { restoreContext: null })
 
@@ -18313,6 +18314,8 @@ test('guest opens venue chat from catalog and venue card question actions', asyn
 
   await expect(page.getByRole('button', { name: 'Чаты' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Помощь' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Задать вопрос' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Задать вопрос' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Задать вопрос' }).click()
@@ -18321,9 +18324,8 @@ test('guest opens venue chat from catalog and venue card question actions', asyn
   expect(createCalls).toBe(1)
 
   await page.evaluate(() => {
-    window.location.hash = '#/catalog'
+    window.location.hash = '#/venue/1'
   })
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
   await expect(page.getByRole('button', { name: 'Задать вопрос' })).toBeVisible()
   await page.getByRole('button', { name: 'Задать вопрос' }).click()
   await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: 'Чат с Микс' })).toBeVisible()
@@ -19131,7 +19133,7 @@ test('venue owner creates edits activates and pauses informational promotion', a
   })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
   await expect(page.locator('.guest-venue-promotions')).toHaveCount(0)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
@@ -19161,7 +19163,7 @@ test('venue owner creates edits activates and pauses informational promotion', a
   const guestVenueResponsePromise = page.waitForResponse((response) => {
     return response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/guest/venue/1'
   })
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
   const guestVenueResponse = await guestVenueResponsePromise
   expect(guestVenueResponse.ok()).toBe(true)
   const guestVenueBody = (await guestVenueResponse.json()) as {
@@ -19186,7 +19188,7 @@ test('venue owner creates edits activates and pauses informational promotion', a
   expect(api.getPromotions()[0].status).toBe('PAUSED')
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
   await expect(page.locator('.guest-venue-promotions')).toHaveCount(0)
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
@@ -19199,7 +19201,7 @@ test('venue owner creates edits activates and pauses informational promotion', a
   await expect(page.getByText('Акция опубликована.')).toBeVisible()
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
   await expect(page.locator('.guest-venue-promotions')).toContainText('Обновлённое предложение для компаний.')
 })
 
@@ -19949,7 +19951,7 @@ test('venue owner configures happy hours windows and targets while invalid activ
   expect(api.getMutations()).toEqual(['create', 'update', 'active'])
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
   await expect(page.locator('.guest-venue-promotions')).toContainText('Счастливые часы')
 
   await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
@@ -19964,7 +19966,7 @@ test('venue owner configures happy hours windows and targets while invalid activ
   expect(api.getPromotions().find((promotion) => promotion.title === 'Счастливые часы')?.status).toBe('PAUSED')
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
   await expect(page.locator('.guest-venue-promotions')).toHaveCount(0)
 })
 
@@ -22448,7 +22450,7 @@ test('my order after restored table context keeps table scope', async ({ page })
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
 
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
-  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
   await expect(page.getByText('Счёт: Личный счёт')).toBeVisible()
@@ -22485,7 +22487,7 @@ test('guest bill request payment method posts json from order screen and shows d
   const api = await mockGuestApi(page, { restoreContext: buildRestoreContext() })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
   await page.getByRole('button', { name: 'Попросить счёт' }).click()
@@ -22535,7 +22537,7 @@ test('guest bill with discount shows useful breakdown and human discount copy', 
   })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
   await expect(page.getByText('Статус: Принят')).toBeVisible()
@@ -22559,7 +22561,7 @@ test('guest order status updates to delivered and closed copy stays self-service
   })
 
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Мой заказ', exact: true }).click()
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
 
   await expect(page.getByText('Статус: Принят')).toBeVisible()
 
@@ -22790,6 +22792,15 @@ test('QR scanner resolution survives focus after the native camera closes', asyn
 test('QR scanner late resolution cannot restore a context after visit exit', async ({ page }) => {
   await installQrScanner(page)
   const api = await mockGuestApi(page, { activeOrder: null })
+  let releaseEnd!: () => void
+  const endReady = new Promise<void>(resolve => { releaseEnd = resolve })
+  let startEnd!: () => void
+  const endStarted = new Promise<void>(resolve => { startEnd = resolve })
+  await page.route('**/api/guest/table/session/end', async route => {
+    startEnd()
+    await endReady
+    await route.fallback()
+  })
   let releaseRestore!: () => void
   const restoreReady = new Promise<void>((resolve) => { releaseRestore = resolve })
   await page.route('**/api/guest/table/restore', async (route) => {
@@ -22818,12 +22829,18 @@ test('QR scanner late resolution cannot restore a context after visit exit', asy
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await scanQr(page, tableQrFixture.qrText)
   await resolutionStarted
+  page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: 'Завершить визит' }).click()
+  await endStarted
   const qrEntry = page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'QR' })
   await expect(qrEntry).toBeVisible()
   releaseResolve()
   await resolutionSettled
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  releaseEnd()
+  await expect(page.getByRole('heading', { name: 'Заведения', exact: true })).toBeVisible()
   await expect(qrEntry).toBeVisible()
   expect(new URL(page.url()).searchParams.has('table_token')).toBe(false)
   expect(await page.evaluate(() => window.sessionStorage.getItem('hookah_guest_table_session_context:user:123456789'))).toBeNull()
@@ -26092,7 +26109,7 @@ test('R2 photos Guest authorized blob delivery and denied image keeps initials',
     return route.fulfill(route.request().url().includes('/501/') ? { status: 200, contentType: 'image/png', body: syntheticStaffPng } : { status: 404, body: '{}' })
   })
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Открыть карточку' }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
   const staff = page.locator('.guest-today-staff')
   await expect(staff.getByAltText('Синтетический сотрудник')).toHaveAttribute('src', /^blob:/)
   await expect(staff.locator('.guest-today-staff-avatar').nth(1)).toHaveText('Б')
@@ -26471,7 +26488,7 @@ for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
       await route.fulfill({ status: 200, contentType: 'application/pdf', body: infoMediaPdf() })
     })
     await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-    if (mode === 'guest') await page.getByRole('button', { name: 'Открыть карточку' }).click()
+    if (mode === 'guest') await page.getByRole('button', { name: 'Открыть', exact: true }).click()
     else await openVenueSection(page, 'Предпросмотр для гостя')
     const pdf = page.locator('.venue-info-media-pdf')
     await expect(page.locator('.venue-info-media-image')).toBeInViewport()
@@ -26632,7 +26649,7 @@ for (const mode of ['guest', 'PUBLISHED_PUBLIC', 'PRIVATE_DRAFT'] as const) {
       await route.fulfill({ status: 200, contentType: id === imageId ? 'image/png' : 'application/pdf', body: id === imageId ? syntheticStaffPng : infoMediaPdf() })
     })
     await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-    if (mode === 'guest') await page.getByRole('button', { name: 'Открыть карточку' }).click()
+    if (mode === 'guest') await page.getByRole('button', { name: 'Открыть', exact: true }).click()
     else await openVenueSection(page, 'Предпросмотр для гостя')
     const pdf = page.locator('.venue-info-media-pdf')
     await expect(page.locator('.venue-info-media-image')).toBeInViewport()
@@ -26781,10 +26798,11 @@ test('direct venue info media UNKNOWN cannot discard its key and SUCCESS refresh
 
 async function mockInlinePdfPreview(page: Page, options: {
   mode?: 'guest' | 'PRIVATE_DRAFT' | 'PUBLISHED_PUBLIC'; count?: number; pages?: number;
-  status?: number; body?: Buffer; urls?: string[]
+  status?: number; body?: Buffer; urls?: string[]; theme?: PolishTheme
 } = {}) {
   const mode = options.mode ?? 'PRIVATE_DRAFT'
   await installTelegramWebApp(page, 123456789)
+  if (options.theme) await installPolishTheme(page, options.theme)
   const prefix = mode === 'PRIVATE_DRAFT' ? '/api/venue/1/guest-preview' : '/api/guest/venue/1'
   const section: VenueGuestPreviewInfoSectionFixture = {
     id: 10, type: 'about', title: 'О заведении', displayTitle: 'О заведении', text: '', mediaCount: options.count ?? 1,
@@ -26805,7 +26823,7 @@ async function mockInlinePdfPreview(page: Page, options: {
     await route.fulfill({ status: options.status ?? 200, contentType: 'application/pdf', body: options.body ?? infoMediaPdf(options.pages ?? 2) })
   })
   const open = async () => {
-    if (mode === 'guest') await page.getByRole('button', { name: 'Открыть карточку', exact: true }).click()
+    if (mode === 'guest') await page.getByRole('button', { name: 'Открыть', exact: true }).click()
     else await openVenueSection(page, 'Предпросмотр для гостя')
   }
   await page.goto(`?mode=${mode === 'guest' ? 'guest' : 'venue'}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
@@ -27100,7 +27118,7 @@ test('PDF inline preserves JPEG and PNG and does not load a renderer without PDF
   const rendererRequests: string[] = []
   page.on('request', (request) => { if (/pdfPageRenderer|pdf.worker/.test(request.url())) rendererRequests.push(request.url()) })
   await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
-  await page.getByRole('button', { name: 'Открыть карточку', exact: true }).click()
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
   const images = page.locator('.venue-info-media-image')
   for (let index = 0; index < 2; index++) {
     await images.nth(index).scrollIntoViewIfNeeded()
@@ -27432,7 +27450,7 @@ for (const role of ['GUEST', 'STAFF', 'MANAGER', 'OWNER', 'PLATFORM_OWNER'] as c
     await mockHomeRoles(page, { role: ['STAFF', 'MANAGER', 'OWNER'].includes(role) ? role as 'STAFF' | 'MANAGER' | 'OWNER' : undefined, platform: role === 'PLATFORM_OWNER' })
     const calls: string[] = []
     page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) calls.push(new URL(request.url()).pathname) })
-    await page.goto('?mode=home')
+    await page.goto('./')
     if (role === 'GUEST') {
       await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
     } else {
@@ -27624,13 +27642,13 @@ for (const entry of ['startapp', 'fallback'] as const) {
     await clickTelegramBackButton(page)
     await expect(page).toHaveURL(/#\/venue\/2$/)
     await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
-    await page.goto('?mode=home')
-    await expect(page).toHaveURL(/#\/venue\/2$/)
-    await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
     await page.screenshot({ path: test.info().outputPath('personal-venue-mobile.png'), fullPage: true })
     expect(calls.filter(path => path === '/api/guest/table/resolve')).toHaveLength(0)
     await page.getByRole('button', { name: 'Другие заведения', exact: true }).click()
     await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+    await page.goto('?mode=home')
+    await expect(page.getByRole('heading', { name: 'Как открыть приложение?' })).toBeVisible()
+    await expect(page.locator('.guest-shell, .venue-shell, .platform-shell')).toHaveCount(0)
     await expectNoHorizontalOverflow(page)
     expect(await page.evaluate(() => (window as any).__e2eTelegramSendDataPayloads)).toEqual([])
   })
@@ -28424,4 +28442,467 @@ test('guest experience retention read failures show retry instead of an empty st
     await expect(page.getByText(scenario.empty)).toBeVisible()
     expect(requests).toBe(2)
   }
+})
+
+type PolishTheme = 'light' | 'dark' | 'custom'
+
+async function installPolishTheme(page: Page, theme: PolishTheme) {
+  await page.emulateMedia({ colorScheme: theme === 'dark' ? 'dark' : 'light' })
+  await page.addInitScript(initial => {
+    const webApp = (window as any).Telegram.WebApp
+    const callbacks = new Set<() => void>()
+    const originalOn = webApp.onEvent?.bind(webApp)
+    const originalOff = webApp.offEvent?.bind(webApp)
+    webApp.onEvent = (name: string, callback: () => void) => name === 'themeChanged' ? callbacks.add(callback) : originalOn?.(name, callback)
+    webApp.offEvent = (name: string, callback: () => void) => name === 'themeChanged' ? callbacks.delete(callback) : originalOff?.(name, callback)
+    const themes = {
+      light: { colorScheme: 'light', themeParams: { bg_color: '#f5f6f3', secondary_bg_color: '#ffffff', text_color: '#202925', hint_color: '#58665d', button_color: '#24584f', button_text_color: '#ffffff' } },
+      dark: { colorScheme: 'dark', themeParams: { bg_color: '#151a18', secondary_bg_color: '#1e2521', text_color: '#edf3ed', hint_color: '#abb9ae', button_color: '#a6c9bc', button_text_color: '#13291f' } },
+      // Deliberately low-contrast Telegram pairs must be repaired.
+      custom: { colorScheme: 'light', themeParams: { bg_color: '#faf7ef', secondary_bg_color: '#fff9e2', text_color: '#fffefe', hint_color: '#eeeecc', button_color: '#fbf3cc', button_text_color: '#ffffff' } }
+    }
+    ;(window as any).__polishTheme = (next: keyof typeof themes) => {
+      Object.assign(webApp, themes[next])
+      callbacks.forEach(callback => callback())
+    }
+    ;(window as any).__polishTheme(initial)
+  }, theme)
+}
+
+async function expectGuestContrast(page: Page) {
+  const measurements = await page.locator('.guest-shell').evaluate(shell => {
+    const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number)
+    const luminance = (values: number[]) => values.slice(0, 3).map(value => {
+      const channel = value / 255
+      return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4
+    }).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0)
+    const ratio = (a: number[], b: number[]) => {
+      const x = luminance(a); const y = luminance(b)
+      return (Math.max(x, y) + .05) / (Math.min(x, y) + .05)
+    }
+    const background = (element: Element): number[] => {
+      for (let current: Element | null = element; current; current = current.parentElement) {
+        const color = rgb(getComputedStyle(current).backgroundColor)
+        if (color.length === 3 || color[3] === 1) return color
+      }
+      return [255, 255, 255]
+    }
+    return [...shell.querySelectorAll<HTMLElement>('.table-status-title, .guest-visit-state, .catalog-title, .catalog-meta, .venue-location, .guest-today-schedule, .status, button, .catalog-controls input, .catalog-controls select')]
+      .filter(element => element.getClientRects().length &&
+        (element.matches('input, select') || element.textContent?.trim()) && !(element as HTMLButtonElement).disabled)
+      .map(element => {
+        const css = getComputedStyle(element)
+        return { text: (element.textContent?.trim() || element.getAttribute('placeholder') || element.tagName).slice(0, 60), ratio: ratio(rgb(css.color), background(element)),
+          width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height,
+          button: element.tagName === 'BUTTON',
+          boundary: element.matches('.catalog-controls input, .catalog-controls select') ? ratio(rgb(css.borderColor), background(element)) : null }
+      })
+  })
+  expect(measurements.length).toBeGreaterThan(4)
+  for (const item of measurements) {
+    expect(item.ratio, item.text).toBeGreaterThanOrEqual(4.5)
+    if (item.boundary !== null) expect(item.boundary, item.text).toBeGreaterThanOrEqual(3)
+    if (item.button) {
+      expect(item.height, item.text).toBeGreaterThanOrEqual(44)
+      expect(item.width, item.text).toBeGreaterThanOrEqual(44)
+    }
+  }
+}
+
+for (const theme of ['light', 'dark', 'custom'] as const) {
+  for (const width of [320, 360, 390, 430]) {
+    test(`guest polish mobile hierarchy and active table contrast ${theme} ${width}px`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 844 })
+      await installTelegramWebApp(page, 123456789)
+      await installPolishTheme(page, theme)
+      const longName = 'Гостиная на Набережной — кальянная с длинным названием'
+      const api = await mockGuestApi(page, {
+        activeOrder: null,
+        catalogVenues: [buildGuestCatalogVenue({ id: 1, name: longName, city: 'Санкт-Петербург', address: 'Набережная реки Фонтанки, 190' })]
+      })
+      await page.goto('?mode=guest#/catalog')
+      if (width === 320) await page.addStyleTag({ content: ':root { font-size: 20px }' })
+      const card = page.locator('.catalog-item')
+      await expect(card.getByText(longName, { exact: true })).toBeVisible()
+      await expect(card.getByRole('button')).toHaveCount(2)
+      const info = await card.locator('.catalog-info').boundingBox()
+      const box = await card.boundingBox()
+      expect(info!.width / box!.width).toBeGreaterThan(.8)
+      await expectGuestContrast(page)
+      await expectNoHorizontalOverflow(page)
+      if (width === 390 && theme !== 'custom') await page.screenshot({ path: testInfo.outputPath(`polish-catalog-${theme}.png`), fullPage: true })
+      await card.getByRole('button', { name: 'Открыть', exact: true }).click()
+      await expect(page.getByRole('button', { name: 'Меню', exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Забронировать', exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Задать вопрос', exact: true })).toBeVisible()
+      await expectGuestContrast(page)
+      await expectNoHorizontalOverflow(page)
+      await page.screenshot({ path: testInfo.outputPath(`polish-card-${theme}-${width}.png`), fullPage: true })
+
+      api.setRestoreContext(buildRestoreContext({ tableNumber: '101' }))
+      await page.route('**/api/guest/table/resolve?**', route => route.fulfill(jsonResponse(buildRestoreContext({ tableNumber: '101' }))))
+      await page.reload()
+      if (width === 320) await page.addStyleTag({ content: ':root { font-size: 20px }' })
+      await expect(page.getByText('Вы за столом №101 · Микс')).toBeVisible()
+      await expect(page.getByText('Активное посещение', { exact: true })).toBeVisible()
+      const actions = page.locator('.table-actions')
+      await expect(actions.getByRole('button', { name: 'Корзина', exact: true })).toBeVisible()
+      await expect(actions.getByRole('button', { name: 'Мои заказы', exact: true })).toBeVisible()
+      await expect(actions.getByRole('button', { name: 'Персонал', exact: true })).toBeVisible()
+      const leave = actions.getByRole('button', { name: 'Завершить визит', exact: true })
+      await expect(leave).toBeVisible()
+      const cartBox = await actions.getByRole('button', { name: 'Корзина', exact: true }).boundingBox()
+      const leaveBox = await leave.boundingBox()
+      expect(leaveBox!.y).toBeGreaterThanOrEqual(cartBox!.y + cartBox!.height)
+      await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+      await expectGuestContrast(page)
+      await expectNoHorizontalOverflow(page)
+      if (width === 390 && theme !== 'custom') await page.screenshot({ path: testInfo.outputPath(`polish-active-table-${theme}.png`), fullPage: true })
+      page.once('dialog', dialog => {
+        expect(dialog.message()).toContain('Микс, стол №101')
+        expect(dialog.message()).toContain('текущей сессии стола и корзины')
+        return dialog.dismiss()
+      })
+      await leave.click()
+      await expect(page.getByText('Вы за столом №101 · Микс')).toBeVisible()
+      await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
+      await expect(page.getByRole('button', { name: 'Добавить', exact: true }).first()).toBeVisible()
+      await expect(page.getByText('Вы за столом №101 · Микс')).toBeVisible()
+      if (width === 390 && theme !== 'custom') await page.screenshot({ path: testInfo.outputPath(`polish-active-menu-${theme}.png`), fullPage: true })
+
+      if (width === 430 && theme === 'light') {
+        await page.evaluate(() => (window as any).__polishTheme('dark'))
+        await expect(page.locator('.guest-shell')).toHaveAttribute('data-color-scheme', 'dark')
+        await expectGuestContrast(page)
+        await page.evaluate(() => (window as any).__polishTheme('custom'))
+        await expect(page.locator('.guest-shell')).toHaveAttribute('data-color-scheme', 'light')
+        await expectGuestContrast(page)
+      }
+      expect(api.getTableSessionEndRequests()).toHaveLength(0)
+    })
+  }
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`guest polish bot QR menu entry keeps an owner in Guest Mode ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    await installPolishTheme(page, theme)
+    const api = await mockGuestApi(page)
+    await mockHomeRoles(page, { role: 'OWNER' })
+    await page.goto(`?mode=venue&screen=menu&table_token=${tableQrFixture.tableToken}`)
+    await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+    await expect(page.locator('.venue-shell, .platform-shell')).toHaveCount(0)
+    await expect(page.getByText('Активное посещение', { exact: true })).toBeVisible()
+    await expectGuestContrast(page)
+    await expectNoHorizontalOverflow(page)
+    await page.screenshot({ path: testInfo.outputPath(`polish-qr-menu-${theme}.png`), fullPage: true })
+    expect(api.getTableSessionEndRequests()).toEqual([])
+  })
+
+  test(`guest polish multiple roles require an explicit available choice ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    await installPolishTheme(page, theme)
+    await mockGuestApi(page)
+    await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+    await mockPlatformBillingApi(page)
+    await mockHomeRoles(page, { role: 'OWNER', platform: true })
+    await page.goto('./')
+    await expect(page.getByRole('heading', { name: 'Как открыть приложение?' })).toBeVisible()
+    await expect(page.locator('.guest-shell, .venue-shell, .platform-shell')).toHaveCount(0)
+    await expectNoHorizontalOverflow(page)
+    await page.screenshot({ path: testInfo.outputPath(`polish-role-choice-${theme}.png`), fullPage: true })
+    await page.getByRole('navigation', { name: 'Режим приложения' }).getByRole('button', { name: 'Заведение', exact: true }).click()
+    await expect(page.locator('.venue-owner-home')).toBeVisible()
+  })
+
+  test(`guest polish five tall PDF pages fit width zoom and return ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await observeInlineMediaResources(page)
+    const api = await mockInlinePdfPreview(page, { mode: 'guest', theme, body: infoMediaPdf(5, false, false, [300, 1800]) })
+    const thumbnail = page.locator('[data-mode="thumbnail"]')
+    await expect(thumbnail).toHaveAttribute('data-state', 'ready')
+    const thumbBox = await thumbnail.locator('.info-media-surface').boundingBox()
+    expect(thumbBox!.height).toBeLessThanOrEqual(210)
+    await expect(thumbnail).toContainText('5 стр.')
+    await thumbnail.scrollIntoViewIfNeeded()
+    await thumbnail.evaluate(el => el.closest('.venue-info-section')!.scrollIntoView({ block: 'start' }))
+    await expect(thumbnail).toHaveAttribute('data-state', 'ready')
+    await expect.poll(() => thumbnail.locator('canvas').evaluate(canvas => {
+      const pixel = canvas.getContext('2d')!.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height * .03), 1, 1).data
+      return pixel[0] > 150 && pixel[1] < 100 && pixel[2] < 100
+    })).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`polish-pdf-preview-${theme}.png`) })
+    await page.getByRole('button', { name: /Открыть документ/ }).click()
+    const viewer = page.locator('[data-mode="viewer"]')
+    await expect(viewer).toHaveAttribute('data-state', 'ready')
+    const canvas = viewer.locator('canvas')
+    const fitted = await canvas.boundingBox()
+    const surface = await viewer.locator('.info-media-surface').boundingBox()
+    expect(Math.abs(fitted!.width - surface!.width)).toBeLessThan(2)
+    expect(fitted!.height / fitted!.width).toBeCloseTo(6, 1)
+    expect(await canvas.evaluate(c => c.width * c.height)).toBeLessThanOrEqual(1_500_000)
+    expect(await canvas.evaluate(c => Math.max(c.width, c.height))).toBeLessThanOrEqual(2048)
+    for (let number = 2; number <= 5; number++) {
+      await viewer.getByRole('button', { name: 'Следующая страница' }).click()
+      await expect(viewer).toHaveAttribute('data-state', 'ready')
+      await expect(canvas).toHaveAttribute('aria-label', new RegExp(`страница ${number} из 5`))
+    }
+    await expect(viewer.getByRole('button', { name: 'Следующая страница' })).toBeDisabled()
+    await viewer.getByRole('button', { name: 'Предыдущая страница' }).click()
+    await expect(canvas).toHaveAttribute('aria-label', /страница 4 из 5/)
+    const pixels = await canvas.evaluate(c => c.width * c.height)
+    await viewer.getByRole('button', { name: 'Увеличить', exact: true }).click()
+    await expect(viewer.locator('.info-media-zoomed')).toBeVisible()
+    await viewer.locator('.info-media-surface').evaluate(el => { el.scrollTop = 200; el.scrollLeft = 20 })
+    expect(await viewer.locator('.info-media-surface').evaluate(el => el.scrollTop)).toBeGreaterThan(0)
+    expect(await canvas.evaluate(c => c.width * c.height)).toBe(pixels)
+    await viewer.getByRole('button', { name: 'По ширине', exact: true }).click()
+    await expect(viewer.getByRole('button', { name: 'По ширине', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    expect(await viewer.locator('.info-media-surface').evaluate(el => el.scrollTop)).toBe(0)
+    await expect(viewer.getByRole('button', { name: 'Скачать файл' })).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+    await page.screenshot({ path: testInfo.outputPath(`polish-pdf-open-${theme}.png`) })
+    await clickTelegramBackButton(page)
+    await expect(page).toHaveURL(/#\/venue\/1$/)
+    await expect.poll(async () => (await inlineResourceCounts(page)).workers).toBe(0)
+    expect(api.reads.length).toBeGreaterThanOrEqual(6)
+    await expect(page.locator('iframe, object, embed')).toHaveCount(0)
+  })
+}
+
+for (const shape of [
+  { name: 'portrait', width: 600, height: 1000 },
+  { name: 'landscape', width: 1000, height: 500 },
+  { name: 'square', width: 700, height: 700 },
+  { name: 'tall', width: 300, height: 2000 }
+]) {
+  test(`guest polish phone photo preserves ${shape.name} proportions and gesture zoom`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    await observeInlineMediaResources(page)
+    await mockGuestApi(page)
+    const encoded = await page.evaluate(({ width, height }) => {
+      const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = '#d1b68c'; ctx.fillRect(0, 0, width, height)
+      ctx.fillStyle = '#294b40'; ctx.fillRect(width * .1, height * .1, width * .8, height * .65)
+      ctx.fillStyle = '#ffffff'; ctx.font = `${Math.floor(width / 11)}px sans-serif`
+      ctx.fillText('МИКС', width * .2, height * .35)
+      ctx.fillStyle = '#352820'; ctx.fillRect(0, height * .85, width, height * .15)
+      return canvas.toDataURL('image/png').split(',')[1]
+    }, shape)
+    await page.route('**/api/guest/venue/1/info-sections', route => route.fulfill(jsonResponse({ venueId: 1, sections: [{
+      id: 10, type: 'about', title: 'Фотографии', displayTitle: 'Фотографии', text: '', mediaCount: 1,
+      media: [{ id: 100, mediaType: 'image', sortOrder: 0, url: '/api/guest/venue/1/info-sections/10/media/100' }]
+    }] })))
+    await page.route('**/api/guest/venue/1/info-sections/10/media/100', route =>
+      route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from(encoded, 'base64') }))
+    for (const theme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: theme })
+      await page.goto('?mode=guest#/venue/1')
+      const preview = page.locator('[data-mode="thumbnail"]')
+      await preview.scrollIntoViewIfNeeded()
+      await expect(preview).toHaveAttribute('data-state', 'ready')
+      await expect(preview).toHaveAttribute('data-orientation', shape.name)
+      const imageBox = await preview.locator('img').boundingBox()
+      const previewBox = await preview.locator('.info-media-surface').boundingBox()
+      expect(Math.abs(imageBox!.width - previewBox!.width)).toBeLessThan(2)
+      expect(imageBox!.width / imageBox!.height).toBeCloseTo(shape.width / shape.height, 2)
+      if (shape.name === 'tall') await expect(preview).toContainText('Фрагмент длинного фото')
+      if (shape.name === 'portrait') {
+        await preview.evaluate(el => el.closest('.venue-info-section')!.scrollIntoView({ block: 'start' }))
+        await page.screenshot({ path: testInfo.outputPath(`polish-photo-preview-${theme}.png`) })
+      }
+      await page.getByRole('button', { name: /Открыть фото/ }).click()
+      const viewer = page.locator('[data-mode="viewer"]')
+      await expect(viewer).toHaveAttribute('data-state', 'ready')
+      const fullImage = viewer.locator('img')
+      const fullBox = await fullImage.boundingBox()
+      const fullSurface = await viewer.locator('.info-media-surface').boundingBox()
+      expect(Math.abs(fullBox!.width - fullSurface!.width)).toBeLessThan(2)
+      expect(fullBox!.width / fullBox!.height).toBeCloseTo(shape.width / shape.height, 2)
+      await viewer.locator('.info-media-surface').evaluate(surface => {
+        const send = (type: string, touches: Array<{ clientX: number; clientY: number }>) => {
+          const event = new Event(type, { bubbles: true, cancelable: true })
+          Object.defineProperty(event, 'touches', { value: touches })
+          surface.dispatchEvent(event)
+        }
+        const rect = surface.getBoundingClientRect()
+        send('touchstart', [{ clientX: rect.left + 60, clientY: rect.top + 100 }, { clientX: rect.left + 180, clientY: rect.top + 100 }])
+        send('touchmove', [{ clientX: rect.left + 30, clientY: rect.top + 100 }, { clientX: rect.left + 210, clientY: rect.top + 100 }])
+        send('touchend', [])
+      })
+      await expect(viewer.locator('.info-media-zoomed')).toBeVisible()
+      expect(await fullImage.evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThan(fullBox!.width * 1.4)
+      await viewer.getByRole('button', { name: 'По ширине' }).click()
+      if (shape.name === 'portrait') await page.screenshot({ path: testInfo.outputPath(`polish-photo-open-${theme}.png`), fullPage: true })
+      await expectNoHorizontalOverflow(page)
+      await clickTelegramBackButton(page)
+      await page.goto('?mode=guest#/account')
+      await expect(page.getByRole('heading', { name: 'Профиль', exact: true })).toBeVisible()
+      await expect.poll(async () => (await inlineResourceCounts(page)).urls).toBe(0)
+    }
+  })
+}
+
+test('guest polish ordinary owner entry ignores old guest browse and rechecks a revoked role', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await mockPersonalVenue(page)
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  const roles = await mockHomeRoles(page, { role: 'OWNER' })
+  await page.addInitScript(() => localStorage.setItem('hookah_browse_venue:user:123456789', 'venue_2'))
+  await page.goto('./')
+  await expect(page.locator('.venue-owner-home')).toBeVisible()
+  await expect(page.locator('.guest-shell')).toHaveCount(0)
+  roles.revoke()
+  await page.reload()
+  await expect(page.locator('.guest-shell')).toBeVisible()
+  await expect(page.locator('.venue-shell, .platform-shell')).toHaveCount(0)
+})
+
+for (const invalid of ['unknown-role', 'missing-permissions', 'foreign-user', 'null-venue'] as const) {
+  test(`guest polish incomplete server access fails closed ${invalid}`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    await mockHomeRoles(page)
+    await page.route('**/api/venue/me', route => route.fulfill(jsonResponse({
+      userId: invalid === 'foreign-user' ? 987654321 : 123456789,
+      venues: [invalid === 'null-venue' ? null : { venueId: 1, role: invalid === 'unknown-role' ? 'ADMIN' : 'OWNER',
+        ...(invalid === 'missing-permissions' ? {} : { permissions: ['ORDER_QUEUE_VIEW'] }) }]
+    })))
+    await page.goto('./')
+    await expect(page.getByText('Не удалось подтвердить доступные роли. Откройте приложение из Telegram заново.')).toBeVisible()
+    await expect(page.locator('.venue-shell, .platform-shell, .guest-shell')).toHaveCount(0)
+  })
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`guest polish owner upload picker explains image and multi-page PDF presentation ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await installTelegramWebApp(page, 123456789)
+    await installPolishTheme(page, theme)
+    await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+    const api = await mockDirectVenueInfoMedia(page)
+    await page.goto('?mode=venue#/settings/card')
+    const editor = page.locator('.venue-info-editor')
+    await editor.locator('summary').click()
+    const picker = editor.getByLabel('Добавить файлы: О заведении')
+    await expect(picker).toBeEnabled()
+    const hint = editor.locator('.venue-info-format-help')
+    await expect(hint).toContainText('Фотографии будут видны в карточке заведения.')
+    await expect(hint).toContainText('Гость сможет открыть их в большом размере')
+    await expect(hint).toContainText('В карточке появится превью документа.')
+    await expect(hint).toContainText('загрузите соответствующие JPEG/PNG отдельно')
+    await expect(hint).toContainText('до 10 МБ на файл · до 10 вложений на раздел')
+    await expect(hint).toContainText('HEIC/HEIF экспортируйте в JPEG')
+    await expect(picker).toHaveAttribute('aria-describedby', await hint.getAttribute('id') as string)
+    await picker.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: testInfo.outputPath(`polish-owner-upload-${theme}.png`), fullPage: true })
+    await picker.locator('..').screenshot({ path: testInfo.outputPath(`polish-owner-upload-detail-${theme}.png`) })
+    await expectNoHorizontalOverflow(page)
+    expect(api.uploads).toHaveLength(0)
+  })
+}
+
+test('guest polish photo decode failure retries and download rechecks revoked access', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await observeInlineMediaResources(page)
+  await mockGuestApi(page)
+  await page.route('**/api/guest/venue/1/info-sections', route => route.fulfill(jsonResponse({ venueId: 1, sections: [{
+    id: 10, type: 'about', title: 'Фотографии', displayTitle: 'Фотографии', text: '', mediaCount: 1,
+    media: [{ id: 100, mediaType: 'image', sortOrder: 0, url: '/api/guest/venue/1/info-sections/10/media/100' }]
+  }] })))
+  let invalid = true
+  let denied = false
+  await page.route('**/api/guest/venue/1/info-sections/10/media/100', route => route.fulfill({
+    status: denied ? 403 : 200, contentType: 'image/png',
+    body: invalid ? Buffer.from('invalid-image') : syntheticStaffPng
+  }))
+  await page.goto('?mode=guest#/venue/1?media=0.0')
+  const viewer = page.locator('[data-mode="viewer"]')
+  await expect(viewer).toHaveAttribute('data-state', 'error')
+  await expect(viewer).toContainText('Не удалось показать файл.')
+  invalid = false
+  await viewer.getByRole('button', { name: 'Повторить просмотр' }).click()
+  await expect(viewer).toHaveAttribute('data-state', 'ready')
+  denied = true
+  const downloads: unknown[] = []
+  page.on('download', download => downloads.push(download))
+  await viewer.getByRole('button', { name: 'Скачать файл' }).click()
+  await expect(viewer).toContainText('Файл недоступен. Обновите список материалов и повторите просмотр.')
+  await expect(viewer.getByRole('button', { name: 'Скачать файл' })).toBeHidden()
+  expect(downloads).toEqual([])
+  await page.goto('?mode=guest#/account')
+  await expect.poll(async () => (await inlineResourceCounts(page)).urls).toBe(0)
+})
+
+test('guest polish system theme changes and invalid Telegram colors use readable fallbacks', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' })
+  await installTelegramWebApp(page, 123456789)
+  await page.addInitScript(() => {
+    const app = (window as any).Telegram.WebApp
+    app.themeParams = { bg_color: 'transparent', text_color: '#12', button_color: 'url(evil)', hint_color: '#oops' }
+  })
+  await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+  await page.goto('?mode=guest')
+  await expect(page.locator('.guest-shell')).toHaveAttribute('data-color-scheme', 'light')
+  await expectGuestContrast(page)
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await expect(page.locator('.guest-shell')).toHaveAttribute('data-color-scheme', 'dark')
+  await expectGuestContrast(page)
+})
+
+test('guest polish explicit startapp stays guest for owner access', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789, 'venue_2')
+  await mockGuestApi(page)
+  await mockPersonalVenue(page)
+  await mockHomeRoles(page, { role: 'OWNER' })
+  await page.goto('./')
+  await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
+  await expect(page.locator('.guest-shell')).toBeVisible()
+  await expect(page.locator('.venue-shell, .platform-shell')).toHaveCount(0)
+})
+
+test('guest polish Telegram safe area updates and keyboard leave content usable', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 })
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest#/catalog')
+  await expect(page.locator('.catalog-item').first()).toBeVisible()
+  await page.evaluate(() => {
+    const style = document.documentElement.style
+    style.setProperty('--tg-safe-area-inset-top', '24px')
+    style.setProperty('--tg-content-safe-area-inset-top', '44px')
+    style.setProperty('--tg-safe-area-inset-bottom', '20px')
+    style.setProperty('--tg-content-safe-area-inset-bottom', '8px')
+    style.setProperty('--tg-safe-area-inset-left', '26px')
+    style.setProperty('--tg-content-safe-area-inset-right', '30px')
+  })
+  expect(await page.locator('.guest-visit-header').evaluate(el => parseFloat(getComputedStyle(el).paddingTop))).toBe(68)
+  expect(await page.locator('.guest-nav').evaluate(el => parseFloat(getComputedStyle(el).paddingBottom))).toBe(36)
+  expect(await page.locator('.app-content').evaluate(el => [parseFloat(getComputedStyle(el).paddingLeft), parseFloat(getComputedStyle(el).paddingRight)])).toEqual([26, 30])
+  await expectNoHorizontalOverflow(page)
+  const search = page.getByRole('searchbox')
+  await search.focus()
+  await page.evaluate(() => {
+    const viewport = window.visualViewport!
+    Object.defineProperty(viewport, 'height', { configurable: true, get: () => window.innerHeight - 300 })
+    viewport.dispatchEvent(new Event('resize'))
+  })
+  await expect(page.locator('.guest-shell')).toHaveAttribute('data-keyboard-open', '')
+  expect(await page.locator('.guest-nav').evaluate(el => getComputedStyle(el).position)).toBe('static')
+  await search.blur()
+  await page.evaluate(() => {
+    const viewport = window.visualViewport!
+    Object.defineProperty(viewport, 'height', { configurable: true, get: () => window.innerHeight })
+    viewport.dispatchEvent(new Event('resize'))
+    document.documentElement.style.setProperty('--tg-safe-area-inset-top', '12px')
+  })
+  await expect(page.locator('.guest-shell')).not.toHaveAttribute('data-keyboard-open', '')
+  expect(await page.locator('.guest-visit-header').evaluate(el => parseFloat(getComputedStyle(el).paddingTop))).toBe(56)
+  await expectNoHorizontalOverflow(page)
 })

@@ -186,8 +186,6 @@ function formatTodaySchedule(schedule: VenueTodayScheduleDto | null | undefined)
 function renderCatalogList(
   venues: CatalogVenueDto[],
   onOpenVenue: (venueId: number) => void,
-  onBookVenue: ((venueId: number) => void) | undefined,
-  onAskVenue: ((venueId: number) => void) | undefined,
   pendingFavoriteVenueIds: ReadonlySet<number>,
   onToggleFavorite: (venue: CatalogVenueDto) => void,
   refs: CatalogRefs,
@@ -205,7 +203,9 @@ function renderCatalogList(
     item.className = 'catalog-item'
 
     const info = document.createElement('div')
+    info.className = 'catalog-info'
     const name = document.createElement('strong')
+    name.className = 'catalog-title'
     name.textContent = venue.name
     const city = document.createElement('div')
     city.className = 'catalog-meta'
@@ -225,34 +225,21 @@ function renderCatalogList(
     }
 
     const actions = document.createElement('div')
-    actions.className = 'order-actions'
+    actions.className = 'order-actions catalog-actions'
     const favoriteButton = document.createElement('button')
-    favoriteButton.className = 'button-small favorite-toggle'
+    favoriteButton.className = 'button-small button-secondary favorite-toggle'
     favoriteButton.dataset.favorite = String(venue.isFavorite)
     favoriteButton.setAttribute('aria-pressed', String(venue.isFavorite))
-    favoriteButton.textContent = venue.isFavorite ? 'В избранном' : 'В избранное'
+    favoriteButton.textContent = venue.isFavorite ? '♥' : '♡'
+    favoriteButton.setAttribute('aria-label', `${venue.isFavorite ? 'Удалить из избранного' : 'В избранное'} · ${venue.name}`)
     favoriteButton.disabled = pendingFavoriteVenueIds.has(venue.id)
     favoriteButton.addEventListener('click', () => onToggleFavorite(venue))
-    actions.appendChild(favoriteButton)
     const button = document.createElement('button')
     button.className = 'button-small'
-    button.textContent = 'Открыть карточку'
+    button.textContent = 'Открыть'
     button.addEventListener('click', () => onOpenVenue(venue.id))
     actions.appendChild(button)
-    if (onAskVenue) {
-      const askButton = document.createElement('button')
-      askButton.className = 'button-small button-secondary'
-      askButton.textContent = 'Задать вопрос'
-      askButton.addEventListener('click', () => onAskVenue(venue.id))
-      actions.appendChild(askButton)
-    }
-    if (onBookVenue) {
-      const bookingButton = document.createElement('button')
-      bookingButton.className = 'button-small button-secondary'
-      bookingButton.textContent = 'Забронировать'
-      bookingButton.addEventListener('click', () => onBookVenue(venue.id))
-      actions.appendChild(bookingButton)
-    }
+    actions.appendChild(favoriteButton)
 
     item.appendChild(info)
     item.appendChild(actions)
@@ -261,7 +248,7 @@ function renderCatalogList(
 }
 
 export function renderCatalogScreen(options: CatalogScreenOptions) {
-  const { root, backendUrl, isDebug, onOpenVenue, onBookVenue, onAskVenue } = options
+  const { root, backendUrl, isDebug, onOpenVenue } = options
   if (!root) return () => undefined
 
   if (window.location.hash === '#/catalog/promotions') return renderCatalogPromotions(root, options)
@@ -330,8 +317,6 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
     renderCatalogList(
       withFavoriteOverrides(venues),
       onOpenVenue,
-      onBookVenue,
-      onAskVenue,
       pendingFavoriteVenueIds,
       (venue) => void toggleFavorite(venue),
       refs,
