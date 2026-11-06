@@ -1,5 +1,4 @@
 import './guestExperience.css'
-import { bindGuestTheme } from '../shared/ui/guestTheme'
 import { clearVenueBrowse, getVenueBrowseId, getVenueBrowsePayload, rememberVenueBrowse } from '../shared/state/venueBrowseContext'
 import { requestApi } from '../shared/api/request'
 import { getBackendBaseUrl } from '../shared/api/backend'
@@ -586,7 +585,6 @@ function mountGuestScreens(options: GuestAppOptions) {
   })
 
   const disposables: Array<() => void> = []
-  disposables.push(bindGuestTheme(refs.app))
   const viewport = window.visualViewport
   if (viewport) {
     const updateKeyboard = () => {

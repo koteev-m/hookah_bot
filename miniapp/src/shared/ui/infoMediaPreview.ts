@@ -18,7 +18,8 @@ function serial<T>(signal: AbortSignal, action: () => Promise<T>): Promise<T> {
   return result
 }
 
-export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, load: InfoMediaLoader, mode?: 'thumbnail' | 'viewer') {
+export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, load: InfoMediaLoader, mode?: 'thumbnail' | 'viewer' | 'inline') {
+  if (mode === 'inline') return createInlineInfoMedia(type, label, load)
   const element = el('div', { className: `info-media-preview venue-info-media-${type}` })
   element.setAttribute('aria-label', label)
   if (mode) element.dataset.mode = mode
@@ -256,6 +257,125 @@ export function createInfoMediaPreview(type: 'pdf' | 'image', label: string, loa
     disposed = true; observer.disconnect(); suspend()
     window.removeEventListener('pagehide', hide)
     window.removeEventListener('pageshow', resume)
+    document.removeEventListener('visibilitychange', resume)
+  } }
+}
+
+// Guest sections own this lifecycle: collapsing disposes the page and cancels pending work.
+function createInlineInfoMedia(type: 'pdf' | 'image', label: string, load: InfoMediaLoader) {
+  const element = el('div', { className: `info-media-preview venue-info-media-${type}` })
+  element.dataset.mode = 'inline'
+  element.setAttribute('aria-label', label)
+  const controls = el('div', { className: 'info-media-controls' })
+  const previous = el('button', { className: 'button-secondary', text: '←' })
+  const next = el('button', { className: 'button-secondary', text: '→' })
+  previous.type = next.type = 'button'
+  previous.setAttribute('aria-label', 'Предыдущая страница')
+  next.setAttribute('aria-label', 'Следующая страница')
+  const counter = el('span')
+  counter.setAttribute('aria-live', 'polite')
+  append(controls, previous, counter, next)
+  controls.hidden = true
+  const surface = el('div', { className: 'info-media-surface' })
+  const canvas = el('canvas'); canvas.width = canvas.height = 0
+  canvas.setAttribute('role', 'img')
+  const image = el('img'); image.alt = label; image.decoding = 'async'
+  canvas.hidden = image.hidden = true
+  surface.appendChild(type === 'pdf' ? canvas : image)
+  const status = el('p', { className: 'status', text: 'Загрузка материала…' })
+  status.setAttribute('role', 'status')
+  const retry = el('button', { className: 'button-secondary', text: 'Повторить просмотр' })
+  retry.type = 'button'; retry.hidden = true
+  append(element, controls, surface, status, retry)
+  let page = 1; let pages = 0; let visible = false; let disposed = false; let ready = false
+  let active: AbortController | null = null
+  let url: string | null = null
+  let frame: number | undefined
+  const clear = () => {
+    ready = false
+    canvas.width = canvas.height = 0; canvas.hidden = image.hidden = true
+    image.removeAttribute('src')
+    if (url) URL.revokeObjectURL(url)
+    url = null
+  }
+  const updateControls = () => {
+    controls.hidden = type !== 'pdf' || pages <= 1
+    counter.textContent = pages ? `${page} из ${pages}` : ''
+    previous.disabled = Boolean(active) || page <= 1
+    next.disabled = Boolean(active) || page >= pages
+  }
+  const start = async () => {
+    if (disposed || !visible || document.hidden || active || ready) return
+    const controller = new AbortController(); active = controller
+    const { signal } = controller
+    element.dataset.state = 'loading'; element.setAttribute('aria-busy', 'true')
+    retry.hidden = true; status.textContent = 'Загрузка материала…'
+    updateControls()
+    let timeout: number | undefined
+    let timedOut = false
+    try {
+      await serial(signal, async () => {
+        timeout = window.setTimeout(() => { timedOut = true; controller.abort() }, 20000)
+        const blob = await abortable(load(signal), signal)
+        signal.throwIfAborted()
+        if (!blob.size || blob.size > 10 * 1024 * 1024) throw new Error('Media size limit')
+        if (type === 'pdf') {
+          const renderer = await abortable(import('./pdfPageRenderer'), signal)
+          signal.throwIfAborted()
+          pages = await renderer.renderPdfPage(new Uint8Array(await blob.arrayBuffer()), canvas, page, signal)
+          signal.throwIfAborted()
+          canvas.setAttribute('aria-label', `${label} · страница ${page} из ${pages}`)
+          canvas.hidden = false
+        } else {
+          url = URL.createObjectURL(blob); image.src = url
+          await abortable(image.decode(), signal)
+          signal.throwIfAborted()
+          image.hidden = false
+        }
+      })
+      if (disposed || active !== controller) return
+      ready = true; element.dataset.state = 'ready'; status.textContent = ''
+      element.dispatchEvent(new CustomEvent('info-media-pages', { bubbles: true, detail: pages }))
+    } catch {
+      if (disposed || active !== controller || signal.aborted && !timedOut) return
+      clear(); element.dataset.state = 'error'
+      status.textContent = 'Не удалось показать материал. Возможно, он скрыт, удалён или временно недоступен. Повторите просмотр.'
+      retry.hidden = false
+    } finally {
+      window.clearTimeout(timeout)
+      if (active === controller) { active = null; element.setAttribute('aria-busy', 'false'); updateControls() }
+    }
+  }
+  const suspend = () => {
+    window.cancelAnimationFrame(frame ?? 0)
+    active?.abort(); active = null; clear()
+    element.dataset.state = 'idle'; element.setAttribute('aria-busy', 'false')
+    status.textContent = 'Загрузка материала…'; retry.hidden = true
+    updateControls()
+  }
+  const turn = (delta: number) => {
+    if (active || page + delta < 1 || page + delta > pages) return
+    page += delta; clear(); element.scrollIntoView({ block: 'start' }); void start()
+  }
+  previous.addEventListener('click', () => turn(-1))
+  next.addEventListener('click', () => turn(1))
+  retry.addEventListener('click', () => { clear(); void start() })
+  const observer = new IntersectionObserver(([entry]) => {
+    visible = entry.isIntersecting && !document.hidden
+    if (visible) frame = window.requestAnimationFrame(() => void start())
+    else suspend()
+  }, { rootMargin: '250px' })
+  observer.observe(element)
+  const hide = () => { visible = false; suspend() }
+  const resume = () => {
+    if (document.hidden) hide()
+    else { observer.unobserve(element); observer.observe(element) }
+  }
+  window.addEventListener('pagehide', hide); window.addEventListener('pageshow', resume)
+  document.addEventListener('visibilitychange', resume)
+  return { element, dispose: () => {
+    disposed = true; observer.disconnect(); suspend()
+    window.removeEventListener('pagehide', hide); window.removeEventListener('pageshow', resume)
     document.removeEventListener('visibilitychange', resume)
   } }
 }
