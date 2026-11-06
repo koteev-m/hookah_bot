@@ -299,11 +299,12 @@ set -euo pipefail
 printf '%s\n' df >> "${V126_FIXTURE_MOCK_LOG}"
 printf '%s\n' 'Avail' '10737418240'
 MOCK
-  # Use native GNU consumers on Linux, retaining the portability adapters on
-  # macOS. These are regular wrappers: chmod below must never follow a link
-  # into /usr/bin. Every metadata/hash call still reads the actual input.
+  # Use native consumers on Linux, retaining the portability adapters on macOS.
+  # These hot-path exec-only wrappers need no Bash or env process. Keep regular
+  # files so chmod below cannot follow a link into /usr/bin; every call still
+  # reads the actual input through the same system executable.
   if [[ "$(uname -s)" == Linux ]] && /usr/bin/sha256sum --version >/dev/null 2>&1; then
-    printf '#!/usr/bin/env bash\nexec /usr/bin/sha256sum "$@"\n' > "${mock}/sha256sum"
+    printf '#!/bin/sh\nexec /usr/bin/sha256sum "$@"\n' > "${mock}/sha256sum"
   else
     cat > "${mock}/sha256sum" <<'MOCK'
 #!/usr/bin/env bash
@@ -312,7 +313,7 @@ exec shasum -a 256 "$@"
 MOCK
   fi
   if [[ "$(uname -s)" == Linux ]] && /usr/bin/stat --version >/dev/null 2>&1; then
-    printf '#!/usr/bin/env bash\nexec /usr/bin/stat "$@"\n' > "${mock}/stat"
+    printf '#!/bin/sh\nexec /usr/bin/stat "$@"\n' > "${mock}/stat"
   else
     cat > "${mock}/stat" <<'MOCK'
 #!/usr/bin/env bash

@@ -352,13 +352,32 @@ wait "$owned_child"
         if sys.platform == 'linux':
             self.assertIn('exec /usr/bin/sha256sum "$@"', (self.mocks / 'sha256sum').read_text())
 
+    @unittest.skipUnless(sys.platform == 'linux', 'system consumer equivalence requires Linux')
+    def test_native_wrappers_preserve_errors_and_read_changed_inputs(self):
+        item = self.case / 'changing input'
+        for payload, mode in ((b'first\n', 0o600), (b'changed\x00bytes\n', 0o640)):
+            item.write_bytes(payload)
+            item.chmod(mode)
+            for name, arguments in (('stat', ['-c', '%a:%u:%g:%s', str(item)]),
+                                    ('sha256sum', [str(item)])):
+                for argv in (arguments, ['--invalid-fixture-option'], [str(self.case / 'missing')]):
+                    with self.subTest(program=name, mode=mode, arguments=argv):
+                        native = subprocess.run(['/usr/bin/' + name, *argv], capture_output=True, timeout=3)
+                        wrapped = subprocess.run([str(self.mocks / name), *argv], capture_output=True, timeout=3)
+                        self.assertEqual((wrapped.returncode, wrapped.stdout, wrapped.stderr),
+                                         (native.returncode, native.stdout, native.stderr))
+
     @unittest.skipUnless(sys.platform == 'linux', 'native GNU before/after timings require Linux')
     def test_native_gnu_equivalent_call_microbenchmark(self):
         item = self.case / 'timing-input'
         item.write_bytes(b'actual unchanged fixture bytes\n')
         result = {'samples_per_program': 20, 'source': 'actual generated and extracted fallback programs'}
         for name, arguments in (('stat', ['-c', '%a:%u:%g:%s', str(item)]), ('sha256sum', [str(item)])):
-            for label, program in (('fallback', self.fallbacks[name]), ('native', self.mocks / name)):
+            bash_wrapper = self.case / ('bash-' + name)
+            bash_wrapper.write_text('#!/usr/bin/env bash\nexec /usr/bin/' + name + ' "$@"\n')
+            bash_wrapper.chmod(0o500)
+            for label, program in (('fallback', self.fallbacks[name]), ('bash_wrapper', bash_wrapper),
+                                   ('native', self.mocks / name)):
                 start = time.monotonic()
                 for _ in range(20):
                     called = subprocess.run([str(program), *arguments], capture_output=True, timeout=3)

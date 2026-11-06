@@ -3824,6 +3824,73 @@ Current CI jobs:
 - `miniapp-e2e-smoke`;
 - `docker`.
 
+### HT-CI-DURATION-OPTIMIZATION-01 fixture startup cost
+
+Read-only inspection of three completed main runs on 2026-11-06 found the same critical
+path through `compose-prerequisite`, the `compose` aggregate and `publish-ghcr`:
+
+| Main run | Total | Prerequisite fixtures | Cutover job | Browser smoke job | GHCR job |
+| --- | --- | --- | --- | --- | --- |
+| [41855127655](https://github.com/koteev-m/hookah_bot/actions/runs/41855127655), `35ecbb9040f1` | 29:13 | 24:21 | 17:21 | 9:40 | 3:33 |
+| [42037086442](https://github.com/koteev-m/hookah_bot/actions/runs/42037086442), `b3496fe1033c` | 28:33 | 23:56 | 20:01 | 11:24 | 3:35 |
+| [42223421617](https://github.com/koteev-m/hookah_bot/actions/runs/42223421617), `6d8cc877876a` | 35:05 | 25:52 | 23:21 | 14:57 | 2:46 |
+
+The local patch starts at `012d664ad62d6e96c28199c947fd4a1222da4396` on
+`codex/ht-unified-theme-inline-media-ci-01`. The GitHub compare API reports no changed
+tracked files between that commit and the latest run's SHA; no Git fetch or branch
+change was used. Existing `PROJECT_STATUS.md` edits remain outside this patch.
+
+The last run's prerequisite job took 32:06. Its Caddy package download alone took
+5:10 for 10.8 MB; the cutover job's download took 5:00. This is variable package
+transport cost, not a failed product test. Initial jobs started within seconds of
+the run; GHCR started three seconds after the Compose aggregate completed.
+
+All three prerequisite logs report the same harness source SHA-256
+`de0b86f0bef1d91967c6319d764590867041434390cc85437b0c0dc578def371`.
+Its 97 controller cases replay source, ownership, checkpoint and predecessor checks;
+the 40 injected post-sync failures already run in batches of four. In the last run
+those batches occupied 13:23, and the complete success case took 89 seconds. Reusing
+previously passed evidence or skipping predecessors would change the safety coverage.
+The full cutover fixture step took 11:22–12:13, including real PostgreSQL backup and
+rehearsal consumers (4:48 in the last run). Browser logs show 545, 579 and 647 passing
+tests respectively, using two workers; test growth and runner performance must be
+distinguished from dependency setup, which took only seconds.
+Even eliminating prerequisite duration would leave cutover plus GHCR at 20:54,
+23:36 and 26:07 for these runs, before aggregation/queue overhead. Reaching 15–20
+minutes also requires measured improvement outside the prerequisite harness.
+
+The bounded change is in the prerequisite harness only: Linux `stat` and `sha256sum`
+wrappers use `/bin/sh` to `exec` the same `/usr/bin` programs without starting `env`
+and Bash on every call. Wrappers remain regular private files; macOS adapters,
+actual file reads, error statuses, source hashes, durable writes, signal handling,
+timeouts and all case assertions are preserved. There is no metadata/result cache.
+Regressions compare stdout, stderr and status with the system executables for changed
+inputs, changed modes, missing files and invalid options, as well as existing symlink
+and stdin cases. The existing microbenchmark also records the prior Bash-wrapper cost.
+
+Local validation used sequential full before/after runs with identical 97-case/status
+inventories and 18/18 fixture groups, each through the endpoint guard, in a disposable
+network-disabled Ubuntu 24.04 arm64 container (Python 3.12.3, 4 CPU, 4 GiB). The image
+was `sha256:0e98102e4242fa62dd8eba87e2a1f8ebfcb6dd2655fbeedbdb9ca3f9a4421494`.
+The baseline took 513 seconds and the patch 486 seconds: 27 seconds / 5.3% less wall time
+in this one paired sample. Both passed. This is a local measurement, not a hosted CI
+speedup guarantee. The Linux fixture-program suite passed 16/16 tests; macOS passed
+14 tests with its two Linux-only tests skipped. The exact generated native wrappers
+also passed 12 stdout/stderr/status comparisons on Ubuntu 26.04 amd64 with uutils 0.10.0.
+
+`python3 -B scripts/test-v126-release-ci.py` passed 18 tests;
+`python3 -B -m unittest discover -s scripts -p test_ghcr_publish.py -v` passed 11 tests
+with the existing cached PyYAML 6.0.3 supplied on `PYTHONPATH`. Shell/Python syntax and
+`git diff --check` passed. The initial isolated snapshot lacked the cutover source needed
+by the header-parity test; adding the unchanged file to both snapshots resolved that
+diagnostic setup error before the paired measurement. No test retry was added to CI.
+
+PR/main triggers, every mandatory job, all test floors, Docker/Compose/PostgreSQL
+consumers and exact-SHA main-only GHCR admission are unchanged. Full hosted Linux
+validation and wall-clock measurement for the eventual reviewed SHA remain required;
+local fixture timings cannot establish a 15–20-minute CI result. This harness-only
+change requires no staging deploy.
+
 ### HT-CI-01 parallel Compose contract
 
 `miniapp-e2e-smoke` also explicitly runs on `ubuntu-26.04`, with Node 20 and exact
