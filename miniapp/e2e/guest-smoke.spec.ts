@@ -17943,10 +17943,12 @@ test('venue message refresh retains a newer user-selected booking thread and its
   await installTelegramWebApp(page, 123456789)
   const initialBooking = buildVenueBooking({ bookingId: 706, displayNumber: 31 })
   const selectedBooking = buildVenueBooking({ bookingId: 707, displayNumber: 32 })
+  const initialMessage = 'Сообщение из переписки по исходной ссылке.'
   const api = await mockVenueBookingsApi(page, {
     role: 'MANAGER',
     bookings: [initialBooking, selectedBooking],
     preopenBookingIds: [initialBooking.bookingId, selectedBooking.bookingId],
+    initialGuestMessages: [{ bookingId: initialBooking.bookingId, text: initialMessage }],
     deferThreadDetailCallNumbers: [1],
     failThreadDetailCallNumbers: [1]
   })
@@ -17961,19 +17963,30 @@ test('venue message refresh retains a newer user-selected booking thread and its
   await expect(page.locator('.booking-thread-reconciliation-error')).toContainText('Не удалось загрузить сообщения')
 
   const selectedCard = page.locator('.venue-message-thread-card').filter({ hasText: 'Бронь №32' })
+  const detail = page.locator('.venue-messages-detail')
+  const messages = detail.locator('.venue-support-messages')
   await selectedCard.getByRole('button', { name: 'Открыть' }).click()
-  await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: 'Бронь №32' })).toBeVisible()
+  await expect(detail.getByRole('heading', { name: 'Бронь №32' })).toBeVisible()
   const draft = page.getByPlaceholder('Напишите ответ гостю.')
   await draft.fill('Черновик выбранной переписки должен сохраниться.')
 
+  const refreshedMessage = 'Новое сообщение в выбранной переписке.'
+  expect(api.addGuestMessage(selectedThread!.threadId, refreshedMessage)).not.toBeNull()
   await page.getByRole('button', { name: '🔄 Обновить', exact: true }).click()
-  await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: 'Бронь №32' })).toBeVisible()
+  await expect(messages).toContainText(refreshedMessage)
+  await expect(detail.getByRole('heading', { name: 'Бронь №32' })).toBeVisible()
+  await expect(draft).toBeEnabled()
   await expect(draft).toHaveValue('Черновик выбранной переписки должен сохраниться.')
   await expect(selectedCard).toHaveAttribute('data-selected', 'true')
-  await expect(page.locator('.venue-messages-detail').getByRole('heading', { name: 'Бронь №31' })).toHaveCount(0)
+  await expect(detail.getByRole('heading', { name: 'Бронь №31' })).toHaveCount(0)
+  await expect(messages).not.toContainText(initialMessage)
 
   expect(api.getThreadInventoryCalls()).toBe(2)
-  expect(api.getThreadDetailCalls()).toBe(3)
+  expect(api.getThreadDetailRequests().map(({ threadId }) => threadId)).toEqual([
+    initialThread?.threadId,
+    selectedThread?.threadId,
+    selectedThread?.threadId
+  ])
   expect(api.getThreadMessageRequests()).toHaveLength(0)
   expect(api.getBookingMessageRequests()).toHaveLength(0)
 })
