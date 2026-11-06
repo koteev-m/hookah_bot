@@ -1599,7 +1599,9 @@ jobs:
 
   miniapp-e2e-smoke:
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6 # linux/amd64
     strategy:
       fail-fast: true
       matrix:
@@ -1614,11 +1616,9 @@ jobs:
       - name: Install dependencies
         working-directory: miniapp
         run: npm ci
-      - name: Install Playwright Chromium
+      - name: Show Playwright version
         working-directory: miniapp
-        run: |
-          npx playwright --version
-          npx playwright install --with-deps chromium
+        run: npx playwright --version
       - name: Run full Mini App browser smoke with structured JSON report
         working-directory: miniapp
         env:
