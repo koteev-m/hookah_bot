@@ -3772,3 +3772,16 @@ input[type="number"] {
 }
 
 .home-modes[hidden] { display: none; }
+
+/* Venue accounting stays readable on narrow Telegram viewports. */
+.venue-accounting { display: grid; gap: 12px; min-width: 0; }
+.venue-accounting > div { display: grid; gap: 12px; min-width: 0; }
+.accounting-field { display: grid; gap: 6px; margin-block: 10px; min-width: 0; }
+.accounting-field input, .accounting-field select, .accounting-field textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+.accounting-field input[type="checkbox"] { width: 24px; height: 24px; }
+.accounting-line { min-width: 0; border: 1px solid var(--border-color, #808080); border-radius: 12px; margin-block: 12px; }
+.accounting-totals { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+.accounting-totals dd { margin: 0; font-weight: 700; text-align: right; }
+.accounting-sales { display: grid; gap: 10px; }
+.accounting-sales button { text-align: left; white-space: normal; overflow-wrap: anywhere; min-height: 48px; }
+.accounting-editor button { margin-block: 6px; }

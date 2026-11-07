@@ -50,6 +50,7 @@ class SupportThreadReadCursorMigrationH2Test {
                     "129" to "V129__venue_info_media_objects.sql",
                     "130" to "V130__venue_public_addresses.sql",
                     "131" to "V131__backfill_venue_public_addresses.sql",
+                    "132" to "V132__venue_accounting_shifts.sql",
                 ),
             ddlFailureContract = MigrationDdlFailureContract.NON_TRANSACTIONAL,
         )

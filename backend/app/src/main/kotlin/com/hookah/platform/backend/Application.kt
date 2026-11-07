@@ -83,6 +83,8 @@ import com.hookah.platform.backend.miniapp.shift.venueShiftExtensionRoutes
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePublicationService
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepository
+import com.hookah.platform.backend.miniapp.venue.accounting.accountingRoutes
 import com.hookah.platform.backend.miniapp.venue.bookings.venueBookingRoutes
 import com.hookah.platform.backend.miniapp.venue.feedback.venueFeedbackRoutes
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationProvider
@@ -1615,6 +1617,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     outboxEnqueuer = telegramOutboxEnqueuer,
                     auditLogRepository = auditLogRepository,
                 )
+                accountingRoutes(AccountingRepository(dataSource))
                 venueStatsRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueStatsRepository = venueStatsRepository,

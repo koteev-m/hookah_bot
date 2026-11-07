@@ -1,5 +1,95 @@
 # Project Status
 
+## HT-VENUE-SHIFT-SALES-MVP-PUBLISH-01 — publication preparation (2026-11-07)
+
+**REVIEW_PASS / PUBLICATION_PREPARED / STAGING_UNVERIFIED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT, primary root/common dir/origin verified.
+Feature branch `codex/ht-venue-shift-sales-mvp-01` starts at fetched main
+`97811abce417bd146acc4dbfab29b9265ce4aff1`; its base tree equals the reviewed local base.
+Scope: complete 42-file MVP including PostgreSQL V131 / H2 V132, both P1 fixes, tests and docs.
+Source/test/financial contracts unchanged from the reviewed candidate. Prior unrelated local
+checkpoint additions are preserved in the worktree and excluded from the publication index.
+
+Final independent review `HT-VENUE-SHIFT-SALES-P1-REVIEW-01`: REVIEW_PASS, both P1
+FIX_CONFIRMED. Fresh targeted 9/9 PASS; old-code negative control reproduces the original
+JSON omission and 15000/10000/0 bill/report/debt race. Author evidence confirmed:
+359 backend, final 46, seven PostgreSQL concurrency, 654/654 Playwright PASS; overlapping
+backend runs are not added together. No full suite rerun is required for unchanged code.
+
+Authorization: exactly one commit and one ordinary non-force push; no PR, merge or deploy.
+Staging and real Telegram/WebView acceptance remain unperformed for this MVP.
+Next: verify the published branch SHA against the sole commit, then stop without CI monitoring.
+Publication inventory, integrity checks and final outcome:
+`/private/tmp/HT-VENUE-SHIFT-SALES-MVP-PUBLISH-01/REPORT.txt`.
+
+## HT-VENUE-SHIFT-SALES-P1-FIX-01 — two reviewed P1 fixes (2026-11-07)
+
+**P1_FIX_READY / LOCAL_UNCOMMITTED / READY_FOR_INDEPENDENT_REVIEW / STAGING_UNVERIFIED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT; primary root
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, common dir `<root>/.git`, origin
+`github.com/koteev-m/hookah_bot`. Observed branch `codex/ht-ci-duration-optimization-01`,
+unchanged HEAD `1453a665679643f3ddc3ceb9bc0656d354f420ca`. EXPECTED_HEAD/BASE and branch/parent
+constraints NOT_SUPPLIED. Scope: only two P1s from the local MVP independent review.
+
+Accounting GET/POST now explicitly serialize defaults within these routes, preserving money,
+empty arrays, nullable values and booleans. A real Ktor HTTP regression verifies the shared
+browser capture; mobile regression displays 100 RUB and records 40 + 60 RUB with zero remainder.
+Extension approval locks session -> tab -> order -> request and rechecks ACTIVE under the order
+lock shared with operational completion and accounting snapshots. PostgreSQL context/venue
+NO KEY UPDATE locks preserve writer exclusion while allowing FK checks. Payment still requires
+operational completion; a losing extension is refused atomically, approved replay adds nothing.
+
+Validation: 359 backend regressions PASS (zero failures/errors/skips), including PostgreSQL/H2
+forward migrations and existing extension routes. Final 46 accounting/extension tests PASS after
+strengthening the rollback barrier to fail after all extension writes, before commit. Seven real
+PostgreSQL concurrency cases verify blocking through pg_blocking_pids, consistent bill/report/
+receipts/debt, duplicate replay and unchanged decision/audit state after refusal or rollback.
+Kotlin compile/ktlint and TypeScript/Vite build PASS. Target Playwright 7/7; final full Chromium
+Playwright 654/654 PASS, no retries or skips. Local diagnostics 23/23, release contracts 72/72 and
+migration lineage/refusal checks PASS. Evidence, commands, hashes and exact ten-file P1 delta:
+`/private/tmp/HT-VENUE-SHIFT-SALES-P1-FIX-01/REPORT.txt`.
+
+MVP migration bytes, release scripts, prior three Playwright expectations and unrelated local
+changes preserved. Git index/HEAD/branch unchanged; `scripts/dev/` untouched. No unfinished test
+process, stage/commit/push/PR/merge/deploy or real-data mutation. Hosted CI, staging and real
+Telegram device smoke remain unverified; release still requires separate authorization/acceptance.
+Next: independent review of these two fixes; this checkpoint is not publication approval.
+
+## HT-VENUE-SHIFT-SALES-MVP-01 — local accounting MVP (2026-11-07)
+
+**IMPLEMENTED_LOCAL / UNCOMMITTED / INDEPENDENT_REVIEW_PENDING / STAGING_UNVERIFIED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT; primary root
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, common dir `<root>/.git`, origin
+`github.com/koteev-m/hookah_bot`; branch `codex/ht-ci-duration-optimization-01`, unchanged
+starting HEAD `1453a665679643f3ddc3ceb9bc0656d354f420ca`. EXPECTED_HEAD, EXPECTED_BASE,
+branch/parent constraints NOT_SUPPLIED. Only local implementation/checks authorized.
+
+Added separate accounting shifts, single-open protection, one-time digital-order attachment,
+manual table sales with immutable menu/custom snapshots, partial/mixed external receipts,
+reasoned gifts/corrections/cancellations, actor/time/old/new audit, replay/version safeguards,
+fresh membership checks and frozen close/history. Venue Mini App has mobile accounting,
+report breakdowns, retained navigation/drafts and uncertain-submit recovery. `revenueMinor`
+stays an estimate, explicitly labeled in Bot/Mini App. PostgreSQL V131 / H2 V132 are additive;
+historical SQL is unchanged. Existing runtime/release tests pin the exact new migration tail.
+
+MVP boundary: RUB; digital payment/correction follows operational order completion, which never
+implies payment. Active orders block shift close. Missing reliable source amounts block receipt/
+close instead of inferring money. Closed records are immutable, including unpaid balances;
+no carry-over settlement/reopen or real refunds. Canonical detail: `docs/VENUE_OPERATIONS.md`.
+
+Validation: 342 backend tests (zero skipped, PostgreSQL/H2), four Bot Stats tests, Kotlin
+compile/ktlint and TypeScript/Vite build PASS. Full Playwright: 650/653 passed, then three
+owner-home expectations updated for the new action and all three passed; mobile layout
+assertions retained, six new accounting cases passed. Runtime self-tests 23/23, release-contract
+72/72, exact migration lineage/refusal tests and Java fixture compile PASS. Evidence/commands/
+file hashes: `/private/tmp/HT-VENUE-SHIFT-SALES-MVP-01/REPORT.txt`.
+
+No unfinished test process, stage/commit/push/PR/merge, SSH/deploy, server or real financial
+mutation. Earlier checkpoint bytes preserved; `scripts/dev/` untouched/untracked. Hosted CI,
+connected Docker/JVM integration and staging/real Telegram device smoke remain unverified.
+Next: independent review of the local financial/RBAC/migration/UI diff before separately
+authorized publication and required staging acceptance.
+
 ## HT-VENUE-PERSONAL-LINKS-RUNTIME-CI-FIX-01 — exact V130 runtime fixture (2026-11-02)
 
 **LOCAL_RUNTIME_CI_FIX_READY / UNCOMMITTED / NOT_PUBLISHED / HOSTED_RUNTIME_UNVERIFIED**.

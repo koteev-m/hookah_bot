@@ -8259,6 +8259,8 @@ extra = {
     'postgresql/V130__backfill_venue_public_addresses.sql': '8cbeabf2d72b754310b4acfd0d919f736f0132f5e26aa1f91e8103f3f5b90d26',
     'h2/V130__venue_public_addresses.sql': 'fb21b03533360487287e4d72bc8fd43bdc5319271ac688aa96c0635d6839f4ec',
     'h2/V131__backfill_venue_public_addresses.sql': 'ff2ac1c9a4617d520d0237919d792aba240930b38c9484aee4440b01075e4154',
+    'postgresql/V131__venue_accounting_shifts.sql': '8579a805509807d151004f9be95c356e4e3de543e6645d320e6fc8dd25555764',
+    'h2/V132__venue_accounting_shifts.sql': '8579a805509807d151004f9be95c356e4e3de543e6645d320e6fc8dd25555764',
 }
 paths = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if not p.is_dir() or p.is_symlink()}
 if set(paths) != set(historical) | set(extra):
@@ -8332,10 +8334,10 @@ PY
   expect_failure 'missing early SQL rejects current lineage' 'migration inventory drift' \
     verify_current_migration_lineage "${fixture}"
   cp "${REPO_ROOT}/${migration_root}/postgresql/$(basename "${early}")" "${early}"
-  printf 'SELECT 1;\n' > "${fixture}/postgresql/V131__unreviewed.sql"
+  printf 'SELECT 1;\n' > "${fixture}/postgresql/V132__unreviewed.sql"
   expect_failure 'unreviewed future SQL rejects current lineage' 'migration inventory drift' \
     verify_current_migration_lineage "${fixture}"
-  rm "${fixture}/postgresql/V131__unreviewed.sql"
+  rm "${fixture}/postgresql/V132__unreviewed.sql"
   printf '\n-- forbidden tail drift\n' >> "${fixture}/postgresql/V127__staff_profile_photos.sql"
   expect_failure 'changed reviewed tail SQL rejects current lineage' 'reviewed migration drift' \
     verify_current_migration_lineage "${fixture}"
@@ -8353,9 +8355,11 @@ PY
     postgresql/V129__venue_public_addresses.sql \
     postgresql/V130__backfill_venue_public_addresses.sql \
     h2/V130__venue_public_addresses.sql \
-    h2/V131__backfill_venue_public_addresses.sql; do
-    printf '\n-- forbidden personal address drift\n' >> "${fixture}/${addition}"
-    expect_failure "changed reviewed personal address SQL rejects lineage: ${addition}" 'reviewed migration drift' \
+    h2/V131__backfill_venue_public_addresses.sql \
+    postgresql/V131__venue_accounting_shifts.sql \
+    h2/V132__venue_accounting_shifts.sql; do
+    printf '\n-- forbidden reviewed tail drift\n' >> "${fixture}/${addition}"
+    expect_failure "changed reviewed tail SQL rejects lineage: ${addition}" 'reviewed migration drift' \
       verify_current_migration_lineage "${fixture}"
     cp "${REPO_ROOT}/${migration_root}/${addition}" "${fixture}/${addition}"
   done

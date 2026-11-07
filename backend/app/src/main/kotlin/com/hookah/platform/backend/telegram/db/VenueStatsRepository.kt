@@ -73,8 +73,8 @@ class VenueStatsRepository(
                 SELECT
                     o.id AS order_id,
                     obi.qty AS qty,
-                    COALESCE(mi.price_minor, 0) AS price_minor,
-                    COALESCE(mi.currency, 'RUB') AS currency,
+                    COALESCE(obi.base_unit_price_minor_snapshot, mi.price_minor, 0) + COALESCE(opt.price_delta_minor_snapshot, 0) AS price_minor,
+                    COALESCE(obi.currency_snapshot, mi.currency, 'RUB') AS currency,
                     CASE
                         WHEN obi.discount_percent BETWEEN 1 AND 100 THEN obi.discount_percent
                         ELSE 0
@@ -84,6 +84,7 @@ class VenueStatsRepository(
                 JOIN order_batches ob ON ob.order_id = o.id
                 JOIN order_batch_items obi ON obi.order_batch_id = ob.id
                 LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+                LEFT JOIN order_batch_item_options opt ON opt.order_batch_item_id = obi.id
                 LEFT JOIN (
                     SELECT order_batch_item_id, SUM(discount_minor) AS discount_minor
                     FROM order_batch_item_promotion_adjustments
@@ -163,7 +164,7 @@ class VenueStatsRepository(
             """
             SELECT
                 obi.menu_item_id,
-                mi.name AS item_name,
+                COALESCE(obi.item_name_snapshot, mi.name) AS item_name,
                 SUM(obi.qty) AS qty
             FROM orders o
             JOIN order_batches ob ON ob.order_id = o.id
@@ -177,7 +178,7 @@ class VenueStatsRepository(
               AND ob.rejected_reason_text IS NULL
               AND obi.is_excluded = FALSE
               AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
-            GROUP BY obi.menu_item_id, mi.name
+            GROUP BY obi.menu_item_id, COALESCE(obi.item_name_snapshot, mi.name)
             ORDER BY SUM(obi.qty) DESC, MIN(obi.id) ASC
             LIMIT 3
             """.trimIndent()
