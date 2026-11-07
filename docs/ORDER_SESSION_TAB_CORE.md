@@ -237,6 +237,18 @@ smoke is [`ORDER-CONTEXT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#order-con
 - Rate-limit batch creation, staff call creation and tab invites.
 - Do not expose raw Telegram payloads, initData, secrets, provider payloads or unrelated PII in order/session/tab docs, DTOs, logs or analytics.
 
+## Accounting shift attachment (local candidate)
+
+`orders.accounting_shift_id` attaches an existing order to one venue accounting period without
+changing `table_session`, `order_batch` or personal/shared `tab` ownership. The sole order creator
+sets the reference under the venue lock; shift opening can adopt unassigned ACTIVE orders. Old
+closed orders are left untouched. Canonical bill snapshots remain the source for digital estimates.
+Payment recording requires operationally CLOSED orders; close itself never implies payment.
+The accounting journal stores explicit external receipt/correction facts and a frozen shift report,
+not another ordering engine. Manual sales create no order, guest, visit, tab or notification.
+Journal discounts/gifts are explicitly separate from the original guest bill. See
+`docs/VENUE_OPERATIONS.md` for the exact settlement, correction and closure prerequisites.
+
 ## Analytics And Dependencies
 
 Growth/retention depends on this core:

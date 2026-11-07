@@ -1767,8 +1767,11 @@ class OrdersRepository(
         val displayNumber = nextOrderDisplayNumber(connection, venueId, displayDate)
         return connection.prepareStatement(
             """
-            INSERT INTO orders (venue_id, table_id, table_session_id, status, display_number, display_date)
-            VALUES (?, ?, ?, 'ACTIVE', ?, ?)
+            INSERT INTO orders (
+                venue_id, table_id, table_session_id, status, display_number, display_date, accounting_shift_id
+            )
+            VALUES (?, ?, ?, 'ACTIVE', ?, ?,
+                (SELECT id FROM venue_accounting_shifts WHERE venue_id = ? AND status = 'OPEN'))
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
@@ -1777,6 +1780,7 @@ class OrdersRepository(
             statement.setLong(3, tableSessionId)
             statement.setInt(4, displayNumber)
             statement.setDate(5, Date.valueOf(displayDate))
+            statement.setLong(6, venueId)
             statement.executeUpdate()
             statement.generatedKeys.use { rs -> if (rs.next()) rs.getLong(1) else error("Failed to create order") }
         }

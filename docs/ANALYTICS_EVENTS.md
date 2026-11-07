@@ -323,6 +323,27 @@ Growth:
 - Repeat template usage = `repeat_template_applied` / `repeat_template_created`.
 - Opt-in notification rate = opted-in guests / eligible guests.
 
+## Venue accounting money semantics (local candidate)
+
+`VenueStatsRepository.revenueMinor` remains an **estimate of completed order value**, not paid
+revenue. Its existing API shape is retained; snapshot item prices/names, option deltas and currency
+are now preferred over the legacy menu fallback. Mini App/Bot labels explicitly say it is not
+payment. Legacy Stats fallback is not admissible evidence for accounting receipts.
+
+The separate accounting report uses integer RUB minor units: gross minus discounts minus gifts
+is accrued; sum of non-void CASH/CARD/TRANSFER entries is operator-confirmed paid; accrued minus
+paid is unpaid. Canceled records contribute zero accrued and cannot retain active receipts.
+Promotion reward value is a gift, ordinary promotion/manual adjustments are discounts. A digital
+order is counted once; mixed-source breakdowns sum its line sources, plus explicit service charges.
+Missing/invalid source snapshots are listed as disputed and excluded from amount totals. They
+block financial recording and final closure rather than manufacturing a value from today's menu.
+
+These confirmed amounts mean an operator recorded an external receipt; they are not bank/provider
+verification. No receipt is derived from bill-request payment preference or operational order state.
+`VENUE_ACCOUNTING_*` audit actions accompany immutable actor/time/old/new history; analytics events
+are not the financial source of truth. Closed reports preserve the acknowledged unpaid/disputed
+state. STAFF receives the current operational report only, not historical business analytics.
+
 ## Dashboards By Role
 
 Guest:

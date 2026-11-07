@@ -16,7 +16,7 @@ export type VenueDashboardOptions = {
   isDebug: boolean
   venueId: number
   access: VenueAccessDto
-  canAccessRoute: (route: 'settings' | 'menu' | 'tables' | 'staff' | 'guest-preview' | 'orders' | 'bookings' | 'calls' | 'messages' | 'extensions' | 'shifts' | 'chat') => boolean
+  canAccessRoute: (route: 'settings' | 'menu' | 'tables' | 'staff' | 'guest-preview' | 'orders' | 'bookings' | 'calls' | 'messages' | 'extensions' | 'shifts' | 'chat' | 'accounting') => boolean
 }
 
 type DashboardRefs = {
@@ -159,6 +159,7 @@ function buildVenueHome(options: VenueDashboardOptions): HTMLElement {
   const items: Array<{ route: Parameters<typeof canAccessRoute>[0]; title: string; detail?: string }> = operational
     ? [
         { route: 'orders', title: 'Заказы', detail: 'Очередь заказов' },
+        { route: 'accounting', title: 'Учёт смены', detail: 'Продажи и внешние оплаты' },
         { route: 'bookings', title: 'Бронирования' },
         { route: 'calls', title: 'Вызовы гостей' },
         { route: 'messages', title: 'Переписки' },

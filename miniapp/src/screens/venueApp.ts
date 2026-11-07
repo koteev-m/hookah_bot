@@ -29,6 +29,7 @@ import { renderVenueSettingsScreen, type VenueSettingsDraftState } from './venue
 import { renderVenueShiftExtensionsScreen } from './venueShiftExtensions'
 import { renderVenueStaffScreen } from './venueStaff'
 import { renderVenueStaffScheduleScreen, type ScheduleNavigation } from './venueStaffSchedule'
+import { renderVenueAccountingScreen } from './venueAccounting'
 import { renderVenueStatsScreen } from './venueStats'
 import { renderVenueSubscriptionScreen } from './venueSubscription'
 import { renderVenueTablesScreen } from './venueTables'
@@ -55,6 +56,7 @@ type RouteName =
   | 'staff'
   | 'my-profile'
   | 'shifts'
+  | 'accounting'
   | 'stats'
   | 'feedback'
   | 'settings'
@@ -72,7 +74,7 @@ type Route = {
   previewSection?: VenueSettingsSection
 }
 
-type NavRouteName = Exclude<RouteName, 'order' | 'more'>
+type NavRouteName = Exclude<RouteName, 'order' | 'more' | 'accounting'>
 
 type VenueShellRefs = {
   app: HTMLDivElement
@@ -136,6 +138,7 @@ function resolveRoute(): Route {
       'staff',
       'my-profile',
       'shifts',
+      'accounting',
       'stats',
       'feedback',
       'settings',
@@ -774,6 +777,8 @@ export function mountVenueApp(options: VenueAppOptions) {
           !staffOwnScheduleModuleDisabled() &&
           (hasPermission('STAFF_SCHEDULE_VIEW') || hasPermission('STAFF_SCHEDULE_VIEW_OWN'))
         )
+      case 'accounting':
+        return currentRole === 'OWNER' || currentRole === 'MANAGER' || currentRole === 'STAFF'
       case 'stats':
         return currentRole === 'OWNER' || currentRole === 'MANAGER'
       case 'feedback':
@@ -1015,6 +1020,8 @@ export function mountVenueApp(options: VenueAppOptions) {
         }
         return dispose
       }
+      case 'accounting':
+        return renderVenueAccountingScreen({ root: screenRoot, backendUrl, isDebug, venueId, access, userId: currentUserId })
       case 'stats':
         return renderVenueStatsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'feedback':
@@ -1146,6 +1153,14 @@ export function mountVenueApp(options: VenueAppOptions) {
     navigate,
     back: () => {
       if (currentSchedule?.controller.back()) return
+      if (currentRoute.name === 'accounting') {
+        const query = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+        if (query.has('sale') || query.has('view')) {
+          query.delete('sale'); query.delete('view')
+          navigate(`#/accounting?${query}`)
+        } else navigate('#/dashboard')
+        return
+      }
       if (currentRoute.name === 'my-profile') {
         navigate(canAccessRoute(ownProfileOrigin) ? `#/${ownProfileOrigin}` : '#/more')
         return

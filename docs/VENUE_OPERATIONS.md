@@ -773,6 +773,70 @@ and enabled, with legacy `TELEGRAM_FILE` compatibility in one information-media 
 Production operating policy, cost/ownership, backup/restore, physical deletion and remaining
 live/error/device evidence stay open. The staging provider decision is closed for this slice.
 
+## Учёт смены — HT-VENUE-SHIFT-SALES-MVP-01 (local candidate)
+
+This is internal venue accounting, separate from `staff_shifts`, staff schedules and Platform Billing.
+`venue_accounting_shifts` is an explicit OPEN/CLOSED period. UTC instants and the venue timezone
+snapshot define its boundaries; midnight does not open or close it. A database unique open slot and
+transactional venue lock allow only one open accounting shift per venue.
+
+- OWNER, MANAGER and STAFF open a shift, add/correct manual sales, record CASH/CARD/TRANSFER
+  receipts and inspect the current operational report. OWNER/MANAGER alone read closed history
+  and confirm closure. Existing Orders/Stats/Platform permissions are unchanged.
+- Opening adopts existing ACTIVE orders that have no accounting shift. Newly created orders bind
+  to the open shift under the existing order writer's venue lock. Past closed orders are not
+  backfilled. One order belongs to one shift, including all its subsequent batches and service
+  charges; the same order is never counted again as a manual sale automatically.
+- Digital order rows are read-only projections of the canonical bill while the order is ACTIVE.
+  Finish the order in `Заказы` before recording its payment or correcting its accounting record.
+  Finishing an order is operational; it does **not** prove payment. All active orders must finish
+  before closing their accounting shift. This is the MVP prerequisite for a stable source bill.
+  Extension approval locks the session, tab and order before rechecking ACTIVE and adding its
+  charge. Operational completion and accounting snapshots lock the same order. An approval that
+  commits first is included in the bill and unpaid balance; if completion wins, approval is refused
+  without a charge or successful decision record. Replaying an already approved request adds nothing.
+- Manual sale: existing active own-venue table, one or more menu/custom lines, integer quantity and
+  RUB minor units. Menu name/price are snapshotted by the server at creation; editing a saved
+  manual line is an explicit reasoned correction, never an implicit menu-price refresh. It creates
+  no guest, QR session, tab, order batch, Telegram message or staff-chat notification.
+- Digital lines preserve order/batch item identity, source, option/name/price, tab and service-charge
+  context. Journal discounts/gifts are separate accounting corrections: they do not rewrite the
+  guest's original bill. UI exposes the original amount and this consequence. Digital quantities,
+  prices and line composition remain immutable in the journal. Existing promotion/manual-discount
+  non-stacking rules are retained; a gift and additional discount cannot stack on one line.
+- Actual receipts are only operator-confirmed external CASH/CARD/TRANSFER entries. Partial and
+  mixed payment use multiple entries; paid cannot exceed payable. A bill request, delivered/closed
+  status or `revenueMinor` never creates a receipt. No acquiring, fiscal receipt or real refund exists.
+- Free/manual gift lines require a reason. Gift value and discount value have separate totals.
+  Canceling a sale preserves history and requires its active payment entries to be corrected first.
+  Canceling an erroneous payment requires a reason, preserves the original entry and increases the
+  unpaid balance; it transfers no money. A replacement payment is a separate explicit command.
+- Every journal command carries an actor-bound, payload-bound idempotency key; exact retry is a
+  no-op after fresh membership verification. Reusing a key for different input conflicts. Sale
+  versions reject stale edits/payments; closure compares the exact preview hash under the same locks.
+- Protected `venue_accounting_events` retains server actor/time, old/new snapshots and correction
+  reason. The corresponding `audit_log` entry and financial write commit together or roll back
+  together. No update/delete/history-forgery API exists. No raw guest identities enter report DTOs.
+- Report: sales/orders, gross, discounts, gifts, accrued, confirmed receipts, unpaid balance,
+  CASH/CARD/TRANSFER, table/item/source breakdowns, all sales and explicit unpaid/disputed lists.
+  A mixed-source order remains one sale; its lines contribute to their actual source breakdown.
+  Missing immutable prices, unsupported currency or source inconsistencies are disputed; their
+  amounts are excluded from totals, never replaced by current menu prices, and block payment/closure.
+- Close stores the full final report. Unpaid/disputed records require explicit acknowledgment of
+  their counts, balance and subsequent immutability. No normal edit, further receipt, reopen,
+  carry-over debt settlement or post-close correction is provided in this MVP. Management must
+  resolve records before closure or deliberately accept the frozen remainder.
+- Mini App `Учёт смены` is on Venue home for all three roles. Back returns from sale/editor to the
+  report; URLs retain shift/sale context across reload. Drafts and uncertain-submit payloads are
+  session/account/venue/shift scoped. A changed record cannot inherit an old draft's authority.
+
+PostgreSQL V131 / H2 V132 are additive; old orders keep NULL shift references until explicit
+adoption of an active order. Historical rows and guest APIs are preserved. Accounting history
+prevents physical deletion of its venue/shift; no destructive cleanup is added. Currency support
+is RUB only; tips, wages, POS, fiscalization, accounting export and AI are out of scope.
+Local validation and remaining release evidence are in `docs/TESTING_QA_SMOKE_STRATEGY.md`.
+Staging deployment and real Telegram/WebView acceptance remain separate authorized work.
+
 ## Stats
 
 Target Owner stats:

@@ -296,6 +296,23 @@ Target decision: remove `ADMIN` from the product model and keep it only as a com
   `/api/guest/venue-entry/{payload}` repeats normal guest availability. New/old aliases and direct
   venue IDs cannot bypass lifecycle/subscription. Public entry never creates a visit/tab/booking/order.
 
+## Venue accounting boundary (local candidate)
+
+For `GET /api/venue/{venueId}/accounting`, `GET .../{shiftId}` and `POST .../commands`, server
+membership is mandatory. STAFF may read/write only the current shift; OWNER/MANAGER may additionally
+read history and close. Platform role alone grants no access. No Platform Billing permission is
+added. The authenticated JWT subject is the actor; the request supplies neither trusted role nor
+actor/time. Transactions lock venue then membership, recheck the current role after waiting, and
+hold these locks through commit, including idempotent replay. This serializes against the current
+venue membership removal/role writer. Cross-venue shift/table/menu/sale references fail closed.
+
+Payment/correction/close writes, actor/time/old/new/reason history, semantic audit and idempotency
+record share one transaction. Audit failure leaves no partial success. Version/hash conflicts,
+overpayment, negative values and closed-period writes are rejected. Correction of a payment is
+an accounting reversal with an explicit no-real-refund warning. Closed unpaid/disputed balances
+require explicit acknowledgment. No ordinary audit update/delete endpoint or cross-venue history
+projection exists. Existing Stats, guest bill, schedule, support and Platform permissions remain.
+
 ## Dangerous Actions
 
 These actions require server-side authorization and should require confirmation, reason and/or audit according to risk and current implementation:

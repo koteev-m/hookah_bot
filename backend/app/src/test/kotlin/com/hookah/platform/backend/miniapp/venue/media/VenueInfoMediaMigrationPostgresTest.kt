@@ -80,11 +80,12 @@ class VenueInfoMediaMigrationPostgresTest {
                 listOf(
                     "129" to "V129__venue_public_addresses.sql",
                     "130" to "V130__backfill_venue_public_addresses.sql",
+                    "131" to "V131__venue_accounting_shifts.sql",
                 ),
                 current.info().pending().map { it.version.version to it.script },
             )
-            assertEquals(2, current.migrate().migrationsExecuted)
-            assertEquals("130", current.info().current().version.version)
+            assertEquals(3, current.migrate().migrationsExecuted)
+            assertEquals("131", current.info().current().version.version)
             assertTrue(current.info().pending().isEmpty())
             current.validate()
             assertEquals(0, current.migrate().migrationsExecuted)

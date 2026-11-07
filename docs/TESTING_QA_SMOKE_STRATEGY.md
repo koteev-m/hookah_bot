@@ -1728,6 +1728,56 @@ Target QA model:
 - GitHub Actions must be green before release/merge.
 - Staging smoke is required for runtime behavior changes that affect guests, venue operations, Telegram/staff-chat, billing/security, migrations or deployment.
 
+## Venue accounting MVP local gate — HT-VENUE-SHIFT-SALES-MVP-01
+
+P1 regression gate (`HT-VENUE-SHIFT-SALES-P1-FIX-01`): `AccountingHttpContractTest` exercises the
+real Ktor module and compares serialized GET/POST responses with
+`miniapp/e2e/fixtures/accounting-http.json`. Only generated IDs, times and report hashes are
+normalized; money, `0`, `true`/`false`, empty arrays and nullable fields must survive unchanged.
+The mobile accounting spec consumes that capture to display 100 RUB and record 40 + 60 RUB.
+Accounting responses explicitly encode defaults; unrelated API serialization remains unchanged.
+`AccountingExtensionConcurrencyPostgresTest` uses independent PostgreSQL connections, controlled
+transaction barriers and `pg_blocking_pids` to prove real lock contention: extension/operational
+completion, accounting close, payment snapshot, duplicate approval and rollback. It compares the
+canonical bill, current/frozen report, receipts, debt and decision/audit records. Include existing
+`ShiftExtensionRoutesTest` in regressions; sequential tests cannot replace this concurrency gate.
+
+New accounting H2 and PostgreSQL contract tests cover separate accounting shifts, unique open
+periods, DB tenant binding, existing order adoption/new-order linkage, immutable menu snapshots,
+manual/free/gift/discount sales, integer limits, partial/mixed receipts, duplicate commands,
+payment correction, cancellation, unpaid/disputed close confirmation, stale preview/version,
+midnight/timezone, STAFF/MANAGER/OWNER/foreign denial and audit rollback. A PostgreSQL lock-barrier
+case commits membership removal while payment waits and verifies fresh denial with zero receipt.
+API tests verify JWT actor authority, current/history role boundaries and generic foreign denial.
+
+Run `*Accounting*`, existing `*GuestOrder*`, `*VenueOrder*`, `*VenueRbac*`, Stats and bill/promotion
+regressions, plus current migration tests and Kotlin compile/ktlint. New SQL is PostgreSQL V131 /
+H2 V132; existing migration source/checksum/history assertions remain mandatory and accept only the
+explicit new tail. Docker 29 local Testcontainers uses process-local `JAVA_TOOL_OPTIONS=-Dapi.version=1.44`;
+a skipped PostgreSQL test is not a pass.
+
+`venue-accounting.spec.ts` covers a 390×844 viewport, manual/menu/gift validation, integer amounts,
+Telegram Back, reload, venue-scoped drafts, exact lost-response retry, mixed receipts, preview-hash
+closure, digital-order prerequisites, stale editors and access denial. Run TypeScript/Vite build
+and the current full Playwright suite, retaining Orders/Stats/Bill and role navigation regressions.
+
+Staging smoke remains required after a separately authorized release: two venue identities and
+STAFF/MANAGER, active digital order admission, manual sale without guest/outbox effects, partial/
+mixed receipt, correction/gift/reason, overnight final report, late access revocation and closed
+immutability in real Telegram WebView. Local synthetic fixtures are not live payment evidence.
+
+Local evidence (2026-11-07, uncommitted candidate on `1453a665679643f3ddc3ceb9bc0656d354f420ca`):
+342 backend tests passed with zero skips, including real PostgreSQL and H2; four additional Bot
+Stats tests passed. Compile/ktlint and TypeScript/Vite build passed. The full 653-case Playwright
+run passed 650 cases; three owner-home expectations needed the new accounting action. Their
+focused rerun passed all three with viewport/overflow assertions retained; runtime UI bytes were
+unchanged after the full run. All six new accounting mobile cases passed in that full run.
+The exact current migration tail is pinned in existing runtime/release fixtures: 23 runtime
+self-tests, 72 release-contract tests, migration-lineage refusal cases and Java fixture compile
+passed. Historical guards remain unchanged; hosted Docker/JVM integration was not executed.
+Commands, logs, XML counts, source hashes and screenshot:
+`/private/tmp/HT-VENUE-SHIFT-SALES-MVP-01/REPORT.txt`. This is local review evidence, not release approval.
+
 ## QA Levels
 
 | Level | Purpose | Current / target |

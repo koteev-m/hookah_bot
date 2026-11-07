@@ -349,9 +349,10 @@ class ShiftExtensionRepository(
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        val request =
-                            loadRequestForUpdate(connection, venueId, requestId)
+                        val decision =
+                            loadRequestForDecision(connection, venueId, requestId)
                                 ?: throw NotFoundException()
+                        val request = decision.request
                         if (request.status == ShiftExtensionRequestStatus.APPROVED) {
                             connection.commit()
                             return@use ShiftExtensionDecisionResult(
@@ -362,6 +363,11 @@ class ShiftExtensionRepository(
                         }
                         if (request.status != ShiftExtensionRequestStatus.PENDING) {
                             throw InvalidInputException("Shift extension request is not pending")
+                        }
+                        if (decision.orderStatus != "ACTIVE") {
+                            throw InvalidInputException(
+                                "Заказ уже завершён. Продление не добавлено. Обновите список запросов.",
+                            )
                         }
                         ensureActiveContext(
                             connection = connection,
@@ -426,7 +432,7 @@ class ShiftExtensionRepository(
                     connection.autoCommit = false
                     try {
                         val request =
-                            loadRequestForUpdate(connection, venueId, requestId)
+                            loadRequestForDecision(connection, venueId, requestId)?.request
                                 ?: throw NotFoundException()
                         if (request.status == ShiftExtensionRequestStatus.REJECTED) {
                             connection.commit()
@@ -733,6 +739,48 @@ class ShiftExtensionRepository(
             statement.setLong(2, requestId)
             statement.executeQuery().use { rs -> if (rs.next()) rs.toShiftExtensionRequestRecord() else null }
         }
+
+    private data class LockedDecisionRequest(
+        val request: ShiftExtensionRequestRecord,
+        val orderStatus: String,
+    )
+
+    private fun loadRequestForDecision(
+        connection: Connection,
+        venueId: Long,
+        requestId: Long,
+    ): LockedDecisionRequest? {
+        val context = loadRequest(connection, venueId, requestId) ?: return null
+        // Match guest ordering: session -> tab -> order -> request. Never hold the request while waiting for context.
+        // NO KEY UPDATE still excludes context writers but permits FK checks by an order closure holding the order.
+        val contextLock =
+            if (connection.metaData.databaseProductName.equals("PostgreSQL", ignoreCase = true)) {
+                "FOR NO KEY UPDATE"
+            } else {
+                "FOR UPDATE"
+            }
+        for ((table, id) in listOf("table_sessions" to context.tableSessionId, "tab" to context.tabId)) {
+            val exists =
+                connection.prepareStatement(
+                    "SELECT id FROM $table WHERE id = ? AND venue_id = ? $contextLock",
+                ).use { statement ->
+                    statement.setLong(1, id)
+                    statement.setLong(2, venueId)
+                    statement.executeQuery().use { it.next() }
+                }
+            if (!exists) return null
+        }
+        val orderStatus =
+            connection.prepareStatement(
+                "SELECT status FROM orders WHERE id = ? AND venue_id = ? FOR UPDATE",
+            ).use { statement ->
+                statement.setLong(1, context.orderId)
+                statement.setLong(2, venueId)
+                statement.executeQuery().use { if (it.next()) it.getString("status") else null }
+            } ?: return null
+        val request = loadRequestForUpdate(connection, venueId, requestId) ?: return null
+        return LockedDecisionRequest(request, orderStatus)
+    }
 
     private fun loadRequestForUpdate(
         connection: Connection,

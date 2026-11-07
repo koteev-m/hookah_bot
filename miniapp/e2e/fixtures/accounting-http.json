@@ -1,0 +1,710 @@
+{
+    "empty": {
+        "current": null,
+        "history": [],
+        "nextHistoryBeforeId": null
+    },
+    "created": {
+        "shiftId": 1,
+        "venueId": 1,
+        "status": "OPEN",
+        "timezone": "Europe/Moscow",
+        "openedAt": "2026-11-07T20:55:00Z",
+        "closedAt": null,
+        "currency": "RUB",
+        "sales": [
+            {
+                "id": "manual:http-contract",
+                "tableId": 11,
+                "tableLabel": "Стол 1",
+                "source": "MANUAL",
+                "orderId": null,
+                "displayNumber": null,
+                "orderClosed": true,
+                "createdAt": "2026-11-07T20:55:00Z",
+                "currency": "RUB",
+                "lines": [
+                    {
+                        "id": "line:http-contract",
+                        "name": "Чай",
+                        "qty": 1,
+                        "unitPriceMinor": 10000,
+                        "menuItemId": null,
+                        "source": "MANUAL",
+                        "tabId": null,
+                        "baseDiscountMinor": 0,
+                        "baseGiftMinor": 0,
+                        "discountMinor": 0,
+                        "giftReason": null
+                    }
+                ],
+                "payments": [],
+                "version": 1,
+                "cancelReason": null,
+                "disputeReason": null,
+                "originalPayableMinor": null,
+                "issue": null
+            }
+        ],
+        "totals": {
+            "salesCount": 1,
+            "ordersCount": 0,
+            "grossMinor": 10000,
+            "discountMinor": 0,
+            "giftMinor": 0,
+            "accruedMinor": 10000,
+            "paidMinor": 0,
+            "unpaidMinor": 10000,
+            "cashMinor": 0,
+            "cardMinor": 0,
+            "transferMinor": 0
+        },
+        "byTable": [
+            {
+                "label": "Стол 1",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "byItem": [
+            {
+                "label": "Чай · 10000 коп.",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "bySource": [
+            {
+                "label": "MANUAL",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "unpaidSaleIds": [
+            "manual:http-contract"
+        ],
+        "disputedSaleIds": [],
+        "reportHash": "http-contract-hash"
+    },
+    "current": {
+        "current": {
+            "shiftId": 1,
+            "venueId": 1,
+            "status": "OPEN",
+            "timezone": "Europe/Moscow",
+            "openedAt": "2026-11-07T20:55:00Z",
+            "closedAt": null,
+            "currency": "RUB",
+            "sales": [
+                {
+                    "id": "manual:http-contract",
+                    "tableId": 11,
+                    "tableLabel": "Стол 1",
+                    "source": "MANUAL",
+                    "orderId": null,
+                    "displayNumber": null,
+                    "orderClosed": true,
+                    "createdAt": "2026-11-07T20:55:00Z",
+                    "currency": "RUB",
+                    "lines": [
+                        {
+                            "id": "line:http-contract",
+                            "name": "Чай",
+                            "qty": 1,
+                            "unitPriceMinor": 10000,
+                            "menuItemId": null,
+                            "source": "MANUAL",
+                            "tabId": null,
+                            "baseDiscountMinor": 0,
+                            "baseGiftMinor": 0,
+                            "discountMinor": 0,
+                            "giftReason": null
+                        }
+                    ],
+                    "payments": [],
+                    "version": 1,
+                    "cancelReason": null,
+                    "disputeReason": null,
+                    "originalPayableMinor": null,
+                    "issue": null
+                }
+            ],
+            "totals": {
+                "salesCount": 1,
+                "ordersCount": 0,
+                "grossMinor": 10000,
+                "discountMinor": 0,
+                "giftMinor": 0,
+                "accruedMinor": 10000,
+                "paidMinor": 0,
+                "unpaidMinor": 10000,
+                "cashMinor": 0,
+                "cardMinor": 0,
+                "transferMinor": 0
+            },
+            "byTable": [
+                {
+                    "label": "Стол 1",
+                    "qty": 1,
+                    "accruedMinor": 10000
+                }
+            ],
+            "byItem": [
+                {
+                    "label": "Чай · 10000 коп.",
+                    "qty": 1,
+                    "accruedMinor": 10000
+                }
+            ],
+            "bySource": [
+                {
+                    "label": "MANUAL",
+                    "qty": 1,
+                    "accruedMinor": 10000
+                }
+            ],
+            "unpaidSaleIds": [
+                "manual:http-contract"
+            ],
+            "disputedSaleIds": [],
+            "reportHash": "http-contract-hash"
+        },
+        "history": [],
+        "nextHistoryBeforeId": null
+    },
+    "detail": {
+        "shiftId": 1,
+        "venueId": 1,
+        "status": "OPEN",
+        "timezone": "Europe/Moscow",
+        "openedAt": "2026-11-07T20:55:00Z",
+        "closedAt": null,
+        "currency": "RUB",
+        "sales": [
+            {
+                "id": "manual:http-contract",
+                "tableId": 11,
+                "tableLabel": "Стол 1",
+                "source": "MANUAL",
+                "orderId": null,
+                "displayNumber": null,
+                "orderClosed": true,
+                "createdAt": "2026-11-07T20:55:00Z",
+                "currency": "RUB",
+                "lines": [
+                    {
+                        "id": "line:http-contract",
+                        "name": "Чай",
+                        "qty": 1,
+                        "unitPriceMinor": 10000,
+                        "menuItemId": null,
+                        "source": "MANUAL",
+                        "tabId": null,
+                        "baseDiscountMinor": 0,
+                        "baseGiftMinor": 0,
+                        "discountMinor": 0,
+                        "giftReason": null
+                    }
+                ],
+                "payments": [],
+                "version": 1,
+                "cancelReason": null,
+                "disputeReason": null,
+                "originalPayableMinor": null,
+                "issue": null
+            }
+        ],
+        "totals": {
+            "salesCount": 1,
+            "ordersCount": 0,
+            "grossMinor": 10000,
+            "discountMinor": 0,
+            "giftMinor": 0,
+            "accruedMinor": 10000,
+            "paidMinor": 0,
+            "unpaidMinor": 10000,
+            "cashMinor": 0,
+            "cardMinor": 0,
+            "transferMinor": 0
+        },
+        "byTable": [
+            {
+                "label": "Стол 1",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "byItem": [
+            {
+                "label": "Чай · 10000 коп.",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "bySource": [
+            {
+                "label": "MANUAL",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "unpaidSaleIds": [
+            "manual:http-contract"
+        ],
+        "disputedSaleIds": [],
+        "reportHash": "http-contract-hash"
+    },
+    "paid": {
+        "shiftId": 1,
+        "venueId": 1,
+        "status": "OPEN",
+        "timezone": "Europe/Moscow",
+        "openedAt": "2026-11-07T20:55:00Z",
+        "closedAt": null,
+        "currency": "RUB",
+        "sales": [
+            {
+                "id": "manual:http-contract",
+                "tableId": 11,
+                "tableLabel": "Стол 1",
+                "source": "MANUAL",
+                "orderId": null,
+                "displayNumber": null,
+                "orderClosed": true,
+                "createdAt": "2026-11-07T20:55:00Z",
+                "currency": "RUB",
+                "lines": [
+                    {
+                        "id": "line:http-contract",
+                        "name": "Чай",
+                        "qty": 1,
+                        "unitPriceMinor": 10000,
+                        "menuItemId": null,
+                        "source": "MANUAL",
+                        "tabId": null,
+                        "baseDiscountMinor": 0,
+                        "baseGiftMinor": 0,
+                        "discountMinor": 0,
+                        "giftReason": null
+                    }
+                ],
+                "payments": [
+                    {
+                        "id": "contract-payment-01",
+                        "method": "CASH",
+                        "amountMinor": 4000,
+                        "recordedAt": "2026-11-07T20:55:00Z",
+                        "voidReason": null
+                    }
+                ],
+                "version": 2,
+                "cancelReason": null,
+                "disputeReason": null,
+                "originalPayableMinor": null,
+                "issue": null
+            }
+        ],
+        "totals": {
+            "salesCount": 1,
+            "ordersCount": 0,
+            "grossMinor": 10000,
+            "discountMinor": 0,
+            "giftMinor": 0,
+            "accruedMinor": 10000,
+            "paidMinor": 4000,
+            "unpaidMinor": 6000,
+            "cashMinor": 4000,
+            "cardMinor": 0,
+            "transferMinor": 0
+        },
+        "byTable": [
+            {
+                "label": "Стол 1",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "byItem": [
+            {
+                "label": "Чай · 10000 коп.",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "bySource": [
+            {
+                "label": "MANUAL",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "unpaidSaleIds": [
+            "manual:http-contract"
+        ],
+        "disputedSaleIds": [],
+        "reportHash": "http-contract-hash"
+    },
+    "settled": {
+        "shiftId": 1,
+        "venueId": 1,
+        "status": "OPEN",
+        "timezone": "Europe/Moscow",
+        "openedAt": "2026-11-07T20:55:00Z",
+        "closedAt": null,
+        "currency": "RUB",
+        "sales": [
+            {
+                "id": "manual:http-contract",
+                "tableId": 11,
+                "tableLabel": "Стол 1",
+                "source": "MANUAL",
+                "orderId": null,
+                "displayNumber": null,
+                "orderClosed": true,
+                "createdAt": "2026-11-07T20:55:00Z",
+                "currency": "RUB",
+                "lines": [
+                    {
+                        "id": "line:http-contract",
+                        "name": "Чай",
+                        "qty": 1,
+                        "unitPriceMinor": 10000,
+                        "menuItemId": null,
+                        "source": "MANUAL",
+                        "tabId": null,
+                        "baseDiscountMinor": 0,
+                        "baseGiftMinor": 0,
+                        "discountMinor": 0,
+                        "giftReason": null
+                    }
+                ],
+                "payments": [
+                    {
+                        "id": "contract-payment-01",
+                        "method": "CASH",
+                        "amountMinor": 4000,
+                        "recordedAt": "2026-11-07T20:55:00Z",
+                        "voidReason": null
+                    },
+                    {
+                        "id": "contract-payment-02",
+                        "method": "CARD",
+                        "amountMinor": 6000,
+                        "recordedAt": "2026-11-07T20:55:00Z",
+                        "voidReason": null
+                    }
+                ],
+                "version": 3,
+                "cancelReason": null,
+                "disputeReason": null,
+                "originalPayableMinor": null,
+                "issue": null
+            }
+        ],
+        "totals": {
+            "salesCount": 1,
+            "ordersCount": 0,
+            "grossMinor": 10000,
+            "discountMinor": 0,
+            "giftMinor": 0,
+            "accruedMinor": 10000,
+            "paidMinor": 10000,
+            "unpaidMinor": 0,
+            "cashMinor": 4000,
+            "cardMinor": 6000,
+            "transferMinor": 0
+        },
+        "byTable": [
+            {
+                "label": "Стол 1",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "byItem": [
+            {
+                "label": "Чай · 10000 коп.",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "bySource": [
+            {
+                "label": "MANUAL",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "unpaidSaleIds": [],
+        "disputedSaleIds": [],
+        "reportHash": "http-contract-hash"
+    },
+    "digitalActive": {
+        "shiftId": 1,
+        "venueId": 1,
+        "status": "OPEN",
+        "timezone": "Europe/Moscow",
+        "openedAt": "2026-11-07T20:55:00Z",
+        "closedAt": null,
+        "currency": "RUB",
+        "sales": [
+            {
+                "id": "manual:http-contract",
+                "tableId": 11,
+                "tableLabel": "Стол 1",
+                "source": "MANUAL",
+                "orderId": null,
+                "displayNumber": null,
+                "orderClosed": true,
+                "createdAt": "2026-11-07T20:55:00Z",
+                "currency": "RUB",
+                "lines": [
+                    {
+                        "id": "line:http-contract",
+                        "name": "Чай",
+                        "qty": 1,
+                        "unitPriceMinor": 10000,
+                        "menuItemId": null,
+                        "source": "MANUAL",
+                        "tabId": null,
+                        "baseDiscountMinor": 0,
+                        "baseGiftMinor": 0,
+                        "discountMinor": 0,
+                        "giftReason": null
+                    }
+                ],
+                "payments": [
+                    {
+                        "id": "contract-payment-01",
+                        "method": "CASH",
+                        "amountMinor": 4000,
+                        "recordedAt": "2026-11-07T20:55:00Z",
+                        "voidReason": null
+                    },
+                    {
+                        "id": "contract-payment-02",
+                        "method": "CARD",
+                        "amountMinor": 6000,
+                        "recordedAt": "2026-11-07T20:55:00Z",
+                        "voidReason": null
+                    }
+                ],
+                "version": 3,
+                "cancelReason": null,
+                "disputeReason": null,
+                "originalPayableMinor": null,
+                "issue": null
+            },
+            {
+                "id": "order:31",
+                "tableId": 11,
+                "tableLabel": "Стол 1",
+                "source": "MINIAPP",
+                "orderId": 31,
+                "displayNumber": null,
+                "orderClosed": false,
+                "createdAt": "2026-11-07T20:55:00Z",
+                "currency": "RUB",
+                "lines": [
+                    {
+                        "id": "item:61",
+                        "name": "Чай",
+                        "qty": 1,
+                        "unitPriceMinor": 10000,
+                        "menuItemId": 21,
+                        "source": "MINIAPP",
+                        "tabId": null,
+                        "baseDiscountMinor": 0,
+                        "baseGiftMinor": 0,
+                        "discountMinor": 0,
+                        "giftReason": null
+                    }
+                ],
+                "payments": [],
+                "version": 0,
+                "cancelReason": null,
+                "disputeReason": null,
+                "originalPayableMinor": 10000,
+                "issue": null
+            }
+        ],
+        "totals": {
+            "salesCount": 2,
+            "ordersCount": 1,
+            "grossMinor": 20000,
+            "discountMinor": 0,
+            "giftMinor": 0,
+            "accruedMinor": 20000,
+            "paidMinor": 10000,
+            "unpaidMinor": 10000,
+            "cashMinor": 4000,
+            "cardMinor": 6000,
+            "transferMinor": 0
+        },
+        "byTable": [
+            {
+                "label": "Стол 1",
+                "qty": 2,
+                "accruedMinor": 20000
+            }
+        ],
+        "byItem": [
+            {
+                "label": "Чай · 10000 коп.",
+                "qty": 2,
+                "accruedMinor": 20000
+            }
+        ],
+        "bySource": [
+            {
+                "label": "MANUAL",
+                "qty": 1,
+                "accruedMinor": 10000
+            },
+            {
+                "label": "MINIAPP",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "unpaidSaleIds": [
+            "order:31"
+        ],
+        "disputedSaleIds": [],
+        "reportHash": "http-contract-hash"
+    },
+    "digitalClosed": {
+        "shiftId": 1,
+        "venueId": 1,
+        "status": "OPEN",
+        "timezone": "Europe/Moscow",
+        "openedAt": "2026-11-07T20:55:00Z",
+        "closedAt": null,
+        "currency": "RUB",
+        "sales": [
+            {
+                "id": "manual:http-contract",
+                "tableId": 11,
+                "tableLabel": "Стол 1",
+                "source": "MANUAL",
+                "orderId": null,
+                "displayNumber": null,
+                "orderClosed": true,
+                "createdAt": "2026-11-07T20:55:00Z",
+                "currency": "RUB",
+                "lines": [
+                    {
+                        "id": "line:http-contract",
+                        "name": "Чай",
+                        "qty": 1,
+                        "unitPriceMinor": 10000,
+                        "menuItemId": null,
+                        "source": "MANUAL",
+                        "tabId": null,
+                        "baseDiscountMinor": 0,
+                        "baseGiftMinor": 0,
+                        "discountMinor": 0,
+                        "giftReason": null
+                    }
+                ],
+                "payments": [
+                    {
+                        "id": "contract-payment-01",
+                        "method": "CASH",
+                        "amountMinor": 4000,
+                        "recordedAt": "2026-11-07T20:55:00Z",
+                        "voidReason": null
+                    },
+                    {
+                        "id": "contract-payment-02",
+                        "method": "CARD",
+                        "amountMinor": 6000,
+                        "recordedAt": "2026-11-07T20:55:00Z",
+                        "voidReason": null
+                    }
+                ],
+                "version": 3,
+                "cancelReason": null,
+                "disputeReason": null,
+                "originalPayableMinor": null,
+                "issue": null
+            },
+            {
+                "id": "order:31",
+                "tableId": 11,
+                "tableLabel": "Стол 1",
+                "source": "MINIAPP",
+                "orderId": 31,
+                "displayNumber": null,
+                "orderClosed": true,
+                "createdAt": "2026-11-07T20:55:00Z",
+                "currency": "RUB",
+                "lines": [
+                    {
+                        "id": "item:61",
+                        "name": "Чай",
+                        "qty": 1,
+                        "unitPriceMinor": 10000,
+                        "menuItemId": 21,
+                        "source": "MINIAPP",
+                        "tabId": null,
+                        "baseDiscountMinor": 0,
+                        "baseGiftMinor": 0,
+                        "discountMinor": 0,
+                        "giftReason": null
+                    }
+                ],
+                "payments": [],
+                "version": 0,
+                "cancelReason": null,
+                "disputeReason": null,
+                "originalPayableMinor": 10000,
+                "issue": null
+            }
+        ],
+        "totals": {
+            "salesCount": 2,
+            "ordersCount": 1,
+            "grossMinor": 20000,
+            "discountMinor": 0,
+            "giftMinor": 0,
+            "accruedMinor": 20000,
+            "paidMinor": 10000,
+            "unpaidMinor": 10000,
+            "cashMinor": 4000,
+            "cardMinor": 6000,
+            "transferMinor": 0
+        },
+        "byTable": [
+            {
+                "label": "Стол 1",
+                "qty": 2,
+                "accruedMinor": 20000
+            }
+        ],
+        "byItem": [
+            {
+                "label": "Чай · 10000 коп.",
+                "qty": 2,
+                "accruedMinor": 20000
+            }
+        ],
+        "bySource": [
+            {
+                "label": "MANUAL",
+                "qty": 1,
+                "accruedMinor": 10000
+            },
+            {
+                "label": "MINIAPP",
+                "qty": 1,
+                "accruedMinor": 10000
+            }
+        ],
+        "unpaidSaleIds": [
+            "order:31"
+        ],
+        "disputedSaleIds": [],
+        "reportHash": "http-contract-hash"
+    }
+}

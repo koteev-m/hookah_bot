@@ -65,7 +65,7 @@ function buildStatsDom(root: HTMLDivElement): StatsRefs {
   const title = el('h2', { text: 'Статистика' })
   const subtitle = el('p', {
     className: 'venue-dashboard-subtitle',
-    text: 'Сводка по заказам заведения. Данные доступны только владельцу и менеджеру.'
+    text: 'Сводка по выполненным заказам, а не подтверждённым оплатам. Внешние поступления учитываются отдельно в «Учёте смены». Данные доступны только владельцу и менеджеру.'
   })
 
   const periodActions = el('div', { className: 'button-row venue-stats-periods' })
@@ -128,7 +128,7 @@ function renderMetric(label: string, value: string) {
 function renderStats(refs: StatsRefs, stats: VenueStatsResponse) {
   refs.metrics.replaceChildren(
     renderMetric('Заказы', String(stats.ordersCount)),
-    renderMetric('Выручка', formatPrice(stats.revenueMinor, stats.currency)),
+    renderMetric('Расчётная сумма заказов', formatPrice(stats.revenueMinor, stats.currency)),
     renderMetric('Средний чек', formatPrice(stats.averageCheckMinor, stats.currency)),
     renderMetric('Скидки', formatPrice(stats.discountMinor, stats.currency)),
     renderMetric('Отмены/исключения', String(stats.cancelledItemsCount))

@@ -21896,7 +21896,7 @@ class TelegramBotRouter internal constructor(
             append("\n\n")
             append("Заказы: ${stats.ordersCount}")
             append("\n")
-            append("Выручка: ${formatPrice(stats.revenueMinor, stats.currency)}")
+            append("Расчётная сумма заказов (не оплата): ${formatPrice(stats.revenueMinor, stats.currency)}")
             append("\n")
             append("Средний чек: ${formatPrice(stats.averageCheckMinor, stats.currency)}")
             append("\n")

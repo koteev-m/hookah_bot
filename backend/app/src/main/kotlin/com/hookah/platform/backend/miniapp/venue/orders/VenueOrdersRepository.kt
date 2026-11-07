@@ -688,167 +688,173 @@ class VenueOrdersRepository(
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
-                ds.connection.use { connection ->
-                    val orderHeader =
-                        connection.prepareStatement(
-                            """
-                            SELECT o.id,
-                                   o.status,
-                                   o.display_number,
-                                   o.display_date,
-                                   o.created_at,
-                                   o.updated_at,
-                                   o.venue_id,
-                                   vt.id AS table_id,
-                                   vt.table_number
-                            FROM orders o
-                            JOIN venue_tables vt ON vt.id = o.table_id
-                            WHERE o.id = ? AND o.venue_id = ?
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, orderId)
-                            statement.setLong(2, venueId)
-                            statement.executeQuery().use { rs ->
-                                if (rs.next()) {
-                                    OrderHeader(
-                                        status = rs.getString("status"),
-                                        displayNumber =
-                                            rs.getInt("display_number").let {
-                                                    value ->
-                                                if (rs.wasNull()) null else value
-                                            },
-                                        displayDate = rs.getDate("display_date")?.toLocalDate(),
-                                        createdAt = rs.getTimestamp("created_at").toInstant(),
-                                        updatedAt = rs.getTimestamp("updated_at").toInstant(),
-                                        tableId = rs.getLong("table_id"),
-                                        tableNumber = rs.getInt("table_number"),
-                                    )
-                                } else {
-                                    null
-                                }
-                            }
-                        } ?: return@use null
-
-                    val batches =
-                        connection.prepareStatement(
-                            """
-                            SELECT ob.id,
-                                   ob.tab_id,
-                                   t.type AS tab_type,
-                                   t.owner_user_id AS tab_owner_user_id,
-                                   ob.status,
-                                   ob.source,
-                                   ob.guest_comment,
-                                   ob.created_at,
-                                   ob.updated_at,
-                                   ob.rejected_reason_code,
-                                   ob.rejected_reason_text,
-                                   COALESCE(
-                                       ob.author_user_id,
-                                       (
-                                           SELECT gbi.user_id
-                                           FROM guest_batch_idempotency gbi
-                                           WHERE gbi.batch_id = ob.id
-                                           ORDER BY gbi.id DESC
-                                           LIMIT 1
-                                       )
-                                   ) AS guest_user_id,
-                                   u.guest_display_name AS guest_display_name
-                            FROM order_batches ob
-                            LEFT JOIN tab t ON t.id = ob.tab_id
-                            LEFT JOIN users u
-                              ON u.telegram_user_id = COALESCE(
-                                  ob.author_user_id,
-                                  (
-                                      SELECT gbi.user_id
-                                      FROM guest_batch_idempotency gbi
-                                      WHERE gbi.batch_id = ob.id
-                                      ORDER BY gbi.id DESC
-                                      LIMIT 1
-                                  )
-                              )
-                            WHERE order_id = ?
-                            ORDER BY ob.created_at, ob.id
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, orderId)
-                            statement.executeQuery().use { rs ->
-                                val result = mutableListOf<OrderBatchDetail>()
-                                while (rs.next()) {
-                                    val batchStatus =
-                                        OrderBatchStatus.fromDb(rs.getString("status"))
-                                            ?.toWorkflow() ?: OrderWorkflowStatus.NEW
-                                    result.add(
-                                        OrderBatchDetail(
-                                            batchId = rs.getLong("id"),
-                                            tabId =
-                                                rs.getLong("tab_id").let {
-                                                        value ->
-                                                    if (rs.wasNull()) null else value
-                                                },
-                                            tabType = rs.getString("tab_type"),
-                                            tabOwnerUserId =
-                                                rs.getLong("tab_owner_user_id").let {
-                                                        value ->
-                                                    if (rs.wasNull()) null else value
-                                                },
-                                            status = batchStatus,
-                                            source = rs.getString("source"),
-                                            comment = rs.getString("guest_comment"),
-                                            createdAt = rs.getTimestamp("created_at").toInstant(),
-                                            updatedAt = rs.getTimestamp("updated_at").toInstant(),
-                                            rejectedReasonCode = rs.getString("rejected_reason_code"),
-                                            rejectedReasonText = rs.getString("rejected_reason_text"),
-                                            authorUserId =
-                                                rs.getLong("guest_user_id").let {
-                                                        value ->
-                                                    if (rs.wasNull()) null else value
-                                                },
-                                            guestDisplayName = rs.getString("guest_display_name"),
-                                            items = emptyList(),
-                                        ),
-                                    )
-                                }
-                                result
-                            }
-                        }
-
-                    val batchIds = batches.map { it.batchId }
-                    val itemsByBatch = loadBatchItems(connection, batchIds)
-                    val promotionDiscountsByBatch = loadPromotionDiscountsByBatch(connection, batchIds)
-                    val serviceCharges = loadServiceCharges(connection, orderId)
-                    val pendingShiftExtension =
-                        loadPendingShiftExtensionsByOrderIds(connection, venueId, listOf(orderId))[orderId]
-                    val mappedBatches =
-                        batches.map { batch ->
-                            batch.copy(
-                                items = itemsByBatch[batch.batchId].orEmpty(),
-                                promotionDiscounts = promotionDiscountsByBatch[batch.batchId].orEmpty(),
-                            )
-                        }
-
-                    val workflowStatus = resolveOrderWorkflowStatus(orderHeader.status, mappedBatches)
-
-                    OrderDetail(
-                        orderId = orderId,
-                        displayNumber = orderHeader.displayNumber,
-                        displayDate = orderHeader.displayDate,
-                        venueId = venueId,
-                        tableId = orderHeader.tableId,
-                        tableNumber = orderHeader.tableNumber,
-                        status = workflowStatus,
-                        createdAt = orderHeader.createdAt,
-                        updatedAt = orderHeader.updatedAt,
-                        batches = mappedBatches,
-                        promotionDiscounts = mappedBatches.flatMap { it.promotionDiscounts }.mergePromotionDiscounts(),
-                        serviceCharges = serviceCharges,
-                        pendingShiftExtension = pendingShiftExtension,
-                    )
-                }
+                ds.connection.use { connection -> loadOrderDetail(connection, venueId, orderId) }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    fun loadOrderDetail(
+        connection: Connection,
+        venueId: Long,
+        orderId: Long,
+    ): OrderDetail? {
+        val orderHeader =
+            connection.prepareStatement(
+                """
+                SELECT o.id,
+                       o.status,
+                       o.display_number,
+                       o.display_date,
+                       o.created_at,
+                       o.updated_at,
+                       o.venue_id,
+                       vt.id AS table_id,
+                       vt.table_number
+                FROM orders o
+                JOIN venue_tables vt ON vt.id = o.table_id
+                WHERE o.id = ? AND o.venue_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.setLong(2, venueId)
+                statement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        OrderHeader(
+                            status = rs.getString("status"),
+                            displayNumber =
+                                rs.getInt("display_number").let {
+                                        value ->
+                                    if (rs.wasNull()) null else value
+                                },
+                            displayDate = rs.getDate("display_date")?.toLocalDate(),
+                            createdAt = rs.getTimestamp("created_at").toInstant(),
+                            updatedAt = rs.getTimestamp("updated_at").toInstant(),
+                            tableId = rs.getLong("table_id"),
+                            tableNumber = rs.getInt("table_number"),
+                        )
+                    } else {
+                        null
+                    }
+                }
+            } ?: return null
+
+        val batches =
+            connection.prepareStatement(
+                """
+                SELECT ob.id,
+                       ob.tab_id,
+                       t.type AS tab_type,
+                       t.owner_user_id AS tab_owner_user_id,
+                       ob.status,
+                       ob.source,
+                       ob.guest_comment,
+                       ob.created_at,
+                       ob.updated_at,
+                       ob.rejected_reason_code,
+                       ob.rejected_reason_text,
+                       COALESCE(
+                           ob.author_user_id,
+                           (
+                               SELECT gbi.user_id
+                               FROM guest_batch_idempotency gbi
+                               WHERE gbi.batch_id = ob.id
+                               ORDER BY gbi.id DESC
+                               LIMIT 1
+                           )
+                       ) AS guest_user_id,
+                       u.guest_display_name AS guest_display_name
+                FROM order_batches ob
+                LEFT JOIN tab t ON t.id = ob.tab_id
+                LEFT JOIN users u
+                  ON u.telegram_user_id = COALESCE(
+                      ob.author_user_id,
+                      (
+                          SELECT gbi.user_id
+                          FROM guest_batch_idempotency gbi
+                          WHERE gbi.batch_id = ob.id
+                          ORDER BY gbi.id DESC
+                          LIMIT 1
+                      )
+                  )
+                WHERE order_id = ?
+                ORDER BY ob.created_at, ob.id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, orderId)
+                statement.executeQuery().use { rs ->
+                    val result = mutableListOf<OrderBatchDetail>()
+                    while (rs.next()) {
+                        val batchStatus =
+                            OrderBatchStatus.fromDb(rs.getString("status"))
+                                ?.toWorkflow() ?: OrderWorkflowStatus.NEW
+                        result.add(
+                            OrderBatchDetail(
+                                batchId = rs.getLong("id"),
+                                tabId =
+                                    rs.getLong("tab_id").let {
+                                            value ->
+                                        if (rs.wasNull()) null else value
+                                    },
+                                tabType = rs.getString("tab_type"),
+                                tabOwnerUserId =
+                                    rs.getLong("tab_owner_user_id").let {
+                                            value ->
+                                        if (rs.wasNull()) null else value
+                                    },
+                                status = batchStatus,
+                                source = rs.getString("source"),
+                                comment = rs.getString("guest_comment"),
+                                createdAt = rs.getTimestamp("created_at").toInstant(),
+                                updatedAt = rs.getTimestamp("updated_at").toInstant(),
+                                rejectedReasonCode = rs.getString("rejected_reason_code"),
+                                rejectedReasonText = rs.getString("rejected_reason_text"),
+                                authorUserId =
+                                    rs.getLong("guest_user_id").let {
+                                            value ->
+                                        if (rs.wasNull()) null else value
+                                    },
+                                guestDisplayName = rs.getString("guest_display_name"),
+                                items = emptyList(),
+                            ),
+                        )
+                    }
+                    result
+                }
+            }
+
+        val batchIds = batches.map { it.batchId }
+        val itemsByBatch = loadBatchItems(connection, batchIds)
+        val promotionDiscountsByBatch = loadPromotionDiscountsByBatch(connection, batchIds)
+        val serviceCharges = loadServiceCharges(connection, orderId)
+        val pendingShiftExtension =
+            loadPendingShiftExtensionsByOrderIds(connection, venueId, listOf(orderId))[orderId]
+        val mappedBatches =
+            batches.map { batch ->
+                batch.copy(
+                    items = itemsByBatch[batch.batchId].orEmpty(),
+                    promotionDiscounts = promotionDiscountsByBatch[batch.batchId].orEmpty(),
+                )
+            }
+
+        val workflowStatus = resolveOrderWorkflowStatus(orderHeader.status, mappedBatches)
+
+        return OrderDetail(
+            orderId = orderId,
+            displayNumber = orderHeader.displayNumber,
+            displayDate = orderHeader.displayDate,
+            venueId = venueId,
+            tableId = orderHeader.tableId,
+            tableNumber = orderHeader.tableNumber,
+            status = workflowStatus,
+            createdAt = orderHeader.createdAt,
+            updatedAt = orderHeader.updatedAt,
+            batches = mappedBatches,
+            promotionDiscounts = mappedBatches.flatMap { it.promotionDiscounts }.mergePromotionDiscounts(),
+            serviceCharges = serviceCharges,
+            pendingShiftExtension = pendingShiftExtension,
+        )
     }
 
     suspend fun loadAudit(

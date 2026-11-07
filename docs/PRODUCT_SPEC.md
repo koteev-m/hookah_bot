@@ -487,6 +487,16 @@ SHOULD:
 - SLA timers and alerts.
 - Paid extension of the current venue/table service window can be requested by guest and confirmed by staff/manager; confirmed extension adds the agreed charge to the bill and extends the current operational/session window.
 
+### Sales accounting and close — local MVP candidate
+
+`Учёт смены` is a separate venue accounting period, not a staff schedule or paid service extension.
+STAFF/MANAGER/OWNER record table sales and external receipts; MANAGER/OWNER inspect history and
+confirm the frozen shift report. Existing digital orders are attached once; manual sales create
+no guest/session/order/notification. Estimates and operator-confirmed receipts stay separate.
+Exact MVP prerequisites, correction boundaries and unpaid-close consequences are canonical in
+`docs/VENUE_OPERATIONS.md`; RBAC in `docs/SECURITY_RBAC_MATRIX.md`; formulas in
+`docs/ANALYTICS_EVENTS.md`. Local implementation does not establish staging acceptance.
+
 ### Paid venue/shift extension — P1 design
 
 Product intent:
