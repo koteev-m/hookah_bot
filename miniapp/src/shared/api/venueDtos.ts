@@ -620,6 +620,10 @@ export type VenueStaffCallActionResponse = {
 }
 
 export type VenueBookingDto = {
+  tableId?: number | null
+  tableNumber?: number | null
+  agreedEndAtDisplay?: string | null
+  source?: string
   bookingId: number
   displayNumber?: number | null
   displayLabel?: string | null

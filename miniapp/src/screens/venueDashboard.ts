@@ -16,7 +16,7 @@ export type VenueDashboardOptions = {
   isDebug: boolean
   venueId: number
   access: VenueAccessDto
-  canAccessRoute: (route: 'settings' | 'menu' | 'tables' | 'staff' | 'guest-preview' | 'orders' | 'bookings' | 'calls' | 'messages' | 'extensions' | 'shifts' | 'chat' | 'accounting') => boolean
+  canAccessRoute: (route: 'hall' | 'settings' | 'menu' | 'tables' | 'staff' | 'guest-preview' | 'orders' | 'bookings' | 'calls' | 'messages' | 'extensions' | 'shifts' | 'chat' | 'accounting') => boolean
 }
 
 type DashboardRefs = {
@@ -75,6 +75,7 @@ function buildDashboardDom(root: HTMLDivElement, options: { showStaffChatStatus:
   }
 
   const actions = el('div', { className: 'button-row' })
+  const hallLink = el('a', { className: 'button-secondary', text: 'Зал — посадка и столы' }); hallLink.href = '#/hall'; actions.append(hallLink)
   const refreshButton = el('button', { className: 'button-secondary', text: 'Обновить' }) as HTMLButtonElement
   append(actions, refreshButton)
 

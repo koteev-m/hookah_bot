@@ -633,6 +633,10 @@ export type GuestBookingConfirmRequest = {
 }
 
 export type GuestBookingResponse = {
+  tableId?: number | null
+  tableNumber?: number | null
+  agreedEndAtDisplay?: string | null
+  source?: string
   bookingId: number
   venueId: number
   status: string

@@ -10,6 +10,7 @@ import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.OrderIdempotencyPayloadMismatchException
 import com.hookah.platform.backend.booking.formatBookingDisplayLabel
 import com.hookah.platform.backend.location.VenueLocationDisplay
 import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
@@ -177,6 +178,7 @@ import com.hookah.platform.backend.telegram.db.PromotionRuleType
 import com.hookah.platform.backend.telegram.db.PromotionVenueFeedItem
 import com.hookah.platform.backend.telegram.db.PromotionVenuePlacement
 import com.hookah.platform.backend.telegram.db.PromotionVenuePlacementRepository
+import com.hookah.platform.backend.telegram.db.QuickOrderRequest
 import com.hookah.platform.backend.telegram.db.StaffCallQueueItem
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffCallStatus
@@ -261,12 +263,6 @@ private data class BotTabResolution(
     val tableSession: TableSessionRecord,
     val personalTab: GuestTabModel,
     val userTabs: List<GuestTabModel>,
-)
-
-private data class QuickOrderMutationResult(
-    val existingOrderId: Long?,
-    val orderId: Long,
-    val batchId: Long,
 )
 
 private fun newBotGiftCallbackTag(): String =
@@ -2339,18 +2335,8 @@ class TelegramBotRouter internal constructor(
             data == "bot_menu_item_staff" -> showStaffCallReasons(chatId)
             data?.startsWith("staff_call_bill_payment:") == true -> handleStaffCallBillPaymentCallback(chatId, data)
             data?.startsWith("bot_menu_item:") == true -> showBotMenuItemDetails(chatId, data, sourceMessageId)
-            data == "quick_order_confirm" -> confirmQuickOrder(chatId)
-            data == "quick_order_edit" -> {
-                dialogStateRepository.set(
-                    chatId,
-                    DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT),
-                )
-                enqueueMessage(chatId, "Напишите детали заказа.")
-            }
-            data == "quick_order_cancel" -> {
-                dialogStateRepository.clear(chatId)
-                enqueueMessage(chatId, "Быстрый заказ отменён.")
-            }
+            data?.substringBefore(':') in setOf("quick_order_confirm", "quick_order_edit", "quick_order_cancel") ->
+                handleQuickOrderCallback(chatId, data!!)
             data == null -> Unit
             else -> handleStaffCallCallback(chatId, data, sourceMessageId)
         }
@@ -3706,6 +3692,13 @@ class TelegramBotRouter internal constructor(
                         venueZoneId = venueZoneId,
                         serviceDate = draft.date,
                     )
+                } catch (e: com.hookah.platform.backend.api.SeatingConflictException) {
+                    botBookingPendingConfirmations[chatId] = draft
+                    enqueueMessage(
+                        chatId,
+                        e.message ?: "Стол недоступен на это время. Выберите другое время в Mini App.",
+                    )
+                    return
                 } catch (e: DatabaseUnavailableException) {
                     botBookingEditContexts.remove(chatId)
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -3760,6 +3753,23 @@ class TelegramBotRouter internal constructor(
                     venueZoneId = venueZoneId,
                     serviceDate = draft.date,
                 )
+            } catch (e: com.hookah.platform.backend.api.SeatingConflictException) {
+                botBookingPendingConfirmations[chatId] = draft
+                enqueueMessage(
+                    chatId,
+                    "${e.message} Откройте Mini App → заведение → Бронирования, чтобы выбрать доступный стол. " +
+                        "Данные заявки в боте сохранены; конфликтная бронь не создана.",
+                )
+                guestMiniAppCatalogUrl()?.takeIf { isMiniAppEntryAvailable() }?.let { url ->
+                    enqueueMessage(
+                        chatId,
+                        "Выбор стола в Mini App",
+                        InlineKeyboardMarkup(
+                            listOf(listOf(InlineKeyboardButton(text = "Открыть Mini App", webApp = WebAppInfo(url)))),
+                        ),
+                    )
+                }
+                return
             } catch (e: DatabaseUnavailableException) {
                 botBookingEditContexts.remove(chatId)
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -5020,6 +5030,7 @@ class TelegramBotRouter internal constructor(
         val booking =
             try {
                 guestBookingRepository.updateByVenue(
+                    actorUserId = user.id,
                     bookingId = bookingId,
                     venueId = venueId,
                     nextStatus = BookingStatus.CONFIRMED,
@@ -5047,10 +5058,12 @@ class TelegramBotRouter internal constructor(
         val displayBooking = withEffectiveBookingDeadline(booking)
         val zoneId = resolveVenueZoneId(venueId)
         scheduleBookingRemindersBestEffort(displayBooking.id, zoneId)
-        enqueueMessage(
-            booking.userId,
-            buildGuestBookingConfirmedText(displayBooking, zoneId),
-        )
+        if (booking.userId != null) {
+            enqueueMessage(
+                booking.userId,
+                buildGuestBookingConfirmedText(displayBooking, zoneId),
+            )
+        }
         val text = buildVenueStaffBookingText(displayBooking, zoneId = zoneId)
         val replyMarkup =
             TelegramKeyboards.inlineVenueStaffBookingActions(
@@ -5556,6 +5569,7 @@ class TelegramBotRouter internal constructor(
         val booking =
             try {
                 guestBookingRepository.updateByVenue(
+                    actorUserId = user.id,
                     bookingId = bookingId,
                     venueId = venueId,
                     nextStatus = BookingStatus.CANCELED,
@@ -5587,10 +5601,12 @@ class TelegramBotRouter internal constructor(
         val venueZoneId = resolveVenueZoneId(booking.venueId)
         val bookingLabel = formatBookingDisplayLabelWithTime(booking, venueZoneId)
         venueBookingCancelReasonDrafts.remove(chatId)
-        enqueueMessage(
-            booking.userId,
-            "❌ $bookingLabel отменена заведением.\nПричина: $reasonText",
-        )
+        if (booking.userId != null) {
+            enqueueMessage(
+                booking.userId,
+                "❌ $bookingLabel отменена заведением.\nПричина: $reasonText",
+            )
+        }
         notifyStaffChatAboutBooking(
             BookingStaffNotification(
                 venueId = booking.venueId,
@@ -5604,7 +5620,7 @@ class TelegramBotRouter internal constructor(
                 displayNumber = booking.displayNumber,
                 cancelReasonText = reasonText,
                 actorDisplayName = actorDisplay,
-                guestDisplayName = loadGuestDisplayName(booking.userId),
+                guestDisplayName = booking.userId?.let { loadGuestDisplayName(it) } ?: booking.guestDisplayName,
             ),
             venueZoneId = venueZoneId,
         )
@@ -5929,12 +5945,14 @@ class TelegramBotRouter internal constructor(
             enqueueMessage(chatId, "Бронь не найдена.")
             return
         }
-        enqueueMessage(
-            booking.userId,
-            "Сообщение от заведения по брони:\n$bookingLabel\nЗаведение: «$venueName»\n\n${write.message.text}",
-            TelegramKeyboards.inlineGuestBookingReplyActions(booking.venueId, booking.id),
-            dedupeKey = "booking-thread-message:${write.message.id}:guest-notification",
-        )
+        if (booking.userId != null) {
+            enqueueMessage(
+                booking.userId,
+                "Сообщение от заведения по брони:\n$bookingLabel\nЗаведение: «$venueName»\n\n${write.message.text}",
+                TelegramKeyboards.inlineGuestBookingReplyActions(booking.venueId, booking.id),
+                dedupeKey = "booking-thread-message:${write.message.id}:guest-notification",
+            )
+        }
         dialogStateRepository.clear(chatId)
         enqueueMessage(
             chatId,
@@ -17715,6 +17733,7 @@ class TelegramBotRouter internal constructor(
                 try {
                     venueTableRepository.updateTableNumber(
                         venueId = venueId,
+                        actorUserId = ownerUserId,
                         tableId = tableId,
                         tableNumber = tableNumber,
                     )
@@ -17789,9 +17808,16 @@ class TelegramBotRouter internal constructor(
                 try {
                     venueTableRepository.updateTableCapacity(
                         venueId = venueId,
+                        actorUserId = ownerUserId,
                         tableId = tableId,
                         capacity = capacity,
                     )
+                } catch (e: com.hookah.platform.backend.api.SeatingConflictException) {
+                    enqueueMessage(
+                        chatId,
+                        e.message ?: "Стол связан с действующими обязательствами. Откройте раздел «Зал».",
+                    )
+                    return
                 } catch (e: DatabaseUnavailableException) {
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                     return
@@ -17819,6 +17845,7 @@ class TelegramBotRouter internal constructor(
         try {
             venueTableRepository.createTable(
                 venueId = venueId,
+                actorUserId = ownerUserId,
                 tableNumber = tableNumber,
                 capacity = capacity,
             )
@@ -17907,9 +17934,16 @@ class TelegramBotRouter internal constructor(
             try {
                 venueTableRepository.setTableActive(
                     venueId = venueId,
+                    actorUserId = userId,
                     tableId = tableId,
                     isActive = nextActive,
                 )
+            } catch (e: com.hookah.platform.backend.api.SeatingConflictException) {
+                enqueueMessage(
+                    chatId,
+                    e.message ?: "Стол связан с действующими обязательствами. Откройте раздел «Зал».",
+                )
+                return
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
@@ -33978,7 +34012,18 @@ class TelegramBotRouter internal constructor(
 
     private suspend fun startQuickOrder(chatId: Long) {
         val context = resolveGuestContext(chatId) ?: return
-        dialogStateRepository.set(chatId, DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT))
+        val tab = resolveCurrentBotTab(chatId, context) ?: return
+        dialogStateRepository.set(
+            chatId,
+            DialogState(
+                DialogStateType.QUICK_ORDER_WAIT_TEXT,
+                mapOf(
+                    "tableToken" to context.table.tableToken,
+                    "tableSessionId" to tab.tableSessionId.toString(),
+                    "tabId" to tab.id.toString(),
+                ),
+            ),
+        )
         enqueueMessage(chatId, "Опишите, что хотите заказать.")
     }
 
@@ -33986,116 +34031,170 @@ class TelegramBotRouter internal constructor(
         chatId: Long,
         text: String,
     ) {
+        val state = dialogStateRepository.get(chatId)
+        if (state.payload["tableSessionId"] == null || state.payload["tabId"] == null) {
+            enqueueMessage(chatId, "Контекст заказа устарел. Откройте QR-код ещё раз и начните быстрый заказ заново.")
+            return
+        }
+        val requestId = UUID.randomUUID().toString()
         dialogStateRepository.set(
             chatId,
-            DialogState(DialogStateType.QUICK_ORDER_WAIT_CONFIRM, mapOf("text" to text)),
+            DialogState(
+                DialogStateType.QUICK_ORDER_WAIT_CONFIRM,
+                state.payload + mapOf("text" to text, "requestId" to requestId),
+            ),
         )
         enqueueMessage(
             chatId,
             "Отправить запрос в заведение?\n\n$text",
-            TelegramKeyboards.inlineConfirmQuickOrder(),
+            TelegramKeyboards.inlineConfirmQuickOrder(requestId),
         )
     }
 
-    private suspend fun confirmQuickOrder(chatId: Long) {
-        val context = resolveGuestContext(chatId) ?: return
-        val currentTab = resolveCurrentBotTab(chatId, context) ?: return
+    private suspend fun handleQuickOrderCallback(
+        chatId: Long,
+        data: String,
+    ) {
         val state = dialogStateRepository.get(chatId)
+        val requestId = state.payload["requestId"]
+        if (state.state != DialogStateType.QUICK_ORDER_WAIT_CONFIRM || requestId == null) {
+            enqueueMessage(chatId, "Этот запрос уже завершён. Для нового заказа выберите «✍️ Быстрый заказ».")
+            return
+        }
+        // Old unscoped buttons cannot identify a request. Refresh the confirmation without executing it.
+        if (':' !in data) {
+            enqueueMessage(
+                chatId,
+                "Эта кнопка устарела. Проверьте запрос и подтвердите его новой кнопкой.\n\n" +
+                    state.payload["text"].orEmpty(),
+                TelegramKeyboards.inlineConfirmQuickOrder(requestId),
+            )
+            return
+        }
+        if (data.substringAfter(':') != requestId) {
+            enqueueMessage(chatId, "Этот запрос уже завершён. Для нового заказа выберите «✍️ Быстрый заказ».")
+            return
+        }
+        when (data.substringBefore(':')) {
+            "quick_order_confirm" -> confirmQuickOrder(chatId, state)
+            "quick_order_edit" -> {
+                if (dialogStateRepository.transitionQuickOrderRequest(
+                        chatId,
+                        requestId,
+                        DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT, state.payload - "text" - "requestId"),
+                    )
+                ) {
+                    enqueueMessage(chatId, "Напишите детали заказа.")
+                } else {
+                    enqueueMessage(chatId, "Запрос уже отправлен или завершён. Проверьте свои заказы.")
+                }
+            }
+            "quick_order_cancel" -> {
+                if (dialogStateRepository.transitionQuickOrderRequest(chatId, requestId)) {
+                    enqueueMessage(chatId, "Быстрый заказ отменён.")
+                } else {
+                    enqueueMessage(chatId, "Запрос уже отправлен или завершён. Проверьте свои заказы.")
+                }
+            }
+        }
+    }
+
+    private suspend fun confirmQuickOrder(
+        chatId: Long,
+        state: DialogState,
+    ) {
         val text = state.payload["text"]
-        if (text.isNullOrBlank()) {
-            enqueueMessage(chatId, "Нет текста заказа, отправьте заново.")
-            dialogStateRepository.set(chatId, DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT))
+        val requestId = state.payload["requestId"]
+        val tableSessionId = state.payload["tableSessionId"]?.toLongOrNull()
+        val tabId = state.payload["tabId"]?.toLongOrNull()
+        if (text.isNullOrBlank() || requestId == null || tableSessionId == null || tabId == null) {
+            enqueueMessage(chatId, "Контекст заказа устарел. Откройте QR-код ещё раз и начните быстрый заказ заново.")
+            return
+        }
+        val context = resolveGuestContext(chatId) ?: return
+        if (state.payload["tableToken"] != context.table.tableToken) {
+            dialogStateRepository.transitionQuickOrderRequest(chatId, requestId)
+            enqueueMessage(chatId, "Стол изменился. Начните быстрый заказ заново после проверки QR-кода.")
             return
         }
         val venueZoneId = resolveVenueZoneId(context.table.venueId)
         val mutation =
-            if (isPlatformOwner(context.userId)) {
-                when (
-                    val attempt =
-                        runConfirmedPlatformGuestBotMutation(
-                            chatId = chatId,
-                            context = context,
-                            expectedTableSessionId = currentTab.tableSessionId,
-                        ) { connection, confirmed ->
-                            if (
-                                !guestTabsRepository.isTabMember(
-                                    connection = connection,
-                                    tabId = currentTab.id,
-                                    venueId = confirmed.context.venueId,
-                                    tableSessionId = confirmed.tableSession.id,
-                                    userId = context.userId,
-                                )
-                            ) {
-                                return@runConfirmedPlatformGuestBotMutation null
-                            }
-                            val existingOrderId =
-                                ordersRepository.findActiveOrderId(connection, confirmed.tableSession.id)
-                            val orderId =
-                                ordersRepository.getOrCreateActiveOrderId(
+            try {
+                if (isPlatformOwner(context.userId)) {
+                    when (
+                        val attempt =
+                            runConfirmedPlatformGuestBotMutation(
+                                chatId = chatId,
+                                context = context,
+                                expectedTableSessionId = tableSessionId,
+                                onDenied = { dialogStateRepository.transitionQuickOrderRequest(chatId, requestId) },
+                            ) { connection, confirmed ->
+                                ordersRepository.createGuestOrderBatch(
                                     connection = connection,
                                     tableId = confirmed.context.tableId,
                                     venueId = confirmed.context.venueId,
                                     tableSessionId = confirmed.tableSession.id,
+                                    userId = context.userId,
+                                    idempotencyKey = "bot-quick:$requestId",
+                                    tabId = tabId,
+                                    comment = text,
+                                    items = emptyList(),
                                     venueZoneId = venueZoneId,
-                                ) ?: return@runConfirmedPlatformGuestBotMutation null
-                            val batchId =
-                                ordersRepository.createOrderBatch(
-                                    connection = connection,
-                                    orderId = orderId,
-                                    authorUserId = context.userId,
-                                    guestComment = text,
-                                    tabId = currentTab.id,
-                                ) ?: return@runConfirmedPlatformGuestBotMutation null
-                            QuickOrderMutationResult(existingOrderId, orderId, batchId)
-                        }
-                ) {
-                    is PlatformGuestBotMutationAttempt.Applied -> attempt.value
-                    PlatformGuestBotMutationAttempt.Stopped -> return
-                }
-            } else {
-                val existingOrderId = ordersRepository.findActiveOrderId(currentTab.tableSessionId)
-                val orderId =
-                    ordersRepository.getOrCreateActiveOrderId(
+                                    chatOrder = true,
+                                    expectedTableToken = context.table.tableToken,
+                                    quickOrderRequest = QuickOrderRequest(chatId, requestId),
+                                )
+                            }
+                    ) {
+                        is PlatformGuestBotMutationAttempt.Applied -> attempt.value
+                        PlatformGuestBotMutationAttempt.Stopped -> return
+                    }
+                } else {
+                    ordersRepository.createGuestOrderBatch(
                         tableId = context.table.tableId,
                         venueId = context.table.venueId,
-                        tableSessionId = currentTab.tableSessionId,
+                        tableSessionId = tableSessionId,
+                        userId = context.userId,
+                        idempotencyKey = "bot-quick:$requestId",
+                        tabId = tabId,
+                        comment = text,
+                        items = emptyList(),
                         venueZoneId = venueZoneId,
+                        chatOrder = true,
+                        expectedTableToken = context.table.tableToken,
+                        quickOrderRequest = QuickOrderRequest(chatId, requestId),
                     )
-                if (orderId == null) {
-                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                    return
                 }
-                val batchId = ordersRepository.createOrderBatch(orderId, context.userId, text, currentTab.id)
-                if (batchId == null) {
-                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                    return
-                }
-                QuickOrderMutationResult(existingOrderId, orderId, batchId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "Не удалось проверить результат. Повторите подтверждение этого запроса.")
+                return
+            } catch (e: OrderIdempotencyPayloadMismatchException) {
+                dialogStateRepository.transitionQuickOrderRequest(chatId, requestId, allowCommitted = true)
+                enqueueMessage(chatId, "Контекст заказа изменился. Откройте QR-код ещё раз и проверьте свои заказы.")
+                return
             }
         if (mutation == null) {
+            dialogStateRepository.transitionQuickOrderRequest(chatId, requestId)
             enqueueMessage(chatId, "Доступ к счёту изменился. Откройте QR-код ещё раз.")
             return
         }
-        val existingOrderId = mutation.existingOrderId
-        val orderId = mutation.orderId
-        val batchId = mutation.batchId
-        dialogStateRepository.clear(chatId)
+        dialogStateRepository.transitionQuickOrderRequest(chatId, requestId, allowCommitted = true)
         enqueueMessage(chatId, "Запрос отправлен, ожидайте подтверждения.")
-        val orderSummary =
-            runCatching { ordersRepository.findActiveOrderSummary(currentTab.tableSessionId) }
-                .getOrNull()
+        if (mutation.idempotencyReplay) return
         val notifier = staffChatNotifier
         if (notifier != null) {
             notifier.notifyNewBatchNow(
                 NewBatchNotification(
                     venueId = context.table.venueId,
-                    orderId = orderId,
-                    batchId = batchId,
+                    orderId = mutation.orderId,
+                    batchId = mutation.batchId,
                     tableLabel = context.table.tableNumber.toString(),
                     itemsSummary = "Быстрый заказ (чат)",
-                    comment = "tableSessionId=${currentTab.tableSessionId}; tabId=${currentTab.id}; Текст: $text",
-                    displayNumber = orderSummary?.displayNumber,
-                    isFirstBatch = existingOrderId == null,
+                    comment = "tableSessionId=$tableSessionId; tabId=$tabId; Текст: $text",
+                    displayNumber = mutation.displayNumber,
+                    isFirstBatch = mutation.isFirstBatch,
                     guestDisplayName = loadGuestDisplayName(context.userId),
                 ),
             )
@@ -34323,17 +34422,25 @@ class TelegramBotRouter internal constructor(
                 ).id
             }
         }
-        return PlatformGuestBotMutationAttempt.Applied(
-            staffCallRepository.createStaffCall(
-                venueId = context.table.venueId,
-                tableId = context.table.tableId,
-                createdByUserId = context.userId,
-                reason = reason,
-                comment = comment,
-                tableSessionId = tableSessionId,
-                orderId = orderId,
-            ),
-        )
+        return try {
+            PlatformGuestBotMutationAttempt.Applied(
+                staffCallRepository.createStaffCall(
+                    venueId = context.table.venueId,
+                    tableId = context.table.tableId,
+                    createdByUserId = context.userId,
+                    reason = reason,
+                    comment = comment,
+                    tableSessionId = tableSessionId,
+                    orderId = orderId,
+                ),
+            )
+        } catch (_: NotFoundException) {
+            enqueueMessage(
+                chatId,
+                "Сеанс стола завершён или изменился. Отсканируйте QR актуального стола и повторите вызов.",
+            )
+            PlatformGuestBotMutationAttempt.Stopped
+        }
     }
 
     private suspend fun resolveSafeStaffCallOrderId(
@@ -34634,6 +34741,7 @@ class TelegramBotRouter internal constructor(
         chatId: Long,
         context: ResolvedChatContext,
         expectedTableSessionId: Long? = null,
+        onDenied: suspend () -> Boolean = { true },
         mutation: (Connection, ConfirmedPlatformGuestMutationContext) -> T,
     ): PlatformGuestBotMutationAttempt<T> {
         val result =
@@ -34651,7 +34759,11 @@ class TelegramBotRouter internal constructor(
         return when (result) {
             is PlatformGuestTableMutationResult.Applied -> PlatformGuestBotMutationAttempt.Applied(result.value)
             PlatformGuestTableMutationResult.Denied -> {
-                enqueueMessage(chatId, "Откройте QR-код ещё раз и подтвердите вход в Telegram.")
+                if (onDenied()) {
+                    enqueueMessage(chatId, "Откройте QR-код ещё раз и подтвердите вход в Telegram.")
+                } else {
+                    enqueueMessage(chatId, "Запрос уже отправлен или завершён. Проверьте свои заказы.")
+                }
                 PlatformGuestBotMutationAttempt.Stopped
             }
             PlatformGuestTableMutationResult.DatabaseUnavailable -> {

@@ -110,6 +110,10 @@ private data class VenueBookingDto(
     val displayLabel: String,
     val status: String,
     val scheduledAt: String,
+    val tableId: Long? = null,
+    val tableNumber: Int? = null,
+    val agreedEndAtDisplay: String? = null,
+    val source: String = "GUEST",
     val scheduledAtDisplay: String? = null,
     val scheduledLocalDate: String? = null,
     val scheduledLocalTime: String? = null,
@@ -192,10 +196,12 @@ fun Route.venueBookingRoutes(
                     booking.venueId,
                     defaultBookingDisplayZoneId(),
                 )
-            outboxEnqueuer.enqueueSendMessage(
-                chatId = booking.userId,
-                text = buildBookingConfirmedGuestNotification(booking, guestBookingRepository, zoneId),
-            )
+            if (booking.userId != null) {
+                outboxEnqueuer.enqueueSendMessage(
+                    chatId = booking.userId,
+                    text = buildBookingConfirmedGuestNotification(booking, guestBookingRepository, zoneId),
+                )
+            }
             if (bookingRemindersEnabled) {
                 guestBookingRepository.scheduleRemindersForBooking(
                     bookingId = booking.id,
@@ -223,22 +229,25 @@ fun Route.venueBookingRoutes(
             val changeReason = normalizeBookingReason(request.reasonText)
             val updated =
                 guestBookingRepository.updateByVenue(
+                    actorUserId = userId,
                     bookingId = bookingId,
                     venueId = venueId,
                     nextStatus = BookingStatus.CHANGED,
                     scheduledAt = scheduledAt,
                     venueZoneId = zoneId,
                 ) ?: throw NotFoundException()
-            outboxEnqueuer.enqueueSendMessage(
-                chatId = updated.userId,
-                text =
-                    buildBookingChangedGuestNotification(
-                        updated,
-                        guestBookingRepository,
-                        zoneId,
-                        changeReason,
-                    ),
-            )
+            if (updated.userId != null) {
+                outboxEnqueuer.enqueueSendMessage(
+                    chatId = updated.userId,
+                    text =
+                        buildBookingChangedGuestNotification(
+                            updated,
+                            guestBookingRepository,
+                            zoneId,
+                            changeReason,
+                        ),
+                )
+            }
             if (bookingRemindersEnabled) {
                 guestBookingRepository.scheduleRemindersForBooking(
                     bookingId = updated.id,
@@ -271,16 +280,18 @@ fun Route.venueBookingRoutes(
                     booking.venueId,
                     defaultBookingDisplayZoneId(),
                 )
-            outboxEnqueuer.enqueueSendMessage(
-                chatId = booking.userId,
-                text =
-                    buildBookingCanceledGuestNotification(
-                        booking,
-                        guestBookingRepository,
-                        displayZoneId,
-                        cancelReason,
-                    ),
-            )
+            if (booking.userId != null) {
+                outboxEnqueuer.enqueueSendMessage(
+                    chatId = booking.userId,
+                    text =
+                        buildBookingCanceledGuestNotification(
+                            booking,
+                            guestBookingRepository,
+                            displayZoneId,
+                            cancelReason,
+                        ),
+                )
+            }
             call.respond(VenueBookingStatusResponse(bookingId = booking.id, status = booking.status.toApi()))
         }
 
@@ -428,6 +439,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.performVenueStatu
             )
         else ->
             guestBookingRepository.updateByVenue(
+                actorUserId = userId,
                 bookingId = bookingId,
                 venueId = venueId,
                 nextStatus = status,
@@ -451,6 +463,8 @@ private fun BookingRecord.toVenueBookingDto(
         displayLabel = toDisplayLabel(zoneId),
         status = status.toApi(),
         scheduledAt = scheduledAt.toString(),
+        tableId = tableId, tableNumber = tableNumber, source = source,
+        agreedEndAtDisplay = agreedEndAt?.let { formatBookingNotificationTime(it, zoneId) },
         scheduledAtDisplay = formatBookingNotificationTime(scheduledAt, zoneId),
         scheduledLocalDate = localDateTime.toLocalDate().toString(),
         scheduledLocalTime = BOOKING_LOCAL_TIME_FORMAT.format(localDateTime),
@@ -495,14 +509,25 @@ private suspend fun buildBookingChangedGuestNotification(
     guestBookingRepository: GuestBookingRepository,
     zoneId: ZoneId,
     reasonText: String?,
-): String {
-    val venueName = resolveBookingVenueName(guestBookingRepository, booking.venueId)
-    return buildString {
+): String =
+    buildBookingChangedGuestNotification(
+        booking,
+        resolveBookingVenueName(guestBookingRepository, booking.venueId),
+        zoneId,
+        reasonText,
+    )
+
+internal fun buildBookingChangedGuestNotification(
+    booking: BookingRecord,
+    venueName: String,
+    zoneId: ZoneId,
+    reasonText: String? = null,
+): String =
+    buildString {
         append("🕒 ${booking.toDisplayLabel(zoneId)} перенесена")
         appendBookingGuestDetails(booking, venueName, zoneId, timeLabel = "Новое время")
         reasonText?.let { append("\nКомментарий: $it") }
     }
-}
 
 private suspend fun buildBookingCanceledGuestNotification(
     booking: BookingRecord,

@@ -1,5 +1,317 @@
 # Project Status
 
+## HT-PR252-COMPOSE-RUNTIME-FIX-01 — exact V132 runtime fixture (2026-11-08)
+
+**FIX_READY / LOCAL_UNCOMMITTED / HOSTED_RECHECK_REQUIRED**.
+PROJECT_IDENTITY_OK in unchanged primary cwd `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`.
+Candidate `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/worktree`, branch
+`codex/ht-halls-seating-table-booking-01`, starts and remains at the supplied published HEAD
+`9fd6068ed3ab8d8c59de3c8b7dc3fe8394426949`; separate base/parent constraints NOT_SUPPLIED.
+Primary HEAD `4d7bb81627ea1a380fb0cbdf9fd8842babef5bf5` and auto-open changes remain separate.
+
+Confirmed diagnostic-contract mismatch in [run 42436640618](https://github.com/koteev-m/hookah_bot/actions/runs/42436640618/job/128596783654):
+current image build/readiness and exact Python V1–V132 history validation completed, then
+`forward_sequence` failed at its Java `validate131` call. Java still required V131/131 applied.
+The dependent compose job refused the failed compose-runtime group. An isolated real-Flyway/H2
+probe reproduces the published Java failure with head132/applied132/pending0; this is a fixture
+expectation mismatch, not evidence of an application or migration failure.
+
+Test-only correction: `validate132` retains Flyway validate and requires exact V132,132 applied,
+0 pending, emitting `FIXTURE_VALIDATED_CURRENT_132`. Python requires that complete output line
+before success, updates readiness/checkpoint names to V132, and rejects missing/wrong markers.
+Negative lineage coverage now includes every V127–V132 tail row and the final adjacent reorder.
+Exact history/checksum validators, approved SQL hashes, hosted-only admission and historical V131
+references are preserved. Product backend, Mini App and all265 SQL files are unchanged.
+
+Checks: portable runtime/diagnostics/migration self-tests24/24, release contracts72/72 and CI
+contracts18/18 PASS. Java21 compilation passes against historical Flyway11.14.0 and current11.19.0.
+Seven real-Flyway/H2 synthetic probes pass: published failure, exact132 success, wrong131/133 head,
+132 head with131 applied, pending SQL and checksum mismatch. `git diff --check` PASS.
+Evidence: `/private/tmp/HT-PR252-COMPOSE-RUNTIME-FIX-01/` (CI excerpts, self-test logs, Java probes,
+source/index preservation). H2 probes are not hosted PostgreSQL/Linux/Docker runtime acceptance;
+the full connected selection remains hosted-only and was not run locally. Backend/Playwright
+suites were not repeated because application inputs did not change.
+
+Local authorization only; no stage/commit/push/PR/merge/rerun/deploy/SSH. No unfinished operation.
+Candidate has3 modified files,0 untracked/staged; primary16 modified +7 untracked,staged0 unchanged.
+Both HEADs/branches/indexes and primary file hashes are preserved; scripts/dev was not touched.
+Next: review the local fix, then separately authorize publication for the hosted CI recheck.
+
+## HT-CHECKOUT-CALLBACK-RACE-FIX-01 — atomic Bot request execution (2026-11-08)
+
+**FIX_PASS / FULL_LOCAL_GATES_PASS / STAGING_UNVERIFIED**.
+READY_FOR_INDEPENDENT_REVIEW = YES. READY_FOR_PUBLICATION = NO.
+PROJECT_IDENTITY_OK in unchanged primary cwd `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`;
+the existing candidate `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/worktree` shares its Hookah
+Git common dir. Candidate HEAD `d3785ff3baccf0d467f36465f9b875c1b426486a`, branch
+`codex/ht-halls-seating-table-booking-01`; primary HEAD `4d7bb81627ea1a380fb0cbdf9fd8842babef5bf5`,
+branch `codex/ht-venue-shift-sales-mvp-01`. Expected HEAD/base/branch/parent NOT_SUPPLIED.
+
+The previous fix still allowed a parallel callback holding an old DialogState to execute after
+another callback terminally rejected the request. A new real-router/PostgreSQL regression failed
+on the original candidate: MOVE A→B, rejection, MOVE B→A, delayed callback created a batch while
+the dialog remained NONE. The same regression now leaves order/batch/idempotency at zero for
+both MOVE and RELEASE/reseat.
+
+Both checkout writers acquire venue first, then lock the matching persisted chat/request row
+through commit/rollback and verify frozen token/session/tab/text. Confirmed context rejection
+finishes the request inside that transaction. Edit/cancel share the dialog-row lock and inspect
+committed idempotency after locking, without acquiring venue/session/order locks. They cannot
+cancel or replace an already committed order. Unknown outcomes retain the original request for
+durable replay, including across router restart. No migration, process mutex or EXECUTING state
+was introduced; the existing Platform Guest authorization lock order remains intact.
+
+Fresh targeted checks **104/104**, including6 new PostgreSQL cases,7 existing quick-order router
+cases and37 accounting cases. A–J coverage includes controlled delayed callbacks, both orders of
+confirm/cancel and confirm/edit, parallel confirm, independent venue/guest progress, both writer
+overloads, precommit rollback, lost commit response and notification failure. PostgreSQL traces
+verify5 new blockers plus13 P1/P2,12 F and14 R interleavings using distinct connection PIDs.
+Full backend **2542/2542**,206 classes, zero errors/failures/skips; all previous2536 cases retained.
+Compile/full ktlint, CI contracts18/18, release contracts72/72 and all7 exact workflow gates pass.
+The new six-case class is included in CI with exact names and minimum count. An initial run was
+stopped to strengthen the unknown-result assertion; lint-only wrapping failures were fixed.
+The final full run covers the stronger assertion, with unchanged tested-input hashes.
+
+Prior full Chromium **678/678** and TS/Vite build evidence were reused after verifying hashes,
+unchanged Mini App/fixtures/configuration/API response contracts, zero retries/skips/flaky attempts,
+and the unchanged browser workflow. All265 migrations, financial calculations/snapshots and QR/visit
+production files are unchanged. Primary auto-open work remains separate and was not integrated.
+
+Task delta:3 production files,1 existing router fixture,1 new PostgreSQL/router test, CI selectors,
+2 canonical docs and this checkpoint. Primary1037-file hashes/mtimes and both indexes/HEADs/branches
+are preserved. Final status: primary16 modified +7 untracked; candidate59 modified +29 untracked;
+staged0 in both. Evidence, negative/positive logs, raw XML, tested-input hashes and final inventories:
+`/private/tmp/HT-CHECKOUT-CALLBACK-RACE-FIX-01/`. No scripts/dev changes or new project/worktree/branch;
+no commit/push/PR/merge/deploy/SSH or external data writes. Next: independent review of this fix.
+Hosted exact-SHA CI, live Telegram/WebView and staging remain unverified; staging smoke is required
+before a separately authorized release. No publication is authorized by this checkpoint.
+
+## HT-HALLS-SEATING-CHECKOUT-REJECTION-FIX-01 — terminal Bot checkout refusal (2026-11-08)
+
+**FIX_PASS / FULL_LOCAL_GATES_PASS / STAGING_UNVERIFIED**.
+READY_FOR_INDEPENDENT_REVIEW = YES. READY_FOR_PUBLICATION = NO.
+PROJECT_IDENTITY_OK for the unchanged primary session cwd
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`, then the registered candidate
+`/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/worktree` sharing its Git common dir.
+Candidate HEAD `d3785ff3baccf0d467f36465f9b875c1b426486a`, branch
+`codex/ht-halls-seating-table-booking-01`; primary HEAD `4d7bb81627ea1a380fb0cbdf9fd8842babef5bf5`,
+branch `codex/ht-venue-shift-sales-mvp-01`. Expected HEAD/base/branch/parent NOT_SUPPLIED.
+
+The previous confirmed refusal left QUICK_ORDER_WAIT_CONFIRM and its request UUID alive.
+Confirmation/edit/cancel now carry that UUID; stale buttons cannot execute or change a newer
+request. A conditional dialog transition finishes only the matching request, clears its payload
+before reporting a known denial, and preserves a newer dialog. Legacy buttons only refresh the
+saved confirmation. Editing preserves QR/session/tab and creates a new UUID with the next text.
+Unknown database/commit outcomes retain the original request and payload for exact replay;
+known success finishes the request without another batch on repeated callbacks.
+
+Fresh targeted checks:22/22, including7 quick-order router cases. Four added router/PostgreSQL
+regressions cover MOVE/refusal/return, RELEASE/refusal/new company, fresh request, stale
+confirm/edit/cancel, lost commit acknowledgement, legacy confirmation refresh, editing and
+Platform Guest denial versus unavailability. Full backend **2536/2536**,205 classes: all previous
+2532 cases retained, no failures/errors/skips. Full Chromium **678/678**, Hall24/24, workers2/retries0;
+all previous cases retained and every attempt passed. PostgreSQL traces retain13 checkout
+interleavings (both overloads and operation orders),12 F-fix and14 R-fix interleavings with distinct
+PIDs and observed blockers. Full accounting37/37 and closed-report assertions pass.
+Compile/ktlint, TS/Vite build, release72/72, CI18/18, runtime23/23 and all7 exact workflow gates pass.
+Initial lint-only failures were formatting in new code; no assertions were relaxed.
+
+Only3 Bot production files,1 router test file,2 contract docs and this checkpoint changed from
+this task's baseline. OrdersRepository, accounting, migrations, Mini App and historical fixtures
+are unchanged. Primary hashes/status and both Git indexes/HEADs/branches are preserved; auto-open
+was not integrated or tested as part of this candidate. Candidate inventory1058 files,
+59 modified +28 untracked, staged0. Primary16 modified +7 untracked is its original user state.
+Fresh logs, XML inventory, browser JSON, PostgreSQL traces, tested-input hashes and final inventory
+are flat `/private/tmp/HT-CHECKOUT-REJECTION-FIX-01-*` artifacts. No scripts/dev changes, new project,
+worktree or branch; no commit/push/PR/merge/deploy/SSH or real-data writes.
+Next: independent review of this terminal-request fix. Hosted exact-SHA CI, live Telegram/WebView
+and staging smoke remain unverified; staging smoke is required before a separately authorized release.
+
+## HT-HALLS-SEATING-TABLE-BOOKING-P1P2-FIX-MAIN-01 — Bot checkout and SEAT terms (2026-11-08)
+
+**P1_P2_FIX_PASS / FULL_LOCAL_GATES_PASS / STAGING_UNVERIFIED**.
+READY_FOR_INDEPENDENT_REVIEW = YES. READY_FOR_PUBLICATION = NO.
+PROJECT_IDENTITY_OK in the unchanged physical session cwd
+`/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`; that checkout and its auto-open work stayed read-only.
+Only the existing candidate `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/worktree` was edited,
+through absolute paths and explicit project arguments. It shares the primary Git common dir.
+Observed candidate HEAD `d3785ff3baccf0d467f36465f9b875c1b426486a`, branch
+`codex/ht-halls-seating-table-booking-01`; primary HEAD `4d7bb81627ea1a380fb0cbdf9fd8842babef5bf5`,
+branch `codex/ht-venue-shift-sales-mvp-01`. Expected HEAD/base/branch/parent constraints NOT_SUPPLIED.
+
+P1: quick-order dialogs freeze QR/session/tab and one request UUID. Both ordinary and confirmed
+Platform Guest use the atomic checkout writer, which revalidates token, current table, active
+unexpired session, active tab and membership after venue lock. No production Bot entrypoint uses
+the old split order/batch sequence. CHAT author/source, unknown-result replay and existing QR
+authorization remain; stale context is refused without joining another company or reporting success.
+P2: booking SEAT displays authoritative read-only party/end; OWNER/MANAGER change the agreement
+through existing booking assignment, while walk-in fields remain editable. The server rejects
+different supplied terms before writes, retaining revision checks and matching/omitted-field compatibility.
+
+Final full backend **2532/2532**, 205 classes; module49/49. Final full Chromium **678/678**,
+workers2/retries0, Hall24/24; no failures/errors/skips/flaky/retried attempts. All prior2523 backend
+and676 browser test occurrences retained, plus9/2. New PostgreSQL coverage:13 controlled independent-PID
+interleavings, exact blocker observation, both operation orders/checkout overloads, replay and separate
+venue progress; prior12 +14 controlled F/R scenarios pass again. Closed financial snapshots remain
+unchanged. F1–F7, R1–R4 and the local A–J regression matrix remain covered; no auto-open integration.
+Compile/full ktlint, TS/Vite, release72/72, CI18/18, runtime diagnostics23/23 and all seven exact
+workflow XML/JSON gates pass. All265 migration SQL files are byte-identical to task start.
+
+The first full backend run had three fixed-clock fixture failures after session-expiry validation
+was strengthened. Aligning repository clocks with the fixture preserved all assertions; explicit
+expiry-boundary denial was added. Targeted17/17 and the final full run pass. The initial sandboxed
+runtime self-test could not bind loopback; the narrowly approved local TCP run passed unchanged tests.
+Evidence is in flat `/private/tmp/HT-P1P2-FIX-MAIN-*` artifacts: `backend-final.log`,
+`backend-final-evidence.json`, `playwright-final.json`, `workflow-gates.log`, `final.json` and their
+preceding failure logs. No new project/report directory, worktree, branch or repository copy was created.
+Candidate inventory:1058 files,57 modified +28 untracked, staged0. Primary1037 file hashes and both
+Git indexes/HEADs/branches preserved; scripts/dev untouched. No commit/push/PR/merge/deploy/SSH.
+Next: independent review of the final inventory. Hosted exact-SHA CI, live Telegram/WebView/R2,
+staging smoke and forward-recovery rehearsal remain unverified and require separate authorization.
+
+## HT-HALLS-SEATING-TABLE-BOOKING-FIX-02 — bounded R1–R4 fixes (2026-11-07)
+
+**FIX_PASS / FULL_LOCAL_GATES_PASS / STAGING_UNVERIFIED**.
+READY_FOR_INDEPENDENT_REVIEW = YES. READY_FOR_PUBLICATION = NO.
+PROJECT_IDENTITY_OK; worktree `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/worktree`,
+branch `codex/ht-halls-seating-table-booking-01`; expected/actual HEAD unchanged:
+`d3785ff3baccf0d467f36465f9b875c1b426486a`. EXPECTED_BASE/PARENT NOT_SUPPLIED.
+Baseline1052-file inventory matched REVIEW-02/QA1 SHA-256
+`b5c900fcaad781ad29073c6a211ff3992e81afa17c34be5eaec26dd7ab0ecfd8`.
+
+R1: order status/close enters venue lock before orders; MOVE/RELEASE context locks use PostgreSQL
+NO KEY UPDATE, retaining compatible visit FK checks. No deadlock retry or process mutex.
+R2: extension checks the current table from latest MOVE arrival, retaining visit start and snapshots.
+R3: Hall SEAT checks booking revision under its transaction lock; exact replay and trusted legacy
+arrival stay compatible. Manual/guest conflicts preserve drafts and require explicit fresh-key retry.
+R4: Hall guest start-time proposal queues the existing notification and enabled reminder schedule
+in the booking transaction. Offline/unchanged/replay cases do not duplicate notifications;
+traffic-policy suppression makes no delivery claim. No migration or auto-open integration added.
+
+Fresh final full backend2523/2523 (202 classes), full Chromium676/676 (workers2/retries0), zero
+failures/errors/skips/flaky/retried attempts. All prior2514 backend and674 browser test occurrences
+retained, plus9/2 new tests. Module42/42;14 new controlled PostgreSQL orders plus12 prior scenarios;
+independent REVIEW-02 probes5/5. Hall22/22 and Venue Menu21/21 including QA1 in full Chromium.
+Kotlin compile/full ktlint, TS/Vite build, release72/72, CI18/18, diagnostics23/23, workflow XML/JSON
+gates, SQL lineage and diff-check pass. All265 SQL remain byte-identical; no new migration needed.
+
+Report, original negative evidence, positive traces/PIDs, before/final inventories and hashes:
+`/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-FIX-02/REPORT.md`.
+Primary checkout, candidate/primary index and HEAD preserved; scripts/dev untouched.
+No stage/commit/push/PR/merge/rebase/deploy/SSH. No unfinished test processes or external operations.
+Next: independent review of this exact final inventory. Local macOS/Node24 results do not replace
+hosted Linux/Node20 CI or separately authorized staging/Telegram/WebView/R2 verification.
+
+
+## HT-HALLS-SEATING-TABLE-BOOKING-QA1-01 — menu scroll QA gate (2026-11-07)
+
+**QA1_FIXED / FULL_LOCAL_QA_GATE_PASS / STAGING_UNVERIFIED**.
+READY_FOR_INDEPENDENT_REVIEW = YES. This closes the QA-1 blocker in the historical FIX-01 entry below.
+PROJECT_IDENTITY_OK; physical worktree `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/worktree`,
+branch `codex/ht-halls-seating-table-booking-01`; exact expected/actual HEAD
+`d3785ff3baccf0d467f36465f9b875c1b426486a`. EXPECTED_BASE/parent NOT_SUPPLIED.
+
+Root cause: browser fixture started focus/typing before the native wheel gesture ended. A100ms
+stationary sample could precede remaining scroll deltas. Controlled negative evidence reproduced
+150–382px drift while the authoritative GET was still held, without DOM mutations or production
+restore. The fixture now awaits wheel `scrollend` before editing; the100ms heuristic is removed.
+Production source, all product assertions including delta<=8px, and F1–F7 remain unchanged.
+
+Final single full Chromium invocation:674/674 PASS, workers2/retries0, zero skips/flaky/errors.
+Exact scenario20/20; controlled final timeline8/8 (delta0); other Venue Menu41/41; Hall20/20.
+TypeScript/Vite build PASS; release72/72, CI18/18, local diagnostics23/23, SQL lineage and full
+CI JSON gate PASS. All728 backend files and265 SQL match the FIX-01 tested snapshot byte-for-byte;
+its2514/2514 backend result is reused with verified hashes, not represented as a new run.
+All102 Mini App production files also match. No accounting/auto-open/financial/RBAC changes.
+
+Report, negative/positive controls, full JSON/traces and before/final inventories:
+`/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-QA1-01/REPORT.md`.
+Only the test fixture, QA documentation and this checkpoint changed in QA1. Primary checkout,
+Git index/HEAD/branches and scripts/dev preserved; no stage/commit/push/PR/merge/deploy/SSH.
+No unfinished operation. Next: independent review of F1–F7 against the final inventory. Local
+Node24/macOS evidence does not replace hosted Node20/Linux CI, real Telegram/WebView or the
+separately authorized staging smoke required for the module's runtime changes.
+
+## HT-HALLS-SEATING-TABLE-BOOKING-FIX-01 — F1–F7 fixes (2026-11-07)
+
+**PARTIAL / F1_F7_FIXED_LOCALLY / QA_BLOCKER_MENU_SCROLL / STAGING_UNVERIFIED**.
+READY_FOR_INDEPENDENT_REVIEW = NO until the new QA blocker is resolved.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT / github.com/koteev-m/hookah_bot.
+Worktree `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/worktree`, branch
+`codex/ht-halls-seating-table-booking-01`, unchanged HEAD/base
+`d3785ff3baccf0d467f36465f9b875c1b426486a`. Supplied base verified as exact starting HEAD;
+EXPECTED_HEAD/parent NOT_SUPPLIED. Git index and primary checkout preserved; no auto-open code copied.
+
+F1: preparation starts at actual release/move, retaining visit buffer snapshot and separating it
+from physical occupancy. F2: legacy reconciliation requires proven booking/session/guest identity.
+F3/F5: active calls move atomically, preserve closed history and real audit; call creation rechecks
+active/unexpired session under venue/table/session locks shared with release and move.
+F4: table assignment preserves booking duration/buffer. F6: terminal rejection is side-effect-free,
+accepted time/end/revision changes are one guarded SQL update. F7: confirmed conflicts refresh
+revision while preserving draft, require explicit acknowledgement and new UUID; unknown outcomes
+retain the original payload/key. No new/changed migrations; PostgreSQL V132 / H2 V133 unchanged.
+
+Final single full backend run: **2514/2514 PASS**, 199 suites, zero failures/errors/skips.
+Final single full Playwright run: **673/674 PASS, 1 FAIL**, zero retries/skips. The unchanged
+menu-scroll regression observed 207px drift versus an 8px limit. Isolated 10/10 reruns passed,
+but cause is unresolved; these do not replace the failed full run. All 20 Hall tests passed.
+New PostgreSQL concurrency: 4 tests / 12 controlled independent-PID interleavings with observed
+blocking and final-row assertions; same tests pass in final full suite. Related Clock/StaffCall/
+Platform selection 49/49; compile/full ktlint and TypeScript/Vite build PASS. Release contracts
+72/72, CI contracts 18/18, local diagnostics 23/23 and exact migration lineage PASS.
+One earlier full backend run had 3 fixed-clock fixture failures; Clock injection aligned with the
+existing coordinator fixture, preserving every assertion and adding an expiry-boundary rejection.
+That earlier run is retained separately and is not combined with the final full PASS.
+
+Report and inventories: `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-FIX-01/REPORT.md`.
+No stage/commit/push/PR/merge/deploy/SSH, live R2/Telegram, server/secret/real-data change.
+No unfinished task operation after report finalization. Real WebView/Telegram delivery, hosted
+exact-SHA CI, staging smoke and forward-recovery rehearsal remain unverified; local Node 24 differs
+from hosted Node 20. Next: a separate bounded diagnosis of the menu-scroll QA failure, then independent review
+of F1–F7 against the final hashes. Publication and
+staging require separate authorization; this checkpoint does not grant it.
+
+## HT-HALLS-SEATING-TABLE-BOOKING-01 — halls, seating and table booking (2026-11-07)
+
+**IMPLEMENTED_LOCAL / UNCOMMITTED / READY_FOR_INDEPENDENT_REVIEW / STAGING_UNVERIFIED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT / github.com/koteev-m/hookah_bot.
+Isolated physical worktree `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/worktree`, branch
+`codex/ht-halls-seating-table-booking-01`, fetched main base and unchanged HEAD
+`d3785ff3baccf0d467f36465f9b875c1b426486a`. EXPECTED_HEAD/BASE/parent NOT_SUPPLIED.
+Common Git dir remains the primary repository's `.git`; primary HEAD/index/status and 1037
+tracked/nonignored untracked file hashes, including scripts/dev/, are preserved.
+
+Single physical table identity/QR, halls/private image plans and geometry editor, separate rules
+and daily hall/list UI, guest PENDING table booking, offline STAFF-authored CONFIRMED booking,
+physical seat/extend/move/release, interval/schedule/timezone/buffer snapshots and explicit
+legacy reconciliation are implemented. New switches default OFF; disabling preserves obligations.
+RBAC/manual-create rights do not expand STAFF booking management. Movement preserves session/
+visit/order/tab identities and closed financial snapshots. No physical operation creates money
+or opens an accounting shift. Separate uncommitted auto-open fixes were not copied; the required
+venue-first Bot/Mini App lock correction is independently implemented/tested on this base.
+
+Added PostgreSQL V132 / H2 V133, all historical SQL bytes unchanged. Canonical UX/lifecycle/RBAC/
+media/time/migration/release/QA docs updated. Complete backend execution: 2502 tests, initially
+2498 PASS / 4 contract-expectation FAIL / 0 skipped. Exact PostgreSQL wait-chain evidence and
+historical migration targets were corrected without weakening child-lock/identity assertions.
+Final affected/module/all-migration selection: 168/168 PASS, zero errors/skips; all four failures
+retested green. The latest per-test evidence covers 2502 passing cases; this is reconciliation
+of full + final affected runs, not a claim that the earlier full invocation exited zero.
+Compile/ktlint and TypeScript/Vite build PASS. Final full Chromium Playwright: 669/669 PASS,
+no retries/skips; 15 hall specs and six module backend classes have explicit CI presence guards.
+Release tests 72, CI contracts 18, local diagnostics 23 and exact migration lineage PASS.
+
+Evidence/report: `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/REPORT.md`;
+full file inventory: `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/changed-files.txt`.
+No stage/commit/push/PR/merge/deploy/SSH, real image publication, real notification or external-data
+write. No test operation remains unfinished after the task report is finalized. Real Telegram
+phone/R2, hosted exact-SHA CI and staging migration/runtime smoke remain unverified. Phone smoke
+is prepared and explicitly NOT EXECUTED. Retained superseded media has no new cleanup job; an old
+backend assuming non-null guest identity/ignoring occupancy is not a compatible rollback after
+new data is created. Next: independent review of this entire worktree; release needs a separate
+authorized task and its normal exact-SHA gates.
+
+
 ## HT-VENUE-SHIFT-SALES-MVP-PUBLISH-01 — publication preparation (2026-11-07)
 
 **REVIEW_PASS / PUBLICATION_PREPARED / STAGING_UNVERIFIED**.

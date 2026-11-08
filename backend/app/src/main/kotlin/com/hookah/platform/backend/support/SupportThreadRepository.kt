@@ -1494,8 +1494,15 @@ open class SupportThreadRepository(
     private fun lockBookingContext(
         connection: Connection,
         bookingId: Long,
-    ): BookingThreadContext? =
-        connection.prepareStatement(
+    ): BookingThreadContext? {
+        val venue =
+            connection.prepareStatement("SELECT venue_id FROM bookings WHERE id = ? AND user_id IS NOT NULL").use {
+                    statement ->
+                statement.setLong(1, bookingId)
+                statement.executeQuery().use { rs -> if (rs.next()) rs.getLong(1) else null }
+            } ?: return null
+        com.hookah.platform.backend.miniapp.venue.seating.lockSeatingVenue(connection, venue)
+        return connection.prepareStatement(
             """
             SELECT id, venue_id, user_id
             FROM bookings
@@ -1516,6 +1523,7 @@ open class SupportThreadRepository(
                 }
             }
         }
+    }
 
     private fun selectBookingLookupContexts(
         connection: Connection,

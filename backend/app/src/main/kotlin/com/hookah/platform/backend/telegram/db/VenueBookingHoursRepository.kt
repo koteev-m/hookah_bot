@@ -570,7 +570,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
-                ds.connection.use { connection ->
+                com.hookah.platform.backend.miniapp.venue.seating.seatingPolicyTransaction(ds, venueId) { connection ->
                     connection.prepareStatement(
                         """
                         DELETE FROM venue_booking_hours_overrides
@@ -597,7 +597,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
-                ds.connection.use { connection ->
+                com.hookah.platform.backend.miniapp.venue.seating.seatingPolicyTransaction(ds, venueId) { connection ->
                     connection.prepareStatement(
                         """
                         DELETE FROM venue_booking_hours_overrides
@@ -727,7 +727,7 @@ class VenueBookingHoursRepository(private val dataSource: DataSource?) {
             SELECT 1
             FROM venues
             WHERE id = ?
-            LIMIT 1
+            LIMIT 1 FOR UPDATE
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)

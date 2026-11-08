@@ -95,7 +95,7 @@ class SupportThreadReadConcurrencyPostgresTest {
                     try {
                         awaitLockWaiter(
                             observer = observer,
-                            queryPattern = "%from bookings%for update%",
+                            queryPattern = "%from venues%for no key update%",
                             operation = second,
                         )
                     } finally {

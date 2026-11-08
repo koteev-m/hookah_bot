@@ -467,6 +467,14 @@ Remaining follow-ups after parity closure:
   AI-generated summaries are later follow-ups, not current launch scope.
 
 ## Block 9 — Tables & QR
+
+Local hall/seating candidate HT-HALLS-SEATING-TABLE-BOOKING-01 extends existing physical tables
+with halls, editable image plans and explicit seating. Addressed guest PENDING and offline manual
+CONFIRMED bookings share availability; physical release remains separate from payment. Canonical
+UX is in `VENUE_OPERATIONS.md`, reservation/time rules in `BOOKING_LIFECYCLE.md`, session/movement
+isolation in `ORDER_SESSION_TAB_CORE.md`, and role boundaries in `SECURITY_RBAC_MATRIX.md`.
+Local test evidence does not imply staging or phone acceptance.
+
 MUST:
 - Follow `docs/ORDER_SESSION_TAB_CORE.md` for `TABLE_SESSION` lifecycle, close/expire policy and guest re-entry rules.
 - Table CRUD; unique QR per table.

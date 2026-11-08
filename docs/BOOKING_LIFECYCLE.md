@@ -1,5 +1,103 @@
 # Booking Lifecycle Model
 
+
+For Hall SEAT of an existing booking, party size and agreed end are read-only agreement fields.
+OWNER/MANAGER can change them through ASSIGN_BOOKING before seating, with current revision and
+availability validation; STAFF gets guidance without expanded booking-edit rights. SEAT accepts
+omitted fields or explicit matching legacy values, but returns SEATING_CONFLICT for different
+values without seating/booking/revision/audit changes. Walk-in SEAT retains editable party/end.
+After a revision conflict the form shows current agreement values and preserves applicable draft
+fields; explicit acknowledgement and a new request remain required.
+
+## Addressed reservations and offline bookings (HT-HALLS-SEATING-TABLE-BOOKING-01)
+
+This section defines the enabled table-booking policy. It extends the same `bookings` records;
+there is no separate reservation registry. `table_id`, `agreed_end_at`, duration/buffer snapshots,
+source/author and seating revision are additive. Guest records retain their real Telegram id;
+offline STAFF records have NULL `user_id` and a required offline label. Existing rows are not
+backfilled with fabricated capacities, ends or identities.
+
+| Status | Addressed interval blocks availability | May seat |
+| --- | --- | --- |
+| PENDING | Yes, until a persisted lifecycle transition | No |
+| CONFIRMED | Yes | Yes, same booking and visit |
+| CHANGED | Yes, proposed interval replaces original atomically after validation | No |
+| CANCELED / EXPIRED / NO_SHOW | No | No |
+| SEATED | Physical seating is the authority, until explicit release | Already seated |
+
+Choosing a marker or viewing a form creates no hold. Guest submit creates PENDING, not CONFIRMED.
+Manual submit creates CONFIRMED without Telegram registration or a second guest confirmation.
+Both paths validate capacity, venue, schedule and the whole interval under the same transaction
+lock. An unsuccessful change preserves the original booking and interval. Guest/legacy Bot writers
+cannot create an unassigned reservation while guest table choice is enabled; Bot directs users to
+Mini App. Unlimited 24-hour service with no finite end permits an ordinary unassigned request with
+an explicit no-guarantee explanation. Offline bookings have no booking conversation with a fake user.
+
+Legacy unconfigured venues retain attendance-only booking arrival for compatibility. Once a venue
+has changed seating rules or recorded addressed bookings/physical seating, legacy unassigned arrival
+must select a table in «Зал»; disabling visual switches cannot bypass that requirement. A guest time
+change through existing APIs still checks the assigned interval; manual agreed time changes stay
+CONFIRMED and do not wait for a nonexistent Telegram guest. Unknown legacy party size must be
+explicitly entered before staff can assign a guaranteed table.
+
+The existing `arrival_deadline_at`/hold and expiry worker remain authoritative (runtime fallback:
+30 minutes). No new selection TTL exists. A deadline alone does not silently release a table:
+reservation state changes only through the normal expiry/no-show/cancel lifecycle. Active queues
+retain unresolved overdue records until that transition. CHANGED never enables arrival actions.
+
+Time policy:
+
+- Venue timezone is used for input, schedule and display; existing unset-zone fallback remains
+  Europe/Moscow. Ambiguous/nonexistent local input at DST transitions is rejected with guidance.
+- «Ограничивать длительность визита» is OFF by default. When enabled, editable duration supplies
+  the standard end (configured 120 is merely the initial editable value); buffer is independent
+  and permits zero. Hold-on-lateness is a different setting.
+- Limited guest reservations receive the full standard duration. Staff shortened seating requires
+  explicit end and acknowledgement that guests were warned. Late arrival preserves the agreed end.
+- Unlimited reservations of a specific table extend to the finite end of the corresponding working
+  interval, including intervals through midnight. For continuous 24-hour service an explicit agreed
+  end is required for a table guarantee. Physical walk-ins may remain open-ended and occupied.
+- Every finite interval must fit effective weekly/date-override hours. Explicit finite intervals
+  are bounded to 31 days to keep schedule validation bounded; open-ended physical visits have no
+  artificial elapsed-time release. Explicit agreement beyond this API bound requires venue review.
+- Applied duration and buffer are snapshots. Settings changes do not rewrite existing agreements
+  or history. Between two commitments the stricter of their buffer snapshots applies once.
+  Therefore a 20:00 booking with buffer 10 requires the prior end at or before 19:50.
+- After explicit release, preparation starts at the actual persisted `released_at`, whether earlier
+  or later than the agreed end. A move starts the same preparation at `moved_at` on the old table.
+  Physical occupancy ends immediately; availability remains blocked until actual release/move plus
+  the stricter of the released visit's buffer snapshot and the next commitment's buffer snapshot.
+  Changing venue settings never replaces the released visit's snapshot. Replaying release/move
+  never restarts preparation. Guest/manual booking and walk-in seating use this same calculation.
+- Assigning another table preserves an existing booking's agreed start/end, duration and buffer
+  snapshots. Only a legacy booking without an agreed interval takes current rules on first assignment.
+- Rejected terminal/stale booking updates change no fields or revision and emit no successful audit
+  or outbox event. Accepted time/end/revision updates are one guarded SQL mutation.
+- Future expected availability may follow a current agreed end. Actual overdue/open-ended occupancy
+  remains blocked until explicit release/extension; it is never labelled free by a timer.
+
+Extension retains the original visit start and agreement snapshots, but checks destination occupancy
+from the latest arrival at that table after MOVE. Completed preparation before that arrival cannot
+block extension; active buffers and future reservations still apply without managerial override.
+Movement validates the remaining interval at the destination. Assignment/time changes lock and validate before changing the reservation;
+a new proposal cannot destroy the old reserve on conflict. A guest time proposal becomes CHANGED;
+manual agreed edits keep the existing confirmed lifecycle and existing management RBAC.
+
+Commands use actor/venue/request UUID plus payload hash. Retry after timeout must reuse the same
+payload/key; changed payload returns conflict. A committed guest request can be replayed even if the
+feature was subsequently switched off. Staff replay still requires current membership/role.
+Transactional audit records only successful changes; a rollback leaves neither operation nor audit.
+Hall SEAT requires the current booking revision under the booking lock. A stale new command returns
+HTTP 409 without changing booking/session/visit/audit/outbox; exact committed replay remains valid.
+Legacy arrival resolves its current revision internally under the same lock, without a Hall bypass.
+Hall guest start-time proposals enqueue the existing guest notification and reschedule enabled
+reminders in the mutation transaction. Replay, unchanged start, failed validation and offline guests
+produce no duplicate notification. Outbox NEW means queued, not delivered; existing traffic policy
+can suppress enqueue without inventing delivery status.
+Order status transitions enter the venue lock before order locks, like Hall/accounting mutations.
+Session/tab context writers use NO KEY UPDATE on PostgreSQL so visit FK checks remain compatible;
+MOVE creates no financial object and RELEASE neither pays nor writes off debt.
+
 Дата актуализации: 2026-08-18.
 
 Статус: **current product reference / SPEC UPDATED**. Booking flows are implemented in several bounded slices: guest booking create/list/cancel/change acceptance foundations, Venue Mini App booking queue/lifecycle, hold settings, `arrival_deadline_at`, confirmed-only arrival terminal actions, state-aware staff-chat booking buttons, booking conversation threads, booking `SEATED` -> Guest History integration and opt-in reminder code are documented as smoke-closed or code/test-backed in the current roadmap. The complete booking lifecycle is still **PARTIAL / needs verification** for rollout-gated reminders, full automation, preorder, feedback and all analytics/audit event coverage.
@@ -27,7 +125,7 @@ Canonical dependencies:
 | `BOOKING_REQUEST` | Initial guest-created booking before venue confirmation. | Current status maps to `PENDING`. |
 | `BOOKING_CHAT` | Conversation tied to exactly one `booking_id`, opened from booking action `Открыть переписку`. | Implemented/smoke-closed through booking conversation threads; not support. |
 | `ARRIVAL_DEADLINE` | Local deadline until which the venue holds a confirmed booking. A changed/proposed-time booking may carry a deadline snapshot, but it is not arrival-ready until confirmed. Target default is `scheduled_at + hold_minutes`. | `arrival_deadline_at` is documented as persisted/smoked; automation semantics remain partial. |
-| `HOLD_MINUTES` | Per-venue setting for how long a booking is held after scheduled time. | Current docs say Venue Mini App settings route exists. Target recommended default: 15 minutes, configurable to 15/30/60 and custom later. |
+| `HOLD_MINUTES` | Per-venue setting for how long a booking is held after scheduled time. | Current docs say Venue Mini App settings route exists. Runtime fallback: 30 minutes; existing configurable hold rules remain in force. |
 | `SEATED_VISIT` | Booking whose guest arrived and was marked seated. It can become a Guest History source. | Current enum/status exists; booking `SEATED` -> Guest History integration is staging-smoked. |
 
 ## Status State Machine

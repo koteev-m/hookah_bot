@@ -22145,7 +22145,18 @@ test('venue menu does not steal user scroll or focus after a delayed authoritati
   const capturedScroll = await page.evaluate(() => window.scrollY)
 
   await page.mouse.move(120, 120)
+  // Finish this wheel gesture before focus/typing can initiate another scroll.
+  // An unchanged scrollY sample can occur while Chromium still has wheel deltas pending.
+  const wheelFinished = await page.evaluateHandle(() => ({
+    finished: new Promise<void>((resolve) => {
+      window.addEventListener('wheel', () => {
+        window.addEventListener('scrollend', () => resolve(), { once: true })
+      }, { once: true })
+    })
+  }))
   await page.mouse.wheel(0, -10_000)
+  await wheelFinished.evaluate(({ finished }) => finished)
+  await wheelFinished.dispose()
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(capturedScroll)
   await currentWorkItem.getByRole('button', { name: 'Править позицию', exact: true }).click()
   const currentWorkForm = currentWorkItem.locator('.venue-menu-item-edit-form')
@@ -22156,13 +22167,6 @@ test('venue menu does not steal user scroll or focus after a delayed authoritati
   await currentWorkPrice.press('ControlOrMeta+A')
   await currentWorkPrice.pressSequentially('999')
   await expect(currentWorkPrice).toBeFocused()
-  // The wheel/keyboard scroll can still be settling after the final key on compact cards.
-  // Capture a stationary viewport before releasing the response; retain the exact <=8px assertion.
-  await expect.poll(async () => page.evaluate(async () => {
-    const before = window.scrollY
-    await new Promise((resolve) => window.setTimeout(resolve, 100))
-    return window.scrollY === before
-  })).toBe(true)
   const userScroll = await page.evaluate(() => window.scrollY)
   expect(Math.abs(userScroll - capturedScroll)).toBeGreaterThan(8)
 
@@ -22928,7 +22932,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 
     await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
     await page.goto('?mode=venue#/settings')
     const catalog = page.locator('.venue-settings-catalog')
-    await expect(catalog.getByRole('link')).toHaveText(['Карточка заведения', 'Часы работы', 'Меню', 'Столы и QR', 'Команда и доступ', 'Бронирование', 'Продление времени', 'Акции'])
+    await expect(catalog.getByRole('link')).toHaveText(['Карточка заведения', 'Часы работы', 'Меню', 'Залы и столы', 'Правила посадки', 'Столы и QR', 'Команда и доступ', 'Бронирование', 'Продление времени', 'Акции'])
     await expect(page.locator('.venue-settings')).toHaveCount(0)
     await expectNoHorizontalOverflow(page)
     await page.screenshot({ path: testInfo.outputPath(`owner-catalog-${viewport.width}.png`), fullPage: true, animations: 'disabled' })

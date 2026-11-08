@@ -931,6 +931,24 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        // Hall and accounting writers take venue before context/order locks. Closing an
+                        // order also inserts visits (session FKs), so it must enter that hierarchy first.
+                        val venueLock =
+                            if (connection.metaData.databaseProductName == "PostgreSQL") {
+                                "FOR NO KEY UPDATE"
+                            } else {
+                                "FOR UPDATE"
+                            }
+                        val venueExists =
+                            connection.prepareStatement("SELECT id FROM venues WHERE id = ? $venueLock").use {
+                                    statement ->
+                                statement.setLong(1, venueId)
+                                statement.executeQuery().use { it.next() }
+                            }
+                        if (!venueExists) {
+                            connection.rollback()
+                            return@use null
+                        }
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
                                 runCatching { connection.rollback() }

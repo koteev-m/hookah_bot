@@ -32,6 +32,7 @@ import { renderVenueStaffScheduleScreen, type ScheduleNavigation } from './venue
 import { renderVenueAccountingScreen } from './venueAccounting'
 import { renderVenueStatsScreen } from './venueStats'
 import { renderVenueSubscriptionScreen } from './venueSubscription'
+import { renderVenueHall } from './venueHall'
 import { renderVenueTablesScreen } from './venueTables'
 
 export type VenueAppOptions = {
@@ -52,6 +53,9 @@ type RouteName =
   | 'guest-preview'
   | 'promotions'
   | 'menu'
+  | 'hall'
+  | 'hall-settings'
+  | 'seating-rules'
   | 'tables'
   | 'staff'
   | 'my-profile'
@@ -74,7 +78,7 @@ type Route = {
   previewSection?: VenueSettingsSection
 }
 
-type NavRouteName = Exclude<RouteName, 'order' | 'more' | 'accounting'>
+type NavRouteName = Exclude<RouteName, 'order' | 'more' | 'accounting' | 'hall-settings' | 'seating-rules'>
 
 type VenueShellRefs = {
   app: HTMLDivElement
@@ -134,6 +138,9 @@ function resolveRoute(): Route {
       'guest-preview',
       'promotions',
       'menu',
+      'hall',
+      'hall-settings',
+      'seating-rules',
       'tables',
       'staff',
       'my-profile',
@@ -215,6 +222,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
     }) as HTMLButtonElement,
     promotions: el('button', { className: 'nav-button', text: 'Акции' }) as HTMLButtonElement,
     menu: el('button', { className: 'nav-button', text: 'Заказное меню' }) as HTMLButtonElement,
+    hall: el('button', { className: 'nav-button', text: 'Зал' }) as HTMLButtonElement,
     tables: el('button', { className: 'nav-button', text: 'Столы и QR' }) as HTMLButtonElement,
     'my-profile': el('button', { className: 'nav-button', text: 'Моя карточка' }) as HTMLButtonElement,
     staff: el('button', { className: 'nav-button', text: 'Персонал' }) as HTMLButtonElement,
@@ -250,6 +258,7 @@ function buildVenueShell(root: HTMLDivElement): VenueShellRefs {
         navButtons.dashboard,
         navButtons.orders,
         navButtons.bookings,
+        navButtons.hall,
         navButtons.messages,
         navButtons.calls,
         navButtons.extensions,
@@ -757,8 +766,12 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'guest-preview':
       case 'promotions':
         return currentRole === 'OWNER' || currentRole === 'MANAGER'
+      case 'hall':
       case 'tables':
         return hasPermission('TABLE_VIEW')
+      case 'hall-settings':
+      case 'seating-rules':
+        return currentRole === 'OWNER' || currentRole === 'MANAGER'
       case 'settings':
         return (
           canManagePublicCard() ||
@@ -934,6 +947,10 @@ export function mountVenueApp(options: VenueAppOptions) {
         return renderVenueMenuScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'promotions':
         return renderVenuePromotionsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+      case 'hall':
+      case 'hall-settings':
+      case 'seating-rules':
+        return renderVenueHall({ root: screenRoot, backendUrl, venueId, access, userId: currentUserId, mode: route.name === 'hall-settings' ? 'settings' : route.name === 'seating-rules' ? 'rules' : 'work' })
       case 'tables':
         return renderVenueTablesScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'my-profile':

@@ -16,6 +16,27 @@ HT33 реализует controller transitions; HT34 добавляет disposab
 Документ описывает безопасный процесс валидации и обычного применения миграций без даунтайма;
 контролируемое окно V126 на staging является явно описанным исключением ниже.
 
+## Hall/seating append-only migration candidate (HT-HALLS-SEATING-TABLE-BOOKING-01)
+
+The verified base has PostgreSQL V131 and H2 V132. New tails are PostgreSQL
+`V132__halls_seating_table_booking.sql` and H2 `V133__halls_seating_table_booking.sql`.
+Historical SQL bytes/checksums are unchanged. Forward tests start from the preceding head with
+existing users, table/QR, booking, visit/session/order and a closed financial report; they verify
+identity, NULL unknown values and report preservation after migrate + validate.
+
+New hall/rule/media/seating/movement/idempotency tables extend the existing physical table,
+booking and visit models. Existing rows receive neither fake capacity nor fabricated end/guest.
+The guest user FK becomes nullable only with the explicit offline identity/source contract.
+Both new features default OFF. PostgreSQL row locks and H2 functional tests have distinct roles;
+H2 tests are not evidence for concurrent PostgreSQL writers.
+
+Once offline reservations or new physical seating exist, an old application that assumes every
+booking/visit has a Telegram user or ignores physical occupancy is not a compatible rollback.
+Use a reviewed compatible forward fix. A release requires exact migration compatibility review,
+backup/readiness, current exact-SHA CI and separate deploy authorization. Local release manifest
+fixtures accepting this exact tail are tests, not approval of a live migration or mixed-version
+rollout. No Flyway repair, historical SQL edits or real data changes are authorized here.
+
 ## Политика для CI
 
 1. Любое изменение схемы должно идти через Flyway-миграции (`classpath:db/migration/...`).

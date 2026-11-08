@@ -1,5 +1,63 @@
 # Order / Session / Tab Core Model
 
+
+Bot free-text quick checkout freezes the QR token, session and tab when the dialog starts and
+persists one request UUID with the confirmed text. Confirmation does not resolve a replacement
+session/tab. Ordinary and confirmed Platform Guest writers use the existing atomic checkout:
+venue → table/token → exact active session/tab/member → order/batch/idempotency. A moved/released
+context, closed tab or rotated token rejects before writes; it never joins the next company.
+CHAT source and author are retained. Exact replay creates no additional batch/notification.
+An older unfinished dialog without frozen context must restart from QR; database uncertainty
+retains the original request for retry. This change does not auto-open an accounting shift.
+
+## Physical seating and movement (HT-HALLS-SEATING-TABLE-BOOKING-01)
+
+`table_seatings` records explicit physical occupancy of an existing physical table; it is not a
+second table registry and not a financial event. It references the canonical visit, table_session
+and optional booking. QR scan, GET, screen entry and personal-tab creation do not themselves record
+physical arrival. Unresolved legacy sessions/orders are shown as RECONCILE instead of assumed free.
+A staff reconciliation reuses only a proven session/visit identity. For a booking, an existing
+booking-to-visit link must match both session and guest (including nullable offline identity).
+Otherwise exactly one unlinked visit in that session must match the booking's non-null verified
+Telegram guest. Matching table/time or two NULL guests is insufficient. Foreign/ambiguous visits
+remain «Требует сверки»; reconciliation must not rewrite their history.
+
+Explicit seating uses an active session whose technical expiry is kept beyond ordinary QR TTL;
+this is not a promised guest visit duration. `agreed_end_at` is separate and may be NULL. Expiry
+cleanup/ordinary closeSession cannot end a currently recorded physical seating. The table remains
+occupied after its agreed end and requires staff release or a conflict-checked extension.
+
+Movement locks the venue, policy and sorted source/destination tables before session/tab/order.
+It retains seating/visit/session/order/tab IDs and writes `table_seating_moves`. It updates the
+session's current table, ACTIVE orders' operational table reference and NEW/ACK staff calls.
+An active call keeps its ID, author, session and original creation history; each committed move
+adds `STAFF_CALL_MOVED` audit with the real initiator and old/new table. DONE calls are unchanged.
+Call completion and movement serialize on the same venue row, so a completed call retains the
+location at completion; no duplicate call or delivery success is synthesized. Closed order references,
+accounting sales/receipts and final report snapshots are unchanged. The former table/session pair
+fails subsequent context validation. Scanning the old table starts a different session; it cannot
+rejoin the moved company's tab/order/conversation. Own historical visits remain user-scoped.
+
+Release is separate from payment. ACTIVE orders must finish through their existing workflow, and
+NEW/ACK staff calls must resolve first. Release then ends the session and active tabs, invalidates
+tab invites and records release. It does not mark debt paid, delete orders or modify closed reports.
+The next company gets a new session and no access to old user-scoped history or bill.
+
+Lock order for seating, booking and relevant Bot/Mini App order paths is venue (PostgreSQL
+NO KEY UPDATE), policy, current membership/booking, sorted tables, session, tabs, orders. The venue
+lock precedes financial work and avoids the former table/session -> venue inversion. Independent
+venues use distinct row locks. Session-bound staff-call creation (Mini App and Bot, including
+BILL) validates and locks venue → active table → exact active, unexpired session in its insertion
+transaction. Completion/acknowledgement also takes the venue lock before the call. A release that
+wins first prevents insertion; a call that wins first prevents release until resolved. Rejection
+rolls back the call and cannot produce a successful notification. Existing BILL deduplication and
+seating command replay contracts remain unchanged. Physical operations never open an accounting shift; separate local
+auto-open work from another checkout is not part of this module.
+The existing paid extension of ordering/service time remains a separate contract: it does not
+silently extend the physical seating agreement. Staff must use the conflict-checked seating
+extension for that agreement. Offline/walk-in physical visits retain NULL user identity; personal
+history remains scoped to verified order participants. Feedback scheduling excludes offline visits.
+
 Дата актуализации: 2026-08-12.
 
 Статус: **current product reference / SPEC UPDATED**. Этот документ фиксирует product model для QR table context, active table order, order batches, personal/shared tabs, bill/request/close flow, visit-history foundation and privacy boundaries. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its item-level action and copy polish is **DONE / MVP / STAGING-SMOKE-PASSED**. Platform test status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; the bounded Telegram/session/privacy smoke is complete. Runtime status is mixed: the old table-only active-order risk and Guest History Foundation MVP are documented as closed in current audit notes, while force-close policy, some DB-level uniqueness nuances, repeat/feedback/loyalty/preorder and broader analytics remain future/partial.
@@ -81,6 +139,30 @@ The active order belongs to a verified table session/visit, not to a physical ta
 - Staff chat is a notification/radar/shortcut surface, not the source of truth.
 
 ## Current Implementation Vs Target
+
+Bot quick-order confirmation/edit/cancel buttons identify the saved request UUID. A confirmed
+checkout rejection finishes only that request and clears its dialog payload before reporting
+the refusal. An old button cannot execute the request after MOVE back or a new seating, nor act
+on a newer dialog. A new order starts through the normal flow with a fresh UUID and current
+QR/session/tab. An unknown database result retains the original text, UUID and frozen context
+for exact idempotent replay. Legacy buttons without a UUID refresh the saved confirmation without
+executing it. A known successful checkout finishes the dialog; repeated callbacks create no batch.
+
+Quick-order execution and terminal transitions share the PostgreSQL dialog-row lock. Both checkout
+writers acquire venue first, then lock the matching chat/request and verify its frozen text,
+token/session/tab before creating a batch. They retain that lock through commit/rollback; a known
+context refusal clears the request in that same transaction. A callback that read an older dialog
+before waiting cannot revive a refused, cancelled or edited request after MOVE back or new seating.
+The existing Platform Guest coordinator retains its authorization locks before entering the writer;
+the writer never acquires a chat-context lock after the dialog lock.
+
+Edit/cancel lock only the dialog row, then read committed batch idempotency in a separate statement
+without taking venue/session/order locks. If checkout committed first, they refuse the change and
+do not claim cancellation. Success acknowledgement clears only its matching dialog. Until
+acknowledgement, the original payload stays intact for exact replay through durable idempotency,
+including after response loss or process restart. There is no intermediate EXECUTING state, new
+migration or process-local mutex. Failed transactions retain the original request; Telegram delivery
+failure cannot reopen a request already completed in PostgreSQL.
 
 | Block | Current implementation from docs/audit | Target product model | Gap / future implementation note |
 | --- | --- | --- | --- |

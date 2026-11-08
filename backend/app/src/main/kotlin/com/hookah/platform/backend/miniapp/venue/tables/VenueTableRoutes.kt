@@ -134,7 +134,11 @@ internal fun Route.venueTableRoutes(
             val prefix = request.prefix?.trim().takeUnless { it.isNullOrBlank() }
             val created =
                 try {
-                    venueTableRepository.batchCreateTables(venueId, tableNumbers) { connection, tables ->
+                    venueTableRepository.batchCreateTables(
+                        venueId,
+                        tableNumbers,
+                        actorUserId = userId,
+                    ) { connection, tables ->
                         auditLogRepository.appendJson(
                             connection = connection,
                             actorUserId = userId,

@@ -136,7 +136,8 @@ function buildDom(root: HTMLDivElement): VenueBookingsRefs {
   const title = el('h2', { text: 'Брони' })
   const status = el('p', { className: 'status', text: '' })
   const refreshButton = el('button', { className: 'button-secondary', text: '🔄 Обновить' }) as HTMLButtonElement
-  append(header, title, status, refreshButton)
+  const addBooking = el('a', { className: 'button-secondary', text: 'Добавить бронь' }); addBooking.href = '#/hall?addBooking=1'
+  append(header, title, status, refreshButton, addBooking)
   const list = el('div', { className: 'venue-bookings-list' })
   append(wrapper, header, list)
   root.replaceChildren(wrapper)
@@ -388,6 +389,9 @@ function renderBookings(
       })
     )
     row.appendChild(el('p', { className: 'venue-order-sub', text: `Гость: ${booking.guestDisplayName || 'Гость'}` }))
+    if (booking.source === 'STAFF') row.appendChild(el('p', { className: 'venue-order-sub', text: 'Создана сотрудником · гость без Telegram' }))
+    if (booking.tableId) { const link = el('a', { className: 'button-small button-secondary', text: `Стол №${booking.tableNumber ?? '—'} · Открыть посадку` }) as HTMLAnchorElement; link.href = '#/hall'; row.appendChild(link) }
+    if (booking.agreedEndAtDisplay) row.appendChild(el('p', { className: 'venue-order-sub', text: `Согласовано до: ${booking.agreedEndAtDisplay}` }))
     if (booking.serviceDate) {
       row.appendChild(el('p', { className: 'venue-order-sub', text: `Смена: ${booking.serviceDate}` }))
     }
@@ -411,9 +415,9 @@ function renderBookings(
     }
     if (reconciliation.status === 'READY_WITH_THREAD') {
       row.appendChild(el('p', { className: 'venue-order-sub', text: 'Есть переписка с гостем.' }))
-    } else if (canManage && reconciliation.status === 'LOADING') {
+    } else if (canManage && booking.source !== 'STAFF' && reconciliation.status === 'LOADING') {
       row.appendChild(el('p', { className: 'venue-order-sub', text: 'Сверяем переписку…' }))
-    } else if (canManage && reconciliation.status === 'ERROR') {
+    } else if (canManage && booking.source !== 'STAFF' && reconciliation.status === 'ERROR') {
       row.appendChild(el('p', { className: 'status', text: 'Не удалось сверить переписку этой брони.' }))
     }
     const actions = el('div', { className: 'order-actions' })
@@ -427,7 +431,7 @@ function renderBookings(
       cancelButton.addEventListener('click', () => onCancel(booking))
       actions.appendChild(cancelButton)
     }
-    if (canManage && (reconciliation.status === 'READY_NO_THREAD' || reconciliation.status === 'READY_WITH_THREAD')) {
+    if (canManage && booking.source !== 'STAFF' && (reconciliation.status === 'READY_NO_THREAD' || reconciliation.status === 'READY_WITH_THREAD')) {
       const messageButton = el('button', {
         className: 'button-small button-secondary',
         text: thread ? 'Открыть переписку' : 'Написать гостю'
@@ -440,7 +444,7 @@ function renderBookings(
         }
       })
       actions.appendChild(messageButton)
-    } else if (canManage && reconciliation.status === 'ERROR') {
+    } else if (canManage && booking.source !== 'STAFF' && reconciliation.status === 'ERROR') {
       const refreshConversationButton = el('button', {
         className: 'button-small button-secondary',
         text: 'Обновить переписку'

@@ -95,7 +95,7 @@ class TableTokenRepository(private val dataSource: DataSource?) {
                 SELECT id, name, status, staff_chat_id
                 FROM venues
                 WHERE id = ?
-                FOR UPDATE
+                ${if (connection.metaData.databaseProductName == "PostgreSQL") "FOR NO KEY UPDATE" else "FOR UPDATE"}
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, expectedVenueId)
