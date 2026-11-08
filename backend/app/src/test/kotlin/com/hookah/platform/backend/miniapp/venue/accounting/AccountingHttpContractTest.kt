@@ -92,10 +92,9 @@ class AccountingHttpContractTest {
                         assertEquals(JsonNull, it.jsonObject.getValue("current"))
                         assertEquals(JsonArray(emptyList()), it.jsonObject.getValue("history"))
                     }
-                val opened = send(command("OPEN"))
-                val shift = Json.decodeFromJsonElement(AccountingReport.serializer(), opened)
-                captured["created"] = send(manual(shift.shiftId))
+                captured["created"] = send(manual(1).copy(shiftId = null))
                 val created = Json.decodeFromJsonElement(AccountingReport.serializer(), captured.getValue("created"))
+                val shift = created
                 val sale = created.sales.single()
                 val wireSale = captured.getValue("created").jsonObject.getValue("sales").jsonArray.single().jsonObject
                 assertEquals(JsonPrimitive(true), wireSale.getValue("orderClosed"))

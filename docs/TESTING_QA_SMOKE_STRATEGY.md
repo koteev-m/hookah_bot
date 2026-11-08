@@ -1730,6 +1730,44 @@ Target QA model:
 
 ## Venue accounting MVP local gate — HT-VENUE-SHIFT-SALES-MVP-01
 
+Auto-opening local gate (`HT-ACCOUNTING-AUTO-SHIFT-OPEN-01`): `AccountingAutoOpenH2Test` and
+`AccountingAutoOpenPostgresTest` exercise first manual/digital/CHAT operations, actual initiator
+audit, role/tenant denials, invalid-input and post-write rollback, exact retry, multi-day/midnight
+period persistence, 40+60 settlement and a new period after closure. PostgreSQL tests use separate
+backend PIDs, controlled JDBC barriers and pg_blocking_pids for simultaneous first orders,
+manual-vs-digital opening and both closure/order serializations. Skipped PG cases are not PASS.
+The real HTTP capture now starts with CREATE without OPEN; its existing money/default fields
+must remain identical. Relevant mobile tests cover all three roles, read/draft without opening,
+first-sale lost-response retry, old-period warning and sale entry after closure. Preserve existing
+extension/snapshot, Guest checkout, Bot confirmation, order, RBAC and financial regressions.
+No new migration or changed historical SQL is needed. Local tests do not prove live Telegram UX.
+
+P1/P2 auto-opening fixes (`HT-ACCOUNTING-AUTO-SHIFT-OPEN-FIX-01`):
+`AccountingCheckoutConcurrencyPostgresTest` must execute without skips. Real Mini App guest
+authorization plus the connection checkout writer and standalone Bot catalog/CHAT writer append
+to the same ACTIVE order in both start orders. JDBC barriers and `pg_blocking_pids` must prove
+actual waiting on different backend PIDs; both writes, exact retries and single shift/audit
+postconditions must pass. Cover failed first writers, revoked guest scope, post-idempotency
+rollback and progress at another venue while one venue is held. Retain the seven extension/
+completion/financial snapshot races. Accounting Playwright must preserve all first-sale draft
+lines through guest opening, reload, same-session app reentry, Telegram Back and venue/account
+switches; compare competing draft ages, remove the unbound key safely, preserve it on storage
+failure and replay an uncertain submission with the original payload/idempotency key.
+
+Completion gate (`HT-ACCOUNTING-AUTO-OPEN-COMPLETE-01`): also exercise first Mini App/Bot
+catalog and CHAT checkouts with no pre-existing order, and manual-sale/Bot opening in both start
+orders. Observe distinct PostgreSQL backend PIDs and actual venue-lock waiting, then assert one
+OPEN shift, correct order/sale/batch/command/audit rows, financial totals and exact replays.
+Accounting browser checks must refuse to send if the pending replay payload cannot be stored,
+retain it after HTTP 408 and reload, and preserve every draft line after a definite 409 followed
+by a guest-opened shift. Keep the PR #252 persisted CHAT v1 fingerprint unchanged; replay a
+pre-auto-open CHAT order through both writer overloads without creating a shift, batch or audit.
+These local-base checks do not establish full compatibility with PR #252:
+after safe integration retain its durable quick-order dialog/token/context guards and execute
+`TelegramQuickOrderConcurrencyPostgresTest`, `SeatingCheckoutConcurrencyPostgresTest` and the
+current seating/migration suite against PostgreSQL V132 / H2 V133. No local old-base PASS
+substitutes for integrated MOVE/RELEASE/order-close/callback evidence.
+
 P1 regression gate (`HT-VENUE-SHIFT-SALES-P1-FIX-01`): `AccountingHttpContractTest` exercises the
 real Ktor module and compares serialized GET/POST responses with
 `miniapp/e2e/fixtures/accounting-http.json`. Only generated IDs, times and report hashes are

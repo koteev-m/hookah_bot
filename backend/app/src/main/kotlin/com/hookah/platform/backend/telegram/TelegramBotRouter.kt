@@ -267,6 +267,7 @@ private data class QuickOrderMutationResult(
     val existingOrderId: Long?,
     val orderId: Long,
     val batchId: Long,
+    val idempotencyReplay: Boolean,
 )
 
 private fun newBotGiftCallbackTag(): String =
@@ -33988,7 +33989,10 @@ class TelegramBotRouter internal constructor(
     ) {
         dialogStateRepository.set(
             chatId,
-            DialogState(DialogStateType.QUICK_ORDER_WAIT_CONFIRM, mapOf("text" to text)),
+            DialogState(
+                DialogStateType.QUICK_ORDER_WAIT_CONFIRM,
+                mapOf("text" to text, "requestId" to UUID.randomUUID().toString()),
+            ),
         )
         enqueueMessage(
             chatId,
@@ -34005,6 +34009,11 @@ class TelegramBotRouter internal constructor(
         if (text.isNullOrBlank()) {
             enqueueMessage(chatId, "Нет текста заказа, отправьте заново.")
             dialogStateRepository.set(chatId, DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT))
+            return
+        }
+        val requestId = state.payload["requestId"]
+        if (requestId == null) {
+            proceedQuickOrderText(chatId, text)
             return
         }
         val venueZoneId = resolveVenueZoneId(context.table.venueId)
@@ -34030,23 +34039,26 @@ class TelegramBotRouter internal constructor(
                             }
                             val existingOrderId =
                                 ordersRepository.findActiveOrderId(connection, confirmed.tableSession.id)
-                            val orderId =
-                                ordersRepository.getOrCreateActiveOrderId(
+                            val created =
+                                ordersRepository.createGuestOrderBatch(
                                     connection = connection,
                                     tableId = confirmed.context.tableId,
                                     venueId = confirmed.context.venueId,
                                     tableSessionId = confirmed.tableSession.id,
-                                    venueZoneId = venueZoneId,
-                                ) ?: return@runConfirmedPlatformGuestBotMutation null
-                            val batchId =
-                                ordersRepository.createOrderBatch(
-                                    connection = connection,
-                                    orderId = orderId,
-                                    authorUserId = context.userId,
-                                    guestComment = text,
+                                    userId = context.userId,
+                                    idempotencyKey = requestId,
                                     tabId = currentTab.id,
+                                    comment = text,
+                                    items = emptyList(),
+                                    venueZoneId = venueZoneId,
+                                    chatOrder = true,
                                 ) ?: return@runConfirmedPlatformGuestBotMutation null
-                            QuickOrderMutationResult(existingOrderId, orderId, batchId)
+                            QuickOrderMutationResult(
+                                existingOrderId,
+                                created.orderId,
+                                created.batchId,
+                                created.idempotencyReplay,
+                            )
                         }
                 ) {
                     is PlatformGuestBotMutationAttempt.Applied -> attempt.value
@@ -34054,23 +34066,20 @@ class TelegramBotRouter internal constructor(
                 }
             } else {
                 val existingOrderId = ordersRepository.findActiveOrderId(currentTab.tableSessionId)
-                val orderId =
-                    ordersRepository.getOrCreateActiveOrderId(
+                val created =
+                    ordersRepository.createGuestOrderBatch(
                         tableId = context.table.tableId,
                         venueId = context.table.venueId,
                         tableSessionId = currentTab.tableSessionId,
+                        userId = context.userId,
+                        idempotencyKey = requestId,
+                        tabId = currentTab.id,
+                        comment = text,
+                        items = emptyList(),
                         venueZoneId = venueZoneId,
+                        chatOrder = true,
                     )
-                if (orderId == null) {
-                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                    return
-                }
-                val batchId = ordersRepository.createOrderBatch(orderId, context.userId, text, currentTab.id)
-                if (batchId == null) {
-                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                    return
-                }
-                QuickOrderMutationResult(existingOrderId, orderId, batchId)
+                created?.let { QuickOrderMutationResult(existingOrderId, it.orderId, it.batchId, it.idempotencyReplay) }
             }
         if (mutation == null) {
             enqueueMessage(chatId, "Доступ к счёту изменился. Откройте QR-код ещё раз.")
@@ -34081,6 +34090,7 @@ class TelegramBotRouter internal constructor(
         val batchId = mutation.batchId
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "Запрос отправлен, ожидайте подтверждения.")
+        if (mutation.idempotencyReplay) return
         val orderSummary =
             runCatching { ordersRepository.findActiveOrderSummary(currentTab.tableSessionId) }
                 .getOrNull()

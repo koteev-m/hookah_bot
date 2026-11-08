@@ -9,7 +9,7 @@ import { formatPrice } from '../shared/ui/price'
 
 type Options = { root: HTMLDivElement | null; backendUrl: string; isDebug: boolean; venueId: number; access: VenueAccessDto; userId?: number | null }
 type LineDraft = { id?: string; menuItemId?: number; name: string; qty: string; price: string; discount: string; gift: boolean; giftReason: string }
-type Draft = { version?: number; tableId: string; lines: LineDraft[]; reason: string }
+type Draft = { version?: number; tableId: string; lines: LineDraft[]; reason: string; updatedAt?: number }
 const sourceNames: Record<string, string> = { MANUAL: 'Вручную', MINIAPP: 'Mini App', CHAT: 'Telegram', STAFF: 'Заказ персонала', MIXED: 'Telegram / Mini App', SERVICE_CHARGE: 'Услуга в счёте' }
 const paymentNames: Record<string, string> = { CASH: 'Наличные', CARD: 'Карта', TRANSFER: 'Перевод' }
 const money = (value: number) => formatPrice(value, 'RUB')
@@ -20,7 +20,7 @@ function minor(text: string): number {
   return Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'))
 }
 function storageRead<T>(key: string): T | null { try { return JSON.parse(sessionStorage.getItem(key) ?? 'null') as T | null } catch { return null } }
-function storageWrite(key: string, value: unknown) { try { sessionStorage.setItem(key, JSON.stringify(value)) } catch { /* Draft remains in the current screen. */ } }
+function storageWrite(key: string, value: unknown): boolean { try { sessionStorage.setItem(key, JSON.stringify(value)); return true } catch { return false } }
 function storageRemove(key: string) { try { sessionStorage.removeItem(key) } catch { /* No financial state is stored only in the browser. */ } }
 function button(text: string, action: () => void, secondary = true) {
   const node = el('button', { text, className: secondary ? 'button-secondary' : '' })
@@ -52,6 +52,17 @@ export function renderVenueAccountingScreen(options: Options) {
   const identity = options.userId ?? getTelegramContext().telegramUserId ?? 'unknown'
   const scope = `hookah:accounting:${location.host}:${identity}:${venueId}`
   const pendingKey = `${scope}:pending`
+  const firstDraftKey = `${scope}:draft:first:new`
+  const adoptFirstDraft = (shiftId: number): Draft | null => {
+    const key = `${scope}:draft:${shiftId}:new`
+    const first = storageRead<Draft>(firstDraftKey)
+    const current = storageRead<Draft>(key)
+    if (!first) return current
+    // Existing legacy drafts win when their relative age is unknown.
+    const chosen = current && !(first.updatedAt !== undefined && current.updatedAt !== undefined && first.updatedAt > current.updatedAt) ? current : first
+    if (chosen === current || storageWrite(key, chosen)) storageRemove(firstDraftKey)
+    return chosen
+  }
   const query = new URLSearchParams(location.hash.split('?')[1] ?? '')
   const sameVenue = query.get('av') === String(venueId)
   const requestedShift = sameVenue ? Number(query.get('shift')) || null : null
@@ -77,8 +88,11 @@ export function renderVenueAccountingScreen(options: Options) {
   }
   const run = async (body: AccountingCommand, draftKey?: string) => {
     if (saving) return
+    if (!storageWrite(pendingKey, { body, draftKey })) {
+      showError(new Error('Операция не отправлена: не удалось сохранить данные для безопасного повтора. Оставьте форму открытой, освободите место в хранилище браузера и повторите сохранение.'))
+      return
+    }
     saving = true; error.hidden = true
-    storageWrite(pendingKey, { body, draftKey })
     content.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button,input,select').forEach((node) => { node.disabled = true })
     const result = await accountingCommand(backendUrl, venueId, body, deps)
     saving = false
@@ -90,7 +104,7 @@ export function renderVenueAccountingScreen(options: Options) {
       if (body.action === 'CREATE') navigate()
       else render()
     } else {
-      if (result.error.status >= 400 && result.error.status < 500) storageRemove(pendingKey)
+      if ([400, 401, 403, 404, 409, 422].includes(result.error.status)) storageRemove(pendingKey)
       if (disposed) return
       render(); showError(result.error)
     }
@@ -107,10 +121,10 @@ export function renderVenueAccountingScreen(options: Options) {
     content.appendChild(box); reason.focus()
   }
   const lineEditor = (sale?: AccountingSale) => {
-    if (!report) return
-    const draftKey = `${scope}:draft:${report.shiftId}:${sale?.id ?? 'new'}`
+    const draftKey = `${scope}:draft:${report?.shiftId ?? 'first'}:${sale?.id ?? 'new'}`
     const blank = (): LineDraft => ({ name: '', qty: '1', price: '', discount: '0', gift: false, giftReason: '' })
-    const draft: Draft = storageRead<Draft>(draftKey) ?? {
+    const saved = !sale && report ? adoptFirstDraft(report.shiftId) : storageRead<Draft>(draftKey)
+    const draft: Draft = saved ?? {
       version: sale?.version, tableId: sale ? String(sale.tableId) : '', reason: '',
       lines: sale ? sale.lines.map((line) => ({ id: line.id, name: line.name, qty: String(line.qty), price: decimal(line.unitPriceMinor), discount: decimal(line.discountMinor), gift: line.giftReason !== null, giftReason: line.giftReason ?? '' })) : [blank()]
     }
@@ -118,7 +132,7 @@ export function renderVenueAccountingScreen(options: Options) {
       append(content, el('p', { text: 'Запись изменилась после начала исправления. Черновик сохранён; проверьте актуальные суммы перед новым исправлением.' }), button('Загрузить актуальную запись вместо черновика', () => { storageRemove(draftKey); render() }), button('К отчёту', () => navigate()))
       return
     }
-    const save = () => storageWrite(draftKey, draft)
+    const save = () => { draft.updatedAt = Date.now(); storageWrite(draftKey, draft) }
     const form = el('form', { className: 'card accounting-editor' })
     const select = el('select'); append(select, new Option('Выберите стол', ''))
     tables.filter((t) => t.isActive || t.tableId === sale?.tableId).forEach((t) => select.appendChild(new Option(t.tableLabel, String(t.tableId))))
@@ -171,7 +185,7 @@ export function renderVenueAccountingScreen(options: Options) {
           return { id: line.id, menuItemId: line.menuItemId, name: line.name, qty: Number(line.qty), unitPriceMinor: minor(line.price), discountMinor: minor(line.discount), giftReason: line.gift ? line.giftReason : null }
         })
         if ((sale || lines.some((line) => (line.discountMinor ?? 0) > 0)) && !draft.reason.trim()) throw new Error('Укажите причину исправления или скидки.')
-        submit({ action: sale ? 'EDIT' : 'CREATE', shiftId: report!.shiftId, saleId: sale?.id, expectedVersion: sale?.version, tableId: Number(draft.tableId), lines, reason: draft.reason }, draftKey)
+        submit({ action: sale ? 'EDIT' : 'CREATE', shiftId: report?.shiftId, saleId: sale?.id, expectedVersion: sale?.version, tableId: Number(draft.tableId), lines, reason: draft.reason }, draftKey)
       } catch (e) { showError(e as Error) }
     })
     content.appendChild(form)
@@ -217,10 +231,16 @@ export function renderVenueAccountingScreen(options: Options) {
       return
     }
     if (!report) {
-      append(content, el('p', { text: 'Открытой учётной смены нет. При открытии в неё войдут текущие активные заказы и последующие новые заказы. Закрытые прошлые заказы не переносятся.' }), button('Открыть учётную смену', () => submit({ action: 'OPEN' }), false))
+      append(content, el('p', { text: 'Добавьте первую продажу. Учётная смена откроется автоматически при сохранении продажи или первом заказе гостя. Просмотр экрана смену не открывает.' }))
+      if (view === 'new') { lineEditor(); return }
+      append(content, button('Добавить продажу', () => navigate({ view: 'new' }), false))
     } else {
       append(content, el('p', { text: `${report.status === 'OPEN' ? 'Открыта' : 'Закрыта'} · ${date(report.openedAt, report.timezone)}${report.closedAt ? ` — ${date(report.closedAt, report.timezone)}` : ''} · ${report.timezone}` }))
       if (report.status === 'CLOSED') append(content, el('p', { text: 'Сохранённый итог. Редактирование финансовых записей закрытой смены запрещено.' }))
+      if (report.status === 'OPEN') {
+        const day = new Intl.DateTimeFormat('sv-SE', { timeZone: report.timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
+        if (day.format(new Date(report.openedAt)) < day.format(new Date())) append(content, el('p', { className: 'error-card', text: `Смена открыта с ${date(report.openedAt, report.timezone)}. Новые продажи войдут в эту же смену. Полночь её не закрывает. Если прошлый рабочий период завершён, попросите владельца или менеджера сверить и закрыть смену до новой продажи.` }))
+      }
       const sale = report.sales.find((item) => item.id === selectedSale)
       if (report.status === 'OPEN' && (view === 'new' || (view === 'edit' && sale && sale.orderClosed && !sale.issue && !sale.cancelReason))) { lineEditor(sale); return }
       if (sale) { detail(sale); return }
@@ -266,7 +286,11 @@ export function renderVenueAccountingScreen(options: Options) {
         })
       }))
     }
-    if (report?.status === 'CLOSED') content.appendChild(button('К текущей смене', () => { location.hash = `#/accounting?av=${venueId}` }))
+    if (report?.status === 'CLOSED') content.appendChild(button('К текущей смене', () => {
+      const target = `#/accounting?av=${venueId}`
+      if (location.hash === target) void load()
+      else location.hash = target
+    }))
   }
   const load = async () => {
     const state = await accountingState(backendUrl, venueId, deps, abort.signal)
@@ -275,6 +299,7 @@ export function renderVenueAccountingScreen(options: Options) {
     history = state.data.history
     nextHistoryBeforeId = state.data.nextHistoryBeforeId ?? null
     report = state.data.current
+    if (report && !storageRead(pendingKey)) adoptFirstDraft(report.shiftId)
     if (requestedShift && requestedShift !== report?.shiftId) {
       const result = await accountingReport(backendUrl, venueId, requestedShift, deps, abort.signal)
       if (disposed) return

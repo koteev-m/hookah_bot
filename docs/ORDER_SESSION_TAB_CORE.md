@@ -241,7 +241,13 @@ smoke is [`ORDER-CONTEXT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#order-con
 
 `orders.accounting_shift_id` attaches an existing order to one venue accounting period without
 changing `table_session`, `order_batch` or personal/shared `tab` ownership. The sole order creator
-sets the reference under the venue lock; shift opening can adopt unassigned ACTIVE orders. Old
+sets the reference under the venue lock; the first authorized checkout creates the shift atomically
+if absent, using the actual initiator for AUTO_OPEN audit. Both checkout transaction overloads
+acquire the venue lock before table/session/tab, idempotency and menu/order locks, matching
+Mini App authorization and Bot checkout even when appending to an existing order. PostgreSQL
+NO KEY UPDATE remains compatible with FK checks; accounting closure uses that same venue lock.
+Existing shift opening can adopt
+unassigned ACTIVE orders. Exact replays return their original order before any new opening. Old
 closed orders are left untouched. Canonical bill snapshots remain the source for digital estimates.
 Payment recording requires operationally CLOSED orders; close itself never implies payment.
 The accounting journal stores explicit external receipt/correction facts and a frozen shift report,

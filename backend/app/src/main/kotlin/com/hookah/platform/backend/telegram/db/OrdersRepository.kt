@@ -11,6 +11,7 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.OrderIdempotencyPayloadMismatchException
 import com.hookah.platform.backend.api.OrderIdempotencyReplayUnverifiableException
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingShiftOpening
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.promotions.GiftDecisionCartItem
 import com.hookah.platform.backend.promotions.GiftDecisionCartScope
@@ -1060,7 +1061,17 @@ class OrdersRepository(
         expectedPreviewFingerprint: String? = null,
         giftDecisionCommand: GiftDecisionCommand? = null,
         venueZoneIdProvider: ((Connection) -> ZoneId)? = null,
+        chatOrder: Boolean = false,
     ): CreatedOrderBatch? {
+        if (chatOrder) {
+            if (items.isNotEmpty() || comment.isNullOrBlank()) {
+                throw InvalidInputException(
+                    "Некорректный текстовый заказ.",
+                )
+            }
+        } else if (items.isEmpty()) {
+            throw InvalidInputException("Добавьте позиции заказа.")
+        }
         val requestFingerprint =
             guestOrderRequestFingerprint(
                 userId = userId,
@@ -1076,6 +1087,8 @@ class OrdersRepository(
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        // Match Mini App authorization: venue -> table -> session/tab -> order.
+                        lockVenue(connection, venueId)
                         if (!lockTable(connection, tableId)) {
                             connection.rollback()
                             return@use null
@@ -1194,6 +1207,7 @@ class OrdersRepository(
                         val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
                         val authoritativeVenueZoneId = venueZoneIdProvider?.invoke(connection) ?: venueZoneId
 
+                        AccountingShiftOpening(clock).open(connection, venueId, userId, "DIGITAL_ORDER")
                         val existingOrderId = findActiveOrderForUpdate(connection, tableSessionId)
                         val orderId =
                             existingOrderId
@@ -1205,7 +1219,8 @@ class OrdersRepository(
                                     authoritativeVenueZoneId,
                                 )
                         val orderDisplay = loadOrderDisplay(connection, orderId)
-                        val batchId = insertOrderBatch(connection, orderId, tabId, comment)
+                        val batchId =
+                            insertOrderBatch(connection, orderId, tabId, comment, if (chatOrder) userId else null)
                         guestOrderWriteCheckpoint(GuestOrderWriteCheckpoint.AFTER_ORDER_BATCH_WRITE)
                         val insertedItems =
                             insertBatchItems(
@@ -1373,7 +1388,17 @@ class OrdersRepository(
         giftDecisionCommand: GiftDecisionCommand? = null,
         beforeAuthoritativeWrites: (() -> Unit)? = null,
         venueZoneIdProvider: ((Connection) -> ZoneId)? = null,
+        chatOrder: Boolean = false,
     ): CreatedOrderBatch? {
+        if (chatOrder) {
+            if (items.isNotEmpty() || comment.isNullOrBlank()) {
+                throw InvalidInputException(
+                    "Некорректный текстовый заказ.",
+                )
+            }
+        } else if (items.isEmpty()) {
+            throw InvalidInputException("Добавьте позиции заказа.")
+        }
         val requestFingerprint =
             guestOrderRequestFingerprint(
                 userId = userId,
@@ -1385,6 +1410,8 @@ class OrdersRepository(
             )
         val savepoint = connection.setSavepoint()
         return try {
+            // Callers retain the venue lock acquired by guest authorization.
+            lockVenue(connection, venueId)
             val existing =
                 findBatchIdempotency(
                     connection = connection,
@@ -1460,6 +1487,7 @@ class OrdersRepository(
             val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
             val authoritativeVenueZoneId = venueZoneIdProvider?.invoke(connection) ?: venueZoneId
             beforeAuthoritativeWrites?.invoke()
+            AccountingShiftOpening(clock).open(connection, venueId, userId, "DIGITAL_ORDER")
             val existingOrderId = findActiveOrderForUpdate(connection, tableSessionId)
             val orderId =
                 existingOrderId
@@ -1471,7 +1499,7 @@ class OrdersRepository(
                         authoritativeVenueZoneId,
                     )
             val orderDisplay = loadOrderDisplay(connection, orderId)
-            val batchId = insertOrderBatch(connection, orderId, tabId, comment)
+            val batchId = insertOrderBatch(connection, orderId, tabId, comment, if (chatOrder) userId else null)
             guestOrderWriteCheckpoint(GuestOrderWriteCheckpoint.AFTER_ORDER_BATCH_WRITE)
             val insertedItems =
                 insertBatchItems(
@@ -1733,14 +1761,7 @@ class OrdersRepository(
         connection: Connection,
         venueId: Long,
     ) {
-        connection.prepareStatement(
-            "SELECT id FROM venues WHERE id = ? FOR UPDATE",
-        ).use { statement ->
-            statement.setLong(1, venueId)
-            statement.executeQuery().use { rs ->
-                if (!rs.next()) error("Venue $venueId not found")
-            }
-        }
+        AccountingShiftOpening(clock).lockVenue(connection, venueId)
     }
 
     private fun findActiveOrderForUpdate(
@@ -1833,19 +1854,22 @@ class OrdersRepository(
         orderId: Long,
         tabId: Long,
         comment: String?,
+        chatAuthor: Long?,
     ): Long {
         val sql =
             """
             INSERT INTO order_batches (order_id, tab_id, author_user_id, source, status, guest_comment)
-            VALUES (?, ?, NULL, 'MINIAPP', 'NEW', ?)
+            VALUES (?, ?, ?, ?, 'NEW', ?)
             """.trimIndent()
         return connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { statement ->
             statement.setLong(1, orderId)
             statement.setLong(2, tabId)
+            if (chatAuthor == null) statement.setNull(3, Types.BIGINT) else statement.setLong(3, chatAuthor)
+            statement.setString(4, if (chatAuthor == null) "MINIAPP" else "CHAT")
             if (comment != null) {
-                statement.setString(3, comment)
+                statement.setString(5, comment)
             } else {
-                statement.setNull(3, Types.VARCHAR)
+                statement.setNull(5, Types.VARCHAR)
             }
             statement.executeUpdate()
             statement.generatedKeys.use { rs -> if (rs.next()) rs.getLong(1) else error("Failed to create batch") }

@@ -780,9 +780,18 @@ This is internal venue accounting, separate from `staff_shifts`, staff schedules
 snapshot define its boundaries; midnight does not open or close it. A database unique open slot and
 transactional venue lock allow only one open accounting shift per venue.
 
-- OWNER, MANAGER and STAFF open a shift, add/correct manual sales, record CASH/CARD/TRANSFER
+- OWNER, MANAGER and STAFF immediately add/correct manual sales, record CASH/CARD/TRANSFER
   receipts and inspect the current operational report. OWNER/MANAGER alone read closed history
   and confirm closure. Existing Orders/Stats/Platform permissions are unchanged.
+- The first successful manual CREATE without a shift ID or authorized Guest Mini App/Telegram
+  checkout automatically opens a shift in the same transaction as the sale/order, audit and
+  idempotency record. A failed operation leaves no empty shift. Screen/catalog reads and drafts
+  never open one. The ordinary UI has no manual-open button; the legacy OPEN command remains
+  compatible, with its existing role checks. Explicit closed/stale shift IDs are never redirected.
+- An open period is reused across midnight and multiple days. Venue UI warns before manual entry
+  when its opening date precedes today in the stored venue timezone, explaining that new sales
+  belong to that period and management must reconcile/close it to start another. No scheduled
+  closure or implicit rollover exists. The next new sale after confirmed closure creates a new shift.
 - Opening adopts existing ACTIVE orders that have no accounting shift. Newly created orders bind
   to the open shift under the existing order writer's venue lock. Past closed orders are not
   backfilled. One order belongs to one shift, including all its subsequent batches and service
@@ -816,7 +825,11 @@ transactional venue lock allow only one open accounting shift per venue.
   versions reject stale edits/payments; closure compares the exact preview hash under the same locks.
 - Protected `venue_accounting_events` retains server actor/time, old/new snapshots and correction
   reason. The corresponding `audit_log` entry and financial write commit together or roll back
-  together. No update/delete/history-forgery API exists. No raw guest identities enter report DTOs.
+  together. Automatic opening records AUTO_OPEN with the actual initiating user and a
+  MANUAL_SALE/DIGITAL_ORDER trigger in semantic audit, including a real Guest actor. This is a
+  consequence of an authorized order, not a grant of venue membership, accounting access or
+  closure permission. No system/staff identity is invented; no audit schema change is required.
+  No update/delete/history-forgery API exists. No raw guest identities enter report DTOs.
 - Report: sales/orders, gross, discounts, gifts, accrued, confirmed receipts, unpaid balance,
   CASH/CARD/TRANSFER, table/item/source breakdowns, all sales and explicit unpaid/disputed lists.
   A mixed-source order remains one sale; its lines contribute to their actual source breakdown.
@@ -829,6 +842,15 @@ transactional venue lock allow only one open accounting shift per venue.
 - Mini App `Учёт смены` is on Venue home for all three roles. Back returns from sale/editor to the
   report; URLs retain shift/sale context across reload. Drafts and uncertain-submit payloads are
   session/account/venue/shift scoped. A changed record cannot inherit an old draft's authority.
+  A first-sale draft is adopted once by the current open shift when another order opens it.
+  The most recently saved draft wins; an existing shift draft wins ties or unknown legacy ages.
+  The unbound key is removed only after the bound draft is stored. Pending submissions retain
+  their original payload/key and are not migrated until their result is confirmed.
+  Sending requires successful persistence of that pending payload/key. If browser storage fails,
+  the form stays open and explains that nothing was sent and storage must be freed before retry.
+  An HTTP timeout is an unknown result: preserve the same pending operation across reload and
+  replay it, rather than allowing a new sale command. A definite validation/conflict refusal
+  leaves the entered draft available for correction.
 
 PostgreSQL V131 / H2 V132 are additive; old orders keep NULL shift references until explicit
 adoption of an active order. Historical rows and guest APIs are preserved. Accounting history

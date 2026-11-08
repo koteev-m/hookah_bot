@@ -8,7 +8,6 @@ import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
-import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -20,10 +19,8 @@ import java.security.MessageDigest
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
-import java.sql.Statement
 import java.time.Clock
 import java.time.OffsetDateTime
-import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
 import javax.sql.DataSource
@@ -103,6 +100,8 @@ class AccountingRepository(
             val shift =
                 if (command.action == "OPEN") {
                     open(c, venueId, actor)
+                } else if (command.action == "CREATE" && command.shiftId == null) {
+                    header(c, venueId, AccountingShiftOpening(clock, audit).open(c, venueId, actor, "MANUAL_SALE"))
                 } else {
                     header(c, venueId, command.shiftId ?: invalid("Не указана смена.")).also {
                         if (it.status != "OPEN") {
@@ -137,47 +136,7 @@ class AccountingRepository(
         venueId: Long,
         actor: Long,
     ): AccountingShiftHeader {
-        if (headers(c, venueId).any { it.status == "OPEN" }) conflict("В заведении уже есть открытая учётная смена.")
-        val zone =
-            c.query("SELECT timezone FROM venue_settings WHERE venue_id = ?", venueId) { it.getString(1) }
-                .singleOrNull()?.takeIf { it.isNotBlank() } ?: VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE
-        if (runCatching { ZoneId.of(zone) }.isFailure) invalid("Проверьте часовой пояс заведения в настройках.")
-        val now = now()
-        val id =
-            c.prepareStatement(
-                "INSERT INTO venue_accounting_shifts (venue_id, status, open_slot, timezone, " +
-                    "opened_at) VALUES (?, 'OPEN', 1, ?, ?)",
-                Statement.RETURN_GENERATED_KEYS,
-            ).use { s ->
-                s.setLong(1, venueId)
-                s.setString(2, zone)
-                s.setObject(3, now)
-                s.executeUpdate()
-                s.generatedKeys.use { rs ->
-                    check(rs.next())
-                    rs.getLong(1)
-                }
-            }
-        // Only current active visits are adopted. Past closed orders are never guessed/backfilled.
-        val active =
-            c.query(
-                "SELECT id FROM orders WHERE venue_id = ? AND status = 'ACTIVE' AND " +
-                    "accounting_shift_id IS NULL ORDER BY id FOR UPDATE",
-                venueId,
-            ) { it.getLong(1) }
-        active.forEach { c.exec("UPDATE orders SET accounting_shift_id = ? WHERE id = ?", id, it) }
-        record(
-            c,
-            actor,
-            id,
-            null,
-            "OPEN",
-            "null",
-            json.encodeToString(active),
-            buildJsonObject {
-                put("adoptedOrders", active.size)
-            },
-        )
+        val id = AccountingShiftOpening(clock, audit).open(c, venueId, actor)
         return header(c, venueId, id)
     }
 

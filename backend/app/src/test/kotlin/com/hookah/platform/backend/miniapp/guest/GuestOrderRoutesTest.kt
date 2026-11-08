@@ -3285,7 +3285,8 @@ class GuestOrderRoutesTest {
             )
             assertEquals(2, countAuditActions(jdbcUrl, MENU_ITEM_RENAMED_AUDIT_ACTION))
             assertEquals(2, countAuditActions(jdbcUrl, MENU_ITEM_PRICE_CHANGED_AUDIT_ACTION))
-            assertEquals(4, countRows(jdbcUrl, "audit_log"))
+            assertEquals(1, countAuditActions(jdbcUrl, "VENUE_ACCOUNTING_AUTO_OPEN"))
+            assertEquals(5, countRows(jdbcUrl, "audit_log"))
             setMenuItemAvailability(jdbcUrl, promotedItemId, isAvailable = false)
 
             val currentMenuResponse =
@@ -3332,6 +3333,8 @@ class GuestOrderRoutesTest {
             val replay = json.decodeFromString(AddBatchResponse.serializer(), replayResponse.bodyAsText())
 
             assertEquals(submitted.batchId, replay.batchId)
+            assertEquals(1, countRows(jdbcUrl, "venue_accounting_shifts"))
+            assertEquals(1, countAuditActions(jdbcUrl, "VENUE_ACCOUNTING_AUTO_OPEN"))
             assertEquals(submitted.pricing, replay.pricing)
             assertEquals(
                 listOf("Акционный кальян", "Обычный чай"),

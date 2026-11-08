@@ -36416,15 +36416,17 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { dialogStateRepository.get(100) } returns
-                DialogState(DialogStateType.QUICK_ORDER_WAIT_CONFIRM, mapOf("text" to "Принесите угли"))
-            coEvery {
-                ordersRepository.getOrCreateActiveOrderId(
-                    tableId = 11L,
-                    venueId = 10L,
-                    tableSessionId = 55L,
+                DialogState(
+                    DialogStateType.QUICK_ORDER_WAIT_CONFIRM,
+                    mapOf("text" to "Принесите угли", "requestId" to "quick-order-request-001"),
                 )
-            } returns 900L
-            coEvery { ordersRepository.createOrderBatch(900L, 200L, "Принесите угли", 1L) } returns 901L
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L, venueId = 10L, tableSessionId = 55L,
+                    userId = 200L, idempotencyKey = "quick-order-request-001", tabId = 1L,
+                    comment = "Принесите угли", items = emptyList(), venueZoneId = any(), chatOrder = true,
+                )
+            } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
 
             router.process(
                 TelegramUpdate(
@@ -36439,15 +36441,12 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify {
-                ordersRepository.getOrCreateActiveOrderId(
-                    tableId = 11L,
-                    venueId = 10L,
-                    tableSessionId = 55L,
+            coVerify(exactly = 1) {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L, venueId = 10L, tableSessionId = 55L,
+                    userId = 200L, idempotencyKey = "quick-order-request-001", tabId = 1L,
+                    comment = "Принесите угли", items = emptyList(), venueZoneId = any(), chatOrder = true,
                 )
-            }
-            coVerify {
-                ordersRepository.createOrderBatch(900L, 200L, "Принесите угли", 1L)
             }
         }
 

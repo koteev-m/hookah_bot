@@ -491,7 +491,11 @@ SHOULD:
 
 `Учёт смены` is a separate venue accounting period, not a staff schedule or paid service extension.
 STAFF/MANAGER/OWNER record table sales and external receipts; MANAGER/OWNER inspect history and
-confirm the frozen shift report. Existing digital orders are attached once; manual sales create
+confirm the frozen shift report. The first saved manual sale or authorized Guest Mini App/Bot order
+opens the existing accounting shift automatically if none is open; reading screens/catalogs does
+not. Midnight never closes a shift. An older open period remains active with an explicit Venue
+warning until management confirms closure; the next sale then creates a new period.
+Existing digital orders are attached once; manual sales create
 no guest/session/order/notification. Estimates and operator-confirmed receipts stay separate.
 Exact MVP prerequisites, correction boundaries and unpaid-close consequences are canonical in
 `docs/VENUE_OPERATIONS.md`; RBAC in `docs/SECURITY_RBAC_MATRIX.md`; formulas in

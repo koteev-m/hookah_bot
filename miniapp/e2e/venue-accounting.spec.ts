@@ -18,22 +18,27 @@ function report(venueId = 1, sales: AccountingSale[] = []): AccountingReport {
       accruedMinor: gross, paidMinor: paid, unpaidMinor: gross - paid, cashMinor: 0, cardMinor: 0, transferMinor: 0 }, byTable: [], byItem: [], bySource: [],
     unpaidSaleIds: sales.filter(s => !s.payments.length).map(s => s.id), disputedSaleIds: [], reportHash: `hash-${venueId}-${paid}-${sales.length}` }
 }
-async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[] = [], useHttpContract = false) {
+async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[] = [], useHttpContract = false, noShift = false) {
   // This capture is checked against real Ktor HTTP responses by AccountingHttpContractTest.
   const reports = new Map([[1, useHttpContract ? httpContract.created as AccountingReport : report(1, initialSales)], [2, report(2)]])
   const commands: AccountingCommand[] = []
   const accepted = new Set<string>()
+  const unopened = new Set(noShift ? [1, 2] : [])
+  let actor = 103
   let loseResponse = false
+  let timeoutResponse = false
+  let conflict = false
   let deny = false
   await page.addInitScript(() => {
-    Object.assign(window, { Telegram: { WebApp: { initDataUnsafe: { user: { id: 103 } }, ready() {}, expand() {} } } })
-    sessionStorage.setItem(`hookah_session_token:${location.host}:user:103`, JSON.stringify({ token: 'synthetic-session', expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 3600 }))
+    const user = Number(sessionStorage.getItem('accounting-test-actor') ?? 103)
+    Object.assign(window, { Telegram: { WebApp: { initDataUnsafe: { user: { id: user } }, ready() {}, expand() {} } } })
+    sessionStorage.setItem(`hookah_session_token:${location.host}:user:${user}`, JSON.stringify({ token: 'synthetic-session', expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 3600 }))
   })
   await page.route('**/miniapp/accounting-test*', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/miniapp/src/style.css"></head><body><div id="app"></div><script type="module">import {mountVenueApp} from '/miniapp/src/screens/venueApp.ts'; mountVenueApp({root:document.querySelector('#app'),backendUrl:location.origin});</script></body></html>` }))
   await page.route('**/api/**', async route => {
     const req = route.request(); const url = new URL(req.url())
     if (!url.pathname.startsWith('/api/')) return route.fallback()
-    if (url.pathname === '/api/venue/me') return route.fulfill({ json: { userId: 103, venues: [1, 2].map(id => ({ venueId: id, venueName: `Заведение ${id}`, venueStatus: 'PUBLISHED', role, permissions: ['ORDER_QUEUE_VIEW', 'MENU_VIEW', 'TABLE_VIEW'] })) } })
+    if (url.pathname === '/api/venue/me') return route.fulfill({ json: { userId: actor, venues: [1, 2].map(id => ({ venueId: id, venueName: `Заведение ${id}`, venueStatus: 'PUBLISHED', role, permissions: ['ORDER_QUEUE_VIEW', 'MENU_VIEW', 'TABLE_VIEW'] })) } })
     if (url.pathname === '/api/venue/tables') return route.fulfill({ json: { tables: [{ tableId: Number(url.searchParams.get('venueId')) * 10 + 1, tableNumber: 1, tableLabel: 'Стол 1', isActive: true }] } })
     if (url.pathname === '/api/venue/menu') return route.fulfill({ json: { venueId: 1, categories: [{ id: 1, name: 'Меню', items: [{ id: 21, name: 'Чай из меню', priceMinor: 10000, currency: 'RUB', isAvailable: true, options: [] }] }] } })
     const match = /^\/api\/venue\/(\d+)\/accounting(?:\/(commands|\d+))?$/.exec(url.pathname)
@@ -41,10 +46,11 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
     const venue = Number(match[1]); let current = reports.get(venue)!
     if (deny) return route.fulfill({ status: 403, json: { error: { code: 'FORBIDDEN', message: 'Forbidden' } } })
     if (req.method() !== 'POST') return route.fulfill({ json: match[2] ? current
-      : useHttpContract ? { ...httpContract.current, current } : { current, history: [] } })
+      : useHttpContract ? { ...httpContract.current, current } : { current: unopened.has(venue) || current.status === 'CLOSED' ? null : current, history: current.status === 'CLOSED' ? [{ id: current.shiftId, status: current.status, timezone: current.timezone, openedAt: current.openedAt, closedAt: current.closedAt }] : [] } })
     const body = req.postDataJSON() as AccountingCommand
     expect(req.headers().authorization).toBe('Bearer synthetic-session')
     commands.push(body)
+    if (conflict) { conflict = false; return route.fulfill({ status: 409, json: { error: { code: 'ACCOUNTING_CONFLICT', message: 'Данные изменились. Обновите отчёт.' } } }) }
     if (useHttpContract) {
       const step = commands.length - 1
       expect(step).toBeLessThan(2)
@@ -57,10 +63,16 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
     if (!accepted.has(body.requestId)) {
       accepted.add(body.requestId)
       if (body.action === 'CREATE') {
+        if (unopened.has(venue) || current.status === 'CLOSED') {
+          expect(body.shiftId).toBeUndefined()
+          unopened.delete(venue)
+          const nextId = current.status === 'CLOSED' ? current.shiftId + 10 : current.shiftId
+          current = { ...report(venue), shiftId: nextId }
+        }
         const added = sale()
         added.lines = body.lines!.map((line, index) => ({ ...added.lines[0], ...line, id: `new-${index}`, menuItemId: line.menuItemId ?? null,
           name: line.menuItemId ? 'Чай из меню' : line.name!, unitPriceMinor: line.unitPriceMinor!, discountMinor: line.discountMinor ?? 0, giftReason: line.giftReason ?? null }))
-        current = report(venue, [...current.sales, added]); reports.set(venue, current)
+        current = { ...report(venue, [...current.sales, added]), shiftId: current.shiftId }; reports.set(venue, current)
       }
       if (body.action === 'PAY') {
         const target = current.sales.find(s => s.id === body.saleId)!
@@ -71,12 +83,16 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
       if (body.action === 'CLOSE') { current.status = 'CLOSED'; current.closedAt = '2026-11-08T00:15:00Z' }
     }
     if (loseResponse) { loseResponse = false; return route.abort('failed') }
+    if (timeoutResponse) { timeoutResponse = false; return route.fulfill({ status: 408, json: { error: { code: 'REQUEST_TIMEOUT', message: 'Request timed out' } } }) }
     return route.fulfill({ json: current })
   })
   await page.goto('accounting-test?venueId=1#/accounting?av=1')
   await expect(page.getByRole('heading', { name: 'Учёт смены' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
-  return { commands, reports, loseNextResponse() { loseResponse = true }, deny() { deny = true } }
+  return { commands, reports, loseNextResponse() { loseResponse = true }, deny() { deny = true },
+    timeoutNextResponse() { timeoutResponse = true }, conflictNextSave() { conflict = true },
+    guestOpensShift(venue = 1) { unopened.delete(venue) },
+    async switchAccount(user: number) { actor = user; await page.evaluate(id => sessionStorage.setItem('accounting-test-actor', String(id)), user); await page.reload() } }
 }
 
 test('mobile staff preserves draft through Telegram Back reload and venue switch then retries exact lost response', async ({ page }) => {
@@ -199,4 +215,239 @@ test('real serialized HTTP contract displays 100 rubles and records partial and 
   expect(api.reports.get(1)?.totals).toMatchObject({ accruedMinor: 10000, paidMinor: 10000,
     unpaidMinor: 0, cashMinor: 4000, cardMinor: 6000, discountMinor: 0, giftMinor: 0 })
   expect(errors).toEqual([])
+})
+
+for (const role of ['STAFF', 'MANAGER', 'OWNER']) test(`first sale creates shift only on save for ${role}`, async ({ page }) => {
+  const api = await fixture(page, role, [], false, true)
+  await expect(page.getByRole('button', { name: 'Открыть учётную смену' })).toHaveCount(0)
+  await expect(page.getByText('Учётная смена откроется автоматически', { exact: false })).toBeVisible()
+  expect(api.commands).toHaveLength(0)
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Название', { exact: true }).fill('Первая продажа')
+  await page.getByLabel('Цена за единицу, ₽').fill('100')
+  await page.reload()
+  await expect(page.getByLabel('Название', { exact: true })).toHaveValue('Первая продажа')
+  expect(api.commands).toHaveLength(0)
+  api.loseNextResponse()
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await page.getByRole('button', { name: 'Проверить и повторить операцию' }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(api.commands).toHaveLength(2)
+  expect(api.commands[0]).toEqual(api.commands[1])
+  expect(api.commands[0].action).toBe('CREATE')
+  expect(api.commands[0].shiftId).toBeUndefined()
+  expect(api.reports.get(1)!.sales).toHaveLength(1)
+  if (role === 'STAFF') await expect(page.getByRole('button', { name: 'Предварительный итог и закрытие' })).toHaveCount(0)
+})
+
+test('old open shift warns before entry and midnight does not send a close or open command', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-11-12T01:00:00Z'))
+  const api = await fixture(page)
+  await expect(page.getByText('Новые продажи войдут в эту же смену.', { exact: false })).toBeVisible()
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await expect(page.getByText('Полночь её не закрывает.', { exact: false })).toBeVisible()
+  expect(api.commands).toHaveLength(0)
+})
+
+test('confirmed close leads to first-sale entry without reopening the frozen shift', async ({ page }) => {
+  const api = await fixture(page, 'MANAGER')
+  await page.getByRole('button', { name: 'Предварительный итог и закрытие' }).click()
+  await page.getByRole('button', { name: 'Подтвердить закрытие смены', exact: true }).click()
+  await page.getByRole('button', { name: 'К текущей смене' }).click()
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Название', { exact: true }).fill('Новый период')
+  await page.getByLabel('Цена за единицу, ₽').fill('100')
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(api.commands.map(c => c.action)).toEqual(['CLOSE', 'CREATE'])
+  expect(api.commands[1].shiftId).toBeUndefined()
+  expect(api.reports.get(1)!.shiftId).toBe(11)
+})
+
+test('first draft follows a guest-opened shift through reload app reentry Back and venue or account switches', async ({ page }) => {
+  const api = await fixture(page, 'STAFF', [], false, true)
+  const key = (user: number, venue: number, shift: string | number) => `hookah:accounting:${new URL(page.url()).host}:${user}:${venue}:draft:${shift}:new`
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Название', { exact: true }).fill('Продажа до заказа гостя')
+  await page.getByLabel('Количество', { exact: true }).fill('3')
+  await page.getByLabel('Цена за единицу, ₽').fill('123,45')
+  await page.getByRole('button', { name: 'Ещё позиция', exact: true }).click()
+  await page.getByLabel('Название', { exact: true }).nth(1).fill('Вторая позиция')
+  await page.getByLabel('Количество', { exact: true }).nth(1).fill('2')
+  await page.getByLabel('Цена за единицу, ₽').nth(1).fill('67,89')
+  const first = key(103, 1, 'first')
+  const bound = key(103, 1, 1)
+  api.guestOpensShift()
+  await page.reload()
+  await expect(page.getByLabel('Название', { exact: true }).nth(0)).toHaveValue('Продажа до заказа гостя')
+  await expect(page.getByLabel('Название', { exact: true }).nth(1)).toHaveValue('Вторая позиция')
+  await expect(page.getByLabel('Количество', { exact: true }).nth(0)).toHaveValue('3')
+  await expect(page.getByLabel('Количество', { exact: true }).nth(1)).toHaveValue('2')
+  await expect(page.getByLabel('Цена за единицу, ₽').nth(0)).toHaveValue('123,45')
+  await expect(page.getByLabel('Цена за единицу, ₽').nth(1)).toHaveValue('67,89')
+  expect(await page.evaluate(k => sessionStorage.getItem(k), first)).toBeNull()
+  expect(await page.evaluate(k => JSON.parse(sessionStorage.getItem(k)!).lines.length, bound)).toBe(2)
+  const entry = page.url()
+  await page.goto('about:blank')
+  await page.goto(entry)
+  await expect(page.getByLabel('Цена за единицу, ₽').nth(1)).toHaveValue('67,89')
+  await page.evaluate(() => window.dispatchEvent(new Event('hookah:e2e-telegram-back')))
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  await page.getByLabel('Выбрать заведение').selectOption('2')
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await expect(page.getByLabel('Название', { exact: true })).toHaveValue('')
+  await page.getByLabel('Название', { exact: true }).fill('Черновик другого заведения')
+  await page.getByLabel('Выбрать заведение').selectOption('1')
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await expect(page.getByLabel('Название', { exact: true }).nth(0)).toHaveValue('Продажа до заказа гостя')
+  await api.switchAccount(204)
+  await expect(page.getByLabel('Название', { exact: true })).toHaveValue('')
+  await page.getByLabel('Название', { exact: true }).fill('Черновик другого аккаунта')
+  await api.switchAccount(103)
+  await expect(page.getByLabel('Название', { exact: true }).nth(0)).toHaveValue('Продажа до заказа гостя')
+  expect(api.commands).toHaveLength(0)
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(api.commands).toHaveLength(1)
+  expect(api.commands[0]).toMatchObject({ action: 'CREATE', shiftId: 1, tableId: 11,
+    lines: [{ name: 'Продажа до заказа гостя', qty: 3, unitPriceMinor: 12345 }, { name: 'Вторая позиция', qty: 2, unitPriceMinor: 6789 }] })
+  expect(await page.evaluate(k => sessionStorage.getItem(k), bound)).toBeNull()
+})
+
+for (const [firstTime, currentTime, expected] of [[100, 200, 'Свежее в смене'], [300, 200, 'Свежий первый'], [200, 200, 'Свежее в смене'], [undefined, undefined, 'Свежее в смене']] as const) {
+  test(`draft adoption keeps freshest data and consumes first key (${firstTime}, ${currentTime})`, async ({ page }) => {
+    const api = await fixture(page, 'STAFF', [], false, true)
+    await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+    await page.evaluate(({ firstTime, currentTime }) => {
+      const prefix = `hookah:accounting:${location.host}:103:1:draft:`
+      const draft = (name: string, updatedAt?: number) => ({ tableId: '11', reason: '', updatedAt,
+        lines: [{ name, qty: '2', price: '100', discount: '0', gift: false, giftReason: '' }] })
+      sessionStorage.setItem(`${prefix}first:new`, JSON.stringify(draft('Свежий первый', firstTime)))
+      sessionStorage.setItem(`${prefix}1:new`, JSON.stringify(draft('Свежее в смене', currentTime)))
+    }, { firstTime, currentTime })
+    api.guestOpensShift()
+    await page.reload()
+    await expect(page.getByLabel('Название', { exact: true })).toHaveValue(expected)
+    expect(await page.evaluate(() => sessionStorage.getItem(`hookah:accounting:${location.host}:103:1:draft:first:new`))).toBeNull()
+    await page.reload()
+    await expect(page.getByLabel('Название', { exact: true })).toHaveValue(expected)
+  })
+}
+
+test('first draft remains intact if binding storage fails and can be recovered on reload', async ({ page }) => {
+  const api = await fixture(page, 'STAFF', [], false, true)
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await page.getByLabel('Название', { exact: true }).fill('Не удалять при ошибке storage')
+  await page.addInitScript(() => {
+    const write = Storage.prototype.setItem
+    Storage.prototype.setItem = function (key, value) {
+      if (key.endsWith(':draft:1:new')) throw new DOMException('Quota exceeded', 'QuotaExceededError')
+      write.call(this, key, value)
+    }
+  })
+  api.guestOpensShift()
+  await page.reload()
+  await expect(page.getByLabel('Название', { exact: true })).toHaveValue('Не удалять при ошибке storage')
+  expect(await page.evaluate(() => sessionStorage.getItem(`hookah:accounting:${location.host}:103:1:draft:first:new`))).not.toBeNull()
+})
+
+test('uncertain first sale replays original payload without migrating its pending draft', async ({ page }) => {
+  const api = await fixture(page, 'STAFF', [], false, true)
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Название', { exact: true }).fill('Неопределённая отправка')
+  await page.getByLabel('Цена за единицу, ₽').fill('100')
+  api.loseNextResponse()
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Проверить и повторить операцию' })).toBeVisible()
+  await page.reload()
+  expect(await page.evaluate(() => sessionStorage.getItem(`hookah:accounting:${location.host}:103:1:draft:first:new`))).not.toBeNull()
+  expect(await page.evaluate(() => sessionStorage.getItem(`hookah:accounting:${location.host}:103:1:draft:1:new`))).toBeNull()
+  await page.getByRole('button', { name: 'Проверить и повторить операцию' }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(api.commands).toHaveLength(2)
+  expect(api.commands[0]).toEqual(api.commands[1])
+  expect(api.commands[1].shiftId).toBeUndefined()
+  expect(api.reports.get(1)!.sales).toHaveLength(1)
+  expect(await page.evaluate(() => Object.keys(sessionStorage).filter(k => k.startsWith(`hookah:accounting:${location.host}:103:1:draft:`)))).toEqual([])
+})
+
+test('first sale is not sent when its replay key cannot be persisted', async ({ page }) => {
+  const api = await fixture(page, 'STAFF', [], false, true)
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Название', { exact: true }).fill('Сохранить первую продажу')
+  await page.getByLabel('Цена за единицу, ₽').fill('123,45')
+  await page.evaluate(() => {
+    const write = Storage.prototype.setItem
+    Storage.prototype.setItem = function (key, value) {
+      if (key.endsWith(':pending')) throw new DOMException('Quota exceeded', 'QuotaExceededError')
+      write.call(this, key, value)
+    }
+  })
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('Операция не отправлена')
+  expect(api.commands).toHaveLength(0)
+  expect(api.reports.get(1)!.sales).toHaveLength(0)
+  await expect(page.getByLabel('Название', { exact: true })).toHaveValue('Сохранить первую продажу')
+  await expect(page.getByRole('button', { name: 'Сохранить продажу', exact: true })).toBeEnabled()
+  await page.reload()
+  await expect(page.getByLabel('Цена за единицу, ₽')).toHaveValue('123,45')
+  api.loseNextResponse()
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await page.getByRole('button', { name: 'Проверить и повторить операцию' }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(api.commands).toHaveLength(2)
+  expect(api.commands[0]).toEqual(api.commands[1])
+  expect(api.reports.get(1)!.sales).toHaveLength(1)
+})
+
+test('HTTP timeout after first sale commit retains the original replay key through reload', async ({ page }) => {
+  const api = await fixture(page, 'STAFF', [], false, true)
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Название', { exact: true }).fill('Таймаут после сохранения')
+  await page.getByLabel('Цена за единицу, ₽').fill('100')
+  api.timeoutNextResponse()
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Проверить и повторить операцию' })).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: 'Проверить и повторить операцию' }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(api.commands).toHaveLength(2)
+  expect(api.commands[0]).toEqual(api.commands[1])
+  expect(api.commands[1].shiftId).toBeUndefined()
+  expect(api.reports.get(1)!.sales).toHaveLength(1)
+})
+
+test('first sale conflict preserves all draft lines through guest opening and reload', async ({ page }) => {
+  const api = await fixture(page, 'STAFF', [], false, true)
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Название', { exact: true }).fill('Первая строка')
+  await page.getByLabel('Цена за единицу, ₽').fill('123,45')
+  await page.getByRole('button', { name: 'Ещё позиция', exact: true }).click()
+  await page.getByLabel('Название', { exact: true }).nth(1).fill('Вторая строка')
+  await page.getByLabel('Количество', { exact: true }).nth(1).fill('2')
+  await page.getByLabel('Цена за единицу, ₽').nth(1).fill('67,89')
+  api.conflictNextSave()
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('Данные изменились')
+  expect(api.reports.get(1)!.sales).toHaveLength(0)
+  await expect(page.getByLabel('Название', { exact: true }).nth(1)).toHaveValue('Вторая строка')
+  api.guestOpensShift()
+  await page.reload()
+  await expect(page.getByLabel('Название', { exact: true }).nth(0)).toHaveValue('Первая строка')
+  await expect(page.getByLabel('Название', { exact: true }).nth(1)).toHaveValue('Вторая строка')
+  await expect(page.getByLabel('Количество', { exact: true }).nth(1)).toHaveValue('2')
+  await expect(page.getByLabel('Цена за единицу, ₽').nth(1)).toHaveValue('67,89')
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(api.commands).toHaveLength(2)
+  expect(api.commands[1].lines).toEqual(api.commands[0].lines)
+  expect(api.commands[1].shiftId).toBe(1)
+  expect(api.reports.get(1)!.sales).toHaveLength(1)
 })

@@ -418,7 +418,7 @@ class AccountingExtensionConcurrencyPostgresTest {
 }
 
 /** Stops a real JDBC transaction at a known statement; pg_blocking_pids proves the other connection is waiting. */
-private class SqlBarrier(
+internal class SqlBarrier(
     private val delegate: DataSource,
     private val prefix: String,
     private val after: Boolean = false,
