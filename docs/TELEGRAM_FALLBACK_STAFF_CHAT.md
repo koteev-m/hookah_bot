@@ -15,6 +15,17 @@ STAGING-SMOKE-PASSED**. The complete Telegram parity model remains **PARTIAL / n
 for broad parity, platform menu placeholders, per-venue real delivery, callback audit completeness
 and notification history.
 
+## Addressed table booking fallback (HT-HALLS-SEATING-TABLE-BOOKING-01)
+
+When guest table choice is off, existing ordinary Bot bookings continue without a table guarantee.
+When it is on, legacy create cannot bypass server interval checks: Bot explains the requirement and
+opens Mini App for table selection, retaining its draft after a conflict. Manual offline creation
+is in Venue Mode's Bookings/Hall forms; no Telegram registration or fake recipient is required.
+Existing staff-chat notification policy is reused after committed creation; offline alerts use
+«Создана сотрудником» and never transmit the supplied phone/comment or message an employee as guest.
+Assigned-booking arrival calls the same physical seating operation; CHANGED is not arrival-ready.
+Staff-chat remains a shortcut, with current role/venue validation and no reservation authority.
+
 ## Core Rule
 
 Mini App and backend domain tables are the source of truth. Telegram private bot and staff-chat are interaction surfaces. Staff-chat is notification/radar/shortcut only; it must not become the canonical storage layer or management workspace for orders, bills, staff calls, bookings, support tickets, venue chats, menu edits, settings or billing.
@@ -547,13 +558,15 @@ Rules:
 44. Unrelated group traffic creates no link or venue action. A valid one-time link code from an
     authorized own-venue actor links only the intended group; foreign/copied callbacks are denied.
 
-### Accounting auto-open — HT-ACCOUNTING-AUTO-SHIFT-OPEN-01 (local candidate)
+### Accounting auto-open — HT-ACCOUNTING-AUTO-OPEN-MAIN-INTEGRATION-01 (local candidate)
 
 Confirmed Bot catalog checkout and confirmed quick text orders use the existing transactional
 order writer: the first order atomically creates/attaches the accounting shift, recording the
 real initiator. No OPEN command or staff-chat action is required. Quick-order confirmation keeps
-a stable request key in its dialog; exact replay does not create a second batch or notification.
-An old dialog lacking that key asks for confirmation again. Merely opening a catalog/quick-order
+a durable request UUID and frozen token/session/tab in its dialog; exact replay does not create
+a second batch, shift or notification. Confirm/edit/cancel serialize on that request; terminal
+context rejection cannot execute later from an old callback. An old dialog lacking frozen context
+must restart from QR. Merely opening a catalog/quick-order
 prompt or typing a draft does not create a shift. Text orders retain CHAT source, author and
 unpriced text semantics; automatic opening neither invents priced lines nor records a receipt.
 Accounting closure remains manual OWNER/MANAGER work in Venue Mode.

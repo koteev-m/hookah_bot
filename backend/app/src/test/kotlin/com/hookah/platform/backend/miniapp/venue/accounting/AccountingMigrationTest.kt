@@ -8,7 +8,6 @@ import java.sql.Connection
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 class AccountingMigrationTest {
     @Test
@@ -42,10 +41,13 @@ class AccountingMigrationTest {
         ds.connection.use { c ->
             val oldHistory = history(c)
             val oldOrder = order(c)
-            val forward = Flyway.configure().dataSource(ds).locations("classpath:db/migration/$dialect").load()
+            val forward =
+                Flyway.configure().dataSource(
+                    ds,
+                ).locations("classpath:db/migration/$dialect").target(next).load()
             assertEquals(1, forward.migrate().migrationsExecuted)
             assertEquals(next, forward.info().current().version.version)
-            assertTrue(forward.info().pending().isEmpty())
+            assertEquals(next, forward.configuration.target.version)
             forward.validate()
             assertEquals(oldHistory, history(c).dropLast(1))
             assertEquals(oldOrder, order(c))

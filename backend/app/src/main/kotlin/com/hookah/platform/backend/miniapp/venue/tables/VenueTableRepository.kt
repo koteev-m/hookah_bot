@@ -1,6 +1,10 @@
 package com.hookah.platform.backend.miniapp.venue.tables
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.venue.seating.authorizeSeating
+import com.hookah.platform.backend.miniapp.venue.seating.conflict
+import com.hookah.platform.backend.miniapp.venue.seating.lockSeatingRules
+import com.hookah.platform.backend.miniapp.venue.seating.rows
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.security.SecureRandom
@@ -41,6 +45,22 @@ data class VenueTableOwnerSummary(
 )
 
 class VenueTableRepository(private val dataSource: DataSource?) {
+    private fun <T> tableMutation(
+        ds: javax.sql.DataSource,
+        venue: Long,
+        action: (java.sql.Connection) -> T,
+    ): T =
+        ds.connection.use { c ->
+            c.autoCommit = false
+            try {
+                lockSeatingRules(c, venue)
+                action(c).also { c.commit() }
+            } catch (e: Exception) {
+                c.rollback()
+                throw e
+            }
+        }
+
     private val tokenGenerator = TableTokenGenerator()
 
     suspend fun listTables(venueId: Long): List<VenueTableSummary> {
@@ -248,6 +268,7 @@ class VenueTableRepository(private val dataSource: DataSource?) {
     suspend fun batchCreateTables(
         venueId: Long,
         tableNumbers: List<Int>,
+        actorUserId: Long? = null,
         beforeCommit: (Connection, List<VenueTableCreated>) -> Unit = { _, _ -> },
     ): List<VenueTableCreated> {
         require(tableNumbers.size in 1..500 && tableNumbers.all { it > 0 })
@@ -258,6 +279,8 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        lockSeatingRules(connection, venueId)
+                        actorUserId?.let { authorizeSeating(connection, venueId, it, true) }
                         val result = mutableListOf<VenueTableCreated>()
                         for (tableNumber in tableNumbers) {
                             val tableId = insertTable(connection, venueId, tableNumber)
@@ -291,6 +314,7 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         venueId: Long,
         tableNumber: Int,
         capacity: Int?,
+        actorUserId: Long? = null,
     ): VenueTableCreated {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -298,6 +322,8 @@ class VenueTableRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        lockSeatingRules(connection, venueId)
+                        actorUserId?.let { authorizeSeating(connection, venueId, it, true) }
                         val tableId = insertTable(connection, venueId, tableNumber, capacity)
                         val issuedAt = Instant.now()
                         insertToken(connection, tableId, issuedAt)
@@ -324,15 +350,17 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         venueId: Long,
         tableId: Long,
         tableNumber: Int,
+        actorUserId: Long? = null,
     ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
-                ds.connection.use { connection ->
+                tableMutation(ds, venueId) { connection ->
+                    actorUserId?.let { authorizeSeating(connection, venueId, it, true) }
                     connection.prepareStatement(
                         """
                         UPDATE venue_tables
-                        SET table_number = ?
+                        SET table_number = ?, seating_revision = seating_revision + 1
                         WHERE id = ? AND venue_id = ?
                         """.trimIndent(),
                     ).use { statement ->
@@ -359,15 +387,28 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         venueId: Long,
         tableId: Long,
         capacity: Int,
+        actorUserId: Long? = null,
     ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
-                ds.connection.use { connection ->
+                tableMutation(ds, venueId) { connection ->
+                    actorUserId?.let { authorizeSeating(connection, venueId, it, true) }
+                    val required =
+                        connection.rows(
+                            """
+                            SELECT party_size FROM bookings WHERE table_id = ? AND status IN ('PENDING','CONFIRMED','CHANGED')
+                            UNION ALL SELECT party_size FROM table_seatings WHERE table_id = ? AND released_at IS NULL
+                            """.trimIndent(),
+                            tableId, tableId,
+                        ) {
+                            it.getInt(1)
+                        }.maxOrNull() ?: 0
+                    if (capacity < required) conflict("Вместимость меньше числа гостей в действующих обязательствах.")
                     connection.prepareStatement(
                         """
                         UPDATE venue_tables
-                        SET capacity = ?
+                        SET capacity = ?, seating_revision = seating_revision + 1
                         WHERE id = ? AND venue_id = ?
                         """.trimIndent(),
                     ).use { statement ->
@@ -387,15 +428,35 @@ class VenueTableRepository(private val dataSource: DataSource?) {
         venueId: Long,
         tableId: Long,
         isActive: Boolean,
+        actorUserId: Long? = null,
     ): Boolean {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
-                ds.connection.use { connection ->
+                tableMutation(ds, venueId) { connection ->
+                    actorUserId?.let { authorizeSeating(connection, venueId, it, true) }
+                    if (!isActive && (
+                            connection.rows(
+                                "SELECT id FROM bookings WHERE table_id = ? " +
+                                    "AND status IN ('PENDING','CONFIRMED','CHANGED')",
+                                tableId,
+                            ) {
+                                it.getLong(1)
+                            }.isNotEmpty() ||
+                                connection.rows(
+                                    "SELECT id FROM table_seatings WHERE table_id = ? AND released_at IS NULL",
+                                    tableId,
+                                ) {
+                                    it.getLong(1)
+                                }.isNotEmpty()
+                        )
+                    ) {
+                        conflict("Сначала разрешите брони и посадки стола в разделе «Зал».")
+                    }
                     connection.prepareStatement(
                         """
                         UPDATE venue_tables
-                        SET is_active = ?
+                        SET is_active = ?, seating_revision = seating_revision + 1
                         WHERE id = ? AND venue_id = ?
                         """.trimIndent(),
                     ).use { statement ->

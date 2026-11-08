@@ -562,6 +562,8 @@ class BookingThreadIntegrityMigrationConcurrencyPostgresTest {
             }
         }
 
+    // A second writer can wait on the venue held by the first writer, which waits on V124's booking lock.
+    // Require that exact blocking chain and forbid reaching either child relation before migration release.
     private fun awaitMigrationFirstWriterWait(
         observer: Connection,
         migrationPid: Int,
@@ -574,7 +576,7 @@ class BookingThreadIntegrityMigrationConcurrencyPostgresTest {
             last = readMigrationFirstWriterWait(observer, migrationPid, writerPid)
             if (
                 last.blockedByMigration &&
-                last.waitingForBookingsRowShare &&
+                last.waitingForCanonicalParent &&
                 !last.holdsThreadsRowShare &&
                 !last.holdsReadsRowExclusive
             ) {
@@ -592,7 +594,7 @@ class BookingThreadIntegrityMigrationConcurrencyPostgresTest {
 
     private fun assertMigrationFirstWriterWait(observation: MigrationFirstWriterWaitObservation) {
         assertTrue(observation.blockedByMigration, observation.diagnostic)
-        assertTrue(observation.waitingForBookingsRowShare, observation.diagnostic)
+        assertTrue(observation.waitingForCanonicalParent, observation.diagnostic)
         assertFalse(observation.holdsThreadsRowShare, observation.diagnostic)
         assertFalse(observation.holdsReadsRowExclusive, observation.diagnostic)
     }
@@ -604,18 +606,30 @@ class BookingThreadIntegrityMigrationConcurrencyPostgresTest {
     ): MigrationFirstWriterWaitObservation =
         observer.prepareStatement(
             """
+            WITH RECURSIVE input AS (SELECT ?::int AS migration_pid, ?::int AS writer_pid),
+            wait_chain(pid) AS (
+                SELECT writer_pid FROM input
+                UNION
+                SELECT unnest(pg_blocking_pids(chain.pid)) FROM wait_chain chain
+            )
             SELECT
-                ? = ANY(pg_blocking_pids(?)) AS blocked_by_migration,
+                EXISTS (SELECT 1 FROM wait_chain, input WHERE pid = migration_pid) AS blocked_by_migration,
                 EXISTS (
                     SELECT 1 FROM pg_locks lock
                     JOIN pg_class relation ON relation.oid = lock.relation
                     JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
                     WHERE lock.pid = ?
                       AND namespace.nspname = current_schema()
-                      AND relation.relname = 'bookings'
                       AND lock.mode = 'RowShareLock'
-                      AND NOT lock.granted
-                ) AS waiting_for_bookings_row_share,
+                      AND (
+                          (relation.relname = 'bookings' AND NOT lock.granted)
+                          OR (relation.relname = 'venues' AND lock.granted AND EXISTS (
+                              SELECT 1 FROM pg_stat_activity activity WHERE activity.pid = lock.pid
+                                AND activity.wait_event_type = 'Lock'
+                                AND LOWER(activity.query) LIKE '%from venues%for no key update%'
+                          ))
+                      )
+                ) AS waiting_for_canonical_parent,
                 EXISTS (
                     SELECT 1 FROM pg_locks lock
                     JOIN pg_class relation ON relation.oid = lock.relation
@@ -649,7 +663,7 @@ class BookingThreadIntegrityMigrationConcurrencyPostgresTest {
                 assertTrue(resultSet.next())
                 MigrationFirstWriterWaitObservation(
                     blockedByMigration = resultSet.getBoolean("blocked_by_migration"),
-                    waitingForBookingsRowShare = resultSet.getBoolean("waiting_for_bookings_row_share"),
+                    waitingForCanonicalParent = resultSet.getBoolean("waiting_for_canonical_parent"),
                     holdsThreadsRowShare = resultSet.getBoolean("holds_threads_row_share"),
                     holdsReadsRowExclusive = resultSet.getBoolean("holds_reads_row_exclusive"),
                     diagnostic =
@@ -912,7 +926,7 @@ class BookingThreadIntegrityMigrationConcurrencyPostgresTest {
 
     private data class MigrationFirstWriterWaitObservation(
         val blockedByMigration: Boolean,
-        val waitingForBookingsRowShare: Boolean,
+        val waitingForCanonicalParent: Boolean,
         val holdsThreadsRowShare: Boolean,
         val holdsReadsRowExclusive: Boolean,
         val diagnostic: String,

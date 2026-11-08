@@ -25,6 +25,7 @@ import kotlinx.serialization.json.Json
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import java.sql.SQLException
+import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -144,7 +145,8 @@ class PlatformGuestTableMutationCoordinatorTest {
                     },
                 )
             val mutationRepository = fixture.database.lifecycleRepository()
-            val staffCallRepository = StaffCallRepository(fixture.database.dataSource)
+            val staffCallRepository =
+                StaffCallRepository(fixture.database.dataSource, clock = Clock.fixed(fixture.now, ZoneId.of("UTC")))
 
             val exit =
                 async(Dispatchers.IO) {
@@ -209,7 +211,8 @@ class PlatformGuestTableMutationCoordinatorTest {
                     },
                 )
             val exitRepository = fixture.database.lifecycleRepository()
-            val staffCallRepository = StaffCallRepository(fixture.database.dataSource)
+            val staffCallRepository =
+                StaffCallRepository(fixture.database.dataSource, clock = Clock.fixed(fixture.now, ZoneId.of("UTC")))
 
             val mutation =
                 async(Dispatchers.IO) {
@@ -279,7 +282,8 @@ class PlatformGuestTableMutationCoordinatorTest {
     fun `mutation SQL failure rolls back domain row and session touch`() =
         runBlocking {
             val fixture = createFixture("platform-mutation-rollback")
-            val staffCallRepository = StaffCallRepository(fixture.database.dataSource)
+            val staffCallRepository =
+                StaffCallRepository(fixture.database.dataSource, clock = Clock.fixed(fixture.now, ZoneId.of("UTC")))
 
             val result =
                 fixture.database.lifecycleRepository().withConfirmedPlatformGuestMutation(
@@ -315,7 +319,8 @@ class PlatformGuestTableMutationCoordinatorTest {
             val fixture = createFixture("platform-shift-extension-membership-race")
             AuthoritativeMutationFamily.SHIFT_EXTENSION.prepare(fixture)
             val tabsRepository = GuestTabsRepository(fixture.database.dataSource)
-            val ordersRepository = OrdersRepository(fixture.database.dataSource)
+            val ordersRepository =
+                OrdersRepository(fixture.database.dataSource, clock = Clock.fixed(fixture.now, ZoneId.of("UTC")))
             val shiftExtensionRepository = ShiftExtensionRepository(fixture.database.dataSource)
             val tab =
                 tabsRepository.ensurePersonalTab(
@@ -490,7 +495,8 @@ class PlatformGuestTableMutationCoordinatorTest {
                             tableSessionId = confirmed.tableSession.id,
                             userId = database.actorUserId,
                         )
-                    val repository = OrdersRepository(database.dataSource)
+                    val repository =
+                        OrdersRepository(database.dataSource, clock = Clock.fixed(fixture.now, ZoneId.of("UTC")))
                     val orderId =
                         checkNotNull(
                             repository.getOrCreateActiveOrderId(
@@ -513,7 +519,10 @@ class PlatformGuestTableMutationCoordinatorTest {
                 }
 
                 STAFF_CALL ->
-                    StaffCallRepository(database.dataSource).createGuestStaffCall(
+                    StaffCallRepository(
+                        database.dataSource,
+                        clock = Clock.fixed(fixture.now, ZoneId.of("UTC")),
+                    ).createGuestStaffCall(
                         connection = connection,
                         venueId = database.venueId,
                         tableId = database.tableId,
@@ -539,7 +548,8 @@ class PlatformGuestTableMutationCoordinatorTest {
                             tableSessionId = confirmed.tableSession.id,
                             userId = database.actorUserId,
                         )
-                    val ordersRepository = OrdersRepository(database.dataSource)
+                    val ordersRepository =
+                        OrdersRepository(database.dataSource, clock = Clock.fixed(fixture.now, ZoneId.of("UTC")))
                     val orderId =
                         checkNotNull(
                             ordersRepository.getOrCreateActiveOrderId(

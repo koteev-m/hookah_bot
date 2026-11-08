@@ -32,6 +32,7 @@ import com.hookah.platform.backend.promotions.toPromotionGiftDecision
 import com.hookah.platform.backend.telegram.ActiveOrderSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -358,6 +359,8 @@ class OrdersRepository(
     private val giftDecisionScopeTokenService: GiftDecisionScopeTokenService? = null,
     private val guestOrderWriteCheckpoint: (GuestOrderWriteCheckpoint) -> Unit = {},
 ) {
+    private val quickOrderDialogs = DialogStateRepository(dataSource, Json)
+
     suspend fun findActiveOrderId(tableSessionId: Long): Long? {
         val ds = dataSource ?: return null
         return withContext(Dispatchers.IO) {
@@ -976,6 +979,22 @@ class OrdersRepository(
         tableSessionId: Long,
         venueZoneId: ZoneId = defaultVenueZoneId(),
     ): Long? {
+        lockVenue(connection, venueId)
+        if (!lockTable(connection, tableId)) return null
+        val activeSession =
+            connection.prepareStatement(
+                """
+                SELECT id FROM table_sessions WHERE id = ? AND venue_id = ? AND table_id = ?
+                  AND status = 'ACTIVE' AND ended_at IS NULL AND expires_at > ? FOR UPDATE
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, tableSessionId)
+                statement.setLong(2, venueId)
+                statement.setLong(3, tableId)
+                statement.setTimestamp(4, Timestamp.from(clock.instant()))
+                statement.executeQuery().use { it.next() }
+            }
+        if (!activeSession) return null
         val existing = findActiveOrderForUpdate(connection, tableSessionId)
         if (existing != null) {
             return existing
@@ -1062,16 +1081,13 @@ class OrdersRepository(
         giftDecisionCommand: GiftDecisionCommand? = null,
         venueZoneIdProvider: ((Connection) -> ZoneId)? = null,
         chatOrder: Boolean = false,
+        expectedTableToken: String? = null,
+        quickOrderRequest: QuickOrderRequest? = null,
     ): CreatedOrderBatch? {
-        if (chatOrder) {
-            if (items.isNotEmpty() || comment.isNullOrBlank()) {
-                throw InvalidInputException(
-                    "Некорректный текстовый заказ.",
-                )
-            }
-        } else if (items.isEmpty()) {
-            throw InvalidInputException("Добавьте позиции заказа.")
+        if (chatOrder && (items.isNotEmpty() || comment.isNullOrBlank() || expectedTableToken.isNullOrBlank())) {
+            throw InvalidInputException("A chat order requires a table token, text and no menu items")
         }
+        if (!chatOrder && items.isEmpty()) throw InvalidInputException("Добавьте позиции заказа.")
         val requestFingerprint =
             guestOrderRequestFingerprint(
                 userId = userId,
@@ -1087,10 +1103,24 @@ class OrdersRepository(
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        // Match Mini App authorization: venue -> table -> session/tab -> order.
                         lockVenue(connection, venueId)
+                        val requestActive =
+                            lockQuickOrderRequest(
+                                connection,
+                                quickOrderRequest,
+                                idempotencyKey,
+                                tableSessionId,
+                                tabId,
+                                comment,
+                                expectedTableToken,
+                                chatOrder,
+                            )
                         if (!lockTable(connection, tableId)) {
-                            connection.rollback()
+                            finishRejectedQuickOrder(connection, quickOrderRequest)
+                            return@use null
+                        }
+                        if (chatOrder && !validateChatOrderToken(connection, expectedTableToken!!, venueId, tableId)) {
+                            finishRejectedQuickOrder(connection, quickOrderRequest)
                             return@use null
                         }
                         val existing =
@@ -1131,6 +1161,10 @@ class OrdersRepository(
                                         expectedPreviewFingerprint != pricing.pricingFingerprint,
                             )
                         }
+                        if (!requestActive) {
+                            connection.rollback()
+                            return@use null
+                        }
                         if (
                             !lockActiveGuestOrderScope(
                                 connection = connection,
@@ -1142,7 +1176,7 @@ class OrdersRepository(
                                 now = clock.instant(),
                             )
                         ) {
-                            connection.rollback()
+                            finishRejectedQuickOrder(connection, quickOrderRequest)
                             return@use null
                         }
                         val concurrentExisting =
@@ -1220,7 +1254,12 @@ class OrdersRepository(
                                 )
                         val orderDisplay = loadOrderDisplay(connection, orderId)
                         val batchId =
-                            insertOrderBatch(connection, orderId, tabId, comment, if (chatOrder) userId else null)
+                            if (chatOrder) {
+                                createOrderBatch(connection, orderId, userId, comment!!, tabId)
+                                    ?: error("Failed to create chat batch")
+                            } else {
+                                insertOrderBatch(connection, orderId, tabId, comment)
+                            }
                         guestOrderWriteCheckpoint(GuestOrderWriteCheckpoint.AFTER_ORDER_BATCH_WRITE)
                         val insertedItems =
                             insertBatchItems(
@@ -1389,15 +1428,30 @@ class OrdersRepository(
         beforeAuthoritativeWrites: (() -> Unit)? = null,
         venueZoneIdProvider: ((Connection) -> ZoneId)? = null,
         chatOrder: Boolean = false,
+        expectedTableToken: String? = null,
+        quickOrderRequest: QuickOrderRequest? = null,
     ): CreatedOrderBatch? {
-        if (chatOrder) {
-            if (items.isNotEmpty() || comment.isNullOrBlank()) {
-                throw InvalidInputException(
-                    "Некорректный текстовый заказ.",
-                )
-            }
-        } else if (items.isEmpty()) {
-            throw InvalidInputException("Добавьте позиции заказа.")
+        if (chatOrder && (items.isNotEmpty() || comment.isNullOrBlank() || expectedTableToken.isNullOrBlank())) {
+            throw InvalidInputException("A chat order requires a table token, text and no menu items")
+        }
+        if (!chatOrder && items.isEmpty()) throw InvalidInputException("Добавьте позиции заказа.")
+        lockVenue(connection, venueId)
+        val requestActive =
+            lockQuickOrderRequest(
+                connection,
+                quickOrderRequest,
+                idempotencyKey,
+                tableSessionId,
+                tabId,
+                comment,
+                expectedTableToken,
+                chatOrder,
+            )
+        if (!lockTable(connection, tableId) ||
+            (chatOrder && !validateChatOrderToken(connection, expectedTableToken!!, venueId, tableId))
+        ) {
+            rejectQuickOrder(connection, quickOrderRequest)
+            return null
         }
         val requestFingerprint =
             guestOrderRequestFingerprint(
@@ -1410,8 +1464,6 @@ class OrdersRepository(
             )
         val savepoint = connection.setSavepoint()
         return try {
-            // Callers retain the venue lock acquired by guest authorization.
-            lockVenue(connection, venueId)
             val existing =
                 findBatchIdempotency(
                     connection = connection,
@@ -1432,6 +1484,7 @@ class OrdersRepository(
                     expectedPreviewFingerprint = expectedPreviewFingerprint,
                 )
             }
+            if (!requestActive) return null
             if (
                 !lockActiveGuestOrderScope(
                     connection = connection,
@@ -1443,6 +1496,7 @@ class OrdersRepository(
                     now = clock.instant(),
                 )
             ) {
+                rejectQuickOrder(connection, quickOrderRequest)
                 return null
             }
             val concurrentExisting =
@@ -1499,7 +1553,13 @@ class OrdersRepository(
                         authoritativeVenueZoneId,
                     )
             val orderDisplay = loadOrderDisplay(connection, orderId)
-            val batchId = insertOrderBatch(connection, orderId, tabId, comment, if (chatOrder) userId else null)
+            val batchId =
+                if (chatOrder) {
+                    createOrderBatch(connection, orderId, userId, comment!!, tabId)
+                        ?: error("Failed to create chat batch")
+                } else {
+                    insertOrderBatch(connection, orderId, tabId, comment)
+                }
             guestOrderWriteCheckpoint(GuestOrderWriteCheckpoint.AFTER_ORDER_BATCH_WRITE)
             val insertedItems =
                 insertBatchItems(
@@ -1663,6 +1723,55 @@ class OrdersRepository(
         }
     }
 
+    private fun lockQuickOrderRequest(
+        connection: Connection,
+        request: QuickOrderRequest?,
+        idempotencyKey: String,
+        tableSessionId: Long,
+        tabId: Long,
+        comment: String?,
+        tableToken: String?,
+        chatOrder: Boolean,
+    ): Boolean {
+        if (request == null) return true
+        require(!connection.autoCommit && chatOrder && idempotencyKey == "bot-quick:${request.requestId}")
+        // Venue is already locked. Keep the dialog locked through all writes and commit/rollback.
+        val state =
+            quickOrderDialogs.lockQuickOrderRequest(connection, request.chatId, request.requestId) ?: return false
+        return state.payload["tableSessionId"] == tableSessionId.toString() &&
+            state.payload["tabId"] == tabId.toString() && state.payload["text"] == comment &&
+            state.payload["tableToken"] == tableToken
+    }
+
+    private fun rejectQuickOrder(
+        connection: Connection,
+        request: QuickOrderRequest?,
+    ) {
+        request?.let { quickOrderDialogs.transitionQuickOrderRequest(connection, it.chatId, it.requestId) }
+    }
+
+    private fun finishRejectedQuickOrder(
+        connection: Connection,
+        request: QuickOrderRequest?,
+    ) {
+        if (request == null) {
+            connection.rollback()
+        } else {
+            rejectQuickOrder(connection, request)
+            connection.commit()
+        }
+    }
+
+    private fun validateChatOrderToken(
+        connection: Connection,
+        token: String,
+        venueId: Long,
+        tableId: Long,
+    ): Boolean {
+        val state = TableTokenRepository(dataSource).resolveForUpdate(connection, token, venueId, tableId)
+        return state != null && state.tokenActive && state.tableActive
+    }
+
     private fun lockActiveGuestOrderScope(
         connection: Connection,
         venueId: Long,
@@ -1761,7 +1870,15 @@ class OrdersRepository(
         connection: Connection,
         venueId: Long,
     ) {
-        AccountingShiftOpening(clock).lockVenue(connection, venueId)
+        connection.prepareStatement(
+            "SELECT id FROM venues WHERE id = ? " +
+                if (connection.metaData.databaseProductName == "PostgreSQL") "FOR NO KEY UPDATE" else "FOR UPDATE",
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs ->
+                if (!rs.next()) error("Venue $venueId not found")
+            }
+        }
     }
 
     private fun findActiveOrderForUpdate(
@@ -1854,22 +1971,19 @@ class OrdersRepository(
         orderId: Long,
         tabId: Long,
         comment: String?,
-        chatAuthor: Long?,
     ): Long {
         val sql =
             """
             INSERT INTO order_batches (order_id, tab_id, author_user_id, source, status, guest_comment)
-            VALUES (?, ?, ?, ?, 'NEW', ?)
+            VALUES (?, ?, NULL, 'MINIAPP', 'NEW', ?)
             """.trimIndent()
         return connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { statement ->
             statement.setLong(1, orderId)
             statement.setLong(2, tabId)
-            if (chatAuthor == null) statement.setNull(3, Types.BIGINT) else statement.setLong(3, chatAuthor)
-            statement.setString(4, if (chatAuthor == null) "MINIAPP" else "CHAT")
             if (comment != null) {
-                statement.setString(5, comment)
+                statement.setString(3, comment)
             } else {
-                statement.setNull(5, Types.VARCHAR)
+                statement.setNull(3, Types.VARCHAR)
             }
             statement.executeUpdate()
             statement.generatedKeys.use { rs -> if (rs.next()) rs.getLong(1) else error("Failed to create batch") }

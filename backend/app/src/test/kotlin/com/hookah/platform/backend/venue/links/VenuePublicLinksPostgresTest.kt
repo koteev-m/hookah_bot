@@ -19,14 +19,14 @@ class VenuePublicLinksPostgresTest {
             flyway(ds, "128").migrate()
             val a = insertVenue(ds, "Одинаковое", "Москва", "Арбат, 1", "PUBLISHED")
             val b = insertVenue(ds, "Одинаковое", "Казань", "Баумана, 2", "DELETED")
-            assertEquals(2, flyway(ds).migrate().migrationsExecuted)
-            flyway(ds).validate()
+            assertEquals(2, flyway(ds, "130").migrate().migrationsExecuted)
+            flyway(ds, "130").validate()
             runBlocking {
                 val links = VenuePublicLinksRepository(ds, 999)
                 assertEquals(a, links.resolveSlug("odinakovoe"))
                 assertEquals(b, links.resolveSlug("odinakovoe-kazan-baumana-2"))
             }
-            assertEquals(0, flyway(ds).migrate().migrationsExecuted)
+            assertEquals(0, flyway(ds, "130").migrate().migrationsExecuted)
         }
     }
 

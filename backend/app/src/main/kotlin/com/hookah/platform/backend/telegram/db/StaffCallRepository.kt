@@ -1,15 +1,20 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.miniapp.venue.seating.lockSeatingVenue
+import com.hookah.platform.backend.miniapp.venue.seating.rows
 import com.hookah.platform.backend.telegram.BillPaymentMethod
 import com.hookah.platform.backend.telegram.StaffCallReason
 import com.hookah.platform.backend.telegram.billPaymentMethodLabel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Timestamp
+import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.util.Locale
@@ -17,7 +22,11 @@ import javax.sql.DataSource
 
 private val ACTIVE_STAFF_CALL_WINDOW: Duration = Duration.ofHours(24)
 
-class StaffCallRepository(private val dataSource: DataSource?) {
+class StaffCallRepository(
+    private val dataSource: DataSource?,
+    private val checkpoint: (String, Connection) -> Unit = { _, _ -> },
+    private val clock: Clock = Clock.systemUTC(),
+) {
     suspend fun listActiveByVenue(
         venueId: Long,
         limit: Int,
@@ -145,6 +154,9 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         orderId: Long? = null,
     ): Long? {
         val ds = dataSource ?: return null
+        if (tableSessionId != null) {
+            return createGuestStaffCall(venueId, tableId, tableSessionId, createdByUserId, reason, comment, orderId).id
+        }
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 val sql =
@@ -158,11 +170,7 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                 connection.prepareStatement(sql).use { statement ->
                     statement.setLong(1, venueId)
                     statement.setLong(2, tableId)
-                    if (tableSessionId != null) {
-                        statement.setLong(3, tableSessionId)
-                    } else {
-                        statement.setNull(3, java.sql.Types.BIGINT)
-                    }
+                    statement.setNull(3, java.sql.Types.BIGINT)
                     if (createdByUserId != null) {
                         statement.setLong(4, createdByUserId)
                     } else {
@@ -221,6 +229,31 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         comment: String?,
         orderId: Long? = null,
     ): CreatedStaffCall {
+        return callTransaction(connection) {
+            lockActiveCallContext(connection, venueId, tableId, tableSessionId)
+            insertGuestStaffCall(
+                connection,
+                venueId,
+                tableId,
+                tableSessionId,
+                createdByUserId,
+                reason,
+                comment,
+                orderId,
+            )
+        }
+    }
+
+    private fun insertGuestStaffCall(
+        connection: Connection,
+        venueId: Long,
+        tableId: Long,
+        tableSessionId: Long,
+        createdByUserId: Long?,
+        reason: StaffCallReason,
+        comment: String?,
+        orderId: Long?,
+    ): CreatedStaffCall {
         val isH2 = connection.metaData.databaseProductName.contains("H2", ignoreCase = true)
         if (createdByUserId != null) {
             ensureUserExists(connection, createdByUserId, isH2)
@@ -273,6 +306,58 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                 }
             }
         }
+    }
+
+    private fun <T> callTransaction(
+        connection: Connection,
+        operation: () -> T,
+    ): T {
+        val ownsTransaction = connection.autoCommit
+        if (ownsTransaction) connection.autoCommit = false
+        try {
+            return operation().also {
+                checkpoint("BEFORE_COMMIT", connection)
+                if (ownsTransaction) connection.commit()
+            }
+        } catch (e: Exception) {
+            if (ownsTransaction) connection.rollback()
+            throw e
+        } finally {
+            if (ownsTransaction) connection.autoCommit = true
+        }
+    }
+
+    private fun lockActiveCallContext(
+        connection: Connection,
+        venueId: Long,
+        tableId: Long,
+        sessionId: Long,
+    ) {
+        checkpoint("BEFORE_LOCK", connection)
+        // Caller-owned order/Platform transactions already hold these same venue/table/session locks.
+        lockSeatingVenue(connection, venueId)
+        if (connection.rows(
+                "SELECT id FROM venue_tables WHERE venue_id = ? AND id = ? AND is_active = TRUE FOR UPDATE",
+                venueId,
+                tableId,
+            ) { it.getLong(1) }.isEmpty()
+        ) {
+            throw NotFoundException()
+        }
+        if (connection.rows(
+                """
+                SELECT id FROM table_sessions WHERE id = ? AND venue_id = ? AND table_id = ?
+                AND status = 'ACTIVE' AND ended_at IS NULL AND expires_at > ? FOR UPDATE
+                """.trimIndent(),
+                sessionId,
+                venueId,
+                tableId,
+                clock.instant(),
+            ) { it.getLong(1) }.isEmpty()
+        ) {
+            throw NotFoundException()
+        }
+        checkpoint("LOCKED", connection)
     }
 
     suspend fun countActiveOrderActivity(
@@ -396,6 +481,9 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        checkpoint("BEFORE_LOCK", connection)
+                        lockSeatingVenue(connection, venueId)
+                        checkpoint("LOCKED", connection)
                         val forUpdateClause =
                             if (connection.metaData.databaseProductName.contains("H2", ignoreCase = true)) {
                                 "FOR UPDATE"
@@ -629,26 +717,8 @@ class StaffCallRepository(private val dataSource: DataSource?) {
         paymentMethod: BillPaymentMethod,
     ): CreatedGuestBillRequest {
         val isH2 = connection.metaData.databaseProductName.contains("H2", ignoreCase = true)
+        lockActiveCallContext(connection, venueId, tableId, tableSessionId)
         ensureUserExists(connection, createdByUserId, isH2)
-        connection.prepareStatement(
-            """
-            SELECT id
-            FROM table_sessions
-            WHERE id = ?
-              AND venue_id = ?
-              AND table_id = ?
-            FOR UPDATE
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, tableSessionId)
-            statement.setLong(2, venueId)
-            statement.setLong(3, tableId)
-            statement.executeQuery().use { rs ->
-                if (!rs.next()) {
-                    throw DatabaseUnavailableException()
-                }
-            }
-        }
         val existing =
             connection.prepareStatement(
                 """
@@ -884,6 +954,9 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        checkpoint("BEFORE_LOCK", connection)
+                        lockSeatingVenue(connection, venueId)
+                        checkpoint("LOCKED", connection)
                         val forUpdateClause =
                             if (connection.metaData.databaseProductName.contains("H2", ignoreCase = true)) {
                                 "FOR UPDATE"
@@ -970,6 +1043,7 @@ class StaffCallRepository(private val dataSource: DataSource?) {
                             runCatching { connection.rollback() }
                             return@use current
                         }
+                        checkpoint("BEFORE_COMMIT", connection)
                         connection.commit()
                         current.copy(status = nextStatus, applied = true)
                     } catch (e: SQLException) {

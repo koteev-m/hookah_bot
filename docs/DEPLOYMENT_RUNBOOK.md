@@ -51,6 +51,18 @@ Target runbook:
 - Every migration has a compatibility and rollback decision.
 - Incidents are triaged by severity, mitigated first, then documented in follow-up Codex tasks.
 
+## Hall/seating migration candidate
+
+`HT-HALLS-SEATING-TABLE-BOOKING-01` adds PostgreSQL V132 / H2 V133; see
+[MIGRATION_POLICY.md](MIGRATION_POLICY.md#hallseating-append-only-migration-candidate-ht-halls-seating-table-booking-01).
+Local tests do not authorize deployment. After offline bookings/physical seating are written,
+an older application that assumes a Telegram user or ignores occupancy is not a compatible
+rollback. Review compatible forward recovery and exact migration lineage before any authorized
+release; retain PRODUCT admission, current exact-SHA green CI and all existing release gates.
+No new storage configuration is needed: plans use the existing private image storage. Retained
+superseded/incomplete image objects have no new automatic deletion job. Real Telegram/R2 smoke
+for this module is deferred and explicitly marked NOT EXECUTED in the QA strategy.
+
 ## Release Model By Change Type
 
 | Change type | Required validation | GitHub Actions | Staging deploy | Smoke requirement | Notes |

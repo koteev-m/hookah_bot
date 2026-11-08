@@ -3785,3 +3785,22 @@ input[type="number"] {
 .accounting-sales { display: grid; gap: 10px; }
 .accounting-sales button { text-align: left; white-space: normal; overflow-wrap: anywhere; min-height: 48px; }
 .accounting-editor button { margin-block: 6px; }
+
+/* Hall coordinates share the exact rendered image box; viewport zoom never changes layout values. */
+.hall-plan-scroll { width:100%; overflow:auto; border:1px solid var(--app-control-border,#777); border-radius:12px; }
+.hall-plan-canvas { position:relative; width:100%; min-width:280px; isolation:isolate; }
+.hall-plan-canvas > img { position:absolute; inset:0; width:100%; height:100%; object-fit:fill; pointer-events:none; }
+.hall-marker { position:absolute; box-sizing:border-box; min-width:0; min-height:0; padding:0; white-space:pre-line; line-height:1.1; font-size:11px; color:var(--app-text,#151515); background:var(--app-surface,#fff); border:2px solid currentColor; touch-action:none; overflow:visible; }
+.hall-marker-occupied,.hall-marker-overdue { border-style:double; border-width:4px; }
+.hall-marker-unavailable,.hall-marker-disabled { opacity:.65; text-decoration:line-through; }
+.hall-marker[aria-pressed=true] { outline:3px solid var(--app-accent,#385fc6); outline-offset:3px; }
+.hall-field { display:flex; flex-direction:column; gap:6px; margin:12px 0; overflow-wrap:anywhere; }
+.hall-field input[type=checkbox] { align-self:flex-start; width:24px; height:24px; }
+.hall-editor:empty { display:none; }
+.hall-editor input,.hall-editor select { max-width:100%; min-width:0; box-sizing:border-box; }
+.hall-plan-preview { display:block; width:100%; max-height:400px; object-fit:contain; }
+.hall-table { overflow-wrap:anywhere; }
+
+.hall-marker-label { display:block; pointer-events:none; }
+
+.hall-marker::before { content:""; position:absolute; left:50%; top:50%; width:max(100%,44px); height:max(100%,44px); transform:translate(-50%,-50%); }

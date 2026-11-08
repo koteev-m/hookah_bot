@@ -194,7 +194,7 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
-                ds.connection.use { connection ->
+                com.hookah.platform.backend.miniapp.venue.seating.seatingPolicyTransaction(ds, venueId) { connection ->
                     val existing =
                         selectSettings(connection, venueId)
                             ?: run {

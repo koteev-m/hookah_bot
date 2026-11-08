@@ -108,6 +108,13 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderServiceChargeDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderStatusUpdateResult
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.miniapp.venue.seating.CheckoutSeat
+import com.hookah.platform.backend.miniapp.venue.seating.STAFF
+import com.hookah.platform.backend.miniapp.venue.seating.SeatingRepository
+import com.hookah.platform.backend.miniapp.venue.seating.checkoutCounts
+import com.hookah.platform.backend.miniapp.venue.seating.checkoutSeat
+import com.hookah.platform.backend.miniapp.venue.seating.cmd
+import com.hookah.platform.backend.miniapp.venue.seating.seatingClock
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteAcceptResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCodeResult
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteCreateResult
@@ -201,6 +208,7 @@ import com.hookah.platform.backend.telegram.db.PromotionVenueFeedItem
 import com.hookah.platform.backend.telegram.db.PromotionVenuePlacement
 import com.hookah.platform.backend.telegram.db.PromotionVenuePlacementRepository
 import com.hookah.platform.backend.telegram.db.PromotionWeekdayWindow
+import com.hookah.platform.backend.telegram.db.QuickOrderRequest
 import com.hookah.platform.backend.telegram.db.StaffCallQueueItem
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.telegram.db.StaffCallStatus
@@ -243,6 +251,7 @@ import com.hookah.platform.backend.telegram.db.VenueSettingsRepository
 import com.hookah.platform.backend.telegram.db.VenueShort
 import com.hookah.platform.backend.telegram.db.VenueStatsReport
 import com.hookah.platform.backend.telegram.db.VenueStatsRepository
+import com.hookah.platform.backend.test.PostgresTestEnv
 import io.ktor.client.engine.mock.respond
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.config.MapApplicationConfig
@@ -272,6 +281,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.SQLException
 import java.sql.Statement
@@ -283,6 +294,7 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
+import javax.sql.DataSource
 import com.hookah.platform.backend.telegram.db.OrderServiceChargeDetails as TelegramOrderServiceChargeDetails
 
 class TelegramBotRouterTableTokenTest {
@@ -355,6 +367,8 @@ class TelegramBotRouterTableTokenTest {
         miniAppAbuseProtectionOverride: MiniAppAbuseProtection = MiniAppAbuseProtection(),
         infoMediaServiceOverride: com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaService? = null,
         outboxOverride: TelegramOutboxEnqueuer = outboxEnqueuer,
+        dialogStateOverride: DialogStateRepository = dialogStateRepository,
+        ordersOverride: OrdersRepository = ordersRepository,
     ): TelegramBotRouter =
         TelegramBotRouter(
             venueInfoMediaService = infoMediaServiceOverride,
@@ -381,8 +395,8 @@ class TelegramBotRouterTableTokenTest {
             userRepository = userRepository,
             tableTokenRepository = tableTokenRepository,
             chatContextRepository = chatContextRepository,
-            dialogStateRepository = dialogStateRepository,
-            ordersRepository = ordersRepository,
+            dialogStateRepository = dialogStateOverride,
+            ordersRepository = ordersOverride,
             staffCallRepository = staffCallRepository,
             staffChatLinkCodeRepository = staffChatLinkCodeRepository,
             guestBookingRepository = guestBookingRepository,
@@ -614,6 +628,11 @@ class TelegramBotRouterTableTokenTest {
         coEvery { dialogStateRepository.get(any()) } returns DialogState(DialogStateType.NONE)
         coEvery { dialogStateRepository.set(any(), any()) } returns Unit
         coEvery { dialogStateRepository.clear(any()) } returns Unit
+        coEvery {
+            dialogStateRepository.transitionQuickOrderRequest(
+                chatId = any(), requestId = any(), nextState = any(), allowCommitted = any(),
+            )
+        } returns true
         coEvery { auditLogRepository.appendJson(any(), any(), any(), any(), any()) } returns Unit
         coEvery { staffCallRepository.resolveActiveCallsForClosedOrder(any(), any()) } returns emptyList()
         coEvery { staffChatNotifier.rememberOrderMessageNow(any(), any(), any(), any()) } returns false
@@ -2197,7 +2216,15 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify { chatContextRepository.saveContext(100, 200, context) }
-            coVerify { dialogStateRepository.set(100, DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT)) }
+            coVerify {
+                dialogStateRepository.set(
+                    100,
+                    DialogState(
+                        DialogStateType.QUICK_ORDER_WAIT_TEXT,
+                        mapOf("tableToken" to "TOKEN", "tableSessionId" to "55", "tabId" to "1"),
+                    ),
+                )
+            }
             coVerify { outboxEnqueuer.enqueueSendMessage(100, "Опишите, что хотите заказать.", null) }
         }
 
@@ -2454,7 +2481,7 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.hasVenueOwner(200L, 10L) } returns false
             coEvery { venueTableRepository.listOwnerTables(10L) } returnsMany
                 listOf(listOf(activeTable), listOf(inactiveTable))
-            coEvery { venueTableRepository.setTableActive(10L, 21L, false) } returns true
+            coEvery { venueTableRepository.setTableActive(10L, 21L, false, actorUserId = 200L) } returns true
 
             router.process(
                 TelegramUpdate(
@@ -2469,7 +2496,7 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify { venueTableRepository.setTableActive(10L, 21L, false) }
+            coVerify { venueTableRepository.setTableActive(10L, 21L, false, actorUserId = 200L) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(100, "🚫 Стол отключён.", any())
             }
@@ -2502,7 +2529,7 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.hasVenueOwner(200L, 10L) } returns false
             coEvery { venueTableRepository.listOwnerTables(10L) } returnsMany
                 listOf(listOf(inactiveTable), listOf(activeTable))
-            coEvery { venueTableRepository.setTableActive(10L, 21L, true) } returns true
+            coEvery { venueTableRepository.setTableActive(10L, 21L, true, actorUserId = 200L) } returns true
 
             router.process(
                 TelegramUpdate(
@@ -2517,7 +2544,7 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify { venueTableRepository.setTableActive(10L, 21L, true) }
+            coVerify { venueTableRepository.setTableActive(10L, 21L, true, actorUserId = 200L) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(100, "✅ Стол включён.", any())
             }
@@ -14093,7 +14120,7 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 0) { venueTableRepository.setTableActive(10L, 21L, any()) }
+            coVerify(exactly = 0) { venueTableRepository.setTableActive(10L, 21L, any(), any()) }
             coVerify(exactly = 0) { venueTableRepository.rotateToken(10L, 21L) }
             coVerify(exactly = 2) {
                 outboxEnqueuer.enqueueSendMessage(100, "Управление столами доступно менеджеру или владельцу.", null)
@@ -18728,6 +18755,7 @@ class TelegramBotRouterTableTokenTest {
                     bookingId = 77L,
                     venueId = 10L,
                     nextStatus = BookingStatus.CONFIRMED,
+                    actorUserId = 200L,
                 )
             } returns
                 BookingRecord(
@@ -18819,6 +18847,7 @@ class TelegramBotRouterTableTokenTest {
                     bookingId = 77L,
                     venueId = 10L,
                     nextStatus = BookingStatus.CONFIRMED,
+                    actorUserId = 200L,
                 )
             }
             coVerify(exactly = 0) {
@@ -18853,7 +18882,7 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 0) {
-                guestBookingRepository.updateByVenue(any(), any(), any())
+                guestBookingRepository.updateByVenue(any(), any(), any(), actorUserId = any())
             }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
@@ -19885,6 +19914,7 @@ class TelegramBotRouterTableTokenTest {
                     bookingId = 77L,
                     venueId = 10L,
                     nextStatus = BookingStatus.CANCELED,
+                    actorUserId = 200L,
                 )
             }
             coVerify {
@@ -19938,7 +19968,7 @@ class TelegramBotRouterTableTokenTest {
                 guestBookingRepository.findByVenue(any(), any())
             }
             coVerify(exactly = 0) {
-                guestBookingRepository.updateByVenue(any(), any(), any())
+                guestBookingRepository.updateByVenue(any(), any(), any(), actorUserId = any())
             }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
@@ -20128,6 +20158,7 @@ class TelegramBotRouterTableTokenTest {
                     cancelReasonText = "Нет мест",
                     canceledByRole = "MANAGER",
                     canceledByUserId = 200L,
+                    actorUserId = 200L,
                 )
             } returns
                 BookingRecord(
@@ -20214,6 +20245,7 @@ class TelegramBotRouterTableTokenTest {
                     bookingId = 77L,
                     venueId = 10L,
                     nextStatus = BookingStatus.CANCELED,
+                    actorUserId = 200L,
                 )
             }
             coVerify {
@@ -36418,16 +36450,19 @@ class TelegramBotRouterTableTokenTest {
             coEvery { dialogStateRepository.get(100) } returns
                 DialogState(
                     DialogStateType.QUICK_ORDER_WAIT_CONFIRM,
-                    mapOf("text" to "Принесите угли", "requestId" to "quick-order-request-001"),
+                    mapOf(
+                        "text" to "Принесите угли", "requestId" to "stable-request",
+                        "tableToken" to "TOKEN", "tableSessionId" to "55", "tabId" to "1",
+                    ),
                 )
             coEvery {
                 ordersRepository.createGuestOrderBatch(
-                    tableId = 11L, venueId = 10L, tableSessionId = 55L,
-                    userId = 200L, idempotencyKey = "quick-order-request-001", tabId = 1L,
-                    comment = "Принесите угли", items = emptyList(), venueZoneId = any(), chatOrder = true,
+                    tableId = 11L, venueId = 10L, tableSessionId = 55L, userId = 200L,
+                    idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
+                    items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
+                    quickOrderRequest = QuickOrderRequest(100, "stable-request"),
                 )
-            } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
-
+            } returns CreatedOrderBatch(900L, 901L, false)
             router.process(
                 TelegramUpdate(
                     updateId = 201,
@@ -36436,19 +36471,559 @@ class TelegramBotRouterTableTokenTest {
                             id = "quick-order-confirm-session",
                             from = User(id = 200),
                             message = Message(messageId = 301, chat = Chat(id = 100, type = "private")),
-                            data = "quick_order_confirm",
+                            data = "quick_order_confirm:stable-request",
                         ),
                 ),
             )
 
-            coVerify(exactly = 1) {
+            coVerify {
                 ordersRepository.createGuestOrderBatch(
-                    tableId = 11L, venueId = 10L, tableSessionId = 55L,
-                    userId = 200L, idempotencyKey = "quick-order-request-001", tabId = 1L,
-                    comment = "Принесите угли", items = emptyList(), venueZoneId = any(), chatOrder = true,
+                    tableId = 11L, venueId = 10L, tableSessionId = 55L, userId = 200L,
+                    idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
+                    items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
+                    quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                )
+            }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100L, "Запрос отправлен, ожидайте подтверждения.", null) }
+            coVerify(exactly = 0) {
+                ordersRepository.getOrCreateActiveOrderId(tableId = any(), venueId = any(), tableSessionId = any())
+            }
+            coVerify(exactly = 0) { ordersRepository.createOrderBatch(any<Long>(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `quick order stale context is denied without success response or legacy split writes`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.QUICK_ORDER_WAIT_CONFIRM,
+                    mapOf(
+                        "text" to "Принесите угли", "requestId" to "stable-request",
+                        "tableToken" to "TOKEN", "tableSessionId" to "55", "tabId" to "1",
+                    ),
+                )
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L, venueId = 10L, tableSessionId = 55L, userId = 200L,
+                    idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
+                    items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
+                    quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                )
+            } returns null
+            router.process(
+                TelegramUpdate(
+                    updateId = 201,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "quick-order-confirm-session",
+                            from = User(id = 200),
+                            message = Message(messageId = 301, chat = Chat(id = 100, type = "private")),
+                            data = "quick_order_confirm:stable-request",
+                        ),
+                ),
+            )
+
+            coVerify {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L, venueId = 10L, tableSessionId = 55L, userId = 200L,
+                    idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
+                    items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
+                    quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                )
+            }
+            coVerify(exactly = 0) { dialogStateRepository.clear(100L) }
+            coVerify(exactly = 1) {
+                dialogStateRepository.transitionQuickOrderRequest(
+                    100L,
+                    "stable-request",
+                    DialogState(DialogStateType.NONE),
+                )
+            }
+            coVerify(
+                exactly = 0,
+            ) { outboxEnqueuer.enqueueSendMessage(100L, "Запрос отправлен, ожидайте подтверждения.", any()) }
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Доступ к счёту изменился. Откройте QR-код ещё раз.",
+                    null,
+                )
+            }
+            coVerify(exactly = 0) {
+                ordersRepository.getOrCreateActiveOrderId(tableId = any(), venueId = any(), tableSessionId = any())
+            }
+            coVerify(exactly = 0) { ordersRepository.createOrderBatch(any<Long>(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `quick order unknown database result retains its original request and context for retry`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.QUICK_ORDER_WAIT_CONFIRM,
+                    mapOf(
+                        "text" to "Принесите угли", "requestId" to "stable-request",
+                        "tableToken" to "TOKEN", "tableSessionId" to "55", "tabId" to "1",
+                    ),
+                )
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L, venueId = 10L, tableSessionId = 55L, userId = 200L,
+                    idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
+                    items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
+                    quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                )
+            } throws DatabaseUnavailableException()
+            router.process(
+                TelegramUpdate(
+                    updateId = 201,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "quick-order-confirm-session",
+                            from = User(id = 200),
+                            message = Message(messageId = 301, chat = Chat(id = 100, type = "private")),
+                            data = "quick_order_confirm:stable-request",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 0) { dialogStateRepository.clear(100L) }
+            coVerify(exactly = 0) {
+                dialogStateRepository.transitionQuickOrderRequest(
+                    chatId = any(),
+                    requestId = any(),
+                    nextState = any(),
+                    allowCommitted = any(),
+                )
+            }
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L, venueId = 10L, tableSessionId = 55L, userId = 200L,
+                    idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
+                    items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
+                    quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                )
+            } returns CreatedOrderBatch(900L, 901L, true)
+            router.process(
+                TelegramUpdate(
+                    updateId = 202,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "quick-order-confirm-retry",
+                            from = User(id = 200),
+                            message = Message(messageId = 301, chat = Chat(id = 100, type = "private")),
+                            data = "quick_order_confirm:stable-request",
+                        ),
+                ),
+            )
+
+            coVerify(exactly = 2) {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11L, venueId = 10L, tableSessionId = 55L, userId = 200L,
+                    idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
+                    items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
+                    quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                )
+            }
+            coVerify(exactly = 0) { tableSessionRepository.resolveActiveSession(any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `quick order rejected by MOVE or RELEASE stays finished after return and cannot confirm a newer request`() =
+        runBlocking<Unit> {
+            PostgresTestEnv.createDataSource(PostgresTestEnv.createDatabase()).use { ds ->
+                val dialogs = DialogStateRepository(ds, infoJson)
+                val appRouter =
+                    routerWithWebAppPublicUrl(
+                        null,
+                        dialogStateOverride = dialogs,
+                        ordersOverride = OrdersRepository(ds, clock = seatingClock),
+                    )
+                val hall = SeatingRepository(ds, clock = seatingClock)
+                for (action in listOf("MOVE", "RELEASE")) {
+                    var seat = checkoutSeat(ds)
+                    stubQuickOrderSeat(seat)
+                    sendQuickOrderText(appRouter, "✍️ Быстрый заказ")
+                    sendQuickOrderText(appRouter, "Synthetic checkout")
+                    val rejected = dialogs.get(100)
+                    val oldId = rejected.payload.getValue("requestId")
+                    assertEquals(seat.session.toString(), rejected.payload["tableSessionId"])
+                    hall.command(
+                        seat.venue,
+                        STAFF,
+                        cmd(action).copy(id = seat.seat, revision = 0, tableId = seat.tables[1]),
+                    )
+                    val beforeDenial = checkoutCounts(ds)
+                    sendQuickOrderCallback(appRouter, oldId)
+                    assertEquals(DialogState(DialogStateType.NONE), dialogs.get(100))
+                    assertEquals(beforeDenial, checkoutCounts(ds))
+                    if (action == "MOVE") {
+                        hall.command(
+                            seat.venue,
+                            STAFF,
+                            cmd("MOVE").copy(id = seat.seat, revision = 1, tableId = seat.tables[0]),
+                        )
+                    } else {
+                        val oldSession = seat.session
+                        val oldTab = seat.tab
+                        val next =
+                            hall.command(
+                                seat.venue,
+                                STAFF,
+                                cmd("SEAT").copy(tableId = seat.tables[0], partySize = 2),
+                            )
+                        val session =
+                            hall.state(
+                                seat.venue,
+                                STAFF,
+                            ).tables.first { it.id == seat.tables[0] }.seating!!.tableSessionId
+                        // A different company occupies the released table before the old guest presses the button.
+                        GuestTabsRepository(ds).ensurePersonalTab(seat.venue, session, 1001)
+                        seat =
+                            seat.copy(
+                                seat = next.id,
+                                session = session,
+                                tab = GuestTabsRepository(ds).ensurePersonalTab(seat.venue, session, 1003).id,
+                            )
+                        assertTrue(oldSession != seat.session)
+                        assertTrue(oldTab != seat.tab)
+                    }
+                    val beforeOldCallback = checkoutCounts(ds)
+                    sendQuickOrderCallback(appRouter, oldId)
+                    assertEquals(beforeOldCallback, checkoutCounts(ds))
+                    assertEquals(DialogState(DialogStateType.NONE), dialogs.get(100))
+                    coVerify {
+                        outboxEnqueuer.enqueueSendMessage(
+                            100L,
+                            "Этот запрос уже завершён. Для нового заказа выберите «✍️ Быстрый заказ».",
+                            null,
+                        )
+                    }
+                    stubQuickOrderSeat(seat)
+                    sendQuickOrderText(appRouter, "✍️ Быстрый заказ")
+                    sendQuickOrderText(appRouter, "Synthetic checkout")
+                    val fresh = dialogs.get(100)
+                    val freshId = fresh.payload.getValue("requestId")
+                    assertTrue(freshId != oldId)
+                    assertEquals(seat.session.toString(), fresh.payload["tableSessionId"])
+                    assertEquals(seat.tab.toString(), fresh.payload["tabId"])
+                    for (oldAction in listOf("confirm", "edit", "cancel")) {
+                        sendQuickOrderCallback(appRouter, oldId, oldAction)
+                        assertEquals(fresh, dialogs.get(100))
+                        assertEquals(beforeOldCallback, checkoutCounts(ds))
+                    }
+                    assertFalse(dialogs.transitionQuickOrderRequest(100, oldId))
+                    assertEquals(fresh, dialogs.get(100))
+                    sendQuickOrderCallback(appRouter, freshId)
+                    assertEquals(DialogState(DialogStateType.NONE), dialogs.get(100))
+                    val afterSuccess = checkoutCounts(ds)
+                    assertEquals(beforeOldCallback.getValue("order_batches") + 1, afterSuccess["order_batches"])
+                    assertEquals(
+                        beforeOldCallback.getValue("guest_batch_idempotency") + 1,
+                        afterSuccess["guest_batch_idempotency"],
+                    )
+                    for (table in listOf("audit_log", "venue_accounting_shifts", "venue_accounting_events")) {
+                        assertEquals(beforeOldCallback.getValue(table) + 1, afterSuccess[table])
+                    }
+                    com.hookah.platform.backend.miniapp.venue.seating.assertCheckoutOpening(ds, seat.venue)
+                    assertEquals(beforeOldCallback["telegram_outbox"], afterSuccess["telegram_outbox"])
+                    sendQuickOrderCallback(appRouter, freshId)
+                    assertEquals(afterSuccess, checkoutCounts(ds))
+                }
+            }
+        }
+
+    @Test
+    fun `quick order lost commit response and legacy button preserve the exact request for one batch replay`() =
+        runBlocking<Unit> {
+            PostgresTestEnv.createDataSource(PostgresTestEnv.createDatabase()).use { ds ->
+                val seat = checkoutSeat(ds)
+                stubQuickOrderSeat(seat)
+                val dialogs = DialogStateRepository(ds, infoJson)
+                var loseCommitResponse = true
+                val uncertainSource =
+                    Proxy.newProxyInstance(
+                        DataSource::class.java.classLoader,
+                        arrayOf(DataSource::class.java),
+                    ) { _, method, args ->
+                        val result = method.invoke(ds, *(args ?: emptyArray()))
+                        if (result !is Connection) {
+                            result
+                        } else {
+                            Proxy.newProxyInstance(
+                                Connection::class.java.classLoader,
+                                arrayOf(Connection::class.java),
+                            ) { _, call, values ->
+                                try {
+                                    val value = call.invoke(result, *(values ?: emptyArray()))
+                                    if (call.name == "commit" && loseCommitResponse) {
+                                        loseCommitResponse = false
+                                        throw SQLException("Synthetic lost commit acknowledgement")
+                                    }
+                                    value
+                                } catch (e: InvocationTargetException) {
+                                    throw e.targetException
+                                }
+                            }
+                        }
+                    } as DataSource
+                val appRouter =
+                    routerWithWebAppPublicUrl(
+                        null,
+                        dialogStateOverride = dialogs,
+                        ordersOverride = OrdersRepository(uncertainSource, clock = seatingClock),
+                    )
+                sendQuickOrderText(appRouter, "✍️ Быстрый заказ")
+                sendQuickOrderText(appRouter, "Synthetic checkout")
+                val original = dialogs.get(100)
+                val requestId = original.payload.getValue("requestId")
+                val before = checkoutCounts(ds)
+                sendQuickOrderCallback(appRouter, requestId)
+                assertFalse(loseCommitResponse)
+                assertEquals(original, dialogs.get(100))
+                val committed = checkoutCounts(ds)
+                assertEquals(before.getValue("order_batches") + 1, committed["order_batches"])
+                coVerify {
+                    outboxEnqueuer.enqueueSendMessage(
+                        100L,
+                        "Не удалось проверить результат. Повторите подтверждение этого запроса.",
+                        null,
+                    )
+                }
+                // Pre-upgrade buttons only refresh the same request; they never execute a different one.
+                sendQuickOrderCallback(appRouter, null)
+                assertEquals(original, dialogs.get(100))
+                assertEquals(committed, checkoutCounts(ds))
+                coVerify {
+                    outboxEnqueuer.enqueueSendMessage(
+                        100L,
+                        match {
+                            it.contains("Эта кнопка устарела")
+                        },
+                        TelegramKeyboards.inlineConfirmQuickOrder(requestId),
+                    )
+                }
+                sendQuickOrderCallback(appRouter, requestId)
+                assertEquals(DialogState(DialogStateType.NONE), dialogs.get(100))
+                assertEquals(committed, checkoutCounts(ds))
+                coVerify(exactly = 1) {
+                    outboxEnqueuer.enqueueSendMessage(100L, "Запрос отправлен, ожидайте подтверждения.", null)
+                }
+                sendQuickOrderCallback(appRouter, requestId)
+                assertEquals(committed, checkoutCounts(ds))
+                coVerify(exactly = 0) { staffChatNotifier.notifyNewBatchNow(any()) }
+                assertTrue(
+                    TelegramKeyboards.inlineConfirmQuickOrder(requestId).inlineKeyboard.flatten().all {
+                        it.callbackData!!.toByteArray().size <= 64
+                    },
                 )
             }
         }
+
+    @Test
+    fun `quick order editing preserves context and retires the old confirmation identity`() =
+        runBlocking<Unit> {
+            PostgresTestEnv.createDataSource(PostgresTestEnv.createDatabase()).use { ds ->
+                val seat = checkoutSeat(ds)
+                stubQuickOrderSeat(seat)
+                val dialogs = DialogStateRepository(ds, infoJson)
+                val appRouter =
+                    routerWithWebAppPublicUrl(
+                        null,
+                        dialogStateOverride = dialogs,
+                        ordersOverride = OrdersRepository(ds, clock = seatingClock),
+                    )
+                sendQuickOrderText(appRouter, "✍️ Быстрый заказ")
+                val context = dialogs.get(100).payload
+                sendQuickOrderText(appRouter, "First text")
+                val oldId = dialogs.get(100).payload.getValue("requestId")
+                sendQuickOrderCallback(appRouter, oldId, "edit")
+                assertEquals(DialogState(DialogStateType.QUICK_ORDER_WAIT_TEXT, context), dialogs.get(100))
+                sendQuickOrderText(appRouter, "Second text")
+                val edited = dialogs.get(100)
+                assertEquals(context, edited.payload - "text" - "requestId")
+                assertEquals("Second text", edited.payload["text"])
+                assertTrue(oldId != edited.payload["requestId"])
+                val before = checkoutCounts(ds)
+                sendQuickOrderCallback(appRouter, oldId)
+                assertEquals(edited, dialogs.get(100))
+                sendQuickOrderCallback(appRouter, edited.payload.getValue("requestId"), "cancel")
+                assertEquals(DialogState(DialogStateType.NONE), dialogs.get(100))
+                sendQuickOrderCallback(appRouter, edited.payload.getValue("requestId"))
+                assertEquals(before, checkoutCounts(ds))
+            }
+        }
+
+    @Test
+    fun `quick order Platform Guest distinguishes unavailable coordinator from confirmed denial and null writer`() =
+        runBlocking<Unit> {
+            PostgresTestEnv.createDataSource(PostgresTestEnv.createDatabase()).use { ds ->
+                val dialogs = DialogStateRepository(ds, infoJson)
+                val appRouter = routerWithWebAppPublicUrl(null, dialogStateOverride = dialogs)
+                val context = platformGuestQrContext()
+                coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 999, tableToken = "TOKEN")
+                coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+                coEvery { platformVenueRepository.getVenueDetail(10) } returns platformGuestQrVenue()
+                coEvery { subscriptionRepository.getSubscriptionStatus(10) } returns SubscriptionStatus.ACTIVE
+                val original =
+                    DialogState(
+                        DialogStateType.QUICK_ORDER_WAIT_CONFIRM,
+                        mapOf(
+                            "text" to "Synthetic checkout",
+                            "requestId" to "platform-request",
+                            "tableToken" to "TOKEN",
+                            "tableSessionId" to "55",
+                            "tabId" to "1",
+                        ),
+                    )
+                dialogs.set(100, original)
+                coEvery {
+                    guestTableContextLifecycleRepository.withConfirmedPlatformGuestMutation<Any?>(
+                        actorUserId = any(), platformOwnerUserId = any(), chatId = any(), tableToken = any(),
+                        expectedVenueId = any(), expectedTableId = any(), expectedSessionId = any(),
+                        ttl = any(), now = any(), mutation = any(),
+                    )
+                } returns PlatformGuestTableMutationResult.DatabaseUnavailable
+                sendQuickOrderCallback(appRouter, "platform-request", userId = 999)
+                assertEquals(original, dialogs.get(100))
+                coEvery {
+                    guestTableContextLifecycleRepository.withConfirmedPlatformGuestMutation<Any?>(
+                        actorUserId = any(), platformOwnerUserId = any(), chatId = any(), tableToken = any(),
+                        expectedVenueId = any(), expectedTableId = any(), expectedSessionId = any(),
+                        ttl = any(), now = any(), mutation = any(),
+                    )
+                } returns PlatformGuestTableMutationResult.Denied
+                sendQuickOrderCallback(appRouter, "platform-request", userId = 999)
+                assertEquals(DialogState(DialogStateType.NONE), dialogs.get(100))
+                val connectedRequest = original.copy(payload = original.payload + ("requestId" to "connected-request"))
+                dialogs.set(100, connectedRequest)
+                stubConfirmedPlatformGuestMutation(context)
+                every {
+                    ordersRepository.createGuestOrderBatch(
+                        connection = any(), tableId = 11, venueId = 10, tableSessionId = 55, userId = 999,
+                        idempotencyKey = "bot-quick:connected-request", tabId = 1,
+                        comment = "Synthetic checkout", items = emptyList(),
+                        chatOrder = true, expectedTableToken = "TOKEN",
+                        quickOrderRequest = QuickOrderRequest(100, "connected-request"),
+                    )
+                } returns null
+                sendQuickOrderCallback(appRouter, "connected-request", userId = 999)
+                assertEquals(DialogState(DialogStateType.NONE), dialogs.get(100))
+                sendQuickOrderCallback(appRouter, "connected-request", userId = 999)
+                verify(exactly = 1) {
+                    ordersRepository.createGuestOrderBatch(
+                        connection = any(), tableId = 11, venueId = 10, tableSessionId = 55, userId = 999,
+                        idempotencyKey = "bot-quick:connected-request", tabId = 1,
+                        comment = "Synthetic checkout", items = emptyList(),
+                        chatOrder = true, expectedTableToken = "TOKEN",
+                        quickOrderRequest = QuickOrderRequest(100, "connected-request"),
+                    )
+                }
+                assertTrue(checkoutCounts(ds).values.all { it == 0 })
+            }
+        }
+
+    private val quickOrderUpdateSequence = AtomicLong(810_000L)
+
+    internal suspend fun sendQuickOrderCallback(
+        appRouter: TelegramBotRouter,
+        requestId: String?,
+        action: String = "confirm",
+        userId: Long = 1003,
+        chatId: Long = 100,
+    ) {
+        val id = quickOrderUpdateSequence.incrementAndGet()
+        appRouter.process(
+            TelegramUpdate(
+                updateId = id,
+                callbackQuery =
+                    CallbackQuery(
+                        id = "checkout-$id",
+                        from = User(id = userId),
+                        message = Message(messageId = 301, chat = Chat(id = chatId, type = "private")),
+                        data = "quick_order_$action" + (requestId?.let { ":$it" } ?: ""),
+                    ),
+            ),
+        )
+    }
+
+    internal suspend fun sendQuickOrderText(
+        appRouter: TelegramBotRouter,
+        text: String,
+        chatId: Long = 100,
+        userId: Long = 1003,
+    ) {
+        val id = quickOrderUpdateSequence.incrementAndGet()
+        appRouter.process(
+            TelegramUpdate(
+                updateId = id,
+                message =
+                    Message(
+                        messageId = id,
+                        chat = Chat(id = chatId, type = "private"),
+                        fromUser = User(id = userId),
+                        text = text,
+                    ),
+            ),
+        )
+    }
+
+    internal fun quickOrderRouter(
+        dialogs: DialogStateRepository,
+        orders: OrdersRepository,
+        outbox: TelegramOutboxEnqueuer = outboxEnqueuer,
+    ): TelegramBotRouter =
+        routerWithWebAppPublicUrl(
+            null,
+            outboxOverride = outbox,
+            dialogStateOverride = dialogs,
+            ordersOverride = orders,
+        )
+
+    internal fun stubQuickOrderSeat(
+        seat: CheckoutSeat,
+        chatId: Long = 100,
+        userId: Long = 1003,
+    ) {
+        val context = platformGuestQrContext(token = seat.token, venueId = seat.venue, tableId = seat.tables[0])
+        coEvery { chatContextRepository.get(chatId) } returns
+            StoredChatContext(userId = userId, tableToken = seat.token)
+        coEvery { tableTokenRepository.resolve(seat.token) } returns context
+        coEvery {
+            platformVenueRepository.getVenueDetail(seat.venue)
+        } returns platformGuestQrVenue(venueId = seat.venue)
+        coEvery { subscriptionRepository.getSubscriptionStatus(seat.venue) } returns SubscriptionStatus.ACTIVE
+        coEvery {
+            tableSessionRepository.resolveActiveSession(seat.venue, seat.tables[0], any(), any())
+        } returns platformGuestTableSession(context, seat.session)
+        val tab = GuestTabModel(seat.tab, seat.venue, seat.session, "PERSONAL", userId, "ACTIVE")
+        coEvery { guestTabsRepository.ensurePersonalTab(seat.venue, seat.session, userId) } returns tab
+        coEvery { guestTabsRepository.listTabsForUser(seat.venue, seat.session, userId) } returns listOf(tab)
+    }
 
     private fun hookahMenuCategoryWithOptions(options: List<VenueMenuOption>): VenueMenuCategory =
         hookahMenuCategoryWithItems(listOf(hookahMenuItem(id = 7001L, options = options)))

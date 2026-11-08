@@ -4,6 +4,131 @@
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
+## Halls, seating and table booking — HT-HALLS-SEATING-TABLE-BOOKING-01
+
+Local candidate, not staging/device acceptance. Run Kotlin compile/ktlint and backend tests,
+including `SeatingRepositoryTest`, `SeatingLifecycleTest`, `SeatingHttpContractTest`,
+`SeatingMediaTest`, `SeatingMigrationTest`, `SeatingConcurrencyPostgresTest`,
+`SeatingFixRegressionTest` (8 cases), `SeatingFixConcurrencyPostgresTest` (4 cases),
+`SeatingReviewFixRegressionTest` (4), `SeatingReviewFixHttpTest` (2), and
+`SeatingReviewFixPostgresTest` (3 tests, 14 controlled operation orders). Retain existing
+Booking/Bot/RBAC/Table/Session/Order/Visit/Feedback/Accounting/Extension regressions and the
+complete `*Migration*` selection. The real Ktor HTTP test captures `seating-http.json`; the
+browser fixture must exactly match that response, including false, 0, null and empty arrays.
+Never use a manually populated fixture as the sole serialization evidence.
+
+PostgreSQL tests use independent connections, latch barriers and observed `pg_blocking_pids`
+waits, not random sleeps. Exercise guest/guest, manual/manual, guest/manual, booking/seating,
+booking/extension, competing and reciprocal moves, release/seating, deactivation/booking and
+rules/booking in controlled operation orders; assert final reservations, seating uniqueness,
+rollback/audit and independent venue progress. Mixed Bot/Mini App order creation shares the
+venue-first lock order and retains its separate PostgreSQL regression. H2 proves functional
+behavior and forward preservation, not concurrent PostgreSQL behavior.
+F1/F3/F5/F6 regressions additionally interleave release/manual and release/guest booking,
+Mini App/Bot call/release, cancel/update and move/call-completion in both orders. Require distinct
+backend PIDs, exact observed blocking relationship, no deadlock, final complete rows/audit/outbox,
+rollback and unrelated-venue progress. F2 checks foreign/ambiguous/offline legacy visits and retry;
+F4 checks buffer 10 retained after settings change to 0 or 30. Use the independent review's
+negative evidence as baseline; record any test-harness corrections separately from product fixes.
+
+Forward migration tests start from PostgreSQL V131 / H2 V132 with existing data; validate the
+new heads V132/V133 and preserved table IDs/QR, nullable unknown capacity/end, bookings/users,
+visits/sessions/orders and closed financial reports. Keep reviewed-tail checks in release
+contracts and migration-lineage negative tests; never alter historical SQL or reduce minima.
+The complete backend test task remains a release/CI requirement.
+
+Browser acceptance: run `npm --prefix miniapp run build`, then the complete
+`MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --workers=2 --retries=0`.
+`halls-seating.spec.ts` covers real-wire defaults, mobile light/dark operation forms, hall/table
+editing, normalized dragging/zoom/reload, image preview and explicit replacement, manual/guest
+booking, conflict input retention, exact retry after an unknown response/reload, flags, role
+denial, draft separation, revoked access and late responses. The full suite also retains shared
+routing, Telegram BackButton, account/venue switches, QR, orders, payments and history coverage.
+F7 uses two browser clients against one authoritative mock revision, confirmed conflict, fresh
+revision, preserved draft and explicit new-key retry; reload, real Venue router Telegram BackButton,
+account/venue isolation and late/revoked refresh are separate assertions.
+R1–R4 add controlled MOVE/RELEASE versus order closing, SEAT versus UPDATE/CANCEL and competing
+time proposals. Require the waiter to block on the venue before taking context/order locks; retain
+actual separate PostgreSQL PIDs and final rows. Extend-after-MOVE tests retain snapshots and exact
+preparation/future-booking boundaries. HTTP checks real guest outbox recipients and stale SEAT 409;
+browser tests cover both manual and guest SEAT drafts after revision conflict.
+CI explicitly requires all 24 hall spec titles plus the fifteen backend module classes; existing
+minimum/skip/flaky/failed-attempt gates are retained. A browser mock is not an executed real
+Telegram or live R2 test.
+
+The FIX-02 final evidence must be one full backend run and one full Playwright run after the last
+source/test changes, plus compile/lint/build and local release contracts. Earlier targeted passes
+must not be presented as a replacement for either full run. Live R2/Telegram/staging remain separate.
+
+### P1/P2 checkout and seating agreement regression
+
+Retain all F1–F7 / R1–R4 cases. `SeatingCheckoutFixTest` checks exact/matching SEAT conditions,
+atomic chat rollback/replay, stale session/table/tab and revoked QR. `SeatingCheckoutFixHttpTest`
+checks real STAFF HTTP denial and unchanged rows/audit, successful agreed seating and walk-in.
+`SeatingCheckoutConcurrencyPostgresTest` checks both checkout overloads against RELEASE/MOVE in
+both orders, Bot/Mini App overlap for same and separate companies, exact request replay and
+independent venue progress. Require exact blocking PIDs, final session/tab/order/batch/idempotency,
+Hall audit, table availability and unchanged closed accounting report. No sleeps determine order.
+Bot router tests retain frozen context/key on uncertain results and forbid success on rejection.
+Quick-order lifecycle regressions also run the router with real PostgreSQL order/dialog repositories:
+MOVE away/refusal/MOVE back and RELEASE/refusal/new seating cannot revive an old callback;
+fresh orders have fresh UUIDs, and old confirm/edit/cancel cannot affect them. Simulate a committed
+transaction with a lost commit acknowledgement: keep the exact dialog, refresh legacy buttons
+without executing, then replay with no second batch or duplicate notification. Check conditional
+dialog transitions and preserve context when editing. Confirmed Platform Guest denial and database
+unavailability must remain distinct.
+Browser SEAT tests assert read-only actual booking values, editable walk-in, manager assignment,
+STAFF restriction, current revision, explicit conflict acknowledgement and fresh request UUID.
+Run complete backend and Chromium suites after final changes with zero retries/skips; keep all
+existing CI minima. Test screenshots use their own Playwright output paths.
+
+For the bounded HT-CHECKOUT-CALLBACK-RACE-FIX-01 correction, run
+`TelegramQuickOrderConcurrencyPostgresTest` and the existing quick-order, checkout, idempotency,
+seating F/R and accounting regressions, then compile/ktlint and the complete backend suite.
+The new router probes pause a callback before venue lock, commit refusal in another instance,
+MOVE back (or RELEASE/reseat), and require no batch from the delayed callback. Confirm/edit/cancel
+run in both orders with independent connections and observed `pg_blocking_pids`; include parallel
+confirm, another guest/venue progressing, rollback before commit, lost commit acknowledgement and
+restart replay. Assert dialog, session/tab, order/batch/idempotency and audit/outbox preservation.
+Reuse the prior complete Chromium/build evidence only after verifying unchanged Mini App source,
+fixtures, configuration and API response contracts; this Bot-only correction does not require an
+automatic full browser rerun. Required hosted release/CI and later staging gates remain unchanged.
+
+### Deferred phone smoke for this module — NOT EXECUTED
+
+Use a separately authorized test venue and synthetic guests/images; retain the initial QR.
+Record device/Telegram versions, test date, venue timezone and each result. The following
+checklist is preparation, not authorization to deploy or mutate a live venue.
+
+1. OWNER: create halls «Основной» and «Тихий», assign old tables, set capacities, upload two
+   synthetic JPEG/PNG plans. Save rectangle/oval sizes/rotation, drag a marker, zoom and fit.
+   Reload: geometry and hall assignment persist, the original QR still resolves the same table.
+2. Configure an open service interval including 18:00–23:00 in the venue timezone, duration
+   120 and buffer 0. Resolve old unassigned bookings, enable scheme and guest choice. STAFF
+   uses «Бронирования → Добавить бронь» for synthetic offline guest, table №3, 20:00–22:00.
+   Expect CONFIRMED in the common queue, correct author/source and no Telegram registration.
+3. Guest: choose the same date, 20:00 and party size. Table №3 is unavailable; another table
+   submits PENDING. Two browser/Telegram accounts submitting an overlapping free table produce
+   one reservation and one conflict with retained form values. STAFF cannot confirm guest
+   requests or edit rules; OWNER/MANAGER keeps existing approval permissions.
+4. At 18:00 seat a walk-in at №3 until 20:00. At 18:30 use a fresh test seating: standard two
+   hours must conflict; explicit 20:00 plus shortened-time acknowledgement succeeds. With
+   buffer 10, the previous end must be 19:50. Extension to 20:30 is refused without changes.
+5. Move the company to a free suitable table. Verify the same visit/order/tab, unchanged totals,
+   old QR context refusal and safe re-entry at the new table. Old table QR for a different
+   guest must show none of the moved company's order/chat/bill. Verify own history remains.
+6. Try release with an active order: guidance requires normal completion. Complete it normally,
+   retain an unpaid amount, then release. Debt and closed report stay unchanged; the next QR
+   company gets a new session. Repeat an unknown HTTP result with the same key, not a new action.
+7. Disable duration: finite service reserves until closing, 24-hour service requires explicit
+   end for an addressed manual booking and offers ordinary guest inquiry without a table promise.
+   Passing the agreed end shows overdue occupancy, never automatic release. Disable scheme/guest
+   choice: existing bookings/seating remain in the list. Reopen/back/reload, switch accounts and
+   venues, and revoke access: drafts stay scoped and delayed responses cannot restore private data.
+
+Staging deploy/smoke and real phone/R2 acceptance are required later under separate authorization.
+Evidence and current local verdict belong in the task report/checkpoint, not in this checklist.
+
 ## Direct Mini App entry regression — HT-BOT-MINIAPP-ENTRY-UX-01
 
 Local tests must cover the global MenuButtonWebApp payload (no chat_id, exact label and
@@ -1768,6 +1893,19 @@ after safe integration retain its durable quick-order dialog/token/context guard
 current seating/migration suite against PostgreSQL V132 / H2 V133. No local old-base PASS
 substitutes for integrated MOVE/RELEASE/order-close/callback evidence.
 
+Main integration gate (`HT-ACCOUNTING-AUTO-OPEN-MAIN-INTEGRATION-01`): run the complete backend
+and Chromium suites on the merged tree, with zero skips/retries. Extend the current main Bot and
+Seating assertions with exact shift/event/audit counts, not just absence of exceptions. Successful
+first checkout creates one AUTO_OPEN using the real guest; rejected, canceled and rolled-back
+requests create none. Retain durable request confirm/edit/cancel, terminal rejection, lost commit
+response, frozen table/session/tab and replay tests. PostgreSQL barriers must also cross first
+manual sale with SEAT/RELEASE and legacy order close in both orders, and checkout with ordinary
+session end. Verify single sale/shift, actual blocking PIDs, unpaid totals and byte-identical closed
+financial snapshots. All V132 PostgreSQL / V133 H2 migrations remain unchanged from main.
+The required route/security CI job selects all ten concrete Accounting suites explicitly and
+requires their JUnit XML, minimum case counts and zero skipped/failed/error cases; the extended
+Seating checkout concurrency suite requires all five cases.
+
 P1 regression gate (`HT-VENUE-SHIFT-SALES-P1-FIX-01`): `AccountingHttpContractTest` exercises the
 real Ktor module and compares serialized GET/POST responses with
 `miniapp/e2e/fixtures/accounting-http.json`. Only generated IDs, times and report hashes are
@@ -3413,6 +3551,10 @@ Required deterministic browser coverage:
   anchor and logical focus when the user has not interacted again. A controlled delayed GET must
   not steal later manual scroll or focus, while the authoritative data still renders; if the user
   starts another menu form, its draft, caret/focus and visible context remain current after render.
+  In the delayed-reload browser fixture, finish the native wheel gesture at `scrollend` before
+  focusing/typing in the next form. A stationary `scrollY` sample does not prove that queued wheel
+  movement has ended. Keep the final scroll delta at most 8px, with unchanged draft/focus checks;
+  do not replace this event boundary with sleeps or retries.
   Failure keeps the form values and a nearby live error;
 - mutation success uses a live region owned by the current Menu screen. Venue/account switch
   disposes that announcement and scoped context, aborts or ignores old reads/mutations and cannot

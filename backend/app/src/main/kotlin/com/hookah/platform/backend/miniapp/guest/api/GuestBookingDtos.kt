@@ -31,6 +31,10 @@ data class GuestBookingConfirmRequest(
 
 @Serializable
 data class GuestBookingResponse(
+    val tableId: Long? = null,
+    val tableNumber: Int? = null,
+    val agreedEndAtDisplay: String? = null,
+    val source: String = "GUEST",
     val bookingId: Long,
     val venueId: Long,
     val status: String,

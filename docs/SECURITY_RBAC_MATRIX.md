@@ -1,5 +1,28 @@
 # Security / RBAC Permission Matrix
 
+
+## Hall/seating permissions (HT-HALLS-SEATING-TABLE-BOOKING-01)
+
+| Operation | OWNER / MANAGER | STAFF | Guest |
+| --- | --- | --- | --- |
+| Hall, layout, capacity, activation, rules, image upload | Own venue | Deny | Deny |
+| SEATING_OPERATE: seat, extend, move, release | Own venue | Own venue | Deny |
+| BOOKING_MANUAL_CREATE: agreed CONFIRMED offline booking | Own venue | Own venue | Deny |
+| Assign/change another booking or normal BOOKING_MANAGE | Existing permission | Deny | Own allowed lifecycle only |
+| Public availability/current hall image | Allowed | Allowed | Published/available venue only |
+
+New command transactions re-read membership and role under lock. SETTINGS and manual creation are
+separate permissions; manual creation does not grant booking management or Platform Billing.
+Hall/table/plan/booking IDs are always checked against venue scope. Staff replay after revocation is
+denied. Legacy table mutation callers pass the real actor for the same transactional authorization.
+
+Public availability contains only table number/capacity/layout/availability and public hall image
+metadata. It never contains another guest's name, phone, booking comment, amount, seating/visit id
+or storage object key. Private responses use no-store. The public image endpoint authorizes the
+currently selected READY image of an enabled public hall; it does not redirect to administrative
+APIs or expose object-store credentials. Source/author and offline phone live only in private venue
+booking records. Audit payloads use object IDs, not phone or free-form guest comment.
+
 Дата актуализации: 2026-08-30.
 
 Статус: **current product reference / UPDATED**. Runtime permission parity and the broader

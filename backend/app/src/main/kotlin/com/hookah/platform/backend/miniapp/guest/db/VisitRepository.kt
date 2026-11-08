@@ -16,12 +16,13 @@ enum class VisitSource {
     BOOKING_SEATED,
     ORDER_CLOSED,
     MERGED,
+    WALK_IN,
 }
 
 data class VisitRecord(
     val id: Long,
     val venueId: Long,
-    val userId: Long,
+    val userId: Long?,
     val bookingId: Long?,
     val tableSessionId: Long?,
     val orderId: Long?,
@@ -151,8 +152,8 @@ class VisitRepository(private val dataSource: DataSource?) {
         bookingId: Long,
         now: Instant = Instant.now(),
     ): VisitRecord? {
-        val booking = loadSeatedBooking(connection, bookingId) ?: return null
         findVisitByBookingId(connection, bookingId)?.let { return it }
+        val booking = loadSeatedBooking(connection, bookingId) ?: return null
 
         val mergeVisitId =
             findSameServiceDateVisit(
@@ -929,6 +930,7 @@ class VisitRepository(private val dataSource: DataSource?) {
             FROM bookings
             WHERE id = ?
               AND status = 'SEATED'
+              AND user_id IS NOT NULL
             FOR UPDATE
             """.trimIndent(),
         ).use { statement ->
@@ -1242,7 +1244,7 @@ class VisitRepository(private val dataSource: DataSource?) {
         VisitRecord(
             id = getLong("id"),
             venueId = getLong("venue_id"),
-            userId = getLong("user_id"),
+            userId = getLong("user_id").let { if (wasNull()) null else it },
             bookingId = getLong("booking_id").let { if (wasNull()) null else it },
             tableSessionId = getLong("table_session_id").let { if (wasNull()) null else it },
             orderId = getLong("order_id").let { if (wasNull()) null else it },

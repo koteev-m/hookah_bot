@@ -1,5 +1,72 @@
 # Venue Mode Operations Model
 
+
+## Halls, physical seating and table booking (HT-HALLS-SEATING-TABLE-BOOKING-01)
+
+Local implementation candidate; release and real Telegram acceptance are not implied.
+`venue_tables` remains the only physical table registry. `tableId`, QR tokens and historical
+references survive renaming, hall assignment and marker movement. Existing tables keep NULL
+capacity and appear under «Без зала»; NULL is shown as «неизвестно», never an invented capacity.
+Tables and halls are deactivated, not deleted. Active seating, unresolved reservations and legacy
+active sessions/orders must be resolved before deactivation or incompatible capacity changes.
+
+Navigation and permissions:
+
+- «Настройки → Залы и столы»: OWNER/MANAGER create/rename halls, distribute existing tables,
+  edit capacity, activate/deactivate, upload plans, edit geometry; the existing Tables/QR screen
+  creates new physical tables and keeps its QR operations.
+- «Настройки → Бронирование / Правила посадки»: scheme, guest table choice, duration and buffer.
+- «Зал»: STAFF/MANAGER/OWNER operate with «Схема / Список», current seating, upcoming bookings,
+  manual reservations and seating/extension/movement/release actions. The list remains reachable
+  for unplaced tables and obligations when the image or feature is unavailable.
+- «Бронирования → Добавить бронь» opens the same manual booking form as a table card. Manual
+  and guest bookings use the existing queue/calendar and lifecycle, plus assigned-table/end labels.
+
+The two switches default OFF for existing venues:
+
+> Использовать схему зала — Разместите столы на изображении и управляйте посадкой.
+> Без схемы работа со столами доступна списком.
+
+> Разрешить гостям выбирать стол — Гость выбирает доступный стол на указанное время.
+> Для корректной доступности отмечайте посадку и освобождение столов.
+
+Guest choice requires active halls/plans, placed tables, known capacity, working hours and no
+unassigned PENDING/CONFIRMED/CHANGED obligations. Owners assign existing bookings in «Зал» before
+activation. Disabling the scheme also disables guest table choice; it never deletes a reservation,
+closes a visit or releases a table. Ordinary requests have no promise of a specific table.
+
+Geometry is normalized to the actual image rectangle: center x/y, width/height in image fractions,
+rotation in degrees, RECTANGLE/ELLIPSE. Each hall retains its own aspect ratio; zoom changes only
+the viewport. Pointer dragging and labelled numeric controls are both available; marker labels
+show table number and textual state. A separate minimum 44px hit area does not resize the saved
+shape at narrow viewport widths. Saving uses the table/hall revision. Replacing the image
+requires preview and explicit confirmation, resets that hall's geometry and disables guest choice
+until setup is checked again. Failed uploads/commands retain the last committed image and layout.
+
+Physical states are independent from table activation and future reservations: FREE, OCCUPIED,
+OVERDUE, PREPARING, RECONCILE, DISABLED. A reservation at 20:00 does not occupy a table at 18:00. The card
+shows actual seating time, agreed end, capacity, hall and nearest reservation. Elapsed time never
+releases the table. Existing QR-created sessions or active orders without recorded physical
+seating are «Требует сверки». Staff may explicitly reconcile exactly one existing company/session;
+ambiguous sessions, conflicting visits and sessionless active orders require their normal resolution.
+
+After release or movement, «Подготовка стола» shows the end of preparation. The company has left
+that table; its stored buffer still blocks a new reservation/seating until preparation ends.
+
+A confirmed 409 refreshes the open form's server version while retaining typed time/table/party,
+name/phone/comment and other draft fields. The screen shows the conflict and current booking data;
+«Проверил изменения, продолжить» is required before a new save with a new operation UUID.
+It never automatically overwrites another employee's edit. Reload/BackButton preserve this state
+within the same account/venue/mode. Network/5xx unknown outcomes retain the original frozen payload
+and UUID for exact replay, rather than treating uncertainty as a confirmed conflict. Late responses
+from an old screen cannot restore data; revoked access clears the private draft.
+
+A manual booking records an offline name, optional phone/comment, real author and source STAFF,
+with status CONFIRMED and nullable guest user id. It never impersonates the employee, creates a
+synthetic Telegram user, links people by phone or sends a guest notification to an unknown person.
+Manual creation is separate from management of other bookings. Phone and comment are private to
+authorized venue operations. Operational actions create no sale, payment or accounting shift.
+
 Дата актуализации: 2026-08-07.
 
 Статус: **current product reference / SPEC UPDATED**. Core Venue operations are partly smoke-closed across orders, bill display, staff calls, bookings, confirmed-only booking arrival actions, state-aware staff-chat booking shortcuts, staff-chat, menu options and settings slices. The bounded shift-check slice is **MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED**. Staff membership mutation audit is **DANGEROUS ACTION AUDIT SLICE / STAFF ROLE AND REMOVAL AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. The full Venue Mode implementation is still **PARTIAL / needs verification** for broad dashboard completeness, arbitrary stats, remaining dangerous-action audit coverage, broader settings parity and deep cross-surface e2e.

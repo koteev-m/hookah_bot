@@ -105,6 +105,31 @@ jobs:
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
             ./gradlew --no-daemon --max-workers=1 :backend:app:test \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCheckoutConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingExtensionConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingHttpContractTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingOrderProjectionTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingMediaTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingRepositoryTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingLifecycleTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingHttpContractTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingMigrationTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingFixRegressionTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingFixConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixRegressionTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixHttpTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.telegram.TelegramQuickOrderConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixHttpTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecycleH2Test" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest" \
@@ -168,6 +193,31 @@ jobs:
           report_dir = Path("backend/app/build/test-results/test")
           expected_classes = [
               "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenH2Test",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCheckoutConcurrencyPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingExtensionConcurrencyPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingHttpContractTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingOrderProjectionTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingMediaTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingRepositoryTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingLifecycleTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingHttpContractTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingMigrationTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingConcurrencyPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingFixRegressionTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingFixConcurrencyPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixRegressionTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixHttpTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutConcurrencyPostgresTest",
+              "com.hookah.platform.backend.telegram.TelegramQuickOrderConcurrencyPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixHttpTest",
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixTest",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecycleH2Test",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest",
@@ -219,6 +269,31 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenH2Test": 7,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenPostgresTest": 11,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCheckoutConcurrencyPostgresTest": 8,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingExtensionConcurrencyPostgresTest": 7,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingHttpContractTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest": 2,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingOrderProjectionTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test": 12,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest": 13,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingMediaTest": 2,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingRepositoryTest": 5,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingLifecycleTest": 6,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingHttpContractTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingMigrationTest": 2,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingConcurrencyPostgresTest": 5,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingFixRegressionTest": 8,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingFixConcurrencyPostgresTest": 4,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixRegressionTest": 4,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixHttpTest": 2,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixPostgresTest": 3,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutConcurrencyPostgresTest": 5,
+              "com.hookah.platform.backend.telegram.TelegramQuickOrderConcurrencyPostgresTest": 6,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixHttpTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixTest": 3,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecycleH2Test": 12,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest": 12,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest": 1,
@@ -304,6 +379,14 @@ jobs:
                   "product mode lets unknown identities preview and accept staff manager and owner invites",
                   "product mode rejects a staff callback copied into another group before idempotency",
                   "product mode callback answer is enqueued only with exact venue group authority",
+              },
+              "com.hookah.platform.backend.telegram.TelegramQuickOrderConcurrencyPostgresTest": {
+                  "rejected request cannot execute from an older callback after MOVE back or RELEASE and new seating",
+                  "parallel confirms replay one batch while another guest and venue progress",
+                  "confirm and cancel or edit serialize on the durable request in both operation orders",
+                  "lost commit response refuses cancellation and editing while precommit error retains safe retry",
+                  "both writer overloads enforce request identity and terminal denial without a router cleanup",
+                  "failed Telegram refusal notification cannot reopen a terminal request",
               },
           }
           totals = {key: 0 for key in ("tests", "skipped", "failures", "errors")}
@@ -1674,6 +1757,30 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("halls-seating.spec.ts", "real wire defaults show unknown values and separate future reserve from occupied state"): 1,
+              ("halls-seating.spec.ts", "manual booking keeps input and uses one key after lost response and reload"): 1,
+              ("halls-seating.spec.ts", "table editor restores draft after reload and saves geometry without changing identity"): 1,
+              ("halls-seating.spec.ts", "rule guidance false zero and staff boundary"): 1,
+              ("halls-seating.spec.ts", "upload previews before explicit confirmation and preserves old plan on upload failure"): 1,
+              ("halls-seating.spec.ts", "revoked access clears persisted drafts and ignores a disposed venue response"): 1,
+              ("halls-seating.spec.ts", "guest selection does not reserve and conflict preserves inputs and permits another table"): 1,
+              ("halls-seating.spec.ts", "unknown guest submit locks inputs and repeats original operation after reload even when feature was disabled"): 1,
+              ("halls-seating.spec.ts", "late response from disposed venue cannot restore another venues content"): 1,
+              ("halls-seating.spec.ts", "dragged marker uses actual image coordinates at mobile zoom and survives explicit save"): 1,
+              ("halls-seating.spec.ts", "walk in draft stays separate from booking with the same numeric id after reload"): 1,
+              ("halls-seating.spec.ts", "denied command wins over a late successful private hall refresh"): 1,
+              ("halls-seating.spec.ts", "guest denied access clears its draft and cannot fall back to ordinary submission"): 1,
+              ("halls-seating.spec.ts", "mobile light table operation conflict retains agreed end and release guidance"): 1,
+              ("halls-seating.spec.ts", "mobile dark table operation conflict retains agreed end and release guidance"): 1,
+              ("halls-seating.spec.ts", "booking conflict between two clients refreshes revision preserves draft and requires explicit new attempt"): 1,
+              ("halls-seating.spec.ts", "manual conflict keeps name phone comment and scoped draft across return and account switch"): 1,
+              ("halls-seating.spec.ts", "refresh rebases table form only after acknowledged server change and preparation has text state"): 1,
+              ("halls-seating.spec.ts", "late conflict refresh cannot restore disposed account and revoked refresh clears conflict draft"): 1,
+              ("halls-seating.spec.ts", "hall conflict draft survives real Venue router Telegram BackButton and reload"): 1,
+              ("halls-seating.spec.ts", "stale STAFF booking SEAT preserves draft and requires explicit revision confirmation"): 1,
+              ("halls-seating.spec.ts", "stale GUEST booking SEAT preserves draft and requires explicit revision confirmation"): 1,
+              ("halls-seating.spec.ts", "booking SEAT shows authoritative read only terms and STAFF cannot change the agreement"): 1,
+              ("halls-seating.spec.ts", "walk in SEAT keeps editable terms and manager changes booking through assignment"): 1,
               (
                   "booking-label-parity.spec.ts",
                   "shared booking label fixture stays aligned with the production TypeScript helper",

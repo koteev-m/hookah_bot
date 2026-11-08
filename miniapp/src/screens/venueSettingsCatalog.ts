@@ -14,6 +14,8 @@ export function renderVenueSettingsCatalog(root: HTMLElement, access: VenueAcces
     ['Карточка заведения', 'settings/card', managesCard],
     ['Часы работы', 'settings/hours', managesCard],
     ['Меню', 'menu', can('MENU_VIEW')],
+    ['Залы и столы', 'hall-settings', managesCard],
+    ['Правила посадки', 'seating-rules', managesCard],
     ['Столы и QR', 'tables', can('TABLE_VIEW')],
     ['Команда и доступ', 'settings/team', managesCard || can('STAFF_MODULE_SETTINGS_MANAGE')],
     ['Бронирование', 'settings/booking', can('BOOKING_MANAGE')],

@@ -173,7 +173,7 @@ class GuestBookingRepositoryTest {
         }
 
     @Test
-    fun `active list falls back to scheduled at plus hold minutes when arrival deadline is missing`() =
+    fun `active list retains unresolved overdue obligations until expiry worker applies transition`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("booking-active-null-deadline")
             val fixture = seedVenueAndUser(jdbcUrl)
@@ -188,7 +188,11 @@ class GuestBookingRepositoryTest {
             val activeIds = repository.listActiveByVenue(fixture.venueId).map { it.id }
 
             assertTrue(activeId in activeIds)
-            assertTrue(expiredId !in activeIds)
+            assertTrue(expiredId in activeIds)
+            repository.expireOverdue()
+            val afterExpiry = repository.listActiveByVenue(fixture.venueId).map { it.id }
+            assertTrue(activeId in afterExpiry)
+            assertTrue(expiredId !in afterExpiry)
         }
 
     @Test
@@ -824,6 +828,11 @@ class GuestBookingRepositoryTest {
             ).use { statement ->
                 statement.setLong(1, userId)
                 statement.executeUpdate()
+            }
+            connection.createStatement().use { it.executeUpdate("INSERT INTO users(telegram_user_id) VALUES (900)") }
+            connection.prepareStatement("INSERT INTO venue_members(venue_id,user_id,role) VALUES (?,900,'STAFF')").use {
+                it.setLong(1, venueId)
+                it.executeUpdate()
             }
             BookingFixture(venueId = venueId, userId = userId)
         }

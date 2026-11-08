@@ -222,6 +222,45 @@ class AccountingCheckoutConcurrencyPostgresTest {
             }
         }
 
+    @Test
+    fun `legacy session end before checkout rejects without opening and after checkout preserves exact replay`() =
+        runBlocking {
+            for (checkoutFirst in listOf(false, true)) fixture().use { ds ->
+                val key = UUID.randomUUID().toString()
+                // Pause after the production session lock, or immediately before it if close must win.
+                SqlBarrier(ds, "SELECT ts.id FROM table_sessions", after = checkoutFirst).use { checkoutSource ->
+                    val order = async { checkout(checkoutSource, miniApp = false, key = key, chat = true) }
+                    val holder = checkoutSource.awaitEntered()
+                    SqlBarrier(ds, "UPDATE table_sessions", hold = false).use { closeSource ->
+                        val close = async { TableSessionRepository(closeSource).closeSession(41, 1) }
+                        val waiter = closeSource.awaitEntered()
+                        assertNotEquals(holder, waiter)
+                        if (checkoutFirst) {
+                            awaitBlocked(ds, holder, waiter)
+                        } else {
+                            assertTrue(close.await())
+                        }
+                        checkoutSource.release()
+                        val created = order.await()
+                        assertTrue(close.await())
+                        if (checkoutFirst) {
+                            assertNotNull(created)
+                            assertSingleOpening(ds, 1)
+                            val replay = assertNotNull(checkout(ds, miniApp = false, key = key, chat = true))
+                            assertTrue(replay.idempotencyReplay)
+                            assertEquals(created.batchId, replay.batchId)
+                        } else {
+                            assertNull(created)
+                            assertEmpty(ds)
+                        }
+                        ds.connection.use { c ->
+                            assertEquals(1, c.count("table_sessions", "id = 41 AND status = 'ENDED'"))
+                        }
+                    }
+                }
+            }
+        }
+
     private fun fixture(): HikariDataSource =
         PostgresTestEnv.createDataSource(PostgresTestEnv.createDatabase()).also { ds ->
             seedAccounting(ds)
@@ -276,7 +315,10 @@ class AccountingCheckoutConcurrencyPostgresTest {
                 repository.createGuestOrderBatch(connection, table, venue, session, 301, key, tab, comment, items)
             }
         } else {
-            repository.createGuestOrderBatch(table, venue, session, 301, key, tab, comment, items, chatOrder = chat)
+            repository.createGuestOrderBatch(
+                table, venue, session, 301, key, tab, comment, items, chatOrder = chat,
+                expectedTableToken = if (chat) "checkout-$venue" else null,
+            )
         }
     }
 
