@@ -1,5 +1,42 @@
 # Project Status
 
+## HT-PR252-COMPOSE-RUNTIME-FIX-01 — exact V132 runtime fixture (2026-11-08)
+
+**FIX_READY / LOCAL_UNCOMMITTED / HOSTED_RECHECK_REQUIRED**.
+PROJECT_IDENTITY_OK in unchanged primary cwd `/Users/maksimmartynov/IdeaProjects/hookah_bot_ANT`.
+Candidate `/private/tmp/HT-HALLS-SEATING-TABLE-BOOKING-01/worktree`, branch
+`codex/ht-halls-seating-table-booking-01`, starts and remains at the supplied published HEAD
+`9fd6068ed3ab8d8c59de3c8b7dc3fe8394426949`; separate base/parent constraints NOT_SUPPLIED.
+Primary HEAD `4d7bb81627ea1a380fb0cbdf9fd8842babef5bf5` and auto-open changes remain separate.
+
+Confirmed diagnostic-contract mismatch in [run 42436640618](https://github.com/koteev-m/hookah_bot/actions/runs/42436640618/job/128596783654):
+current image build/readiness and exact Python V1–V132 history validation completed, then
+`forward_sequence` failed at its Java `validate131` call. Java still required V131/131 applied.
+The dependent compose job refused the failed compose-runtime group. An isolated real-Flyway/H2
+probe reproduces the published Java failure with head132/applied132/pending0; this is a fixture
+expectation mismatch, not evidence of an application or migration failure.
+
+Test-only correction: `validate132` retains Flyway validate and requires exact V132,132 applied,
+0 pending, emitting `FIXTURE_VALIDATED_CURRENT_132`. Python requires that complete output line
+before success, updates readiness/checkpoint names to V132, and rejects missing/wrong markers.
+Negative lineage coverage now includes every V127–V132 tail row and the final adjacent reorder.
+Exact history/checksum validators, approved SQL hashes, hosted-only admission and historical V131
+references are preserved. Product backend, Mini App and all265 SQL files are unchanged.
+
+Checks: portable runtime/diagnostics/migration self-tests24/24, release contracts72/72 and CI
+contracts18/18 PASS. Java21 compilation passes against historical Flyway11.14.0 and current11.19.0.
+Seven real-Flyway/H2 synthetic probes pass: published failure, exact132 success, wrong131/133 head,
+132 head with131 applied, pending SQL and checksum mismatch. `git diff --check` PASS.
+Evidence: `/private/tmp/HT-PR252-COMPOSE-RUNTIME-FIX-01/` (CI excerpts, self-test logs, Java probes,
+source/index preservation). H2 probes are not hosted PostgreSQL/Linux/Docker runtime acceptance;
+the full connected selection remains hosted-only and was not run locally. Backend/Playwright
+suites were not repeated because application inputs did not change.
+
+Local authorization only; no stage/commit/push/PR/merge/rerun/deploy/SSH. No unfinished operation.
+Candidate has3 modified files,0 untracked/staged; primary16 modified +7 untracked,staged0 unchanged.
+Both HEADs/branches/indexes and primary file hashes are preserved; scripts/dev was not touched.
+Next: review the local fix, then separately authorize publication for the hosted CI recheck.
+
 ## HT-CHECKOUT-CALLBACK-RACE-FIX-01 — atomic Bot request execution (2026-11-08)
 
 **FIX_PASS / FULL_LOCAL_GATES_PASS / STAGING_UNVERIFIED**.
