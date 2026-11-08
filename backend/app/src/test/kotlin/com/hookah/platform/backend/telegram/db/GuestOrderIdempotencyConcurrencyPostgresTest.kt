@@ -446,6 +446,106 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
         }
     }
 
+    @Test
+    fun `Bot standalone and Mini App transaction orders serialize venue first in both orders`() {
+        for (standaloneFirst in listOf(true, false)) {
+            withFixture { dataSource, fixture ->
+                val heldSource = AfterVenueLockDataSource(dataSource)
+                val waitingSource = RecordingDataSource(dataSource)
+                val executor = Executors.newFixedThreadPool(2)
+
+                fun execute(
+                    source: DataSource,
+                    standalone: Boolean,
+                    key: String,
+                ): CreatedOrderBatch {
+                    val orders = ordersRepository(source)
+                    val sessions = TableSessionRepository(source)
+                    return if (standalone) {
+                        submit(orders, fixture, fixture.primaryPersonalScope(), key)
+                    } else {
+                        submitWithContext(
+                            GuestOrderTransactionCoordinator(
+                                source,
+                                TableTokenRepository(source),
+                                SubscriptionRepository(source),
+                                sessions,
+                            ),
+                            orders,
+                            sessions,
+                            GuestTabsRepository(source),
+                            fixture,
+                            fixture.primaryPersonalScope(),
+                            key,
+                        )
+                    }
+                }
+                try {
+                    val first = executor.submit(Callable { execute(heldSource, standaloneFirst, "mixed-first") })
+                    await(heldSource.held, "first venue lock")
+                    val second = executor.submit(Callable { execute(waitingSource, !standaloneFirst, "mixed-second") })
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_TIMEOUT_SECONDS)
+                    var blocked = false
+                    dataSource.connection.use { c ->
+                        while (!blocked && System.nanoTime() < deadline) {
+                            val pid = waitingSource.backendPid.get()
+                            if (pid > 0) {
+                                c.prepareStatement("SELECT cardinality(pg_blocking_pids(?)) > 0").use { st ->
+                                    st.setInt(1, pid)
+                                    st.executeQuery().use { rs ->
+                                        rs.next()
+                                        blocked = rs.getBoolean(1)
+                                    }
+                                }
+                            }
+                            Thread.yield()
+                        }
+                    }
+                    assertTrue(blocked, "Second connection must wait for the venue lock")
+                    heldSource.release.countDown()
+                    val a = first.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    val b = second.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    assertEquals(a.orderId, b.orderId)
+                    assertNotEquals(a.batchId, b.batchId)
+                    assertEquals(1, countRows(dataSource, "orders"))
+                    assertEquals(2, countRows(dataSource, "order_batches"))
+                    assertEquals(2, countRows(dataSource, "guest_batch_idempotency"))
+                } finally {
+                    heldSource.release.countDown()
+                    shutdown(executor)
+                }
+            }
+        }
+    }
+
+    private class AfterVenueLockDataSource(private val delegate: DataSource) : DataSource by delegate {
+        val held = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        private val paused = AtomicBoolean()
+
+        override fun getConnection(): Connection {
+            val connection = delegate.connection
+            return object : Connection by connection {
+                override fun prepareStatement(sql: String): PreparedStatement {
+                    val statement = connection.prepareStatement(sql)
+                    if (sql.lowercase().contains("from venues") && sql.lowercase().contains("for no key update")) {
+                        return object : PreparedStatement by statement {
+                            override fun executeQuery(): ResultSet {
+                                val result = statement.executeQuery()
+                                if (paused.compareAndSet(false, true)) {
+                                    held.countDown()
+                                    check(release.await(20, TimeUnit.SECONDS))
+                                }
+                                return result
+                            }
+                        }
+                    }
+                    return statement
+                }
+            }
+        }
+    }
+
     private fun withFixture(
         includePrimaryPersonalTab: Boolean = true,
         block: (DataSource, Fixture) -> Unit,

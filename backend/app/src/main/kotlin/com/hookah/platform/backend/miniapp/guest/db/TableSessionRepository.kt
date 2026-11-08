@@ -80,6 +80,7 @@ class TableSessionRepository(
         ttl: Duration,
         now: Instant,
     ): TableSessionRecord {
+        com.hookah.platform.backend.miniapp.venue.seating.lockSeatingVenue(connection, venueId)
         if (!lockTable(connection, venueId, tableId)) {
             throw SQLException("Table is unavailable")
         }
@@ -245,6 +246,7 @@ class TableSessionRepository(
                         WHERE status = 'ACTIVE'
                           AND ended_at IS NULL
                           AND expires_at <= ?
+                          AND NOT EXISTS (SELECT 1 FROM table_seatings x WHERE x.table_session_id = table_sessions.id AND x.released_at IS NULL)
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setTimestamp(1, Timestamp.from(now))
@@ -276,6 +278,7 @@ class TableSessionRepository(
                           AND venue_id = ?
                           AND status = 'ACTIVE'
                           AND ended_at IS NULL
+                          AND NOT EXISTS (SELECT 1 FROM table_seatings x WHERE x.table_session_id = table_sessions.id AND x.released_at IS NULL)
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setTimestamp(1, Timestamp.from(now))

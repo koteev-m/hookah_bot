@@ -1,6 +1,15 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.venue.seating.SeatingRepository
+import com.hookah.platform.backend.miniapp.venue.seating.agreedInterval
+import com.hookah.platform.backend.miniapp.venue.seating.authorizeSeating
+import com.hookah.platform.backend.miniapp.venue.seating.conflict
+import com.hookah.platform.backend.miniapp.venue.seating.lockSeatingRules
+import com.hookah.platform.backend.miniapp.venue.seating.readSeatingRules
+import com.hookah.platform.backend.miniapp.venue.seating.rows
+import com.hookah.platform.backend.miniapp.venue.seating.seatingZone
+import com.hookah.platform.backend.miniapp.venue.seating.serviceWindow
 import com.hookah.platform.backend.telegram.TelegramOutboundClaimScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -40,7 +49,7 @@ enum class BookingStatus {
 data class BookingRecord(
     val id: Long,
     val venueId: Long,
-    val userId: Long,
+    val userId: Long?,
     val scheduledAt: Instant,
     val partySize: Int?,
     val comment: String?,
@@ -58,6 +67,10 @@ data class BookingRecord(
     val venueConfirmedAt: Instant? = null,
     val lastRescheduledAt: Instant? = null,
     val guestDisplayName: String? = null,
+    val tableNumber: Int? = null,
+    val tableId: Long? = null,
+    val agreedEndAt: Instant? = null,
+    val source: String = "GUEST",
 )
 
 data class UserBookingSummaryRecord(
@@ -75,6 +88,10 @@ data class UserBookingSummaryRecord(
     val venueConfirmedAt: Instant? = null,
     val lastRescheduledAt: Instant? = null,
     val guestDisplayName: String? = null,
+    val tableId: Long? = null,
+    val tableNumber: Int? = null,
+    val agreedEndAt: Instant? = null,
+    val source: String = "GUEST",
 )
 
 data class ExpireBookingsResult(
@@ -141,6 +158,7 @@ data class BookingReminderDelivery(
 class GuestBookingRepository(
     private val dataSource: DataSource?,
     private val visitRepository: VisitRepository? = null,
+    private val checkpoint: (String, java.sql.Connection) -> Unit = { _, _ -> },
 ) {
     suspend fun getHoldMinutes(venueId: Long): Int {
         val ds = dataSource ?: throw DatabaseUnavailableException()
@@ -160,24 +178,30 @@ class GuestBookingRepository(
         try {
             return withContext(Dispatchers.IO) {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        SELECT name
-                        FROM venues
-                        WHERE id = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.executeQuery().use { rs ->
-                            if (rs.next()) rs.getString("name") else null
-                        }
-                    }
+                    findVenueName(connection, venueId)
                 }
             }
         } catch (_: SQLException) {
             throw DatabaseUnavailableException()
         }
     }
+
+    internal fun findVenueName(
+        connection: java.sql.Connection,
+        venueId: Long,
+    ): String? =
+        connection.prepareStatement(
+            """
+            SELECT name
+            FROM venues
+            WHERE id = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) rs.getString("name") else null
+            }
+        }
 
     suspend fun updateHoldMinutes(
         venueId: Long,
@@ -236,6 +260,19 @@ class GuestBookingRepository(
                     val initialAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
+                        val seatingRules = lockSeatingRules(connection, venueId)
+                        val finiteService =
+                            if (seatingRules.guestTableChoice && !seatingRules.limitDuration) {
+                                val zone = seatingZone(connection, venueId)
+                                serviceWindow(connection, venueId, scheduledAt, zone).end != null
+                            } else {
+                                false
+                            }
+                        if (seatingRules.guestTableChoice && (seatingRules.limitDuration || finiteService)) {
+                            conflict(
+                                "Выберите стол в Mini App для бронирования. Откройте заведение → Забронировать.",
+                            )
+                        }
                         val displayDate = serviceDate ?: bookingDisplayDate(scheduledAt, venueZoneId)
                         val displayNumber = nextDisplayNumber(connection, venueId, displayDate)
                         val holdMinutes = getOrCreateHoldMinutes(connection, venueId)
@@ -278,7 +315,7 @@ class GuestBookingRepository(
                         val created = loadById(connection, bookingId) ?: throw DatabaseUnavailableException()
                         connection.commit()
                         created
-                    } catch (e: SQLException) {
+                    } catch (e: Exception) {
                         runCatching { connection.rollback() }
                         throw e
                     } finally {
@@ -304,8 +341,19 @@ class GuestBookingRepository(
         val ds = dataSource ?: throw DatabaseUnavailableException()
         try {
             return withContext(Dispatchers.IO) {
-                ds.connection.use { connection ->
-                    val current = loadById(connection, bookingId) ?: return@use null
+                bookingTransaction(ds, venueId) { connection ->
+                    connection.rows(
+                        "SELECT id FROM bookings WHERE id = ? AND venue_id = ? FOR UPDATE",
+                        bookingId,
+                        venueId,
+                    ) {
+                        it.getLong(1)
+                    }
+                    val current = loadById(connection, bookingId) ?: return@bookingTransaction null
+                    if (current.venueId != venueId || current.userId != userId || current.status !in ACTIVE_STATUSES) {
+                        return@bookingTransaction null
+                    }
+                    val agreedEnd = validateSeatingBookingChange(connection, current, scheduledAt, partySize)
                     val displayDate = serviceDate ?: bookingDisplayDate(scheduledAt, venueZoneId)
                     val displayNumber =
                         if (current.displayDate == displayDate && current.displayNumber != null) {
@@ -320,6 +368,7 @@ class GuestBookingRepository(
                             """
                             UPDATE bookings
                             SET scheduled_at = ?,
+                                agreed_end_at = COALESCE(?, agreed_end_at),
                                 party_size = ?,
                                 comment = ?,
                                 status = 'PENDING',
@@ -329,27 +378,29 @@ class GuestBookingRepository(
                                 last_guest_confirmation_at = NULL,
                                 venue_confirmed_at = NULL,
                                 last_rescheduled_at = NULL,
+                                seating_revision = seating_revision + 1,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE id = ? AND venue_id = ? AND user_id = ? AND status IN ('PENDING', 'CHANGED', 'CONFIRMED')
                             """.trimIndent(),
                         ).use { statement ->
                             statement.setTimestamp(1, Timestamp.from(scheduledAt))
+                            setNullableTimestamp(statement, 2, agreedEnd)
                             if (partySize == null) {
-                                statement.setNull(2, java.sql.Types.INTEGER)
+                                statement.setNull(3, java.sql.Types.INTEGER)
                             } else {
-                                statement.setInt(2, partySize)
+                                statement.setInt(3, partySize)
                             }
-                            statement.setString(3, comment)
-                            statement.setDate(4, SqlDate.valueOf(displayDate))
-                            statement.setInt(5, displayNumber)
-                            statement.setTimestamp(6, Timestamp.from(arrivalDeadlineAt))
-                            statement.setLong(7, bookingId)
-                            statement.setLong(8, venueId)
-                            statement.setLong(9, userId)
+                            statement.setString(4, comment)
+                            statement.setDate(5, SqlDate.valueOf(displayDate))
+                            statement.setInt(6, displayNumber)
+                            statement.setTimestamp(7, Timestamp.from(arrivalDeadlineAt))
+                            statement.setLong(8, bookingId)
+                            statement.setLong(9, venueId)
+                            statement.setLong(10, userId)
                             statement.executeUpdate()
                         }
                     if (updated <= 0) {
-                        return@use null
+                        return@bookingTransaction null
                     }
                     cancelPendingReminders(connection, bookingId)
                     loadById(connection, bookingId)
@@ -374,7 +425,7 @@ class GuestBookingRepository(
                                b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                                b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
                                b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
-                               u.guest_display_name
+                               COALESCE(b.offline_guest_name, u.guest_display_name) AS guest_display_name, b.table_id, b.agreed_end_at, b.booking_source, (SELECT t.table_number FROM venue_tables t WHERE t.id = b.table_id) AS seating_table_number
                         FROM bookings b
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
                         WHERE b.id = ? AND b.venue_id = ?
@@ -408,7 +459,7 @@ class GuestBookingRepository(
                                b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                                b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
                                b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
-                               u.guest_display_name
+                               COALESCE(b.offline_guest_name, u.guest_display_name) AS guest_display_name, b.table_id, b.agreed_end_at, b.booking_source, (SELECT t.table_number FROM venue_tables t WHERE t.id = b.table_id) AS seating_table_number
                         FROM bookings b
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
                         WHERE b.id = ? AND b.venue_id = ? AND b.user_id = ?
@@ -458,17 +509,44 @@ class GuestBookingRepository(
         canceledByUserId: Long? = null,
         venueZoneId: ZoneId = ZoneId.systemDefault(),
         serviceDate: LocalDate? = null,
+        actorUserId: Long? = null,
     ): BookingRecord? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         try {
             return withContext(Dispatchers.IO) {
-                ds.connection.use { connection ->
-                    val current = loadById(connection, bookingId) ?: return@use null
+                bookingTransaction(ds, venueId) { connection ->
+                    connection.rows(
+                        "SELECT id FROM bookings WHERE id = ? AND venue_id = ? FOR UPDATE",
+                        bookingId,
+                        venueId,
+                    ) {
+                        it.getLong(1)
+                    }
+                    val current = loadById(connection, bookingId) ?: return@bookingTransaction null
+                    if (current.venueId != venueId || current.status !in ACTIVE_STATUSES) return@bookingTransaction null
+                    val effectiveStatus =
+                        if (current.source == "STAFF" && nextStatus == BookingStatus.CHANGED) {
+                            BookingStatus.CONFIRMED
+                        } else {
+                            nextStatus
+                        }
+                    actorUserId?.let { authorizeSeating(connection, venueId, it, true) }
+                    val agreedEnd =
+                        if (effectiveStatus in ACTIVE_STATUSES) {
+                            validateSeatingBookingChange(
+                                connection,
+                                current,
+                                scheduledAt ?: current.scheduledAt,
+                                current.partySize,
+                            )
+                        } else {
+                            null
+                        }
                     val now = Instant.now()
                     val updated =
                         if (scheduledAt == null) {
                             val deadlineFallback =
-                                if (nextStatus in ACTIVE_STATUSES) {
+                                if (effectiveStatus in ACTIVE_STATUSES) {
                                     val holdMinutes = getOrCreateHoldMinutes(connection, venueId)
                                     current.arrivalDeadlineAt
                                         ?: bookingDeadline(current.scheduledAt, holdMinutes)
@@ -487,26 +565,27 @@ class GuestBookingRepository(
                                         WHEN ? IN ('CONFIRMED', 'CHANGED') AND venue_confirmed_at IS NULL THEN ?
                                         ELSE venue_confirmed_at
                                     END,
+                                    seating_revision = seating_revision + 1,
                                     updated_at = CURRENT_TIMESTAMP
                                 WHERE id = ? AND venue_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
                                 """.trimIndent(),
                             ).use { statement ->
-                                statement.setString(1, nextStatus.name)
+                                statement.setString(1, effectiveStatus.name)
                                 statement.setString(
                                     2,
-                                    if (nextStatus == BookingStatus.CANCELED) cancelReasonText else null,
+                                    if (effectiveStatus == BookingStatus.CANCELED) cancelReasonText else null,
                                 )
                                 statement.setString(
                                     3,
-                                    if (nextStatus == BookingStatus.CANCELED) canceledByRole else null,
+                                    if (effectiveStatus == BookingStatus.CANCELED) canceledByRole else null,
                                 )
-                                if (nextStatus == BookingStatus.CANCELED && canceledByUserId != null) {
+                                if (effectiveStatus == BookingStatus.CANCELED && canceledByUserId != null) {
                                     statement.setLong(4, canceledByUserId)
                                 } else {
                                     statement.setNull(4, java.sql.Types.BIGINT)
                                 }
                                 setNullableTimestamp(statement, 5, deadlineFallback)
-                                statement.setString(6, nextStatus.name)
+                                statement.setString(6, effectiveStatus.name)
                                 statement.setTimestamp(7, Timestamp.from(now))
                                 statement.setLong(8, bookingId)
                                 statement.setLong(9, venueId)
@@ -527,6 +606,7 @@ class GuestBookingRepository(
                                 UPDATE bookings
                                 SET status = ?,
                                     scheduled_at = ?,
+                                    agreed_end_at = COALESCE(?, agreed_end_at),
                                     display_date = ?,
                                     display_number = ?,
                                     arrival_deadline_at = ?,
@@ -539,26 +619,28 @@ class GuestBookingRepository(
                                     cancel_reason_text = NULL,
                                     canceled_by_role = NULL,
                                     canceled_by_user_id = NULL,
+                                    seating_revision = seating_revision + 1,
                                     updated_at = CURRENT_TIMESTAMP
                                 WHERE id = ? AND venue_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
                                 """.trimIndent(),
                             ).use { statement ->
-                                statement.setString(1, nextStatus.name)
+                                statement.setString(1, effectiveStatus.name)
                                 statement.setTimestamp(2, Timestamp.from(scheduledAt))
-                                statement.setDate(3, SqlDate.valueOf(displayDate))
-                                statement.setInt(4, displayNumber)
-                                statement.setTimestamp(5, Timestamp.from(arrivalDeadlineAt))
-                                statement.setTimestamp(6, Timestamp.from(now))
+                                setNullableTimestamp(statement, 3, agreedEnd)
+                                statement.setDate(4, SqlDate.valueOf(displayDate))
+                                statement.setInt(5, displayNumber)
+                                statement.setTimestamp(6, Timestamp.from(arrivalDeadlineAt))
                                 statement.setTimestamp(7, Timestamp.from(now))
-                                statement.setLong(8, bookingId)
-                                statement.setLong(9, venueId)
+                                statement.setTimestamp(8, Timestamp.from(now))
+                                statement.setLong(9, bookingId)
+                                statement.setLong(10, venueId)
                                 statement.executeUpdate()
                             }
                         }
                     if (updated <= 0) {
-                        return@use null
+                        return@bookingTransaction null
                     }
-                    if (nextStatus !in ACTIVE_STATUSES) {
+                    if (effectiveStatus !in ACTIVE_STATUSES) {
                         cancelPendingReminders(connection, bookingId)
                     }
                     loadById(connection, bookingId)
@@ -573,13 +655,16 @@ class GuestBookingRepository(
         venueId: Long,
         bookingId: Long,
         actorUserId: Long? = null,
-    ): BookingRecord? =
-        updateTerminalLifecycleStatus(
-            venueId = venueId,
-            bookingId = bookingId,
-            nextStatus = BookingStatus.SEATED,
-            timestampColumn = "seated_at",
-        )
+    ): BookingRecord? {
+        val booking = findByVenue(bookingId, venueId) ?: return null
+        if (booking.tableId != null) {
+            val actor = actorUserId ?: throw com.hookah.platform.backend.api.ForbiddenException()
+            SeatingRepository(dataSource).seatBookingArrival(venueId, actor, bookingId)
+            return findByVenue(bookingId, venueId)
+        }
+        if (booking.userId == null) conflict("Назначьте стол и выполните посадку из раздела «Зал».")
+        return updateTerminalLifecycleStatus(venueId, bookingId, BookingStatus.SEATED, "seated_at", actorUserId)
+    }
 
     suspend fun markNoShow(
         venueId: Long,
@@ -591,6 +676,7 @@ class GuestBookingRepository(
             bookingId = bookingId,
             nextStatus = BookingStatus.NO_SHOW,
             timestampColumn = "no_show_at",
+            actorUserId = actorUserId,
         )
 
     suspend fun expireOverdue(now: Instant = Instant.now()): Int = expireOverdueBookings(now = now).expiredCount
@@ -616,7 +702,7 @@ class GuestBookingRepository(
                             }
                         connection.commit()
                         ExpireBookingsResult(expiredCount = updated)
-                    } catch (e: SQLException) {
+                    } catch (e: Exception) {
                         runCatching { connection.rollback() }
                         throw e
                     } finally {
@@ -708,57 +794,10 @@ class GuestBookingRepository(
                     val initialAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
-                        val booking =
-                            loadById(
-                                connection,
-                                bookingId,
-                            ) ?: return@use BookingReminderScheduleResult(
-                                0, 0, 0,
-                            )
-                        if (booking.status !in REMINDER_ELIGIBLE_STATUSES) {
-                            val canceledCount = cancelUnsentM7cReminders(connection, bookingId)
-                            connection.commit()
-                            return@use BookingReminderScheduleResult(0, 0, canceledCount)
-                        }
-                        if (hasQueuedOrSentM7cReminder(connection, booking.id)) {
-                            val canceledCount = cancelUnsentM7cReminders(connection, bookingId)
-                            connection.commit()
-                            return@use BookingReminderScheduleResult(0, 0, canceledCount)
-                        }
-                        val plan = buildReminderPlan(booking, now, venueZoneId)
-                        val keepDedupeKey =
-                            plan?.let {
-                                reminderDedupeKey(
-                                    bookingId = booking.id,
-                                    kind = it.kind,
-                                    scheduledFor = it.scheduledFor,
-                                    anchorAt = it.anchorAt,
-                                )
-                            }
-                        val canceledCount =
-                            cancelUnsentM7cReminders(
-                                connection = connection,
-                                bookingId = bookingId,
-                                exceptDedupeKey = keepDedupeKey,
-                            )
-                        var pendingCount = 0
-                        var skippedCount = 0
-                        plan?.let {
-                            if (upsertReminder(connection, booking.id, plan)) {
-                                when (plan.status) {
-                                    BookingReminderStatus.PENDING -> pendingCount++
-                                    BookingReminderStatus.SKIPPED -> skippedCount++
-                                    else -> Unit
-                                }
-                            }
-                        }
+                        val result = scheduleRemindersForBooking(connection, bookingId, now, venueZoneId)
                         connection.commit()
-                        BookingReminderScheduleResult(
-                            pendingCount = pendingCount,
-                            skippedCount = skippedCount,
-                            canceledCount = canceledCount,
-                        )
-                    } catch (e: SQLException) {
+                        result
+                    } catch (e: Exception) {
                         runCatching { connection.rollback() }
                         throw e
                     } finally {
@@ -769,6 +808,61 @@ class GuestBookingRepository(
         } catch (_: SQLException) {
             throw DatabaseUnavailableException()
         }
+    }
+
+    internal fun scheduleRemindersForBooking(
+        connection: java.sql.Connection,
+        bookingId: Long,
+        now: Instant,
+        venueZoneId: ZoneId,
+    ): BookingReminderScheduleResult {
+        val booking =
+            loadById(
+                connection,
+                bookingId,
+            ) ?: return BookingReminderScheduleResult(
+                0, 0, 0,
+            )
+        if (booking.userId == null || booking.status !in REMINDER_ELIGIBLE_STATUSES) {
+            val canceledCount = cancelUnsentM7cReminders(connection, bookingId)
+            return BookingReminderScheduleResult(0, 0, canceledCount)
+        }
+        if (hasQueuedOrSentM7cReminder(connection, booking.id)) {
+            val canceledCount = cancelUnsentM7cReminders(connection, bookingId)
+            return BookingReminderScheduleResult(0, 0, canceledCount)
+        }
+        val plan = buildReminderPlan(booking, now, venueZoneId)
+        val keepDedupeKey =
+            plan?.let {
+                reminderDedupeKey(
+                    bookingId = booking.id,
+                    kind = it.kind,
+                    scheduledFor = it.scheduledFor,
+                    anchorAt = it.anchorAt,
+                )
+            }
+        val canceledCount =
+            cancelUnsentM7cReminders(
+                connection = connection,
+                bookingId = bookingId,
+                exceptDedupeKey = keepDedupeKey,
+            )
+        var pendingCount = 0
+        var skippedCount = 0
+        plan?.let {
+            if (upsertReminder(connection, booking.id, plan)) {
+                when (plan.status) {
+                    BookingReminderStatus.PENDING -> pendingCount++
+                    BookingReminderStatus.SKIPPED -> skippedCount++
+                    else -> Unit
+                }
+            }
+        }
+        return BookingReminderScheduleResult(
+            pendingCount = pendingCount,
+            skippedCount = skippedCount,
+            canceledCount = canceledCount,
+        )
     }
 
     suspend fun cancelPendingReminders(bookingId: Long): Int {
@@ -802,7 +896,7 @@ class GuestBookingRepository(
                         val reminders = selectDueReminders(connection, now, limit, eligibleUserIds)
                         connection.commit()
                         reminders
-                    } catch (e: SQLException) {
+                    } catch (e: Exception) {
                         runCatching { connection.rollback() }
                         throw e
                     } finally {
@@ -1067,7 +1161,7 @@ class GuestBookingRepository(
                                b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                                b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
                                b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
-                               u.guest_display_name
+                               COALESCE(b.offline_guest_name, u.guest_display_name) AS guest_display_name, b.table_id, b.agreed_end_at, b.booking_source, (SELECT t.table_number FROM venue_tables t WHERE t.id = b.table_id) AS seating_table_number
                         FROM bookings b
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
                         WHERE b.id = ? AND b.user_id = ?
@@ -1110,7 +1204,7 @@ class GuestBookingRepository(
                                b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                                b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
                                b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
-                               u.guest_display_name
+                               COALESCE(b.offline_guest_name, u.guest_display_name) AS guest_display_name, b.table_id, b.agreed_end_at, b.booking_source, (SELECT t.table_number FROM venue_tables t WHERE t.id = b.table_id) AS seating_table_number
                         FROM bookings b
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
                         WHERE b.venue_id = ? AND b.user_id = ?
@@ -1159,7 +1253,7 @@ class GuestBookingRepository(
                                b.last_guest_confirmation_at,
                                b.venue_confirmed_at,
                                b.last_rescheduled_at,
-                               u.guest_display_name
+                               COALESCE(b.offline_guest_name, u.guest_display_name) AS guest_display_name, b.table_id, b.agreed_end_at, b.booking_source, (SELECT t.table_number FROM venue_tables t WHERE t.id = b.table_id) AS seating_table_number
                         FROM bookings b
                         JOIN venues v ON v.id = b.venue_id
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
@@ -1170,18 +1264,8 @@ class GuestBookingRepository(
                     ).use { statement ->
                         statement.setLong(1, userId)
                         statement.executeQuery().use { rs ->
-                            val now = Instant.now()
-                            val holdMinutesByVenue = mutableMapOf<Long, Int>()
                             buildList {
-                                while (rs.next()) {
-                                    add(rs.toUserBookingSummary())
-                                }
-                            }.filter { booking ->
-                                val holdMinutes =
-                                    holdMinutesByVenue.getOrPut(booking.venueId) {
-                                        getOrCreateHoldMinutes(connection, booking.venueId)
-                                    }
-                                isActiveAt(booking.scheduledAt, booking.arrivalDeadlineAt, holdMinutes, now)
+                                while (rs.next()) add(rs.toUserBookingSummary())
                             }.take(limit)
                         }
                     }
@@ -1206,7 +1290,7 @@ class GuestBookingRepository(
                         """
                         SELECT b.id, b.venue_id, v.name AS venue_name, b.scheduled_at, b.party_size, b.comment,
                                b.status, b.display_number, b.display_date, b.arrival_deadline_at,
-                               b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at, u.guest_display_name
+                               b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at, COALESCE(b.offline_guest_name, u.guest_display_name) AS guest_display_name, b.table_id, b.agreed_end_at, b.booking_source, (SELECT t.table_number FROM venue_tables t WHERE t.id = b.table_id) AS seating_table_number
                         FROM bookings b
                         JOIN venues v ON v.id = b.venue_id
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
@@ -1253,6 +1337,10 @@ class GuestBookingRepository(
             venueConfirmedAt = getTimestamp("venue_confirmed_at")?.toInstant(),
             lastRescheduledAt = getTimestamp("last_rescheduled_at")?.toInstant(),
             guestDisplayName = getString("guest_display_name"),
+            tableId = getLong("table_id").let { if (wasNull()) null else it },
+            tableNumber = getInt("seating_table_number").let { if (wasNull()) null else it },
+            agreedEndAt = getTimestamp("agreed_end_at")?.toInstant(),
+            source = getString("booking_source"),
         )
 
     suspend fun listActiveByVenue(
@@ -1269,7 +1357,7 @@ class GuestBookingRepository(
                                b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                                b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
                                b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
-                               u.guest_display_name
+                               COALESCE(b.offline_guest_name, u.guest_display_name) AS guest_display_name, b.table_id, b.agreed_end_at, b.booking_source, (SELECT t.table_number FROM venue_tables t WHERE t.id = b.table_id) AS seating_table_number
                         FROM bookings b
                         LEFT JOIN users u ON u.telegram_user_id = b.user_id
                         WHERE b.venue_id = ?
@@ -1285,8 +1373,6 @@ class GuestBookingRepository(
                                 while (rs.next()) {
                                     add(mapBooking(rs))
                                 }
-                            }.filter { booking ->
-                                isActiveAt(booking.scheduledAt, booking.arrivalDeadlineAt, holdMinutes, now)
                             }.take(limit)
                         }
                     }
@@ -1306,7 +1392,7 @@ class GuestBookingRepository(
         val ds = dataSource ?: throw DatabaseUnavailableException()
         try {
             return withContext(Dispatchers.IO) {
-                ds.connection.use { connection ->
+                bookingTransaction(ds, venueId) { connection ->
                     val updated =
                         connection.prepareStatement(
                             """
@@ -1315,6 +1401,7 @@ class GuestBookingRepository(
                                 cancel_reason_text = NULL,
                                 canceled_by_role = ?,
                                 canceled_by_user_id = ?,
+                                seating_revision = seating_revision + 1,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE id = ? AND venue_id = ? AND user_id = ? AND status IN ('PENDING', 'CONFIRMED', 'CHANGED')
                             """.trimIndent(),
@@ -1331,7 +1418,7 @@ class GuestBookingRepository(
                             statement.setLong(6, userId)
                             statement.executeUpdate()
                         }
-                    if (updated <= 0) return@use null
+                    if (updated <= 0) return@bookingTransaction null
                     cancelPendingReminders(connection, bookingId)
                     loadById(connection, bookingId)
                 }
@@ -1346,13 +1433,30 @@ class GuestBookingRepository(
         bookingId: Long,
         nextStatus: BookingStatus,
         timestampColumn: String,
+        actorUserId: Long? = null,
     ): BookingRecord? {
         require(nextStatus in TERMINAL_STATUSES) { "nextStatus must be terminal" }
         require(timestampColumn == "seated_at" || timestampColumn == "no_show_at" || timestampColumn == "expired_at")
         val ds = dataSource ?: throw DatabaseUnavailableException()
         try {
             return withContext(Dispatchers.IO) {
-                ds.connection.use { connection ->
+                bookingTransaction(ds, venueId) { connection ->
+                    if (nextStatus == BookingStatus.SEATED) {
+                        val physicalPolicy =
+                            readSeatingRules(connection, venueId).revision > 0 ||
+                                connection.rows(
+                                    "SELECT id FROM bookings WHERE venue_id = ? AND table_id IS NOT NULL",
+                                    venueId,
+                                ) {
+                                    it.getLong(1)
+                                }.isNotEmpty() ||
+                                connection.rows("SELECT id FROM table_seatings WHERE venue_id = ?", venueId) {
+                                    it.getLong(1)
+                                }.isNotEmpty()
+                        if (physicalPolicy) conflict("Выберите стол и подтвердите посадку в разделе «Зал».")
+                    }
+
+                    actorUserId?.let { authorizeSeating(connection, venueId, it) }
                     val now = Instant.now()
                     val updated =
                         connection.prepareStatement(
@@ -1370,7 +1474,7 @@ class GuestBookingRepository(
                             statement.setLong(4, venueId)
                             statement.executeUpdate()
                         }
-                    if (updated <= 0) return@use null
+                    if (updated <= 0) return@bookingTransaction null
                     cancelPendingReminders(connection, bookingId)
                     if (nextStatus == BookingStatus.SEATED) {
                         visitRepository?.recordBookingSeatedVisit(connection, bookingId, now)
@@ -1383,6 +1487,12 @@ class GuestBookingRepository(
         }
     }
 
+    internal fun findByVenue(
+        connection: java.sql.Connection,
+        bookingId: Long,
+        venueId: Long,
+    ): BookingRecord? = loadById(connection, bookingId)?.takeIf { it.venueId == venueId }
+
     private fun loadById(
         connection: java.sql.Connection,
         bookingId: Long,
@@ -1393,7 +1503,7 @@ class GuestBookingRepository(
                    b.display_number, b.display_date, b.cancel_reason_text, b.canceled_by_role, b.canceled_by_user_id,
                    b.arrival_deadline_at, b.seated_at, b.no_show_at, b.expired_at,
                    b.last_guest_confirmation_at, b.venue_confirmed_at, b.last_rescheduled_at,
-                   u.guest_display_name
+                   COALESCE(b.offline_guest_name, u.guest_display_name) AS guest_display_name, b.table_id, b.agreed_end_at, b.booking_source, (SELECT t.table_number FROM venue_tables t WHERE t.id = b.table_id) AS seating_table_number
             FROM bookings b
             LEFT JOIN users u ON u.telegram_user_id = b.user_id
             WHERE b.id = ?
@@ -1408,7 +1518,7 @@ class GuestBookingRepository(
         return BookingRecord(
             id = rs.getLong("id"),
             venueId = rs.getLong("venue_id"),
-            userId = rs.getLong("user_id"),
+            userId = rs.getLong("user_id").let { if (rs.wasNull()) null else it },
             scheduledAt = rs.getTimestamp("scheduled_at").toInstant(),
             partySize = rs.getInt("party_size").let { if (rs.wasNull()) null else it },
             comment = rs.getString("comment"),
@@ -1426,7 +1536,75 @@ class GuestBookingRepository(
             venueConfirmedAt = rs.getTimestamp("venue_confirmed_at")?.toInstant(),
             lastRescheduledAt = rs.getTimestamp("last_rescheduled_at")?.toInstant(),
             guestDisplayName = rs.getString("guest_display_name"),
+            tableNumber = rs.getInt("seating_table_number").let { if (rs.wasNull()) null else it },
+            tableId = rs.getLong("table_id").let { if (rs.wasNull()) null else it },
+            agreedEndAt = rs.getTimestamp("agreed_end_at")?.toInstant(),
+            source = rs.getString("booking_source"),
         )
+    }
+
+    private fun <T> bookingTransaction(
+        ds: DataSource,
+        venueId: Long,
+        operation: (java.sql.Connection) -> T,
+    ): T =
+        ds.connection.use { c ->
+            c.autoCommit = false
+            try {
+                checkpoint("BEFORE_LOCK", c)
+                lockSeatingRules(c, venueId)
+                checkpoint("LOCKED", c)
+                operation(c).also {
+                    checkpoint("BEFORE_COMMIT", c)
+                    c.commit()
+                }
+            } catch (e: Exception) {
+                c.rollback()
+                throw e
+            }
+        }
+
+    private fun validateSeatingBookingChange(
+        c: java.sql.Connection,
+        booking: BookingRecord,
+        start: Instant,
+        party: Int?,
+    ): Instant? {
+        val rules = readSeatingRules(c, booking.venueId)
+        if (booking.tableId == null) {
+            if (rules.guestTableChoice) conflict("Назначьте стол через раздел «Зал» перед изменением брони.")
+            return null
+        }
+        c.rows(
+            "SELECT id FROM venue_tables WHERE id = ? AND venue_id = ? FOR UPDATE",
+            booking.tableId,
+            booking.venueId,
+        ) {
+            it.getLong(1)
+        }
+        val oldEnd = booking.agreedEndAt ?: conflict("Согласуйте окончание брони в разделе «Зал».")
+        val end = oldEnd.plus(Duration.between(booking.scheduledAt, start))
+        val snapshot =
+            c.rows("SELECT duration_minutes, buffer_minutes FROM bookings WHERE id = ?", booking.id) { rs ->
+                val duration = rs.getInt("duration_minutes").let { if (rs.wasNull()) null else it }
+                rules.copy(
+                    limitDuration = duration != null,
+                    durationMinutes = duration ?: rules.durationMinutes,
+                    bufferMinutes = rs.getInt("buffer_minutes"),
+                )
+            }.single()
+        val interval = agreedInterval(c, booking.venueId, start, end, snapshot, true)
+        SeatingRepository(
+            dataSource,
+        ).availabilityReason(
+            c,
+            booking.venueId,
+            booking.tableId,
+            party ?: conflict("Укажите число гостей для брони конкретного стола."),
+            interval,
+            booking.id,
+        )?.let(::conflict)
+        return end
     }
 
     private data class ReminderPlan(
@@ -1441,7 +1619,7 @@ class GuestBookingRepository(
         now: Instant,
         venueZoneId: ZoneId,
     ): ReminderPlan? {
-        if (booking.status !in REMINDER_ELIGIBLE_STATUSES) return null
+        if (booking.userId == null || booking.status !in REMINDER_ELIGIBLE_STATUSES) return null
         val anchorAt =
             booking.lastRescheduledAt
                 ?: booking.venueConfirmedAt

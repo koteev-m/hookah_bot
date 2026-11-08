@@ -1,5 +1,32 @@
 # Venue Media Storage And Upload
 
+
+## Hall plans (HT-HALLS-SEATING-TABLE-BOOKING-01)
+
+Hall plans reuse `VenueInfoMediaStorage`, its configured private R2 bucket and existing JPEG/PNG
+content validation/re-encoding. No new provider, bucket, arbitrary external URL or application
+container filesystem persistence is introduced. The existing 10 MiB / 8192-side / 32MP limits and
+actual decode/format checks apply; PDF is explicitly denied for a hall plan. Metadata is stripped.
+Synthetic images and FakeInfoStorage are used in tests, with no real image publication.
+
+`hall_plan_media` stores venue/hall/actor/request/hash/dimensions and UPLOADING/READY metadata;
+object keys retain the permitted `venue-info/<uuid>.png|jpg` shape. Upload runs outside the DB
+transaction with bounded input/time/concurrency. Membership is checked before reservation and after
+storage completion. Repeated same-key/same-file upload resolves the same object; changed file/key
+payload conflicts. A failed upload never changes `venue_halls.plan_id` or marker geometry.
+
+Applying the uploaded image is a separate explicit PLAN command with hall revision and confirmation.
+It resets markers in that hall and disables guest choice until placement is reviewed; reservations,
+physical seating and QR identities remain intact. Preview is required in the client before apply.
+Public image reads expose bytes only for the current READY image of an active enabled hall, with
+published/subscription checks before and after storage read, checksum verification and no-store.
+Private reads require current venue membership and matching hall/venue ownership.
+
+Superseded READY images and incomplete upload metadata are retained; this candidate does not add an
+automatic media deletion job. Existing deployment storage lifecycle must account for retained plan
+objects before rollout; never delete an active image as cleanup. Storage outages leave list-based
+operations available. No storage configuration or secrets are modified by this task.
+
 Дата актуализации: 2026-11-02 (HT-PDF-RELEASE-ACCEPTANCE-DOCS-01; PDF staging release and owner-confirmed iPhone acceptance).
 
 Статус: **CANONICAL SPEC / PDF INLINE UX STAGING-SMOKE-PASSED / BROADER MEDIA ACCEPTANCE OPEN**.

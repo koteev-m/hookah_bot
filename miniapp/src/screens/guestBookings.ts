@@ -21,6 +21,7 @@ import {
 } from '../shared/bookingThreadReconciliation'
 import { bookingDisplayLabel } from '../shared/ui/bookingLabel'
 import { append, el, on } from '../shared/ui/dom'
+import { guestTableChoice } from '../shared/ui/guestTableChoice'
 import { showToast } from '../shared/ui/toast'
 
 const MAX_COMMENT_LENGTH = 500
@@ -378,6 +379,8 @@ function renderBookings(
       })
     )
     info.appendChild(el('p', { className: 'guest-booking-status', text: guestBookingStatusText(booking) }))
+    if (booking.tableId) info.appendChild(el('p', { className: 'venue-order-sub', text: `Стол №${booking.tableNumber ?? '—'}` }))
+    if (booking.agreedEndAtDisplay) info.appendChild(el('p', { className: 'venue-order-sub', text: `Согласовано до: ${booking.agreedEndAtDisplay}` }))
     if (booking.comment) {
       info.appendChild(el('p', { className: 'venue-order-sub', text: `Комментарий: ${booking.comment}` }))
     }
@@ -527,6 +530,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
   if (!root) return () => undefined
 
   const refs = buildDom(root, venueId)
+  const tableChoice = venueId ? guestTableChoice(backendUrl, venueId, refs) : null
   const deps = buildApiDeps(isDebug)
   const disposables: Array<() => void> = []
   let disposed = false
@@ -736,6 +740,14 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
 
   const submitBooking = async () => {
     if (!venueId || isLoading || openingConversationBookingId !== null) return
+    if (tableChoice) {
+      setLoading(true)
+      const outcome = await tableChoice.submit()
+      if (disposed) return
+      setLoading(false)
+      if (outcome === 'blocked') return
+      if (outcome === 'success') { showToast('Заявка на выбранный стол отправлена'); resetForm(); await loadBookings(); return }
+    }
     const scheduledAt = buildScheduledAt(refs.dateInput.value, refs.timeInput.value)
     if (!scheduledAt) {
       refs.status.textContent = 'Выберите дату и время.'
@@ -766,6 +778,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
     }
     showSuccess(result.data)
     resetForm()
+    tableChoice?.clear()
     showToast('Заявка на бронь отправлена')
     await loadBookings()
   }
@@ -873,6 +886,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
 
   return () => {
     disposed = true
+    tableChoice?.dispose()
     abortController?.abort()
     disposables.forEach((dispose) => dispose())
   }

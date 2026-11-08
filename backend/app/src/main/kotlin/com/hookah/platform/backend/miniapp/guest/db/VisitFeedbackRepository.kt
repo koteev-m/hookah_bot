@@ -646,7 +646,7 @@ class VisitFeedbackRepository(private val dataSource: DataSource?) {
             FROM visits v
             JOIN venues venue ON venue.id = v.venue_id
             LEFT JOIN venue_settings vs ON vs.venue_id = v.venue_id
-            WHERE v.id = ?
+            WHERE v.id = ? AND v.user_id IS NOT NULL
             """.trimIndent(),
         ).use { statement ->
             statement.setString(1, VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE)

@@ -52,7 +52,7 @@ class BookingConversationConcurrencyPostgresTest {
                         assertEquals(
                             2,
                             observation.waiterPids.size,
-                            "Both independent production transactions must wait on the canonical booking row. " +
+                            "Both independent production transactions must wait in the venue-to-booking lock chain. " +
                                 observation.diagnostic,
                         )
                         assertFalse(blockerPid in observation.waiterPids)
@@ -121,8 +121,8 @@ class BookingConversationConcurrencyPostgresTest {
                 WHERE datname = current_database()
                   AND pid <> pg_backend_pid()
                   AND wait_event_type = 'Lock'
-                  AND lower(query) LIKE '%from bookings%'
-                  AND lower(query) LIKE '%for update%'
+                  AND ((lower(query) LIKE '%from bookings%' AND lower(query) LIKE '%for update%')
+                    OR (lower(query) LIKE '%from venues%' AND lower(query) LIKE '%for no key update%'))
             ),
             lock_chain(root_pid, pid, path) AS (
                 SELECT pid, pid, ARRAY[pid]

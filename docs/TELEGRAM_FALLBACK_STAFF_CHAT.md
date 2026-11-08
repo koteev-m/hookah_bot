@@ -15,6 +15,17 @@ STAGING-SMOKE-PASSED**. The complete Telegram parity model remains **PARTIAL / n
 for broad parity, platform menu placeholders, per-venue real delivery, callback audit completeness
 and notification history.
 
+## Addressed table booking fallback (HT-HALLS-SEATING-TABLE-BOOKING-01)
+
+When guest table choice is off, existing ordinary Bot bookings continue without a table guarantee.
+When it is on, legacy create cannot bypass server interval checks: Bot explains the requirement and
+opens Mini App for table selection, retaining its draft after a conflict. Manual offline creation
+is in Venue Mode's Bookings/Hall forms; no Telegram registration or fake recipient is required.
+Existing staff-chat notification policy is reused after committed creation; offline alerts use
+«Создана сотрудником» and never transmit the supplied phone/comment or message an employee as guest.
+Assigned-booking arrival calls the same physical seating operation; CHANGED is not arrival-ready.
+Staff-chat remains a shortcut, with current role/venue validation and no reservation authority.
+
 ## Core Rule
 
 Mini App and backend domain tables are the source of truth. Telegram private bot and staff-chat are interaction surfaces. Staff-chat is notification/radar/shortcut only; it must not become the canonical storage layer or management workspace for orders, bills, staff calls, bookings, support tickets, venue chats, menu edits, settings or billing.

@@ -63,6 +63,8 @@ REVIEWED_FORWARD_MIGRATIONS = (
      '8cbeabf2d72b754310b4acfd0d919f736f0132f5e26aa1f91e8103f3f5b90d26', 123295140),
     ('131', 'V131__venue_accounting_shifts.sql',
      '8579a805509807d151004f9be95c356e4e3de543e6645d320e6fc8dd25555764', -882993773),
+    ('132', 'V132__halls_seating_table_booking.sql',
+     '2069100fbdeb3ee2fe4cd69db78f9bb11ff41572d50315d8607a1c5b26bd6500', 1841965168),
 )
 sys.dont_write_bytecode = True
 SPEC = importlib.util.spec_from_file_location('database_evidence', ROOT / 'scripts/v126-database-evidence.py')
@@ -86,7 +88,7 @@ def verify_historical_history(rows):
 
 def verify_forward_history(before, after):
     verify_historical_history(before)
-    require(len(after) == 131, 'forward migration history must be exact V1-V131')
+    require(len(after) == 132, 'forward migration history must be exact V1-V132')
     require(after[:126] == before, 'forward migration changed historical Flyway rows')
     for row, (version, script, _, checksum) in zip(after[126:], REVIEWED_FORWARD_MIGRATIONS):
         require(row['version'] == version and row['script'] == script
@@ -745,7 +747,7 @@ class Integration:
             path = ROOT / MIGRATION_PATH / 'postgresql' / script
             require(hashlib.sha256(path.read_bytes()).hexdigest() == sha256, 'unreviewed current migration bytes: ' + script)
         self.release = self.current_release
-        self.image = 'ht-v131-runtime-fixture:' + self.token
+        self.image = 'ht-v132-runtime-fixture:' + self.token
         self.build_image(ROOT, self.root / 'current-lib')
         self.values.update(APP_VERSION=self.release, BACKEND_IMAGE=self.image)
         self.write_inputs()
@@ -1053,10 +1055,11 @@ class MigrationRuntimeTest(unittest.TestCase):
                     ('129', 'V129__venue_public_addresses.sql', -618822785),
                     ('130', 'V130__backfill_venue_public_addresses.sql', 123295140),
                     ('131', 'V131__venue_accounting_shifts.sql', -882993773),
+                    ('132', 'V132__halls_seating_table_booking.sql', 1841965168),
                 )]
         return before, before + tail
 
-    def test_forward_accepts_exact_v131_history(self):
+    def test_forward_accepts_exact_v132_history(self):
         before, after = self.history_fixture()
         verify_forward_history(before, after)
 

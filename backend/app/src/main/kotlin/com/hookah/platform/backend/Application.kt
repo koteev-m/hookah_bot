@@ -97,6 +97,10 @@ import com.hookah.platform.backend.miniapp.venue.menu.venueMenuRoutes
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
 import com.hookah.platform.backend.miniapp.venue.orders.venueOrderRoutes
 import com.hookah.platform.backend.miniapp.venue.promotions.venuePromotionRoutes
+import com.hookah.platform.backend.miniapp.venue.seating.HallPlanService
+import com.hookah.platform.backend.miniapp.venue.seating.SeatingRepository
+import com.hookah.platform.backend.miniapp.venue.seating.guestSeatingRoutes
+import com.hookah.platform.backend.miniapp.venue.seating.seatingRoutes
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteConfig
 import com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepository
 import com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoRepository
@@ -311,6 +315,7 @@ internal data class ModuleOverrides(
     val staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
     val venueLocationProvider: VenueLocationProvider? = null,
     val staffScheduleClock: Clock? = null,
+    val seatingClock: Clock? = null,
     val staffPhotoStorage: StaffPhotoStorage? = null,
     val venueInfoMediaStorage: VenueInfoMediaStorage? = null,
     val venueInfoPdfValidator: ((ByteArray) -> Unit)? = null,
@@ -788,6 +793,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             overrides.venueInfoPdfValidator ?: com.hookah.platform.backend.miniapp.venue.media.pdf.PdfWorkerClient()
                 ::validate,
         )
+    val seatingRepository = SeatingRepository(dataSource, clock = overrides.seatingClock ?: Clock.systemUTC())
+    val hallPlanService = HallPlanService(seatingRepository, infoMediaStorage)
     val guestTodayStaffResolver = GuestTodayStaffResolver(venueStaffProfileRepository, staffPhotoRepository)
     val guestVenueReadService =
         GuestVenueReadService(
@@ -1442,6 +1449,15 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         guestOrderTransactionCoordinator = guestOrderTransactionCoordinator,
                         guestOrderContextCheckpoint = overrides.guestOrderContextCheckpoint,
                     )
+                    guestSeatingRoutes(
+                        seatingRepository,
+                        miniAppAbuseProtection,
+                        hallPlanService,
+                        guestVenueRepository,
+                        subscriptionRepository,
+                        guestBookingRepository,
+                        guestStaffChatNotifier,
+                    )
                     guestBookingRoutes(
                         guestVenueRepository = guestVenueRepository,
                         subscriptionRepository = subscriptionRepository,
@@ -1574,6 +1590,15 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     venueAccessRepository = venueAccessRepository,
                     staffCallRepository = staffCallRepository,
                     auditLogRepository = auditLogRepository,
+                )
+                seatingRoutes(
+                    seatingRepository,
+                    hallPlanService,
+                    miniAppAbuseProtection,
+                    guestBookingRepository,
+                    guestStaffChatNotifier,
+                    telegramOutboxEnqueuer,
+                    bookingReminderWorkerConfig.enabled,
                 )
                 venueTableRoutes(
                     venueAccessRepository = venueAccessRepository,

@@ -172,7 +172,7 @@ class VenuePublicLinksTest {
             val reserved = insertVenue(ds, "www", null, null, "PUBLISHED")
             val long = "a".repeat(64)
             val legacyLong = insertVenue(ds, long, null, null, "PUBLISHED")
-            val migration = flyway(ds).migrate()
+            val migration = flyway(ds, "131").migrate()
             assertEquals(2, migration.migrationsExecuted)
             runBlocking {
                 val links = VenuePublicLinksRepository(ds, 999)
@@ -202,7 +202,7 @@ class VenuePublicLinksTest {
                     }
                 }
             }
-            assertEquals(0, flyway(ds).migrate().migrationsExecuted)
+            assertEquals(0, flyway(ds, "131").migrate().migrationsExecuted)
         }
     }
 

@@ -7136,13 +7136,13 @@ object TelegramKeyboards {
                 },
         )
 
-    fun inlineConfirmQuickOrder(): InlineKeyboardMarkup =
+    fun inlineConfirmQuickOrder(requestId: String): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
                 listOf(
-                    listOf(InlineKeyboardButton(text = "✅ Отправить", callbackData = "quick_order_confirm")),
-                    listOf(InlineKeyboardButton(text = "✏️ Изменить", callbackData = "quick_order_edit")),
-                    listOf(InlineKeyboardButton(text = "❌ Отмена", callbackData = "quick_order_cancel")),
+                    listOf(InlineKeyboardButton(text = "✅ Отправить", callbackData = "quick_order_confirm:$requestId")),
+                    listOf(InlineKeyboardButton(text = "✏️ Изменить", callbackData = "quick_order_edit:$requestId")),
+                    listOf(InlineKeyboardButton(text = "❌ Отмена", callbackData = "quick_order_cancel:$requestId")),
                 ),
         )
 
