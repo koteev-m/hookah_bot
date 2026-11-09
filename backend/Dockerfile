@@ -29,8 +29,9 @@ COPY backend/build.gradle.kts backend/build.gradle.kts
 COPY backend/app/build.gradle.kts backend/app/build.gradle.kts
 
 RUN chmod +x ./gradlew
+COPY backend/gradle-wrapper-bootstrap.sh /tmp/gradle-wrapper-bootstrap.sh
 RUN --mount=type=cache,target=/root/.gradle/wrapper \
-    ./gradlew --version --no-daemon
+    sh /tmp/gradle-wrapper-bootstrap.sh
 RUN --mount=type=cache,target=/root/.gradle/wrapper \
     --mount=type=cache,target=/root/.gradle/caches \
     ./gradlew :backend:app:dependencies --configuration runtimeClasspath --no-daemon -Pkotlin.daemon.jvmargs="${GRADLE_JVM_ARGS}"
