@@ -3804,3 +3804,17 @@ input[type="number"] {
 .hall-marker-label { display:block; pointer-events:none; }
 
 .hall-marker::before { content:""; position:absolute; left:50%; top:50%; width:max(100%,44px); height:max(100%,44px); transform:translate(-50%,-50%); }
+/* Shared Venue cockpit remains in the shell while individual workspaces change. */
+.venue-event-root { display: contents; }
+.venue-alerts { position: sticky; top: var(--app-safe-top, 0px); z-index: 3; max-height: 26vh; overflow: auto; border-inline-start: 4px solid var(--app-accent); padding: 12px; background: var(--app-surface); }
+.venue-alerts h2 { position: sticky; top: 0; z-index: 1; background: var(--app-surface); font-size: 1rem; margin: 0 0 6px; }
+.venue-alerts p { margin: 4px 0; font-size: .82rem; }
+.venue-alert-status, .venue-alert-help { font-size: .82rem; color: var(--app-muted); }
+.venue-alert-list { max-height: 100px; overflow: auto; }
+.venue-alert-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; }
+.venue-alert-row a { flex: 1; min-width: 160px; }
+.venue-alerts input[type=range] { width: 100px; }
+.venue-dashboard-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.venue-dashboard-card { display: flex; flex-direction: column; gap: 8px; text-decoration: none; color: inherit; }
+.venue-dashboard-card:focus-visible, .venue-alerts a:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 2px; }
+.venue-has-alerts .venue-content :is(input, select, textarea, button, a) { scroll-margin-top: calc(26vh + var(--app-safe-top, 0px)); }

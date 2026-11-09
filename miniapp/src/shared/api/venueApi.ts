@@ -1332,11 +1332,12 @@ export async function venueGetStaffChatStatus(
 
 export async function venueGetStaffCalls(
   backendUrl: string,
-  params: { venueId: number; limit?: number },
+  params: { venueId: number; limit?: number; callId?: number },
   deps: RequestDependencies,
   signal?: AbortSignal
 ) {
   const search = new URLSearchParams()
+  if (params.callId) search.set('callId', String(params.callId))
   if (params.limit) {
     search.set('limit', String(params.limit))
   }

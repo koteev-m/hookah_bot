@@ -203,7 +203,9 @@ export function renderVenueCallsScreen(options: VenueCallsOptions) {
     const controller = new AbortController()
     loadAbort = controller
     const seq = ++loadSeq
-    const result = await venueGetStaffCalls(backendUrl, { venueId, limit: 50 }, deps, controller.signal)
+    const targetId = new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('callId')
+    const callId = targetId && /^\d+$/.test(targetId) && Number(targetId) > 0 ? Number(targetId) : undefined
+    const result = await venueGetStaffCalls(backendUrl, { venueId, limit: 50, callId }, deps, controller.signal)
     if (disposed || loadSeq !== seq) return
     loadAbort = null
     if (!result.ok && result.error.code === REQUEST_ABORTED_CODE) return

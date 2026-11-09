@@ -140,6 +140,94 @@ Role behavior:
 Current vs target:
 - Current dashboard is `PARTIAL`: operational counters and stats exist in slices, but one complete dashboard model with all cards above needs verification.
 
+### Venue cockpit and device alerts — HT-VENUE-DASHBOARD-ALERTS-01
+
+Local candidate, corrected by `HT-VENUE-DASHBOARD-ALERTS-FINDINGS-FIX-01`; independent review
+and separately authorized staging/device acceptance remain required. The previous unbounded
+creation manifest is superseded by protocol 2 below. Deployed evidence above is unchanged.
+
+Dashboard cards open existing Orders, Calls, Bookings, Hall, Accounting, Menu, Staff Chat and
+Subscription sections. NEW batches include append batches of the same order; active orders
+count ACTIVE orders; pending bookings count PENDING. Physical occupancy counts unreleased
+`table_seatings`, separately from active table inventory. The accounting card shows only the
+open period boundary; completed order value, external payment receipts and accounting accruals
+are not combined. No shift, order, accounting, audit or Telegram record is written by this GET.
+Menu/booking/table summaries use existing server permissions; chat linkage requires its existing
+permission, subscription state is Owner-only. Exact call links reuse the authorized `callId`
+read, including older/handled records; the ordinary queue keeps its original window/limit.
+
+Protocol 2: `GET /api/venue/{venueId}/dashboard`
+
+- One read-only repeatable-read transaction checks membership and returns current NEW batches
+  of ACTIVE orders and NEW calls. IDs are `batch:<batchId>` / `call:<staffCallId>`; first/append
+  labels do not merge distinct batches of one order. ACK calls are separately counted in work.
+- Each successful complete snapshot contains **all** such events up to **256 total**. No
+  history manifest, MAX(id), createdAt cut-off or advancing cursor is used. Every poll queries
+  current rows again: a lower ID committed later is found while it remains unhandled.
+- Each source reads at most 257 candidate rows, using the extra row as an explicit capacity
+  sentinel. The response has `monitoringVersion=2`, `eventCapacity=256`, `attentionComplete`
+  and `attentionTotalAtLeast`. Incomplete means at least 257, with at most 256 displayed rows.
+  It never means that omitted rows were processed. Automatic signals pause without reconciling
+  an incomplete set; the UI labels partial counts and directs the operator to existing queues.
+- The encoded response is capped at **128 KiB**, also enforced by the browser stream reader.
+  Oversized/incompatible responses show unknown completeness, not an empty successful queue.
+  JDBC candidate objects are bounded by two 257-row reads; no historical ID arrays are built.
+- PostgreSQL V133 / H2 V134 add four non-unique composite indexes, without writer, status,
+  money or delivery changes. Status/venue indexes exclude historical work from queue reads.
+  First-batch lookup seeks the `(order_id,id)` prefix of an order known to have a visible batch;
+  it avoids the skew-sensitive MIN(id)/primary-key history walk. No planner switches are disabled.
+
+The monitor stays in the Venue shell across routes. It polls once per 15-second cycle plus
+explicit/lifecycle refresh, with a 10-second HTTP deadline. Queue workspace loading is separate.
+On confirmed 401/403, clear actor/venue/role/permissions, unmount the entire private workspace,
+abort its requests and dispose retained settings/schedule/photo drafts **before** awaiting /me.
+Unsaved in-memory drafts in this app instance are cleared on access loss, not on an ordinary
+allowed venue/role navigation. Controller/epoch/actor checks reject old responses. An automatic
+/me 200 for the identical revoked scope cannot restore it; explicit access retry or a fresh
+allowed different role/venue/account is required. A mismatched /me actor remains invalid.
+
+Device ledger and delivery:
+
+- One origin-wide v2 ledger contains at most **4 contexts** (backend/account/venue), each with
+  at most **256 current + 256 retired receipts**. Retired receipts expire within 24 hours;
+  recent 30-second receipts are not silently evicted. Exceeding that retirement/byte/context
+  capacity explicitly limits automatic monitoring and retries after capacity becomes available.
+  An inactive context can be evicted after 30 seconds without an active delivery lease; returning
+  to an evicted/cleared context establishes a new silent baseline.
+- Ledger key + value are capped at **256 KiB UTF-8 / 512 KiB UTF-16**. Oversized legacy v1
+  histories are removed without parsing, only from the owned legacy prefix (bounded key lookup).
+  Other application storage/auth/drafts are not deleted by this migration. Quota/prohibited or
+  corrupt storage causes an explicit visual-only fallback, never a false empty queue.
+- Detection is separate from channel delivery. The first snapshot of a new context lists backlog
+  silently. Later new IDs remain pending for audio even if a sound-OFF tab observes them first.
+  Desktop notification receipts are separate; neither channel consumes the other's delivery.
+- Web Locks protect short ledger transactions, with a 2-second acquisition deadline. Network
+  fetch and playback never hold that lock. A suitable foreground consumer reserves an 8-second
+  delivery lease, then attempts sound outside the lock. Only a completed Web Audio attempt
+  advances its receipt; failure does not. Closing/crashing the owner leaves an expiring lease
+  that another enabled consumer can recover. A busy lock preserves preferences and reports a
+  bounded wait; closing its tab releases the browser lock and polling can recover.
+- Normal successful audio delivery is one grouped signal plus at most two reminders, at least
+  60 seconds apart, only while unhandled/unmuted. Mute is device-local and never ACK/DONE.
+  A crash/lost acknowledgement can cause a recovery attempt; no exactly-once physical audio
+  or proof that somebody heard it is claimed. Initial backlog is never sounded by enabling.
+- Enable/test require a user click; reload needs a new gesture. Volume persists on this device.
+  Blocked/failed audio remains pending; manual enable can retry it. Hidden pages, Telegram
+  deactivation and offline state pause automatic activity and cancel current playback.
+  Returning foreground coalesces pending events, without a per-event sound storm.
+- Optional system notifications require an available API and click-based permission, remain
+  silent/generic and contain no guest/table/order/amount/message data. Staff Chat/outbox sends,
+  recipients, deduplication and callbacks are unchanged; no extra Telegram messages or staff DMs.
+
+Explicit boundary: an event completed or deleted before first successful observation may be
+unavailable without a separate durable event log. This slice adds no such log or cross-device
+receipts. Work scales with current operational/configuration rows and indexed lookups, not all
+retained creation history; it is not a production throughput/SLO guarantee. Protocol 2 and its
+index migration require a coordinated client/backend release; old active clients need reload.
+Closed Mini App has no guaranteed background push. Telegram alerts depend on Telegram/group/
+device settings. Real Telegram WebView/audio/OS notification and index-build rollout acceptance
+remain separate, unexecuted staging/device gates.
+
 ### Owner Mini App home and navigation (HT-VENUE-OWNER-UX02)
 
 Local UI scope: OWNER sees the selected venue name, city and authoritative status, the compact

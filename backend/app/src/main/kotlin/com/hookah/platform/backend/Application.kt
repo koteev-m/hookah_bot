@@ -86,6 +86,8 @@ import com.hookah.platform.backend.miniapp.venue.VenuePublicationService
 import com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepository
 import com.hookah.platform.backend.miniapp.venue.accounting.accountingRoutes
 import com.hookah.platform.backend.miniapp.venue.bookings.venueBookingRoutes
+import com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardRepository
+import com.hookah.platform.backend.miniapp.venue.dashboard.venueDashboardRoutes
 import com.hookah.platform.backend.miniapp.venue.feedback.venueFeedbackRoutes
 import com.hookah.platform.backend.miniapp.venue.location.VenueLocationProvider
 import com.hookah.platform.backend.miniapp.venue.location.createVenueLocationProvider
@@ -1591,6 +1593,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     staffCallRepository = staffCallRepository,
                     auditLogRepository = auditLogRepository,
                 )
+                venueDashboardRoutes(VenueDashboardRepository(dataSource))
                 seatingRoutes(
                     seatingRepository,
                     hallPlanService,

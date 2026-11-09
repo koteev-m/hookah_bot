@@ -8813,6 +8813,12 @@ async function mockOwnerUx(page: Page, status = 'DRAFT', permissions = ownerUxPe
     { id: 1, status: 'NEW' }, { id: 2, status: 'ACK' }
   ] })))
   await page.route('**/api/venue/*/staff-chat', (route) => route.fulfill(jsonResponse({ isLinked: true })))
+  await page.route('**/api/venue/*/dashboard', route => route.fulfill(jsonResponse({
+    venueId: Number(new URL(route.request().url()).pathname.split('/')[3]), userId: 123456789, role: 'OWNER', permissions,
+    monitoringVersion: 2, eventCapacity: 256, attentionComplete: true, attentionTotalAtLeast: 1, attention: [{ id: 'call:1', kind: 'STAFF_CALL_CREATED', createdAt: '2030-01-01T00:00:00Z', callId: 1, orderId: null, tableNumber: 1 }],
+    activeOrders: 0, callsInWork: 1, bookingsPending: 0, occupiedTables: 0, activeTables: 4, unavailableItems: 0,
+    unavailableOptions: 0, accountingOpenedAt: null, staffChatLinked: true, venueStatus: status, subscriptionStatus: null, refreshedAt: '2030-01-01T00:00:00Z'
+  })))
   await page.route('**/api/venue/*/support/unread-count', (route) => route.fulfill(jsonResponse({
     unreadCount: new URL(route.request().url()).pathname.includes('/1/') ? 3 : 0
   })))
@@ -8836,10 +8842,15 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 
     await expect(page.locator('[data-nav-route="dashboard"]')).toHaveAttribute('aria-current', 'page')
     const actions = page.locator('.venue-owner-action')
     await expect(actions).toHaveCount(8)
-    for (const action of await actions.all()) await expect(action).toBeInViewport()
+    for (const action of await actions.all()) {
+      await action.scrollIntoViewIfNeeded()
+      await expect(action).toBeInViewport()
+      await action.click({ trial: true })
+    }
+    await page.evaluate(() => window.scrollTo(0, 0))
     await expect(page.getByRole('link', { name: 'Учёт смены Продажи и внешние оплаты' })).toHaveAttribute('href', '#/accounting')
     await expect(page.getByRole('link', { name: 'Настроить заведение' })).toHaveAttribute('href', '#/settings')
-    await expect(page.locator('.venue-summary-row').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:1')
+    await expect(page.locator('.venue-dashboard-card').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:1')
     await expect(page.locator('.ownership-workspace')).toHaveCount(0)
     await expectNoHorizontalOverflow(page)
     const navBox = await page.locator('.venue-owner-nav').boundingBox()
@@ -8854,9 +8865,9 @@ test('owner UX published metrics, unread badge, switching and portfolio history'
   await mockOwnerUx(page, 'PUBLISHED')
   await page.goto('?mode=venue&venueId=1#/dashboard')
   await expect(page.locator('.venue-header')).toContainText('Москва · Опубликовано')
-  await expect(page.locator('.venue-summary-row').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:1')
-  await expect(page.locator('.venue-summary-row').filter({ hasText: 'В работе:' })).toHaveText('В работе:1')
-  await expect(page.locator('.venue-summary')).toContainText('Чат персонала:привязан')
+  await expect(page.locator('.venue-dashboard-card').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:1')
+  await expect(page.locator('.venue-dashboard-card').filter({ hasText: 'Вызовы в работе' })).toHaveText('Вызовы в работе1')
+  await expect(page.locator('.venue-dashboard-cards')).toContainText('Чат персонала:привязан')
   await expect(page.locator('.venue-owner-actions a')).toHaveText(['ЗаказыОчередь заказов', 'Учёт сменыПродажи и внешние оплаты', 'Бронирования', 'Вызовы гостей', 'Переписки3', 'Запросы продления', 'График смен', 'Стоп-лист и меню'])
   await expect(page.getByRole('link', { name: 'Переписки, непрочитанных: 3', exact: true })).toBeVisible()
   await expect(page.locator('[data-owner-messages] .nav-unread-badge')).toHaveCSS('color', await page.locator(':root').evaluate(el => getComputedStyle(el).getPropertyValue('--app-on-danger').trim()))
@@ -23381,10 +23392,10 @@ test('owner UX02 booking and extension forms save explicitly and protect unsaved
 
 test('owner UX02 load errors do not become zero counts and denied settings do not call APIs', async ({ page }) => {
   await mockOwnerUx(page, 'DRAFT', ['ORDER_QUEUE_VIEW'])
-  await page.route('**/api/venue/*/staff-calls**', (route) => route.fulfill(jsonResponse({ error: { code: 'INTERNAL_ERROR' } }, 500)))
+  await page.route('**/api/venue/*/dashboard', (route) => route.fulfill(jsonResponse({ error: { code: 'INTERNAL_ERROR' } }, 500)))
   await page.goto('?mode=venue#/dashboard')
-  await expect(page.locator('.venue-summary-row').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:ошибка')
-  await expect(page.locator('.venue-dashboard .error-card')).toBeVisible()
+  await expect(page.locator('.venue-dashboard-card').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:—')
+  await expect(page.locator('.venue-alert-status')).toContainText('Нет связи')
   const requests: string[] = []
   page.on('request', (request) => { if (request.url().includes('/api/venue/')) requests.push(request.url()) })
   for (const section of ['booking', 'extension']) {

@@ -159,6 +159,9 @@ jobs:
             --tests "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardCapacityPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest" \
             --tests "com.hookah.platform.backend.telegram.db.VenuePromotionRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest" \
@@ -247,6 +250,9 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest",
               "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest",
               "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardCapacityPostgresTest",
               "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest",
               "com.hookah.platform.backend.telegram.db.VenuePromotionRepositoryTest",
               "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest",
@@ -269,6 +275,9 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
+              "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardRoutesTest": 2,
+              "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardPostgresTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardCapacityPostgresTest": 1,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenH2Test": 7,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenPostgresTest": 11,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCheckoutConcurrencyPostgresTest": 8,
@@ -1757,6 +1766,30 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("venue-dashboard-alerts.spec.ts", 'first connection is silent, first batch and append of one order plus calls coalesce and replay is silent'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'offline recovery catches lower delayed IDs and already handled creations without a sound storm'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'bounded repeats and local mute do not ACK, toggle and volume are device only'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'autoplay rejection and unavailable storage fail safely with visual alerts'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'venue and role switches discard late responses and denied access clears the snapshot'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'real HTTP capture renders all cockpit cards and retained first batch plus append'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'visibility pause, timeout, offline and account switch discard stale private state'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'unsupported Web Locks keeps visual detection and explicitly disables automatic sound'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'Web Locks rejection falls back to visual updates without automatic signals'): 1,
+              ("venue-dashboard-alerts.spec.ts", '401 clears facts and stops polling until explicit access recovery'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'repeat mount and competing windows reserve each new event once, notifications contain no customer data'): 1,
+              ("venue-dashboard-alerts.spec.ts", '403 unmounts private calls before delayed me and rejects late private 200 and stale access'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'late dashboard 200 cannot restore a context cleared by another venue 403'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'stale me actor after account change stays invalid until matching access is obtained'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'confirmed role change cannot reenter the old role from stale me or start a revalidation loop'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'silent tab discovering first leaves audio pending for enabled tab'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'two enabled tabs concurrently deliver one successful audio receipt'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'closed delivery owner leaves an expiring lease and another enabled tab recovers'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'stalled Web Lock has a bounded wait and recovers after its tab closes'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'failed automatic playback is not a receipt and manual enable retries pending audio'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'capacity sentinel and oversized responses explicitly limit monitoring without empty success'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'rapid receipt capacity preserves enabled preference and resumes pending delivery after grace'): 1,
+              ("venue-dashboard-alerts.spec.ts", '200000 and 400000 legacy IDs never accumulate in bounded ledger and new batches still sound'): 1,
+              ("venue-dashboard-alerts.spec.ts", 'origin ledger enforces byte context and receipt limits without silent rapid-history eviction'): 1,
               ("halls-seating.spec.ts", "real wire defaults show unknown values and separate future reserve from occupied state"): 1,
               ("halls-seating.spec.ts", "manual booking keeps input and uses one key after lost response and reload"): 1,
               ("halls-seating.spec.ts", "table editor restores draft after reload and saves geometry without changing identity"): 1,

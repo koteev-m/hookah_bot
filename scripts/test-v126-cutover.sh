@@ -8263,6 +8263,8 @@ extra = {
     'h2/V132__venue_accounting_shifts.sql': '8579a805509807d151004f9be95c356e4e3de543e6645d320e6fc8dd25555764',
     'postgresql/V132__halls_seating_table_booking.sql': '2069100fbdeb3ee2fe4cd69db78f9bb11ff41572d50315d8607a1c5b26bd6500',
     'h2/V133__halls_seating_table_booking.sql': '699f48004ec72e40e2b815327368f25a750b0c420a736998cf2287035066d3d6',
+    'postgresql/V133__venue_dashboard_monitor_indexes.sql': 'b22025ab2f5a7f586f9f9c9db2ef3208e89568bfca6659eca2bc8451dbeda058',
+    'h2/V134__venue_dashboard_monitor_indexes.sql': 'b22025ab2f5a7f586f9f9c9db2ef3208e89568bfca6659eca2bc8451dbeda058',
 }
 paths = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if not p.is_dir() or p.is_symlink()}
 if set(paths) != set(historical) | set(extra):
@@ -8336,10 +8338,10 @@ PY
   expect_failure 'missing early SQL rejects current lineage' 'migration inventory drift' \
     verify_current_migration_lineage "${fixture}"
   cp "${REPO_ROOT}/${migration_root}/postgresql/$(basename "${early}")" "${early}"
-  printf 'SELECT 1;\n' > "${fixture}/postgresql/V133__unreviewed.sql"
+  printf 'SELECT 1;\n' > "${fixture}/postgresql/V134__unreviewed.sql"
   expect_failure 'unreviewed future SQL rejects current lineage' 'migration inventory drift' \
     verify_current_migration_lineage "${fixture}"
-  rm "${fixture}/postgresql/V133__unreviewed.sql"
+  rm "${fixture}/postgresql/V134__unreviewed.sql"
   printf '\n-- forbidden tail drift\n' >> "${fixture}/postgresql/V127__staff_profile_photos.sql"
   expect_failure 'changed reviewed tail SQL rejects current lineage' 'reviewed migration drift' \
     verify_current_migration_lineage "${fixture}"
@@ -8361,7 +8363,9 @@ PY
     postgresql/V131__venue_accounting_shifts.sql \
     h2/V132__venue_accounting_shifts.sql \
     postgresql/V132__halls_seating_table_booking.sql \
-    h2/V133__halls_seating_table_booking.sql; do
+    h2/V133__halls_seating_table_booking.sql \
+    postgresql/V133__venue_dashboard_monitor_indexes.sql \
+    h2/V134__venue_dashboard_monitor_indexes.sql; do
     printf '\n-- forbidden reviewed tail drift\n' >> "${fixture}/${addition}"
     expect_failure "changed reviewed tail SQL rejects lineage: ${addition}" 'reviewed migration drift' \
       verify_current_migration_lineage "${fixture}"
