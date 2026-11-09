@@ -4,6 +4,7 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.venue.seating.CheckoutSeat
 import com.hookah.platform.backend.miniapp.venue.seating.STAFF
 import com.hookah.platform.backend.miniapp.venue.seating.SeatingRepository
+import com.hookah.platform.backend.miniapp.venue.seating.assertCheckoutOpening
 import com.hookah.platform.backend.miniapp.venue.seating.checkoutCounts
 import com.hookah.platform.backend.miniapp.venue.seating.checkoutSeat
 import com.hookah.platform.backend.miniapp.venue.seating.cmd
@@ -129,6 +130,7 @@ class TelegramQuickOrderConcurrencyPostgresTest {
                     withTimeout(5000) { other.callback(otherState.payload.getValue("requestId")) }
                     assertEquals(DialogState(DialogStateType.NONE), other.dialogs.get(200))
                     assertEquals(before.getValue("order_batches") + 1, checkoutCounts(ds)["order_batches"])
+                    assertCheckoutOpening(ds, otherSeat.venue, actor = 1001)
                 } finally {
                     holding.release.countDown()
                 }
@@ -139,7 +141,10 @@ class TelegramQuickOrderConcurrencyPostgresTest {
                     assertEquals(before.getValue(table) + 2, after[table])
                 }
                 assertEquals(before["telegram_outbox"], after["telegram_outbox"])
-                assertEquals(before["venue_accounting_shifts"], after["venue_accounting_shifts"])
+                for (table in listOf("venue_accounting_shifts", "venue_accounting_events")) {
+                    assertEquals(before.getValue(table) + 2, after[table])
+                }
+                assertCheckoutOpening(ds, seat.venue)
                 assertTrue(first.messages.contains("Запрос отправлен, ожидайте подтверждения."))
                 assertTrue(second.messages.contains("Запрос отправлен, ожидайте подтверждения."))
                 assertEquals(DialogState(DialogStateType.NONE), first.dialogs.get(100))
@@ -182,9 +187,11 @@ class TelegramQuickOrderConcurrencyPostgresTest {
                     for (table in listOf("orders", "order_batches", "guest_batch_idempotency")) {
                         assertEquals(before.getValue(table) + if (confirmFirst) 1 else 0, after[table])
                     }
-                    for (table in listOf("audit_log", "telegram_outbox", "venue_accounting_shifts")) {
-                        assertEquals(before[table], after[table])
+                    for (table in listOf("audit_log", "venue_accounting_shifts", "venue_accounting_events")) {
+                        assertEquals(before.getValue(table) + if (confirmFirst) 1 else 0, after[table])
                     }
+                    assertEquals(before["telegram_outbox"], after["telegram_outbox"])
+                    assertCheckoutOpening(ds, seat.venue, expected = if (confirmFirst) 1 else 0)
                     val acceptedText = if (action == "edit") "Напишите детали заказа." else "Быстрый заказ отменён."
                     assertEquals(!confirmFirst, change.messages.contains(acceptedText))
                     if (confirmFirst) {
@@ -265,9 +272,11 @@ class TelegramQuickOrderConcurrencyPostgresTest {
                     for (table in listOf("orders", "order_batches", "guest_batch_idempotency")) {
                         assertEquals(before.getValue(table) + if (committed) 1 else 0, uncertain[table])
                     }
-                    for (table in listOf("audit_log", "telegram_outbox", "venue_accounting_shifts")) {
-                        assertEquals(before[table], uncertain[table])
+                    for (table in listOf("audit_log", "venue_accounting_shifts", "venue_accounting_events")) {
+                        assertEquals(before.getValue(table) + if (committed) 1 else 0, uncertain[table])
                     }
+                    assertEquals(before["telegram_outbox"], uncertain["telegram_outbox"])
+                    assertCheckoutOpening(ds, seat.venue, expected = if (committed) 1 else 0)
                     if (committed) {
                         for (action in listOf("cancel", "edit")) {
                             restarted.callback(id, action)
@@ -279,6 +288,7 @@ class TelegramQuickOrderConcurrencyPostgresTest {
                     assertEquals(DialogState(DialogStateType.NONE), restarted.dialogs.get(100))
                     val after = checkoutCounts(ds)
                     assertEquals(before.getValue("order_batches") + 1, after["order_batches"])
+                    assertCheckoutOpening(ds, seat.venue)
                     restarted.callback(id)
                     assertEquals(after, checkoutCounts(ds))
                     assertEquals(session, fullRow(ds, "table_sessions", seat.session))

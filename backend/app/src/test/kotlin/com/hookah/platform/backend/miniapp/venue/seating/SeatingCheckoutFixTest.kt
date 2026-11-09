@@ -80,10 +80,51 @@ internal fun checkoutCounts(ds: DataSource): Map<String, Int> =
             "audit_log",
             "telegram_outbox",
             "venue_accounting_shifts",
+            "venue_accounting_events",
         ).associateWith { table ->
             c.rows("SELECT COUNT(*) FROM $table") { it.getInt(1) }.single()
         }
     }
+
+internal fun assertCheckoutOpening(
+    ds: DataSource,
+    venue: Long,
+    expected: Int = 1,
+    actor: Long = 1003,
+    trigger: String = "DIGITAL_ORDER",
+) = ds.connection.use { c ->
+    val shifts =
+        c.rows("SELECT id FROM venue_accounting_shifts WHERE venue_id = ? AND status = 'OPEN'", venue) {
+            it.getLong(1)
+        }
+    assertEquals(expected, shifts.size)
+    val events =
+        c.rows(
+            "SELECT e.actor_user_id FROM venue_accounting_events e JOIN venue_accounting_shifts s " +
+                "ON s.id=e.shift_id WHERE s.venue_id=? AND e.action='AUTO_OPEN'",
+            venue,
+        ) { it.getLong(1) }
+    assertEquals(List(expected) { actor }, events)
+    val audits =
+        c.rows(
+            "SELECT a.actor_user_id, a.payload_json FROM audit_log a JOIN venue_accounting_shifts s " +
+                "ON s.id=a.entity_id WHERE s.venue_id=? AND a.action='VENUE_ACCOUNTING_AUTO_OPEN' " +
+                "AND a.entity_type='venue_accounting_shift'",
+            venue,
+        ) { it.getLong(1) to it.getString(2) }
+    assertEquals(expected, audits.size)
+    audits.forEach { (user, payload) ->
+        assertEquals(actor, user)
+        assertTrue(payload.contains("\"trigger\":\"$trigger\""), payload)
+    }
+    if (expected == 1) {
+        val orderShifts =
+            c.rows("SELECT accounting_shift_id FROM orders WHERE venue_id=?", venue) {
+                it.getLong(1).takeUnless { _ -> it.wasNull() }
+            }
+        orderShifts.forEach { assertEquals(shifts.single(), it) }
+    }
+}
 
 class SeatingCheckoutFixTest {
     @Test
@@ -217,8 +258,10 @@ class SeatingCheckoutFixTest {
                     assertEquals("CHAT", batch["source"])
                     assertEquals("1003", batch["author_user_id"])
                     assertEquals(s.tab.toString(), batch["tab_id"])
-                    assertNull(fullRow(ds, "orders", saved.orderId)["accounting_shift_id"])
-                    assertEquals(before["venue_accounting_shifts"], after["venue_accounting_shifts"])
+                    assertCheckoutOpening(ds, s.venue)
+                    for (table in listOf("venue_accounting_shifts", "venue_accounting_events", "audit_log")) {
+                        assertEquals(before.getValue(table) + 1, after[table])
+                    }
                     assertEquals(before["telegram_outbox"], after["telegram_outbox"])
                 }
             }

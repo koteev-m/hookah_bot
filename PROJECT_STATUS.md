@@ -1,5 +1,140 @@
 # Project Status
 
+## HT-ACCOUNTING-AUTO-OPEN-MAIN-INTEGRATION-01 — local main integration (2026-11-08)
+
+**AUTO_OPEN_INTEGRATED / READY_FOR_INDEPENDENT_REVIEW=YES / READY_FOR_PUBLICATION=NO / NOT_DEPLOYED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT; physical root, Git dir/common dir/index and
+origin verified. Same primary checkout and branch `codex/ht-venue-shift-sales-mvp-01` throughout.
+Initial HEAD `4d7bb81627ea1a380fb0cbdf9fd8842babef5bf5`; EXPECTED_HEAD/BASE/branch/parent NOT_SUPPLIED.
+User authorized one preservation commit and a local merge, without publication or server actions.
+Preservation commit `cb5a53368a29bead5a5222de4a94afc674acca00` contains 19 reviewed auto-open files;
+5 unrelated checkpoint blocks (133 lines) and 4 scripts/dev files remain outside commits, hash-verified.
+Fetched main `049afc9f3cb290521a17e3fa3d9a8792ea50e281`; merge-base was the initial HEAD.
+Integration uses a normal two-parent merge of that main into the existing feature branch; exact
+resulting commit and file inventories are recorded in the external evidence report below.
+
+Resolved checkpoint, OrdersRepository, TelegramBotRouter and Bot-test conflicts manually.
+TelegramBotRouter, DialogState, Seating and VenueOrders runtime match main byte-for-byte.
+OrdersRepository retains main's durable request/token/context/replay/locking implementation,
+adding only auto-open after validation in both atomic writers and empty-cart rejection.
+Existing first-sale draft migration, pending-payload persistence and HTTP 408 replay are retained.
+First real sale/order and opening commit together; venue-first locks serialize one OPEN period.
+GET/QR/booking/seating/drafts do not open shifts; closure remains manual OWNER/MANAGER work.
+Closed reports/debts remain unchanged; a later real operation can start the next period.
+
+Fresh merged-tree validation: full backend **2570/2570**, 209 suites, zero failed/error/skipped;
+full Chromium **693/693**, zero skipped/flaky/retries; Kotlin compile/ktlint and TypeScript/Vite PASS.
+Real PostgreSQL barriers cover manual/Bot/Mini App, MOVE/RELEASE, SEAT, session end, order close,
+durable confirm/edit/cancel, terminal refusal, lost commit response, rollback and independent venues.
+Final rows, real actors/audit, debt and closed snapshots are asserted, including both lock orders.
+All 265 migration files match main exactly (PostgreSQL V132 / H2 V133); no added/edited migration.
+All 7 CI result gates pass against fresh XML/JSON. Accounting's 10 concrete suites are now explicit
+required CI selectors with case-count and no-skip checks; Seating checkout requires all 5 cases.
+Portable release contracts: 367 passed; one opt-in historical Docker installer case not executed.
+Earlier failures were test fixture/contract expectations and formatting/nullability, corrected
+without weakening assertions; full final run repeated all affected tests. Tested input hashes match.
+
+Evidence: `/private/tmp/HT-ACCOUNTING-AUTO-OPEN-MAIN-INTEGRATION-01/REPORT.txt`, backend-full-summary.json,
+backend-full-xml/, playwright-full.json, ci-gate-results.json, migration-integrity.json and preservation-check.json.
+No push, PR, remote merge, deploy, SSH, server/Toshiba action or deferred Telegram smoke performed.
+Hosted CI and separately authorized staging deploy/runtime smoke remain future release gates.
+Next: independent review of the committed delta against the fetched main; publication stays unauthorized.
+
+## HT-ACCOUNTING-AUTO-OPEN-COMPLETE-01 — local completion, main integration pending (2026-11-08)
+
+**PARTIAL / READY_FOR_INDEPENDENT_REVIEW=NO / READY_FOR_MAIN_INTEGRATION=NO / NOT_DEPLOYED**.
+These readiness flags cover the complete candidate including PR #252, not just the local fixes.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT; primary physical root, Git dir/common dir/index
+and origin verified. Branch `codex/ht-venue-shift-sales-mvp-01`, unchanged local HEAD
+`4d7bb81627ea1a380fb0cbdf9fd8842babef5bf5`; EXPECTED_HEAD/BASE/branch/parent NOT_SUPPLIED.
+Authorized fetch verified main `049afc9f3cb290521a17e3fa3d9a8792ea50e281`. No base or worktree change.
+
+Existing auto-open, venue-first checkout locks and first-draft adoption were inspected and retested.
+Now block sending if pending payload/key cannot be persisted; retain unknown HTTP 408 for exact
+replay after reload. Removed the extra CHAT field from v1 fingerprint so existing main Bot requests
+replay unchanged. The fingerprint function matches main byte-for-byte; golden H2/PG persisted-main
+replay tests first failed, then passed without a new shift/batch/audit. Added first Mini App/Bot and
+manual/Bot PG races in both operation orders, plus storage/408/409 draft browser regressions.
+Money, discounts, gifts, debt and frozen reports remain unchanged. All 263 migration files unchanged.
+
+Validation after final runtime/test changes: 639 unique backend methods passed across the broad
+selection and a corrected UTC Booking rerun, zero skipped. The broad run had 635 PASS and four
+Booking timezone-precondition failures (host Europe/Moscow); both affected classes then passed
+21/21 with required `TZ=UTC`, without source/assertion changes. Includes 62 accounting, 131 migration,
+11 auto-open PG, seven checkout PG methods (17 scenarios), seven extension/snapshot races and
+11 Guest idempotency PG methods. Kotlin compile/ktlint and TypeScript/Vite build PASS; accounting
+Playwright 22/22 and full Chromium 669/669 PASS, zero skipped/flaky/retries. No full backend claim.
+
+Integration blocker: main has overlapping OrdersRepository writer signatures/locks/CHAT insertion,
+durable DialogState/requestId, frozen table/session/tab and terminal callback denial, plus V132
+physical seating/MOVE/RELEASE and venue-first order close. The older local Bot router must not
+replace them. Current tests run on PostgreSQL V131 / H2 V132; integrated V132 / H2 V133 and new
+MOVE/RELEASE/order-close/callback races are NOT_EXECUTED. No claim of main/staging compatibility.
+Exact conflict locations, safe minimal transfer plan, commands, XML, file inventory and hashes:
+`/private/tmp/HT-ACCOUNTING-AUTO-OPEN-COMPLETE-01/REPORT.txt` and `INTEGRATION.txt` in that directory.
+
+Unrelated dirty files and scripts/dev/ preserved; staged empty. No commit/push/PR/merge/deploy/SSH,
+server or real-data changes. No unfinished local operation. Staging smoke remains required only
+after later separately authorized integration/release; the installed staging was not touched.
+Next: separately authorize preservation of all dirty work and integration onto current main,
+retain PR #252 safeguards, run its complete seating/callback/migration gates, then independent review.
+
+## HT-ACCOUNTING-AUTO-SHIFT-OPEN-FIX-01 — P1/P2 review fixes (2026-11-07)
+
+**FIX_READY / READY_FOR_INDEPENDENT_REVIEW / NOT_DEPLOYED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT; primary physical root/common dir/origin
+verified. Branch `codex/ht-venue-shift-sales-mvp-01`, unchanged starting HEAD
+`4d7bb81627ea1a380fb0cbdf9fd8842babef5bf5`; EXPECTED_HEAD/BASE/branch/parent NOT_SUPPLIED.
+This checkpoint supersedes the earlier auto-opening review readiness only for its two findings.
+Bot and connection checkout now acquire venue before table/session/tab/idempotency/menu/order,
+matching Mini App authorization. The venue-specific NO KEY UPDATE lock and all authorization,
+idempotency, atomic audit and extension/completion/financial snapshot contracts remain intact.
+First-sale drafts bind once to the observed current shift; newer saved data wins, existing bound
+drafts win ties/unknown legacy ages, and the unbound key is removed after safe persistence.
+Pending submissions retain their original body/key; account/venue/shift isolation remains.
+
+Validation: 356 targeted backend tests PASS, zero skips/errors/failures. Includes five new PG
+methods with nine fixture scenarios: both Mini App/Bot start orders, catalog/CHAT append to an
+existing ACTIVE order, barrier/pg_blocking_pids contention, failed-first recovery, revoked scope,
+post-idempotency rollback and independent-venue progress. All seven prior financial races PASS.
+Compile/ktlint and TypeScript/Vite build PASS. Focused accounting Playwright 19/19 and full
+Chromium Playwright 666/666 PASS, zero skipped/flaky/retries. All263 migration files unchanged.
+Existing user changes/checkpoint bytes, HEAD/branch/index and scripts/dev/ preserved.
+No commit/push/PR/merge/deploy, server or real-data change. Staging/real Telegram WebView and
+hosted CI remain separate; no full backend suite claim. No unfinished local operation.
+Evidence, exact commands and fix-only patch:
+`/private/tmp/HT-ACCOUNTING-AUTO-SHIFT-OPEN-FIX-01-6x1gggvg/REPORT.txt`.
+Next: independent review of these P1/P2 fixes before separately authorized publication/release.
+
+## HT-ACCOUNTING-AUTO-SHIFT-OPEN-01 — automatic accounting opening (2026-11-07)
+
+**IMPLEMENTED_LOCAL / READY_FOR_INDEPENDENT_REVIEW / NOT_DEPLOYED**.
+PROJECT_IDENTITY_OK: Hookah_Tootah / hookah_bot_ANT, primary root/common dir/origin verified.
+Unchanged branch `codex/ht-venue-shift-sales-mvp-01`, starting HEAD
+`4d7bb81627ea1a380fb0cbdf9fd8842babef5bf5`; EXPECTED_HEAD/BASE/branch/parent NOT_SUPPLIED.
+Scope: local auto-opening on the first saved manual sale or authorized Guest Mini App/Bot order.
+The shared existing shift model and venue writer lock serialize first operations and closure;
+creation, actual-initiator AUTO_OPEN audit, order/sale and idempotency commit or roll back together.
+Guest auto-opening grants no staff/accounting authority. No schema/audit-schema or money contract change.
+Bot quick text confirmation now uses the same atomic writer and a persisted request key; exact
+retry adds no batch or staff notification. Existing catalog fingerprint format remains compatible.
+Ordinary UI offers Add sale immediately without OPEN; GET/catalog/draft creates nothing.
+Older open periods show a venue-timezone warning, retain their original boundary across midnight,
+and close only after OWNER/MANAGER confirmation. The next sale starts a new shift. Legacy OPEN
+API remains compatible; explicit closed/stale shift IDs are not silently redirected.
+
+Validation: 251 distinct backend checks confirmed (250 in the regression run, then the one
+outdated audit-count expectation corrected and its full test rerun PASS; no skips). Includes
+16 new auto-open tests: H2 6 / PostgreSQL 10, four PG barrier tests covering five lock-contention
+scenarios; original seven extension/snapshot concurrency and eleven Guest idempotency PG cases PASS.
+Actual Ktor JSON contract, Bot confirmation/fallback, RBAC, order and financial regressions PASS.
+Kotlin compile/ktlint, Mini App build, accounting Playwright 12/12 and adjacent Playwright 8/8 PASS.
+All263 historical migration files unchanged. Full backend/Playwright suites not rerun.
+Existing user checkpoint bytes, HEAD/branch/index and scripts/dev/ preserved. No commit/push/PR/deploy.
+Staging and real Telegram/WebView acceptance for this change remain unperformed.
+Evidence and exact file inventory: `/private/tmp/HT-ACCOUNTING-AUTO-SHIFT-OPEN-01-_q6zg7cc/REPORT.txt`.
+Next: independent review of the local diff; publication/deploy require separate authorization.
+
 ## HT-PR252-COMPOSE-RUNTIME-FIX-01 — exact V132 runtime fixture (2026-11-08)
 
 **FIX_READY / LOCAL_UNCOMMITTED / HOSTED_RECHECK_REQUIRED**.

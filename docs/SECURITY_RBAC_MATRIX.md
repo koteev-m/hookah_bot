@@ -334,7 +334,11 @@ record share one transaction. Audit failure leaves no partial success. Version/h
 overpayment, negative values and closed-period writes are rejected. Correction of a payment is
 an accounting reversal with an explicit no-real-refund warning. Closed unpaid/disputed balances
 require explicit acknowledgment. No ordinary audit update/delete endpoint or cross-venue history
-projection exists. Existing Stats, guest bill, schedule, support and Platform permissions remain.
+projection exists. A CREATE without shiftId opens the shift atomically under the same membership
+checks; the client does not issue a separate OPEN in ordinary UX. Authorized Guest Mini App/Bot
+checkout may cause AUTO_OPEN with its real initiator, without granting that user any venue role
+or accounting/closure access. The shift, order, event and semantic audit roll back together.
+Existing Stats, guest bill, schedule, support and Platform permissions remain.
 
 ## Dangerous Actions
 

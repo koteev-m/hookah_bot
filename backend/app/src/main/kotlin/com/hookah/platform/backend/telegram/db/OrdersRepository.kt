@@ -11,6 +11,7 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.OrderIdempotencyPayloadMismatchException
 import com.hookah.platform.backend.api.OrderIdempotencyReplayUnverifiableException
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingShiftOpening
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.promotions.GiftDecisionCartItem
 import com.hookah.platform.backend.promotions.GiftDecisionCartScope
@@ -1086,6 +1087,7 @@ class OrdersRepository(
         if (chatOrder && (items.isNotEmpty() || comment.isNullOrBlank() || expectedTableToken.isNullOrBlank())) {
             throw InvalidInputException("A chat order requires a table token, text and no menu items")
         }
+        if (!chatOrder && items.isEmpty()) throw InvalidInputException("Добавьте позиции заказа.")
         val requestFingerprint =
             guestOrderRequestFingerprint(
                 userId = userId,
@@ -1239,6 +1241,7 @@ class OrdersRepository(
                         val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
                         val authoritativeVenueZoneId = venueZoneIdProvider?.invoke(connection) ?: venueZoneId
 
+                        AccountingShiftOpening(clock).open(connection, venueId, userId, "DIGITAL_ORDER")
                         val existingOrderId = findActiveOrderForUpdate(connection, tableSessionId)
                         val orderId =
                             existingOrderId
@@ -1431,6 +1434,7 @@ class OrdersRepository(
         if (chatOrder && (items.isNotEmpty() || comment.isNullOrBlank() || expectedTableToken.isNullOrBlank())) {
             throw InvalidInputException("A chat order requires a table token, text and no menu items")
         }
+        if (!chatOrder && items.isEmpty()) throw InvalidInputException("Добавьте позиции заказа.")
         lockVenue(connection, venueId)
         val requestActive =
             lockQuickOrderRequest(
@@ -1537,6 +1541,7 @@ class OrdersRepository(
             val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
             val authoritativeVenueZoneId = venueZoneIdProvider?.invoke(connection) ?: venueZoneId
             beforeAuthoritativeWrites?.invoke()
+            AccountingShiftOpening(clock).open(connection, venueId, userId, "DIGITAL_ORDER")
             val existingOrderId = findActiveOrderForUpdate(connection, tableSessionId)
             val orderId =
                 existingOrderId

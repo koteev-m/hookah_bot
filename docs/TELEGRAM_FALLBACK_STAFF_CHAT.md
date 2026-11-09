@@ -557,3 +557,16 @@ Rules:
     membership, preview, audit, update, outbox row or delivery.
 44. Unrelated group traffic creates no link or venue action. A valid one-time link code from an
     authorized own-venue actor links only the intended group; foreign/copied callbacks are denied.
+
+### Accounting auto-open — HT-ACCOUNTING-AUTO-OPEN-MAIN-INTEGRATION-01 (local candidate)
+
+Confirmed Bot catalog checkout and confirmed quick text orders use the existing transactional
+order writer: the first order atomically creates/attaches the accounting shift, recording the
+real initiator. No OPEN command or staff-chat action is required. Quick-order confirmation keeps
+a durable request UUID and frozen token/session/tab in its dialog; exact replay does not create
+a second batch, shift or notification. Confirm/edit/cancel serialize on that request; terminal
+context rejection cannot execute later from an old callback. An old dialog lacking frozen context
+must restart from QR. Merely opening a catalog/quick-order
+prompt or typing a draft does not create a shift. Text orders retain CHAT source, author and
+unpriced text semantics; automatic opening neither invents priced lines nor records a receipt.
+Accounting closure remains manual OWNER/MANAGER work in Venue Mode.

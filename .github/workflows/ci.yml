@@ -105,6 +105,16 @@ jobs:
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
             ./gradlew --no-daemon --max-workers=1 :backend:app:test \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCheckoutConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingExtensionConcurrencyPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingHttpContractTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingOrderProjectionTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingMediaTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingLifecycleTest" \
@@ -183,6 +193,16 @@ jobs:
           report_dir = Path("backend/app/build/test-results/test")
           expected_classes = [
               "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenH2Test",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCheckoutConcurrencyPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingExtensionConcurrencyPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingHttpContractTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingOrderProjectionTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingMediaTest",
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingRepositoryTest",
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingLifecycleTest",
@@ -249,6 +269,16 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenH2Test": 7,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenPostgresTest": 11,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCheckoutConcurrencyPostgresTest": 8,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingExtensionConcurrencyPostgresTest": 7,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingHttpContractTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest": 2,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingOrderProjectionTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test": 12,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest": 13,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest": 1,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingMediaTest": 2,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingRepositoryTest": 5,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingLifecycleTest": 6,
@@ -260,7 +290,7 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixRegressionTest": 4,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixHttpTest": 2,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingReviewFixPostgresTest": 3,
-              "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutConcurrencyPostgresTest": 3,
+              "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutConcurrencyPostgresTest": 5,
               "com.hookah.platform.backend.telegram.TelegramQuickOrderConcurrencyPostgresTest": 6,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixHttpTest": 1,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixTest": 3,

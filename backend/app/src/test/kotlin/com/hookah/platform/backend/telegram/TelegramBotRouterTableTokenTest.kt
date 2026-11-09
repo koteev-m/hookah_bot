@@ -36746,7 +36746,10 @@ class TelegramBotRouterTableTokenTest {
                         beforeOldCallback.getValue("guest_batch_idempotency") + 1,
                         afterSuccess["guest_batch_idempotency"],
                     )
-                    assertEquals(beforeOldCallback["audit_log"], afterSuccess["audit_log"])
+                    for (table in listOf("audit_log", "venue_accounting_shifts", "venue_accounting_events")) {
+                        assertEquals(beforeOldCallback.getValue(table) + 1, afterSuccess[table])
+                    }
+                    com.hookah.platform.backend.miniapp.venue.seating.assertCheckoutOpening(ds, seat.venue)
                     assertEquals(beforeOldCallback["telegram_outbox"], afterSuccess["telegram_outbox"])
                     sendQuickOrderCallback(appRouter, freshId)
                     assertEquals(afterSuccess, checkoutCounts(ds))

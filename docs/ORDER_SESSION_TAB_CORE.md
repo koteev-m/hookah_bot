@@ -8,7 +8,8 @@ venue → table/token → exact active session/tab/member → order/batch/idempo
 context, closed tab or rotated token rejects before writes; it never joins the next company.
 CHAT source and author are retained. Exact replay creates no additional batch/notification.
 An older unfinished dialog without frozen context must restart from QR; database uncertainty
-retains the original request for retry. This change does not auto-open an accounting shift.
+retains the original request for retry. The first successful checkout also opens the accounting
+shift in that transaction if none is OPEN; a rejected context or exact replay does not open one.
 
 ## Physical seating and movement (HT-HALLS-SEATING-TABLE-BOOKING-01)
 
@@ -51,8 +52,9 @@ BILL) validates and locks venue → active table → exact active, unexpired ses
 transaction. Completion/acknowledgement also takes the venue lock before the call. A release that
 wins first prevents insertion; a call that wins first prevents release until resolved. Rejection
 rolls back the call and cannot produce a successful notification. Existing BILL deduplication and
-seating command replay contracts remain unchanged. Physical operations never open an accounting shift; separate local
-auto-open work from another checkout is not part of this module.
+seating command replay contracts remain unchanged. Physical operations never open an accounting
+shift. Auto-opening belongs only to a successful manual sale or digital checkout and shares the
+venue-first lock order with physical operations.
 The existing paid extension of ordering/service time remains a separate contract: it does not
 silently extend the physical seating agreement. Staff must use the conflict-checked seating
 extension for that agreement. Offline/walk-in physical visits retain NULL user identity; personal
@@ -323,7 +325,13 @@ smoke is [`ORDER-CONTEXT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#order-con
 
 `orders.accounting_shift_id` attaches an existing order to one venue accounting period without
 changing `table_session`, `order_batch` or personal/shared `tab` ownership. The sole order creator
-sets the reference under the venue lock; shift opening can adopt unassigned ACTIVE orders. Old
+sets the reference under the venue lock; the first authorized checkout creates the shift atomically
+if absent, using the actual initiator for AUTO_OPEN audit. Both checkout transaction overloads
+acquire the venue lock before table/session/tab, idempotency and menu/order locks, matching
+Mini App authorization and Bot checkout even when appending to an existing order. PostgreSQL
+NO KEY UPDATE remains compatible with FK checks; accounting closure uses that same venue lock.
+Existing shift opening can adopt
+unassigned ACTIVE orders. Exact replays return their original order before any new opening. Old
 closed orders are left untouched. Canonical bill snapshots remain the source for digital estimates.
 Payment recording requires operationally CLOSED orders; close itself never implies payment.
 The accounting journal stores explicit external receipt/correction facts and a frozen shift report,
