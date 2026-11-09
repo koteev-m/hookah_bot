@@ -26,6 +26,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   }
   python3 "${COMPARATOR}" self-test
   python3 "${COMPARATOR}" base-pins "${DOCKERFILE}" >/dev/null
+  python3 "${SCRIPT_DIR}/test-gradle-wrapper-bootstrap.py"
   python3 "${ARCHIVE_TOOL}" self-test --cutover-script "${SCRIPT_DIR}/v126-cutover.sh"
   backend_release_artifact_self_test
   exit 0
