@@ -1,0 +1,18 @@
+[
+  {
+    "action": "CREATE",
+    "shiftId": 1,
+    "tableId": 11,
+    "lines": [{ "name": "Первый чек — уже сохранён", "qty": 1, "unitPriceMinor": 12345, "discountMinor": 0, "giftReason": null }],
+    "reason": "",
+    "requestId": "first-draft-operation"
+  },
+  {
+    "action": "CREATE",
+    "shiftId": 1,
+    "tableId": 11,
+    "lines": [{ "name": "Следующая продажа", "qty": 1, "unitPriceMinor": 6789, "discountMinor": 0, "giftReason": null }],
+    "reason": "",
+    "requestId": "next-independent-operation"
+  }
+]

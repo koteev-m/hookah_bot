@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import httpContract from './fixtures/accounting-http.json' with { type: 'json' }
+import draftCommands from './fixtures/accounting-first-draft-commands.json' with { type: 'json' }
 import type { AccountingCommand, AccountingReport, AccountingSale } from '../src/shared/api/accounting'
 
 test.use({ viewport: { width: 390, height: 844 } })
@@ -28,6 +29,8 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
   let loseResponse = false
   let timeoutResponse = false
   let conflict = false
+  let failBeforeCommit = false
+  let responseBarrier: Promise<void> | undefined
   let deny = false
   await page.addInitScript(() => {
     const user = Number(sessionStorage.getItem('accounting-test-actor') ?? 103)
@@ -51,6 +54,7 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
     expect(req.headers().authorization).toBe('Bearer synthetic-session')
     commands.push(body)
     if (conflict) { conflict = false; return route.fulfill({ status: 409, json: { error: { code: 'ACCOUNTING_CONFLICT', message: 'Данные изменились. Обновите отчёт.' } } }) }
+    if (failBeforeCommit) { failBeforeCommit = false; return route.fulfill({ status: 503, json: { error: { code: 'UNAVAILABLE', message: 'Try again' } } }) }
     if (useHttpContract) {
       const step = commands.length - 1
       expect(step).toBeLessThan(2)
@@ -70,6 +74,7 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
           current = { ...report(venue), shiftId: nextId }
         }
         const added = sale()
+        added.id = `manual:${body.requestId}`
         added.lines = body.lines!.map((line, index) => ({ ...added.lines[0], ...line, id: `new-${index}`, menuItemId: line.menuItemId ?? null,
           name: line.menuItemId ? 'Чай из меню' : line.name!, unitPriceMinor: line.unitPriceMinor!, discountMinor: line.discountMinor ?? 0, giftReason: line.giftReason ?? null }))
         current = { ...report(venue, [...current.sales, added]), shiftId: current.shiftId }; reports.set(venue, current)
@@ -84,6 +89,7 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
     }
     if (loseResponse) { loseResponse = false; return route.abort('failed') }
     if (timeoutResponse) { timeoutResponse = false; return route.fulfill({ status: 408, json: { error: { code: 'REQUEST_TIMEOUT', message: 'Request timed out' } } }) }
+    if (responseBarrier) { const barrier = responseBarrier; responseBarrier = undefined; await barrier }
     return route.fulfill({ json: current })
   })
   await page.goto('accounting-test?venueId=1#/accounting?av=1')
@@ -91,11 +97,13 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
   await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
   return { commands, reports, loseNextResponse() { loseResponse = true }, deny() { deny = true },
     timeoutNextResponse() { timeoutResponse = true }, conflictNextSave() { conflict = true },
+    failNextBeforeCommit() { failBeforeCommit = true },
+    holdNextResponse() { let release!: () => void; responseBarrier = new Promise<void>(resolve => { release = resolve }); return () => release() },
     guestOpensShift(venue = 1) { unopened.delete(venue) },
     async switchAccount(user: number) { actor = user; await page.evaluate(id => sessionStorage.setItem('accounting-test-actor', String(id)), user); await page.reload() } }
 }
 
-test('mobile staff preserves draft through Telegram Back reload and venue switch then retries exact lost response', async ({ page }) => {
+test('mobile staff preserves draft through Telegram Back reload and venue switch then retries exact lost response', async ({ page }, testInfo) => {
   const api = await fixture(page)
   await expect(page.getByRole('button', { name: 'Предварительный итог и закрытие' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
@@ -125,7 +133,7 @@ test('mobile staff preserves draft through Telegram Back reload and venue switch
   expect(api.commands[0].lines?.[0].unitPriceMinor).toBe(12550)
   expect(api.reports.get(1)?.sales).toHaveLength(1)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-  await page.screenshot({ path: '/private/tmp/HT-VENUE-SHIFT-SALES-MVP-01-mobile.png', fullPage: true })
+  await page.screenshot({ path: testInfo.outputPath('mobile-accounting.png'), fullPage: true })
 })
 
 test('gift requires reason and menu amount is sent in integer minor units', async ({ page }) => {
@@ -450,4 +458,205 @@ test('first sale conflict preserves all draft lines through guest opening and re
   expect(api.commands[1].lines).toEqual(api.commands[0].lines)
   expect(api.commands[1].shiftId).toBe(1)
   expect(api.reports.get(1)!.sales).toHaveLength(1)
+})
+
+const accountingScope = (page: Page, user = 103, venue = 1) => `hookah:accounting:${new URL(page.url()).host}:${user}:${venue}`
+const stored = (page: Page, key: string) => page.evaluate(k => sessionStorage.getItem(k), key)
+async function enterFirstDraft(page: Page) {
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Название', { exact: true }).fill(draftCommands[0].lines[0].name)
+  await page.getByLabel('Цена за единицу, ₽').fill('123,45')
+}
+async function exhaustSessionStorage(page: Page) {
+  const quota = await page.evaluate(() => {
+    let low = 0, high = 6 * 1024 * 1024, errors = 0
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2)
+      try { sessionStorage.setItem('accounting-quota-filler', 'x'.repeat(middle)); low = middle }
+      catch (error) { if (!(error instanceof DOMException) || error.name !== 'QuotaExceededError') throw error; errors++; high = middle - 1 }
+    }
+    sessionStorage.setItem('accounting-quota-filler', 'x'.repeat(low))
+    return { chars: low, errors }
+  })
+  expect(quota.chars).toBeGreaterThan(1_000_000)
+  expect(quota.errors).toBeGreaterThan(0)
+  return quota
+}
+async function quotaFallback(page: Page) {
+  const api = await fixture(page, 'STAFF', [], false, true)
+  await enterFirstDraft(page)
+  const first = `${accountingScope(page)}:draft:first:new`
+  const bound = `${accountingScope(page)}:draft:1:new`
+  const original = await stored(page, first)
+  const quota = await exhaustSessionStorage(page)
+  api.guestOpensShift()
+  await page.reload()
+  await expect(page.getByLabel('Название', { exact: true })).toHaveValue(draftCommands[0].lines[0].name)
+  expect(await stored(page, first)).toBe(original)
+  expect(await stored(page, bound)).toBeNull()
+  return { api, first, bound, original, quota, pending: `${accountingScope(page)}:pending` }
+}
+function expectDraftCommand(command: AccountingCommand, index = 0) {
+  expect(command.requestId).toMatch(/^[0-9a-f-]{36}$/)
+  expect({ ...command, requestId: draftCommands[index].requestId }).toEqual(draftCommands[index])
+}
+
+test('real quota fallback cleans the actual first draft and permits only a genuinely new sale', async ({ page }, testInfo) => {
+  const { api, first, bound, pending, quota } = await quotaFallback(page)
+  // The same full browser storage must also prevent sending an unpersisted request.
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('Операция не отправлена')
+  expect(api.commands).toHaveLength(0)
+  expect(await stored(page, pending)).toBeNull()
+  expect(await stored(page, first)).not.toBeNull()
+  await page.evaluate(() => sessionStorage.removeItem('accounting-quota-filler'))
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(api.commands).toHaveLength(1)
+  expectDraftCommand(api.commands[0])
+  expect(api.reports.get(1)!.sales).toHaveLength(1)
+  for (const key of [first, bound, pending]) expect(await stored(page, key)).toBeNull()
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await expect(page.getByLabel('Название', { exact: true })).toHaveValue('')
+  await expect(page.getByLabel('Цена за единицу, ₽')).toHaveValue('')
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  expect(api.commands).toHaveLength(1)
+  await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Название', { exact: true }).fill(draftCommands[1].lines[0].name)
+  await page.getByLabel('Цена за единицу, ₽').fill('67,89')
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(api.commands).toHaveLength(2)
+  expectDraftCommand(api.commands[1], 1)
+  expect(api.commands[1].requestId).not.toBe(api.commands[0].requestId)
+  expect(api.reports.get(1)!.totals.accruedMinor).toBe(19134)
+  await testInfo.attach('actual-browser-commands.json', { body: JSON.stringify({ quota, commands: api.commands }), contentType: 'application/json' })
+})
+
+test('successful first draft adoption removes both operation copies after save', async ({ page }) => {
+  const api = await fixture(page, 'STAFF', [], false, true)
+  await enterFirstDraft(page)
+  const first = `${accountingScope(page)}:draft:first:new`, bound = `${accountingScope(page)}:draft:1:new`
+  api.guestOpensShift()
+  await page.reload()
+  await expect(page.getByLabel('Название', { exact: true })).toHaveValue(draftCommands[0].lines[0].name)
+  expect(await stored(page, first)).toBeNull()
+  expect(await stored(page, bound)).not.toBeNull()
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(await stored(page, first)).toBeNull()
+  expect(await stored(page, bound)).toBeNull()
+  expect(api.commands).toHaveLength(1)
+  expectDraftCommand(api.commands[0])
+})
+
+for (const failure of ['conflict', 'before-commit', '408', 'lost-response'] as const) {
+  test(`real quota fallback preserves draft after ${failure} and safely retries`, async ({ page }) => {
+    const { api, first, bound, pending, original } = await quotaFallback(page)
+    await page.evaluate(() => sessionStorage.removeItem('accounting-quota-filler'))
+    if (failure === 'conflict') api.conflictNextSave()
+    if (failure === 'before-commit') api.failNextBeforeCommit()
+    if (failure === '408') api.timeoutNextResponse()
+    if (failure === 'lost-response') api.loseNextResponse()
+    await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+    if (failure === 'conflict') {
+      await expect(page.getByRole('alert')).toContainText('Данные изменились')
+      expect(await stored(page, pending)).toBeNull()
+      // Available storage permits migration on rerender; the input is still retained.
+      expect((await stored(page, first)) ?? (await stored(page, bound))).toBe(original)
+    } else {
+      await expect(page.getByRole('button', { name: 'Проверить и повторить операцию' })).toBeVisible()
+      expect(await stored(page, first)).toBe(original)
+      expect(await stored(page, bound)).toBeNull()
+      expect(JSON.parse((await stored(page, pending))!).body).toEqual(api.commands[0])
+    }
+    expect(api.reports.get(1)!.sales).toHaveLength(['408', 'lost-response'].includes(failure) ? 1 : 0)
+    await page.reload()
+    if (failure === 'conflict') {
+      await expect(page.getByLabel('Название', { exact: true })).toHaveValue(draftCommands[0].lines[0].name)
+      await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+    } else await page.getByRole('button', { name: 'Проверить и повторить операцию' }).click()
+    await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+    expect(api.commands).toHaveLength(2)
+    if (failure !== 'conflict') expect(api.commands[1]).toEqual(api.commands[0])
+    expectDraftCommand(api.commands[0]); expectDraftCommand(api.commands[1])
+    expect(api.reports.get(1)!.sales).toHaveLength(1)
+    for (const key of [first, bound, pending]) expect(await stored(page, key)).toBeNull()
+  })
+}
+
+test('late success preserves newer same-key revision and foreign drafts and pending operation', async ({ page }) => {
+  const api = await fixture(page)
+  await enterFirstDraft(page)
+  const key = `${accountingScope(page)}:draft:1:new`, pending = `${accountingScope(page)}:pending`
+  const release = api.holdNextResponse()
+  try {
+    await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+    await expect.poll(() => api.commands.length).toBe(1)
+    const protectedData = await page.evaluate(({ key, pending }) => {
+      const draft = JSON.parse(sessionStorage.getItem(key)!)
+      // Same payload and clock tick, but a different edit: content/timestamp alone is insufficient.
+      draft.revision = crypto.randomUUID()
+      const prefix = `hookah:accounting:${location.host}:`
+      const entries = [[key, JSON.stringify(draft)], [`${prefix}103:1:draft:99:new`, 'another shift'],
+        [`${prefix}103:2:draft:first:new`, 'another venue'], [`${prefix}204:1:draft:first:new`, 'another user'],
+        [pending, JSON.stringify({ body: { action: 'CREATE', requestId: 'parallel-operation' } })]]
+      entries.forEach(([k, value]) => sessionStorage.setItem(k, value))
+      return entries
+    }, { key, pending })
+    release()
+    await expect(page.getByRole('button', { name: 'Проверить и повторить операцию' })).toBeVisible()
+    for (const [k, value] of protectedData) expect(await stored(page, k)).toBe(value)
+    expect(api.commands).toHaveLength(1)
+  } finally { release() }
+})
+
+test('double synchronous submit sends one persisted requestId', async ({ page }) => {
+  const api = await fixture(page, 'STAFF', [], false, true)
+  await enterFirstDraft(page)
+  const release = api.holdNextResponse()
+  try {
+    await page.locator('form.accounting-editor').evaluate(form => {
+      form.dispatchEvent(new Event('submit', { cancelable: true }))
+      form.dispatchEvent(new Event('submit', { cancelable: true }))
+    })
+    await expect.poll(() => api.commands.length).toBe(1)
+    const pending = JSON.parse((await stored(page, `${accountingScope(page)}:pending`))!)
+    expect(pending.body).toEqual(api.commands[0])
+    await expect(page.getByRole('button', { name: 'Сохранить продажу', exact: true })).toBeDisabled()
+    release()
+    await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+    expect(api.commands).toHaveLength(1)
+    expect(api.reports.get(1)!.sales).toHaveLength(1)
+  } finally { release() }
+})
+
+for (const newer of [false, true]) test(`legacy pending replay preserves its request and protects newer draft: ${newer}`, async ({ page }) => {
+  const { api, first, bound, pending } = await quotaFallback(page)
+  await page.evaluate(() => sessionStorage.removeItem('accounting-quota-filler'))
+  api.loseNextResponse()
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Проверить и повторить операцию' })).toBeVisible()
+  await page.evaluate(({ first, bound, pending, newer }) => {
+    const operation = JSON.parse(sessionStorage.getItem(pending)!)
+    // Pre-fix pending records have only the computed shift key, even when the source was first:new.
+    sessionStorage.setItem(pending, JSON.stringify({ body: operation.body, draftKey: bound }))
+    const draft = JSON.parse(sessionStorage.getItem(first)!)
+    if (newer) draft.revision = crypto.randomUUID()
+    else delete draft.revision
+    sessionStorage.setItem(first, JSON.stringify(draft))
+  }, { first, bound, pending, newer })
+  const preserved = await stored(page, first)
+  await page.reload()
+  await page.getByRole('button', { name: 'Проверить и повторить операцию' }).click()
+  await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
+  expect(api.commands).toHaveLength(2)
+  expect(api.commands[1]).toEqual(api.commands[0])
+  expect(api.reports.get(1)!.sales).toHaveLength(1)
+  expect(await stored(page, pending)).toBeNull()
+  expect(await stored(page, first)).toBeNull()
+  expect(await stored(page, bound)).toBe(newer ? preserved : null)
+  await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
+  await expect(page.getByLabel('Название', { exact: true })).toHaveValue(newer ? draftCommands[0].lines[0].name : '')
 })

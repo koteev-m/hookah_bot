@@ -1893,6 +1893,17 @@ after safe integration retain its durable quick-order dialog/token/context guard
 current seating/migration suite against PostgreSQL V132 / H2 V133. No local old-base PASS
 substitutes for integrated MOVE/RELEASE/order-close/callback evidence.
 
+First-draft cleanup gate (`HT-ACCOUNTING-FIRST-DRAFT-P2-FIX-01`): fill real Chromium sessionStorage
+to QuotaExceededError, let a guest-opened shift fail to adopt the first draft, then free space and
+save. Require one command/sale, removal of the actual source copy, an empty next editor and a new
+request ID only for a genuinely new sale. Check normal adoption, API refusal/pre-commit failure,
+408/lost-response replay through reload, double submit and late success with newer/foreign data.
+`accounting-first-draft-commands.json` binds the browser's complete commands (only UUIDs normalized)
+to `AccountingFirstDraftHttpPostgresTest`: real HTTP/PostgreSQL sale and CREATE audit counts,
+rollback, exact replay, the next independent sale and byte-identical closed reports/debt/history.
+Run all accounting browser tests, the full Chromium suite, accounting backend/HTTP tests and the
+production Mini App build; a mock-only financial count is insufficient evidence.
+
 Main integration gate (`HT-ACCOUNTING-AUTO-OPEN-MAIN-INTEGRATION-01`): run the complete backend
 and Chromium suites on the merged tree, with zero skips/retries. Extend the current main Bot and
 Seating assertions with exact shift/event/audit counts, not just absence of exceptions. Successful

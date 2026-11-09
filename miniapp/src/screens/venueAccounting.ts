@@ -9,7 +9,10 @@ import { formatPrice } from '../shared/ui/price'
 
 type Options = { root: HTMLDivElement | null; backendUrl: string; isDebug: boolean; venueId: number; access: VenueAccessDto; userId?: number | null }
 type LineDraft = { id?: string; menuItemId?: number; name: string; qty: string; price: string; discount: string; gift: boolean; giftReason: string }
-type Draft = { version?: number; tableId: string; lines: LineDraft[]; reason: string; updatedAt?: number }
+type Draft = { version?: number; tableId: string; lines: LineDraft[]; reason: string; updatedAt?: number; revision?: string }
+type StoredCopy = { key: string; value: string }
+type StoredDraft = { draft: Draft; key: string; copies: StoredCopy[] }
+type PendingCommand = { body: AccountingCommand; draftCopies?: StoredCopy[]; draftKey?: string }
 const sourceNames: Record<string, string> = { MANUAL: 'Вручную', MINIAPP: 'Mini App', CHAT: 'Telegram', STAFF: 'Заказ персонала', MIXED: 'Telegram / Mini App', SERVICE_CHARGE: 'Услуга в счёте' }
 const paymentNames: Record<string, string> = { CASH: 'Наличные', CARD: 'Карта', TRANSFER: 'Перевод' }
 const money = (value: number) => formatPrice(value, 'RUB')
@@ -22,6 +25,22 @@ function minor(text: string): number {
 function storageRead<T>(key: string): T | null { try { return JSON.parse(sessionStorage.getItem(key) ?? 'null') as T | null } catch { return null } }
 function storageWrite(key: string, value: unknown): boolean { try { sessionStorage.setItem(key, JSON.stringify(value)); return true } catch { return false } }
 function storageRemove(key: string) { try { sessionStorage.removeItem(key) } catch { /* No financial state is stored only in the browser. */ } }
+function removeUnchanged(copy: StoredCopy) {
+  try { if (sessionStorage.getItem(copy.key) === copy.value) sessionStorage.removeItem(copy.key) } catch { /* Keep data if storage is unavailable. */ }
+}
+function readDraft(key: string): StoredDraft | null {
+  try {
+    const value = sessionStorage.getItem(key)
+    return value ? { draft: JSON.parse(value) as Draft, key, copies: [{ key, value }] } : null
+  } catch { return null }
+}
+function matchesLegacyCommand(draft: Draft, body: AccountingCommand): boolean {
+  if (draft.revision || !['CREATE', 'EDIT'].includes(body.action)) return false
+  try {
+    return draft.version === body.expectedVersion && Number(draft.tableId) === body.tableId && draft.reason === body.reason &&
+      JSON.stringify(draft.lines.map(line => ({ id: line.id, menuItemId: line.menuItemId, name: line.name, qty: Number(line.qty), unitPriceMinor: minor(line.price), discountMinor: minor(line.discount), giftReason: line.gift ? line.giftReason : null }))) === JSON.stringify(body.lines)
+  } catch { return false }
+}
 function button(text: string, action: () => void, secondary = true) {
   const node = el('button', { text, className: secondary ? 'button-secondary' : '' })
   node.type = 'button'; node.addEventListener('click', action); return node
@@ -53,15 +72,19 @@ export function renderVenueAccountingScreen(options: Options) {
   const scope = `hookah:accounting:${location.host}:${identity}:${venueId}`
   const pendingKey = `${scope}:pending`
   const firstDraftKey = `${scope}:draft:first:new`
-  const adoptFirstDraft = (shiftId: number): Draft | null => {
+  const adoptFirstDraft = (shiftId: number): StoredDraft | null => {
     const key = `${scope}:draft:${shiftId}:new`
-    const first = storageRead<Draft>(firstDraftKey)
-    const current = storageRead<Draft>(key)
+    const first = readDraft(firstDraftKey)
+    const current = readDraft(key)
     if (!first) return current
     // Existing legacy drafts win when their relative age is unknown.
-    const chosen = current && !(first.updatedAt !== undefined && current.updatedAt !== undefined && first.updatedAt > current.updatedAt) ? current : first
-    if (chosen === current || storageWrite(key, chosen)) storageRemove(firstDraftKey)
-    return chosen
+    if (current && !(first.draft.updatedAt !== undefined && current.draft.updatedAt !== undefined && first.draft.updatedAt > current.draft.updatedAt)) {
+      removeUnchanged(first.copies[0])
+      return current
+    }
+    if (!storageWrite(key, first.draft)) return first
+    removeUnchanged(first.copies[0])
+    return { draft: first.draft, key, copies: [...first.copies, { key, value: JSON.stringify(first.draft) }] }
   }
   const query = new URLSearchParams(location.hash.split('?')[1] ?? '')
   const sameVenue = query.get('av') === String(venueId)
@@ -86,9 +109,19 @@ export function renderVenueAccountingScreen(options: Options) {
         : ['ACCOUNTING_CONFLICT', 'INVALID_INPUT'].includes(value.code ?? '') ? value.message ?? 'Проверьте данные.'
           : 'Не удалось подтвердить операцию. Обновите отчёт; повтор с теми же данными не создаёт вторую запись.'
   }
-  const run = async (body: AccountingCommand, draftKey?: string) => {
+  const run = async (operation: PendingCommand) => {
     if (saving) return
-    if (!storageWrite(pendingKey, { body, draftKey })) {
+    const pending = storageRead<PendingCommand>(pendingKey)
+    if (pending && pending.body.requestId !== operation.body.requestId) { render(); return }
+    const { body } = operation
+    // Upgrade old pending records only when the legacy draft still matches their submitted input.
+    if (!operation.draftCopies && operation.draftKey) {
+      const keys = [operation.draftKey, ...(body.action === 'CREATE' ? [firstDraftKey] : [])]
+      operation = { ...operation, draftCopies: [...new Set(keys)].filter(key => key.startsWith(`${scope}:draft:`))
+        .flatMap(key => { const saved = readDraft(key); return saved && matchesLegacyCommand(saved.draft, body) ? saved.copies : [] }) }
+    }
+    const pendingCopy = { key: pendingKey, value: JSON.stringify(operation) }
+    if (!storageWrite(pendingKey, operation)) {
       showError(new Error('Операция не отправлена: не удалось сохранить данные для безопасного повтора. Оставьте форму открытой, освободите место в хранилище браузера и повторите сохранение.'))
       return
     }
@@ -97,19 +130,23 @@ export function renderVenueAccountingScreen(options: Options) {
     const result = await accountingCommand(backendUrl, venueId, body, deps)
     saving = false
     if (result.ok) {
-      storageRemove(pendingKey)
-      if (draftKey) storageRemove(draftKey)
+      removeUnchanged(pendingCopy)
+      operation.draftCopies?.filter(copy => copy.key.startsWith(`${scope}:draft:`)).forEach(removeUnchanged)
       if (disposed) return
       report = result.data
       if (body.action === 'CREATE') navigate()
       else render()
     } else {
-      if ([400, 401, 403, 404, 409, 422].includes(result.error.status)) storageRemove(pendingKey)
+      if ([400, 401, 403, 404, 409, 422].includes(result.error.status)) removeUnchanged(pendingCopy)
       if (disposed) return
       render(); showError(result.error)
     }
   }
-  const submit = (body: Omit<AccountingCommand, 'requestId'>, draftKey?: string) => void run({ ...body, requestId: crypto.randomUUID() }, draftKey)
+  const submit = (body: Omit<AccountingCommand, 'requestId'>, draftCopies?: StoredCopy[]) => {
+    if (saving) return
+    if (storageRead(pendingKey)) { render(); return }
+    void run({ body: { ...body, requestId: crypto.randomUUID() }, draftCopies })
+  }
   const saleCommand = (sale: AccountingSale, action: string, extra: Partial<AccountingCommand> = {}) => submit({ action, shiftId: report!.shiftId, saleId: sale.id, expectedVersion: sale.version, ...extra })
   const reasonAction = (sale: AccountingSale, action: string, title: string, explanation: string, extra: Partial<AccountingCommand> = {}) => {
     const box = el('div', { className: 'card' })
@@ -121,10 +158,12 @@ export function renderVenueAccountingScreen(options: Options) {
     content.appendChild(box); reason.focus()
   }
   const lineEditor = (sale?: AccountingSale) => {
-    const draftKey = `${scope}:draft:${report?.shiftId ?? 'first'}:${sale?.id ?? 'new'}`
+    const targetKey = `${scope}:draft:${report?.shiftId ?? 'first'}:${sale?.id ?? 'new'}`
     const blank = (): LineDraft => ({ name: '', qty: '1', price: '', discount: '0', gift: false, giftReason: '' })
-    const saved = !sale && report ? adoptFirstDraft(report.shiftId) : storageRead<Draft>(draftKey)
-    const draft: Draft = saved ?? {
+    const saved = !sale && report ? adoptFirstDraft(report.shiftId) : readDraft(targetKey)
+    const draftKey = saved?.key ?? targetKey
+    let draftCopies = saved?.copies ?? []
+    const draft: Draft = saved?.draft ?? {
       version: sale?.version, tableId: sale ? String(sale.tableId) : '', reason: '',
       lines: sale ? sale.lines.map((line) => ({ id: line.id, name: line.name, qty: String(line.qty), price: decimal(line.unitPriceMinor), discount: decimal(line.discountMinor), gift: line.giftReason !== null, giftReason: line.giftReason ?? '' })) : [blank()]
     }
@@ -132,7 +171,12 @@ export function renderVenueAccountingScreen(options: Options) {
       append(content, el('p', { text: 'Запись изменилась после начала исправления. Черновик сохранён; проверьте актуальные суммы перед новым исправлением.' }), button('Загрузить актуальную запись вместо черновика', () => { storageRemove(draftKey); render() }), button('К отчёту', () => navigate()))
       return
     }
-    const save = () => { draft.updatedAt = Date.now(); storageWrite(draftKey, draft) }
+    const save = () => {
+      draft.updatedAt = Date.now(); draft.revision = crypto.randomUUID()
+      if (storageWrite(draftKey, draft)) {
+        draftCopies = [...draftCopies.filter(copy => copy.key !== draftKey), { key: draftKey, value: JSON.stringify(draft) }]
+      }
+    }
     const form = el('form', { className: 'card accounting-editor' })
     const select = el('select'); append(select, new Option('Выберите стол', ''))
     tables.filter((t) => t.isActive || t.tableId === sale?.tableId).forEach((t) => select.appendChild(new Option(t.tableLabel, String(t.tableId))))
@@ -185,7 +229,7 @@ export function renderVenueAccountingScreen(options: Options) {
           return { id: line.id, menuItemId: line.menuItemId, name: line.name, qty: Number(line.qty), unitPriceMinor: minor(line.price), discountMinor: minor(line.discount), giftReason: line.gift ? line.giftReason : null }
         })
         if ((sale || lines.some((line) => (line.discountMinor ?? 0) > 0)) && !draft.reason.trim()) throw new Error('Укажите причину исправления или скидки.')
-        submit({ action: sale ? 'EDIT' : 'CREATE', shiftId: report?.shiftId, saleId: sale?.id, expectedVersion: sale?.version, tableId: Number(draft.tableId), lines, reason: draft.reason }, draftKey)
+        submit({ action: sale ? 'EDIT' : 'CREATE', shiftId: report?.shiftId, saleId: sale?.id, expectedVersion: sale?.version, tableId: Number(draft.tableId), lines, reason: draft.reason }, draftCopies)
       } catch (e) { showError(e as Error) }
     })
     content.appendChild(form)
@@ -225,9 +269,9 @@ export function renderVenueAccountingScreen(options: Options) {
   const render = () => {
     if (disposed) return
     content.replaceChildren()
-    const pending = storageRead<{ body: AccountingCommand; draftKey?: string }>(pendingKey)
+    const pending = storageRead<PendingCommand>(pendingKey)
     if (pending) {
-      append(content, el('p', { text: 'Результат предыдущей операции ещё не подтверждён. Повтор безопасен: сохранён тот же ключ и те же данные.' }), button('Проверить и повторить операцию', () => void run(pending.body, pending.draftKey)))
+      append(content, el('p', { text: 'Результат предыдущей операции ещё не подтверждён. Повтор безопасен: сохранён тот же ключ и те же данные.' }), button('Проверить и повторить операцию', () => void run(pending)))
       return
     }
     if (!report) {

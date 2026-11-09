@@ -918,6 +918,11 @@ transactional venue lock allow only one open accounting shift per venue.
   An HTTP timeout is an unknown result: preserve the same pending operation across reload and
   replay it, rather than allowing a new sale command. A definite validation/conflict refusal
   leaves the entered draft available for correction.
+  If adoption cannot store the shift-bound copy, the editor keeps the actual source key.
+  Pending commands retain exact stored draft versions as well as the original request ID/payload.
+  Confirmed success removes only those unchanged operation copies; newer edits (including equal
+  input saved in the same clock tick), another operation, account, venue or shift are preserved.
+  Refusals and unknown outcomes do not discard the user's input. No storage-wide cleanup is used.
 
 PostgreSQL V131 / H2 V132 are additive; old orders keep NULL shift references until explicit
 adoption of an active order. Historical rows and guest APIs are preserved. Accounting history
