@@ -1,9 +1,18 @@
 # Venue Mode Operations Model
 
+Current release evidence (2026-11-09): main `8292696…` is reported installed on staging with
+PostgreSQL V132 and technical smoke PASS; this task did not inspect the server. Halls/table editing,
+physical seating/manual and guest reservations, publication/links and accounting/auto-open are
+in main and that reported image. Their phone/product acceptance remains open. See
+[roadmap Section 13.0](UPDATED_PRODUCT_AI_ROADMAP.md#130-current-evidence-boundary--2026-11-09);
+older local-candidate headings do not mean the code still needs integration or deploy.
+
 
 ## Halls, physical seating and table booking (HT-HALLS-SEATING-TABLE-BOOKING-01)
 
-Local implementation candidate; release and real Telegram acceptance are not implied.
+Implemented in main (PR #252) and present in the reported staging image; real Telegram/WebView
+and live plan-media acceptance remain unperformed. Table edit/deactivation is part of this module,
+not a missing second CRUD feature (`VENUE-TABLE-CRUD-001`).
 `venue_tables` remains the only physical table registry. `tableId`, QR tokens and historical
 references survive renaming, hall assignment and marker movement. Existing tables keep NULL
 capacity and appear under «Без зала»; NULL is shown as «неизвестно», never an invented capacity.
@@ -840,7 +849,7 @@ and enabled, with legacy `TELEGRAM_FILE` compatibility in one information-media 
 Production operating policy, cost/ownership, backup/restore, physical deletion and remaining
 live/error/device evidence stay open. The staging provider decision is closed for this slice.
 
-## Учёт смены — HT-VENUE-SHIFT-SALES-MVP-01 (local candidate)
+## Учёт смены — HT-VENUE-SHIFT-SALES-MVP-01 (in main; live acceptance open)
 
 This is internal venue accounting, separate from `staff_shifts`, staff schedules and Platform Billing.
 `venue_accounting_shifts` is an explicit OPEN/CLOSED period. UTC instants and the venue timezone

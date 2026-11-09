@@ -1,5 +1,11 @@
 # Product Spec v1 — Telegram Hookah Platform (Multi-tenant)
 
+Current implementation/release reconciliation: 2026-11-09, `HT-PRODUCT-DOCS-RECONCILIATION-01`.
+See [roadmap Section 13.0](UPDATED_PRODUCT_AI_ROADMAP.md#130-current-evidence-boundary--2026-11-09).
+Main `8292696…` and reported staging V132 include halls/seating/table booking, accounting/auto-open,
+publication/personal links and Guest loyalty reads. Dated local-candidate wording below is not a
+current integration/deploy blocker; feature-specific live acceptance remains separate and open.
+
 ## Product summary
 A single Telegram bot + Telegram Mini App (WebApp) that serves many hookah lounges (“venues”) without code changes per new venue.
 Guests can browse a catalog, book a visit, and in-venue scan a table QR to open the Mini App, view menu, place orders and call staff.
@@ -495,7 +501,7 @@ SHOULD:
 - SLA timers and alerts.
 - Paid extension of the current venue/table service window can be requested by guest and confirmed by staff/manager; confirmed extension adds the agreed charge to the bill and extends the current operational/session window.
 
-### Sales accounting and close — local MVP candidate
+### Sales accounting and close — in main, live acceptance open
 
 `Учёт смены` is a separate venue accounting period, not a staff schedule or paid service extension.
 STAFF/MANAGER/OWNER record table sales and external receipts; MANAGER/OWNER inspect history and
@@ -507,7 +513,8 @@ Existing digital orders are attached once; manual sales create
 no guest/session/order/notification. Estimates and operator-confirmed receipts stay separate.
 Exact MVP prerequisites, correction boundaries and unpaid-close consequences are canonical in
 `docs/VENUE_OPERATIONS.md`; RBAC in `docs/SECURITY_RBAC_MATRIX.md`; formulas in
-`docs/ANALYTICS_EVENTS.md`. Local implementation does not establish staging acceptance.
+`docs/ANALYTICS_EVENTS.md`. Main and reported staging contain the implementation; technical smoke
+does not establish the live accounting/Telegram acceptance described in the QA strategy.
 
 ### Paid venue/shift extension — P1 design
 

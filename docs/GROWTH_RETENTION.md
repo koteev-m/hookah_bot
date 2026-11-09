@@ -1,5 +1,14 @@
 # Guest Growth And Retention Model
 
+Evidence reconciliation (2026-11-09): Gift/Repeat code is in main `8292696…` and the reported
+staging image, but their complete feature-specific live acceptance is not proved; older
+“review before commit” wording describes history. PR #247 also implements catalog promotions,
+separate visit/booking/order history reads and the Guest Mini App loyalty progress/reward/target
+screen (`GuestLoyaltyRoutes`, `guestLoyalty.ts`, authenticated route and browser tests).
+`GROWTH-LOYALTY-PRODUCTIZE-001` still owns enablement/financial-lifecycle/compatibility evidence;
+`REPEAT-MANUAL-001` still owns the deferred live scenario. See
+[roadmap Section 13.0](UPDATED_PRODUCT_AI_ROADMAP.md#130-current-evidence-boundary--2026-11-09).
+
 Дата актуализации: 2026-08-15.
 
 Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 / Happy Hours Percent is **DONE / STAGING-SMOKE-PASSED**. Gift parity is **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; CI and staging evidence remain open. Promotion creation audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Promotion effective state clarity is **PROMOTION EFFECTIVE STATE CLARITY / DONE / MVP / STAGING-SMOKE-PASSED**. Promotion lifecycle status/archive audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Venue promotions tabs are **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**. Promotion configuration edit audit and broader dangerous-action audit remain partial/future.
