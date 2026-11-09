@@ -30,6 +30,7 @@ class StaffCallRepository(
     suspend fun listActiveByVenue(
         venueId: Long,
         limit: Int,
+        callId: Long? = null,
     ): List<StaffCallQueueItem> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         val activeSince = Instant.now().minus(ACTIVE_STAFF_CALL_WINDOW)
@@ -57,15 +58,17 @@ class StaffCallRepository(
                         LEFT JOIN tab t ON t.id = sc.tab_id
                         LEFT JOIN users u ON u.telegram_user_id = sc.created_by_user_id
                         WHERE sc.venue_id = ?
-                          AND sc.status IN ('NEW', 'ACK')
-                          AND sc.created_at >= ?
+                          AND ((? IS NULL AND sc.status IN ('NEW', 'ACK') AND sc.created_at >= ?)
+                            OR sc.id = ?)
                         ORDER BY sc.created_at DESC, sc.id DESC
                         LIMIT ?
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, venueId)
-                        statement.setTimestamp(2, Timestamp.from(activeSince))
-                        statement.setInt(3, limit)
+                        statement.setObject(2, callId, java.sql.Types.BIGINT)
+                        statement.setTimestamp(3, Timestamp.from(activeSince))
+                        statement.setObject(4, callId, java.sql.Types.BIGINT)
+                        statement.setInt(5, limit)
                         statement.executeQuery().use { rs ->
                             val result = mutableListOf<StaffCallQueueItem>()
                             while (rs.next()) {

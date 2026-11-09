@@ -73,7 +73,11 @@ fun Route.venueStaffCallRoutes(
             if (limit <= 0 || limit > MAX_STAFF_CALL_LIMIT) {
                 throw InvalidInputException("limit must be between 1 and $MAX_STAFF_CALL_LIMIT")
             }
-            val calls = staffCallRepository.listActiveByVenue(venueId = venueId, limit = limit)
+            val callId =
+                call.request.queryParameters["callId"]?.let {
+                    it.toLongOrNull()?.takeIf { id -> id > 0 } ?: throw InvalidInputException("callId must be positive")
+                }
+            val calls = staffCallRepository.listActiveByVenue(venueId = venueId, limit = limit, callId = callId)
             call.respond(VenueStaffCallsResponse(items = calls.map { it.toDto() }))
         }
 

@@ -8,6 +8,7 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { isDebugEnabled } from '../shared/debug'
 import { parsePositiveInt } from '../shared/parse'
 import { getTelegramContext } from '../shared/telegram'
+import { mountVenueEventMonitor, type VenueMonitor } from '../shared/venueEventMonitor'
 import { bindTelegramBackButton } from '../shared/telegramBackButton'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
@@ -423,6 +424,38 @@ export function mountVenueApp(options: VenueAppOptions) {
   let currentRole: VenueAccessDto['role'] | null = null
   let currentPermissions: string[] = []
   let currentUserId: number | null = null
+  let eventMonitor: VenueMonitor | null = null
+  let eventMonitorKey = ''
+  let deniedEventScope = ''
+  let contextEpoch = 0
+  const revokedContexts = new Set<string>()
+  const accessContextKey = (userId: number, access: VenueAccessDto) =>
+    JSON.stringify([userId, access.venueId, access.role, [...access.permissions].sort()])
+  const eventRoot = el('div', { className: 'venue-event-root' })
+  refs.content.before(eventRoot)
+  const syncEventMonitor = () => {
+    const access = accessList.find(item => item.venueId === selectedVenueId)
+    const key = access && currentUserId && access.permissions.includes('ORDER_QUEUE_VIEW')
+      ? accessContextKey(currentUserId, access) : ''
+    if (key === eventMonitorKey) return
+    eventMonitor?.dispose(); eventMonitor = null; eventMonitorKey = key; eventRoot.replaceChildren()
+    refs.app.classList.toggle('venue-has-alerts', Boolean(key && key !== deniedEventScope))
+    if (key && key === deniedEventScope) {
+      const message = el('p', { text: 'Оповещения остановлены: доступ изменился или потерян. Обновите доступ перед продолжением.' })
+      const retry = el('button', { text: 'Обновить доступ к оповещениям' })
+      retry.onclick = () => { revokedContexts.clear(); deniedEventScope = ''; eventMonitorKey = ''; void loadAccess() }
+      eventRoot.append(message, retry)
+      return
+    }
+    if (key && access && currentUserId) eventMonitor = mountVenueEventMonitor({
+      root: eventRoot, backendUrl, isDebug, access, userId: currentUserId,
+      onAccessChanged: reason => {
+        if (reason === 'denied') { deniedEventScope = key; revokedContexts.add(key) }
+        invalidateVenueContext()
+        void loadAccess()
+      }
+    })
+  }
   let canLeaveScreen: ((url?: string) => boolean) | null = null
   let renderedUrl = window.location.href
   type SettingsDraft = {
@@ -580,27 +613,64 @@ export function mountVenueApp(options: VenueAppOptions) {
   const settingsDraftKey = (access: VenueAccessDto, section?: VenueSettingsSection) =>
     JSON.stringify([currentUserId, access.venueId, access.role, [...access.permissions].sort(), section ?? 'all'])
 
+  const invalidateVenueContext = () => {
+    contextEpoch++
+    accessAbort?.abort(); accessAbort = null
+    conversationUnreadAbort?.abort(); conversationUnreadAbort = null
+    eventMonitor?.dispose(); eventMonitor = null; eventMonitorKey = ''
+    currentDispose?.(); currentDispose = null
+    const privateDisposables = new Set([
+      ...[...drafts.values(), ...(currentSettings ? [currentSettings] : [])].map(draft => draft.dispose),
+      ...[...scheduleSessions.values(), ...(currentSchedule ? [currentSchedule] : [])].map(session => session.dispose),
+      ...[...photoSessions.values(), ...(currentPhotos ? [currentPhotos] : [])].map(session => session.dispose)
+    ])
+    privateDisposables.forEach(dispose => dispose())
+    drafts.clear(); scheduleSessions.clear(); photoSessions.clear()
+    currentSettings = null; currentSchedule = null; currentPhotos = null; canLeaveScreen = null
+    accessList = []; selectedVenueId = null; currentUserId = null; currentRole = null; currentPermissions = []
+    refs.content.replaceChildren(el('p', { text: 'Доступ изменился или потерян. Приватный экран закрыт, несохранённые черновики этого окна очищены. Проверяем разрешения.' }))
+    draftNotice.replaceChildren(); draftNotice.hidden = true
+    refs.venueSelect.replaceChildren(); refs.venueSelect.disabled = true
+    refs.app.classList.remove('venue-has-alerts')
+    clearAccessError(); refs.errorTitle.textContent = ''; refs.errorMessage.textContent = ''
+    eventRoot.replaceChildren()
+    const message = el('p', { text: 'Оповещения остановлены: доступ изменился или потерян. Обновите доступ перед продолжением.' })
+    const retry = el('button', { text: 'Обновить доступ к оповещениям' })
+    retry.onclick = () => { revokedContexts.clear(); deniedEventScope = ''; void loadAccess() }
+    eventRoot.append(message, retry)
+    setConversationUnreadCount(0); updateAccessState(); updateNavVisibility()
+    refs.nav.hidden = true
+  }
+
   const loadAccess = async () => {
     if (accessAbort) {
       accessAbort.abort()
     }
     const controller = new AbortController()
+    const epoch = contextEpoch
+    const requestActor = getTelegramContext().telegramUserId
     accessAbort = controller
     refs.accessState.textContent = 'Загрузка доступа...'
     refs.venueSelect.disabled = true
     refs.venueSelect.replaceChildren()
     const result = await venueGetMe(backendUrl, deps, controller.signal)
-    if (disposed || accessAbort !== controller) return
+    if (disposed || accessAbort !== controller || contextEpoch !== epoch || getTelegramContext().telegramUserId !== requestActor) return
     accessAbort = null
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) {
         return
       }
+      invalidateVenueContext()
       showAccessError(result.error)
       return
     }
     clearAccessError()
-    accessList = result.data.venues
+    if (requestActor != null && result.data.userId !== requestActor) {
+      invalidateVenueContext(); clearSession()
+      refs.accessState.textContent = 'Аккаунт изменился. Обновите доступ или откройте Mini App заново.'
+      return
+    }
+    accessList = result.data.venues.filter(access => !revokedContexts.has(accessContextKey(result.data.userId, access)))
     currentUserId = result.data.userId
     for (const [key, draft] of drafts) {
       const access = accessList.find((item) => item.venueId === draft.venueId)
@@ -666,6 +736,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     setConversationUnreadCount(0)
     updateAccessState()
     updateNavVisibility()
+    syncEventMonitor()
   }
 
   const hasPermission = (permission: string) => currentPermissions.includes(permission)
@@ -881,7 +952,7 @@ export function mountVenueApp(options: VenueAppOptions) {
         return () => undefined
       }
       case 'dashboard':
-        return renderVenueDashboardScreen({ root: screenRoot, backendUrl, isDebug, venueId, access, canAccessRoute })
+        return renderVenueDashboardScreen({ root: screenRoot, backendUrl, isDebug, venueId, access, canAccessRoute, monitor: eventMonitor })
       case 'orders':
         return renderVenueOrdersScreen({
           root: screenRoot,
@@ -1239,7 +1310,7 @@ export function mountVenueApp(options: VenueAppOptions) {
     refs.backButton.hidden = true
     // The common shell retains the existing permission-filtered route contracts.
     refs.header.appendChild(refs.nav)
-    refs.nav.hidden = owner
+    refs.nav.hidden = owner || (contextEpoch > 0 && currentRole === null)
     const scheduleAccess = selectedAccess()
     if (currentSchedule && scheduleAccess && currentSchedule.key === scheduleKey(scheduleAccess) && route.name === 'shifts') {
       currentSchedule.controller.applyRoute()
@@ -1334,6 +1405,7 @@ export function mountVenueApp(options: VenueAppOptions) {
 
   return () => {
     disposed = true
+    eventMonitor?.dispose()
     accessAbort?.abort()
     accessAbort = null
     conversationUnreadAbort?.abort()

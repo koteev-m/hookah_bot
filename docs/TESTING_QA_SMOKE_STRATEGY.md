@@ -12,6 +12,91 @@ Do not treat the 2570/703 prior automated results, installed migration head or h
 product acceptance. Preserve `REPEAT-MANUAL-001`, `CATALOG-SEARCH-MANUAL-001` and
 `STAFF-IDENTITY-MANUAL-001` with their exact fixture/cleanup requirements.
 
+## Venue dashboard and operational alerts — HT-VENUE-DASHBOARD-ALERTS-FINDINGS-FIX-01
+
+Local review-fix candidate; live Telegram/device/staging smoke is NOT EXECUTED. The previous
+2575/714 automated evidence belongs to the pre-fix implementation and does not close these
+findings. Run fresh full backend and Chromium after shared API/shell changes, plus Kotlin
+compile/ktlint, TypeScript/Vite, local result gates and affected migration/release contracts.
+Docker 29 may require `_JAVA_OPTIONS='-Xmx4g -Dapi.version=1.44'`; PG skips are not evidence.
+
+Fresh local fix evidence (2026-11-09, HEAD `1e43a8f` plus the uncommitted fix tree): full
+backend **2576 tests / 213 suites**, full Chromium **727/727**, zero failures/errors/skips/flaky
+or browser retries; all seven current CI result gates executed locally PASS. Kotlin compile/
+ktlint and TypeScript/Vite PASS. Eight portable contract suites executed **360**, with one
+explicit opt-in Docker installer smoke skipped; runtime diagnostics **24/24** and the bounded
+migration identity/negative-lineage function PASS. These local checks do not replace hosted
+Linux installer, staging or device acceptance. PG 200000/400000 historical batches (plus the
+same number of DONE calls) each returned **1729 bytes** for four current events; batch SQL
+was **0.074/0.146 ms**, **26/25 shared hits**, with indexed current reads and one-row prefix
+lookups. Eight full snapshot/serialization samples had medians **4.322/4.498 ms**. Chromium
+legacy 400000-ID storage failed quota, yet the new event sounded; v2 value sizes were **241/365
+UTF-8 bytes** for the sequential 200000/400000 cases. Stress peaked at **255280 UTF-8 bytes**
+(plus 22-byte key), four scopes, 512 receipts/scope, with explicit capacity errors. Full SQL
+plans, samples, storage outputs and commands are recorded in the local task report
+`/private/tmp/HT-VENUE-DASHBOARD-ALERTS-FINDINGS-FIX-01-REPORT.txt` and adjacent evidence files.
+
+CI explicitly requires `VenueDashboardRoutesTest` (2), `VenueDashboardPostgresTest` (1),
+`VenueDashboardCapacityPostgresTest` (1), zero skipped/error/failed cases, and all 24 exact
+alert browser titles. Retain all existing suite minima and anti-skip/flaky/failed-attempt gates.
+The read-only HTTP tests cover membership/role/tenant boundaries, revocation/deletion, exact old
+call reads, first/append batches and no financial/audit/Telegram side effects. PG transactions
+hold smaller IDs uncommitted while higher IDs commit, then verify still-NEW lower IDs appear;
+handled-before-observation absence is the explicit v2 boundary, not durable-log proof.
+
+`VenueDashboardCapacityPostgresTest` seeds **200000 and 400000 DELIVERED batches**, the same
+number of DONE calls, and 100000/200000 CLOSED orders, with current NEW events and another venue.
+Use exact production SQL and EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON), normal planner settings,
+8 snapshot+serialization samples and actual encoded response bytes. Fail sequential history
+scans **and historical index/filter walks**, not only slow wall-clock thresholds. Also verify
+lower-ID delayed commit after 400000 rows, terminal-before-observation absence and explicit
+257th-row overflow with <=256 returned rows. Output: `backend/app/build/venue-dashboard-capacity.json`.
+The real Ktor response capture is `backend/app/build/venue-dashboard-http.json`, used by
+`miniapp/e2e/fixtures/venue-dashboard-http.json`; synthetic fixtures supplement wire evidence.
+
+Chromium regressions in `venue-dashboard-alerts.spec.ts` must include:
+
+1. Confirmed 403 while /me is held: immediately remove all guest names/comments/cards/actions;
+   release old private HTTP 200 and stale /me 200, and keep the revoked context invalid.
+2. Old dashboard response across venue change/403; ordinary allowed role/venue/account switches;
+   stale mismatched /me actor cannot restore the previous account.
+3. First batch + append of one order, another order and several calls between polls; repeated
+   responses/reload, offline/timeout recovery and visibility/Telegram foreground reconciliation.
+4. Silent tab discovers first, enabled tab delivers; two enabled tabs concurrently reserve once;
+   owner closes before acknowledgement and another enabled consumer recovers the expired lease.
+5. Stalled Web Lock has a bounded wait, keeps enabled preference and recovers after holder closes.
+   Failed autoplay/playback does not become a delivery receipt; manual enable retries pending audio.
+6. Maximum two normal reminders, local mute saved before advancing time, volume/off controls,
+   no server ACK/order mutation, generic click-permission-gated system notifications.
+7. Server sentinel/oversized/incompatible response shows limited/unknown monitoring, not empty
+   success. Rapid receipt capacity preserves preference and recovers pending events after grace.
+8. Actual origin localStorage on 200000/400000 legacy IDs: record old quota outcome, compact v2
+   bytes, refresh time and new-batch sound. Record four-context/current/retired byte pressure;
+   assert global bytes/scopes/receipt ceilings and explicit failure without silent recent eviction.
+
+Browser capacity outputs are `capacity-browser.json` and `capacity-ledger.json` under Playwright's
+own output directory. They measure actual serialized storage and mocked HTTP/browser execution,
+not production PostgreSQL/network or exact browser heap. Body cap is 128 KiB; global ledger
+key+value cap is 256 KiB UTF-8 / 512 KiB UTF-16, <=4 contexts, <=512 receipts/context. Do not relax
+these checks or silently cap IDs. PostgreSQL timings are local synthetic measurements, not SLOs.
+
+PostgreSQL V133 / H2 V134 are index-only additions. Run cursor/media/seating forward-preservation
+and complete migration suites. Keep historical 265 SQL files byte-identical, append exact reviewed
+tail identities/checksums, and reject a missing/altered/reordered/new unreviewed migration.
+Current-runtime Java fixture must validate exact PostgreSQL V133, all 133 rows and zero pending;
+old/wrong/partial marker outputs remain invalid. Local diagnostics are not hosted runtime proof.
+
+Deferred separately authorized staging/device checklist — **NOT EXECUTED**:
+
+- Apply the coordinated backend/client and index release only after review and green required CI.
+  Measure index build/lock duration and representative current backlog, then verify cards/RBAC,
+  two accounts/windows, delayed access revalidation, foreground recovery and device quota policy.
+- On Telegram iOS/Android/desktop, test gesture/autoplay, actual volume/mute, interrupted owner,
+  OS notification support and privacy. Browser fakes do not prove physical audio or OS delivery.
+- Verify existing Staff Chat sends/outbox dedup/replay/inline actions and order/session/tab,
+  accounting, booking and physical seating flows. No live smoke has been inferred from migration
+  head, automated PASS or mock notices. Closing Mini App offers no guaranteed background push.
+
 Дата актуализации: 2026-09-17.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.

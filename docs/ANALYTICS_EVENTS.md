@@ -30,6 +30,17 @@ Testing and smoke strategy for event implementation is defined in `docs/TESTING_
 
 Analytics events are immutable facts for reporting, funnels and diagnostics. They must not drive money, access, billing, order state or support state.
 
+Local operational monitor (`HT-VENUE-DASHBOARD-ALERTS-FINDINGS-FIX-01`): protocol 2 reads a
+bounded complete snapshot of current NEW batches/NEW calls, not an analytics or Telegram log.
+`batch:<id>` and `call:<id>` identify distinct domain records, including append batches of one
+order. No MAX(id)/time cursor excludes delayed commits. Capacity overflow is explicit, never
+proof that omitted events were handled. A creation completed/deleted before first observation
+may be unavailable without a separate durable log. UI kinds `ORDER_CREATED`, `BATCH_ADDED` and
+`STAFF_CALL_CREATED` do not claim new canonical analytics emission. Detection/baseline and
+channel delivery receipts are separate bounded device state; successful Web Audio completion
+is not proof of physical audibility, human action, payment, order completion or call ACK.
+See `VENUE_OPERATIONS.md` for capacity, lease/retry, retention and background boundaries.
+
 ## Event Families
 
 | Family | Purpose | Source of truth |

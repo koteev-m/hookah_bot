@@ -25,7 +25,8 @@ export async function requestApi<T>(
   backendUrl: string,
   path: string,
   init: RequestInit | undefined,
-  deps: RequestDependencies
+  deps: RequestDependencies,
+  maxResponseBytes?: number
 ): Promise<ApiResult<T>> {
   try {
     if (isAuthenticatedApi(path)) {
@@ -41,7 +42,7 @@ export async function requestApi<T>(
     try {
       const response = await fetch(`${backendUrl}${path}`, init)
       if (response.ok) {
-        return { ok: true, data: (await response.json()) as T }
+        return { ok: true, data: (maxResponseBytes ? await boundedJson(response, maxResponseBytes) : await response.json()) as T }
       }
 
       const headerRequestId = response.headers.get(REQUEST_ID_HEADER)
@@ -64,6 +65,9 @@ export async function requestApi<T>(
       }
       return { ok: false, error: errorInfo }
     } catch (error) {
+      if (error instanceof ResponseCapacityError) {
+        return { ok: false, error: { status: 0, code: 'MONITORING_CAPACITY', message: 'Ответ мониторинга превышает допустимый размер.' } }
+      }
       if (isAbortError(error)) {
         // Use a dedicated code so screens can ignore aborted requests without UI noise.
         return {
@@ -94,6 +98,30 @@ export async function requestApi<T>(
       }
     }
   }
+}
+
+class ResponseCapacityError extends Error {}
+
+async function boundedJson(response: Response, maximum: number): Promise<unknown> {
+  if (Number(response.headers.get('content-length')) > maximum) {
+    await response.body?.cancel()
+    throw new ResponseCapacityError()
+  }
+  const reader = response.body?.getReader()
+  if (!reader) throw new ResponseCapacityError()
+  const decoder = new TextDecoder()
+  let bytes = 0
+  let text = ''
+  try {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      bytes += chunk.value.byteLength
+      if (bytes > maximum) { await reader.cancel(); throw new ResponseCapacityError() }
+      text += decoder.decode(chunk.value, { stream: true })
+    }
+    return JSON.parse(text + decoder.decode())
+  } finally { reader.releaseLock() }
 }
 
 export async function requestBinary(

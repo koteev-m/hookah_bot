@@ -306,6 +306,22 @@ Current vs target:
 
 ## Staff-Chat Notification Policy
 
+Local Venue monitor candidate (`HT-VENUE-DASHBOARD-ALERTS-01`) adds device-only sound and
+optional generic system notifications while Mini App is active. Its source is committed domain
+records, with separate batch IDs for append orders, rather than Telegram messages or outbox
+attempts. It adds no Telegram sends, recipients, staff DMs, outbox rows or callback behavior.
+Existing Staff Chat deduplication, live activity cards, inline buttons, RBAC and delivery policy
+remain unchanged. Device mute never acknowledges a call or executes an order action.
+
+The UI states that when Mini App is closed, Telegram notifications depend on Telegram, group
+and device settings. Web Audio requires a user gesture; hidden/deactivated app polling and sound
+are paused. System notifications are optional, click-permission-gated, silent and privacy-safe;
+they are not background push or a replacement for Staff Chat. Live Telegram smoke for this
+candidate is **NOT EXECUTED**. The findings fix uses bounded protocol 2 (current NEW events,
+explicit overflow), with independent detection/audio/desktop receipts and expiring cross-tab
+delivery leases. A sound-OFF tab does not consume another tab's audio. Completed/deleted events
+before first observation may be unavailable without a durable log; no delivery guarantee was added.
+
 Allowed events:
 - new order batch;
 - important order status updates when useful;
