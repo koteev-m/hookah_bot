@@ -1,5 +1,13 @@
 # Order / Session / Tab Core Model
 
+Evidence reconciliation (2026-11-09): PR #252 is in main `8292696…` and reported staging V132.
+Normal recorded seating RELEASE (`SeatingRepository.release`) refuses active orders/calls, ends
+the physical session, closes active tabs and removes their invites. It neither records payment
+nor writes off debt; Guest exit remains user-scoped. `ORDER-SESSION-CLOSE-POLICY-001` now concerns
+exceptional force-close/override and legacy handling; `ORDER-TAB-LIFECYCLE-001` retains unresolved
+settlement/reopen/member policy. New physical-release live acceptance remains open; see
+[roadmap Section 13.0](UPDATED_PRODUCT_AI_ROADMAP.md#130-current-evidence-boundary--2026-11-09).
+
 
 Bot free-text quick checkout freezes the QR token, session and tab when the dialog starts and
 persists one request UUID with the confirmed text. Confirmation does not resolve a replacement

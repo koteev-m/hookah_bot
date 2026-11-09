@@ -1,5 +1,12 @@
 # Analytics And Events Model
 
+Evidence reconciliation (2026-11-09): main `8292696…` / reported staging V132 include the
+accounting report and auto-open; live product acceptance remains open. Current literal server
+event names observed in source are `table_session_started`, `batch_created`, `batch_status_changed`,
+`subscription_status_changed`, `feedback_submitted` and `promotion_applied`. The event catalog below
+is a target contract; it does not prove emission of every named event. See
+[roadmap Section 13.0](UPDATED_PRODUCT_AI_ROADMAP.md#130-current-evidence-boundary--2026-11-09).
+
 Дата актуализации: 2026-07-23.
 
 Статус: **current product reference / SPEC UPDATED**. Analytics implementation is **PARTIAL / needs verification** unless a specific repository, migration, dashboard or smoke result is cited by an implementation task. This document defines target events, KPI formulas, dashboards, audit boundaries and privacy rules for Telegram bot + Mini App.
@@ -323,7 +330,7 @@ Growth:
 - Repeat template usage = `repeat_template_applied` / `repeat_template_created`.
 - Opt-in notification rate = opted-in guests / eligible guests.
 
-## Venue accounting money semantics (local candidate)
+## Venue accounting money semantics (in main; live acceptance open)
 
 `VenueStatsRepository.revenueMinor` remains an **estimate of completed order value**, not paid
 revenue. Its existing API shape is retained; snapshot item prices/names, option deltas and currency

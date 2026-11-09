@@ -1,12 +1,25 @@
 # Testing / QA Smoke Strategy
 
+Current evidence boundary (2026-11-09, `HT-PRODUCT-DOCS-RECONCILIATION-01`): the owner reports
+main `8292696b2f1c8c0916a2673aa3e0326a015e5d3d` installed on staging, PostgreSQL V132 and
+technical smoke PASS. GitHub PRs #252/#253 are merged; this docs task reran no runtime tests and
+performed no server/device actions. Existing automated suites and prior PR result counts are
+recorded in [roadmap Section 13.0](UPDATED_PRODUCT_AI_ROADMAP.md#130-current-evidence-boundary--2026-11-09).
+The deferred phone checklist below and accounting/auto-open live acceptance remain NOT EXECUTED.
+Run them within `QA-PILOT-READINESS-001`, alongside existing `QA-TG-FALLBACK-SMOKE-001`,
+`QA-STAFF-CHAT-PILOT-001` and two-account `QA-BOOKING-ISOLATION-001`, when separately authorized.
+Do not treat the 2570/703 prior automated results, installed migration head or health checks as
+product acceptance. Preserve `REPEAT-MANUAL-001`, `CATALOG-SEARCH-MANUAL-001` and
+`STAFF-IDENTITY-MANUAL-001` with their exact fixture/cleanup requirements.
+
 Дата актуализации: 2026-09-17.
 
 Статус: **current product reference / UPDATED**. This document is the canonical QA/smoke strategy for the Telegram bot + Mini App platform. It consolidates local validation, GitHub Actions expectations, area-specific smoke suites, staging policy, failure reporting and Codex handoff rules. Deployment and incident operations are defined in `docs/DEPLOYMENT_RUNBOOK.md`.
 
 ## Halls, seating and table booking — HT-HALLS-SEATING-TABLE-BOOKING-01
 
-Local candidate, not staging/device acceptance. Run Kotlin compile/ktlint and backend tests,
+In main and the reported staging image; device/product acceptance remains open. For future
+behavior changes, run Kotlin compile/ktlint and backend tests,
 including `SeatingRepositoryTest`, `SeatingLifecycleTest`, `SeatingHttpContractTest`,
 `SeatingMediaTest`, `SeatingMigrationTest`, `SeatingConcurrencyPostgresTest`,
 `SeatingFixRegressionTest` (8 cases), `SeatingFixConcurrencyPostgresTest` (4 cases),
