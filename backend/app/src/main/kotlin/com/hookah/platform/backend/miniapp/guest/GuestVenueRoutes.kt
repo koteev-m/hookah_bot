@@ -235,6 +235,8 @@ private fun MenuItemModel.toDto(category: MenuCategoryModel): MenuItemDto =
         isAvailable = isAvailable,
         itemType = itemType?.dbValue,
         effectiveItemType = effectiveType(category).dbValue,
+        description = description,
+        featuredOrder = featuredOrder,
         options = options.map { it.toDto() },
     )
 

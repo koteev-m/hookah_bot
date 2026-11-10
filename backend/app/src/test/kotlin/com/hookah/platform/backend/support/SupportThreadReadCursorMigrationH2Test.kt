@@ -53,6 +53,8 @@ class SupportThreadReadCursorMigrationH2Test {
                     "132" to "V132__venue_accounting_shifts.sql",
                     "133" to "V133__halls_seating_table_booking.sql",
                     "134" to "V134__venue_dashboard_monitor_indexes.sql",
+                    "135" to "V135__menu_featured.sql",
+                    "136" to "V136__menu_featured_operations.sql",
                 ),
             ddlFailureContract = MigrationDdlFailureContract.NON_TRANSACTIONAL,
         )

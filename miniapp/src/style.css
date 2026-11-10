@@ -3818,3 +3818,34 @@ input[type="number"] {
 .venue-dashboard-card { display: flex; flex-direction: column; gap: 8px; text-decoration: none; color: inherit; }
 .venue-dashboard-card:focus-visible, .venue-alerts a:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 2px; }
 .venue-has-alerts .venue-content :is(input, select, textarea, button, a) { scroll-margin-top: calc(26vh + var(--app-safe-top, 0px)); }
+
+.menu-item-description, .menu-item-description-full {
+  margin: 0.25rem 0;
+  color: var(--app-muted);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+}
+.menu-item-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.menu-description-field { grid-column: 1 / -1; min-width: 0; }
+.menu-description-field textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.menu-description-count { font-size: 0.85rem; }
+.menu-description-field [aria-invalid="true"] { border-color: var(--app-danger); }
+.venue-menu-featured-body { display: grid; gap: 0.75rem; min-width: 0; }
+.venue-menu-featured-body li { margin-block: 0.5rem; overflow-wrap: anywhere; }
+.venue-menu-featured-body li button { margin: 0.25rem; }
+.venue-menu-featured-body select { max-width: 100%; }
+.menu-featured .menu-item-info, .menu-featured-preview .menu-item-info { min-width: 0; }
+
+.venue-menu-hookah .menu-item-description { flex-basis: 100%; }
+
+.menu-item:has(.menu-item-description) .menu-item-info { min-width: 0; }
+.menu-item:has(.menu-item-description) .menu-item-controls { flex-shrink: 0; }
+.menu-item-description-details summary { cursor: pointer; }
+
+.venue-menu-featured-saved { overflow-wrap: anywhere; }

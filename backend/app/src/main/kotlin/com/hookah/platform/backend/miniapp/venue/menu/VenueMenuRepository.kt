@@ -2,6 +2,8 @@ package com.hookah.platform.backend.miniapp.venue.menu
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.MenuFeaturedOperationConflictException
+import com.hookah.platform.backend.api.MenuFeaturedStaleException
 import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
 import com.hookah.platform.backend.api.MenuShiftCheckStaleException
 import com.hookah.platform.backend.api.NotFoundException
@@ -21,6 +23,7 @@ import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
 import java.util.Locale
+import java.util.UUID
 import javax.sql.DataSource
 
 internal const val MENU_SHIFT_CHECK_MAX_CHANGES = 500
@@ -117,6 +120,7 @@ data class VenueMenuCategory(
     val sortOrder: Int,
     val items: List<VenueMenuItem>,
     val categoryType: MenuSemanticType = MenuSemanticType.OTHER,
+    val isActive: Boolean = true,
 )
 
 data class VenueMenuItem(
@@ -130,6 +134,8 @@ data class VenueMenuItem(
     val sortOrder: Int,
     val options: List<VenueMenuOption>,
     val itemType: MenuSemanticType? = null,
+    val description: String? = null,
+    val featuredOrder: Int? = null,
 )
 
 fun VenueMenuItem.effectiveType(category: VenueMenuCategory): MenuSemanticType = itemType ?: category.categoryType
@@ -159,6 +165,17 @@ data class HookahFlavorProfileNormalizationResult(
     val addedCount: Int,
 )
 
+data class VenueMenuSnapshot(val categories: List<VenueMenuCategory>, val featuredVersion: Long)
+
+data class MenuFeaturedState(val itemIds: List<Long>, val version: Long)
+
+data class MenuFeaturedResult(
+    val state: MenuFeaturedState,
+    val operationId: String,
+    val appliedVersion: Long,
+    val replayed: Boolean,
+)
+
 class VenueMenuRepository(
     private val dataSource: DataSource?,
     private val auditLogWriter: TransactionalAuditLogWriter = AuditLogRepository(dataSource),
@@ -172,6 +189,224 @@ class VenueMenuRepository(
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    suspend fun getMenuSnapshot(venueId: Long): VenueMenuSnapshot {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val autoCommit = connection.autoCommit
+                    val isolation = connection.transactionIsolation
+                    connection.transactionIsolation = Connection.TRANSACTION_REPEATABLE_READ
+                    connection.autoCommit = false
+                    try {
+                        val version = readFeaturedVersion(connection, venueId, lock = false)
+                        val result = VenueMenuSnapshot(loadMenu(connection, venueId), version)
+                        connection.commit()
+                        result
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = autoCommit
+                        connection.transactionIsolation = isolation
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun updateFeatured(
+        venueId: Long,
+        itemIds: List<Long>,
+        expectedVersion: Long,
+        operationId: String,
+        actorUserId: Long,
+    ): MenuFeaturedResult {
+        if (itemIds.size > 6 || itemIds.distinct().size != itemIds.size || itemIds.any { it <= 0 }) {
+            throw InvalidInputException("Рекомендуем: не более 6 разных позиций.")
+        }
+        if (expectedVersion < 0) throw InvalidInputException("Некорректная версия подборки.")
+        val canonicalOperationId = runCatching { UUID.fromString(operationId).toString() }.getOrNull()
+        if (canonicalOperationId == null || canonicalOperationId != operationId.lowercase(Locale.ROOT)) {
+            throw InvalidInputException("operationId должен быть UUID.")
+        }
+        val requestHash =
+            MessageDigest.getInstance("SHA-256")
+                .digest("$expectedVersion:${itemIds.joinToString(",")}".toByteArray(StandardCharsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    val originalAutoCommit = connection.autoCommit
+                    connection.autoCommit = false
+                    try {
+                        // Menu scope, venue version, categories by id, then items by id.
+                        lockMenuCategoryOrderScope(connection, venueId)
+                        val version = readFeaturedVersion(connection, venueId, lock = true)
+                        val current = loadFeaturedIds(connection, venueId)
+                        val recorded =
+                            connection.prepareStatement(
+                                "SELECT request_hash, applied_version FROM menu_featured_operations " +
+                                    "WHERE venue_id = ? AND operation_id = ?",
+                            ).use { statement ->
+                                statement.setLong(1, venueId)
+                                statement.setString(2, canonicalOperationId)
+                                statement.executeQuery().use { rs ->
+                                    if (rs.next()) {
+                                        rs.getString("request_hash") to rs.getLong("applied_version")
+                                    } else {
+                                        null
+                                    }
+                                }
+                            }
+                        if (recorded != null) {
+                            if (recorded.first != requestHash) throw MenuFeaturedOperationConflictException()
+                            connection.commit()
+                            return@use MenuFeaturedResult(
+                                MenuFeaturedState(current, version),
+                                canonicalOperationId,
+                                recorded.second,
+                                replayed = true,
+                            )
+                        }
+                        if (expectedVersion != version) throw MenuFeaturedStaleException()
+                        loadCategoriesForUpdate(connection, venueId)
+                        val ownIds =
+                            connection.prepareStatement(
+                                "SELECT id FROM menu_items WHERE venue_id = ? ORDER BY id FOR UPDATE",
+                            ).use { statement ->
+                                statement.setLong(1, venueId)
+                                statement.executeQuery().use {
+                                        rs ->
+                                    buildSet { while (rs.next()) add(rs.getLong("id")) }
+                                }
+                            }
+                        if (!ownIds.containsAll(itemIds)) {
+                            throw InvalidInputException("Позиции должны принадлежать меню заведения. Обновите меню.")
+                        }
+                        val changed = itemIds != current
+                        val appliedVersion = if (changed) bumpFeaturedVersion(connection, venueId, version) else version
+                        if (changed) {
+                            connection.prepareStatement(
+                                "UPDATE menu_items SET featured_order = NULL " +
+                                    "WHERE venue_id = ? AND featured_order IS NOT NULL",
+                            ).use { statement ->
+                                statement.setLong(1, venueId)
+                                statement.executeUpdate()
+                            }
+                            connection.prepareStatement(
+                                "UPDATE menu_items SET featured_order = ? WHERE venue_id = ? AND id = ?",
+                            ).use { statement ->
+                                itemIds.forEachIndexed { index, id ->
+                                    statement.setInt(1, index + 1)
+                                    statement.setLong(2, venueId)
+                                    statement.setLong(3, id)
+                                    statement.addBatch()
+                                }
+                                statement.executeBatch()
+                            }
+                            auditLogWriter.appendJson(
+                                connection = connection,
+                                actorUserId = actorUserId,
+                                action = "MENU_FEATURED_CHANGED",
+                                entityType = "venue",
+                                entityId = venueId,
+                                payload =
+                                    buildJsonObject {
+                                        put("venueId", venueId)
+                                        put("source", "VENUE_MINI_APP")
+                                        put("version", appliedVersion)
+                                        put("operationId", canonicalOperationId)
+                                        put("oldItemIds", buildJsonArray { current.forEach { add(JsonPrimitive(it)) } })
+                                        put("itemIds", buildJsonArray { itemIds.forEach { add(JsonPrimitive(it)) } })
+                                    },
+                            )
+                        }
+                        connection.prepareStatement(
+                            "INSERT INTO menu_featured_operations " +
+                                "(venue_id, operation_id, request_hash, applied_version) " +
+                                "VALUES (?, ?, ?, ?)",
+                        ).use { statement ->
+                            statement.setLong(1, venueId)
+                            statement.setString(2, canonicalOperationId)
+                            statement.setString(3, requestHash)
+                            statement.setLong(4, appliedVersion)
+                            statement.executeUpdate()
+                        }
+                        connection.commit()
+                        MenuFeaturedResult(
+                            MenuFeaturedState(itemIds, appliedVersion),
+                            canonicalOperationId,
+                            appliedVersion,
+                            replayed = false,
+                        )
+                    } catch (e: Exception) {
+                        connection.rollback()
+                        throw e
+                    } finally {
+                        connection.autoCommit = originalAutoCommit
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    private fun readFeaturedVersion(
+        connection: Connection,
+        venueId: Long,
+        lock: Boolean,
+    ): Long {
+        val suffix =
+            if (!lock) {
+                ""
+            } else if (connection.metaData.databaseProductName == "PostgreSQL") {
+                " FOR NO KEY UPDATE"
+            } else {
+                " FOR UPDATE"
+            }
+        return connection.prepareStatement("SELECT menu_featured_version FROM venues WHERE id = ?$suffix").use {
+                statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs ->
+                if (!rs.next()) throw NotFoundException()
+                rs.getLong("menu_featured_version")
+            }
+        }
+    }
+
+    private fun loadFeaturedIds(
+        connection: Connection,
+        venueId: Long,
+    ): List<Long> =
+        connection.prepareStatement(
+            "SELECT id FROM menu_items WHERE venue_id = ? AND featured_order IS NOT NULL ORDER BY featured_order, id",
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getLong("id")) } }
+        }
+
+    private fun bumpFeaturedVersion(
+        connection: Connection,
+        venueId: Long,
+        version: Long,
+    ): Long {
+        if (version == Long.MAX_VALUE) throw InvalidInputException("Достигнут предел версии подборки.")
+        connection.prepareStatement(
+            "UPDATE venues SET menu_featured_version = ? WHERE id = ? AND menu_featured_version = ?",
+        ).use { statement ->
+            statement.setLong(1, version + 1)
+            statement.setLong(2, venueId)
+            statement.setLong(3, version)
+            if (statement.executeUpdate() != 1) throw MenuFeaturedStaleException()
+        }
+        return version + 1
     }
 
     suspend fun completeShiftCheck(
@@ -577,7 +812,9 @@ class VenueMenuRepository(
         actorUserId: Long,
         source: MenuItemCreateSource,
         itemType: MenuSemanticType? = null,
+        description: String? = null,
     ): VenueMenuItem? {
+        val normalizedDescription = normalizeMenuDescription(description)
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -608,6 +845,7 @@ class VenueMenuRepository(
                                 isAvailable = isAvailable,
                                 sortOrder = sortOrder,
                                 itemType = itemType,
+                                description = normalizedDescription,
                             )
                         auditMenuItemCreate(
                             connection = connection,
@@ -646,7 +884,10 @@ class VenueMenuRepository(
         source: MenuItemAvailabilitySource,
         itemType: MenuSemanticType? = null,
         itemTypeSpecified: Boolean = false,
+        description: String? = null,
+        descriptionSpecified: Boolean = false,
     ): VenueMenuItem? {
+        val normalizedDescription = if (descriptionSpecified) normalizeMenuDescription(description) else null
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
@@ -682,6 +923,9 @@ class VenueMenuRepository(
                         val updatedCurrency = currency ?: existing.currency
                         val updatedIsAvailable = isAvailable ?: existing.isAvailable
                         val updatedItemType = if (itemTypeSpecified) itemType else existing.itemType
+                        val updatedDescription =
+                            if (descriptionSpecified) normalizedDescription else existing.description
+                        val isDescriptionChange = updatedDescription != existing.description
                         val isRename = updatedName != existing.name
                         val isPriceChange =
                             updatedPriceMinor != existing.priceMinor || updatedCurrency != existing.currency
@@ -689,7 +933,8 @@ class VenueMenuRepository(
                         val isCategoryMove = updatedCategoryId != existing.categoryId
                         val isAvailabilityChange = updatedIsAvailable != existing.isAvailable
                         val hasChanges =
-                            isRename || isPriceChange || isTypeChange || isCategoryMove || isAvailabilityChange
+                            isRename || isPriceChange || isTypeChange || isCategoryMove ||
+                                isAvailabilityChange || isDescriptionChange
                         if (!hasChanges) {
                             connection.commit()
                             return@use existing
@@ -699,7 +944,7 @@ class VenueMenuRepository(
                                 """
                                 UPDATE menu_items
                                 SET category_id = ?, name = ?, price_minor = ?, currency = ?,
-                                    is_available = ?, item_type = ?, updated_at = now()
+                                    is_available = ?, item_type = ?, description = ?, updated_at = now()
                                 WHERE id = ? AND venue_id = ? AND category_id = ? AND is_available = ?
                                 """.trimIndent(),
                             ).use { statement ->
@@ -713,14 +958,31 @@ class VenueMenuRepository(
                                 } else {
                                     statement.setString(6, updatedItemType.dbValue)
                                 }
-                                statement.setLong(7, itemId)
-                                statement.setLong(8, venueId)
-                                statement.setLong(9, existing.categoryId)
-                                statement.setBoolean(10, existing.isAvailable)
+                                statement.setString(7, updatedDescription)
+                                statement.setLong(8, itemId)
+                                statement.setLong(9, venueId)
+                                statement.setLong(10, existing.categoryId)
+                                statement.setBoolean(11, existing.isAvailable)
                                 statement.executeUpdate()
                             }
                         if (updated != 1) {
                             throw SQLException("Locked menu item changed during update", "40001")
+                        }
+                        if (isDescriptionChange) {
+                            auditLogWriter.appendJson(
+                                connection = connection,
+                                actorUserId = actorUserId,
+                                action = "MENU_ITEM_DESCRIPTION_CHANGED",
+                                entityType = "menu_item",
+                                entityId = itemId,
+                                payload =
+                                    buildJsonObject {
+                                        put("venueId", venueId)
+                                        put("itemId", itemId)
+                                        put("hasDescription", updatedDescription != null)
+                                        put("source", source.name)
+                                    },
+                            )
                         }
                         if (isRename) {
                             auditMenuItemRenamed(
@@ -806,12 +1068,17 @@ class VenueMenuRepository(
                     val originalAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
+                        lockMenuCategoryOrderScope(connection, venueId)
                         val initialCategoryId =
                             loadItemCategoryId(connection, venueId, itemId)
                                 ?: run {
                                     connection.commit()
                                     return@use false
                                 }
+                        // The menu-scope lock prevents pin changes before deletion takes its row locks.
+                        val wasFeatured = itemId in loadFeaturedIds(connection, venueId)
+                        val featuredVersion =
+                            if (wasFeatured) readFeaturedVersion(connection, venueId, lock = true) else null
                         val initialReferences =
                             loadPromotionRulesReferencingItem(connection, venueId, itemId)
                         lockPromotionRuleReferences(connection, venueId, initialReferences)
@@ -860,6 +1127,7 @@ class VenueMenuRepository(
                                 "40001",
                             )
                         }
+                        if (featuredVersion != null) bumpFeaturedVersion(connection, venueId, featuredVersion)
                         auditLogWriter.appendJson(
                             connection = connection,
                             actorUserId = actorUserId,
@@ -1876,13 +2144,15 @@ class VenueMenuRepository(
         isAvailable: Boolean,
         sortOrder: Int,
         itemType: MenuSemanticType?,
+        description: String?,
     ): Long =
         connection.prepareStatement(
             """
             INSERT INTO menu_items (
-                venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type, updated_at
+                venue_id, category_id, name, price_minor, currency, is_available,
+                sort_order, item_type, description, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
@@ -1898,6 +2168,7 @@ class VenueMenuRepository(
             } else {
                 statement.setString(8, itemType.dbValue)
             }
+            statement.setString(9, description)
             statement.executeUpdate()
             statement.generatedKeys.use { rs ->
                 if (rs.next()) rs.getLong(1) else throw SQLException("Failed to insert menu item")
@@ -2397,7 +2668,7 @@ class VenueMenuRepository(
         val categories =
             connection.prepareStatement(
                 """
-                SELECT id, venue_id, name, sort_order, category_type
+                SELECT id, venue_id, name, sort_order, category_type, is_active
                 FROM menu_categories
                 WHERE venue_id = ?
                 ORDER BY sort_order, id
@@ -2415,7 +2686,8 @@ class VenueMenuRepository(
         val itemsByCategory =
             connection.prepareStatement(
                 """
-                SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type
+                SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type,
+                   description, featured_order
                 FROM menu_items
                 WHERE venue_id = ?
                 ORDER BY sort_order, id
@@ -2607,6 +2879,7 @@ class VenueMenuRepository(
             name = rs.getString("name"),
             sortOrder = rs.getInt("sort_order"),
             categoryType = MenuSemanticType.fromDb(rs.getString("category_type")),
+            isActive = rs.getBoolean("is_active"),
             items = emptyList(),
         )
 
@@ -2621,6 +2894,8 @@ class VenueMenuRepository(
             isAvailable = rs.getBoolean("is_available"),
             sortOrder = rs.getInt("sort_order"),
             itemType = MenuSemanticType.nullableFromDb(rs.getString("item_type")),
+            description = rs.getString("description"),
+            featuredOrder = rs.getInt("featured_order").let { if (rs.wasNull()) null else it },
             options = emptyList(),
         )
 
@@ -2642,7 +2917,7 @@ class VenueMenuRepository(
     ): VenueMenuCategory? {
         return connection.prepareStatement(
             """
-            SELECT id, venue_id, name, sort_order, category_type
+            SELECT id, venue_id, name, sort_order, category_type, is_active
             FROM menu_categories
             WHERE id = ? AND venue_id = ?
             """.trimIndent(),
@@ -2662,7 +2937,7 @@ class VenueMenuRepository(
     ): VenueMenuCategory? =
         connection.prepareStatement(
             """
-            SELECT id, venue_id, name, sort_order, category_type
+            SELECT id, venue_id, name, sort_order, category_type, is_active
             FROM menu_categories
             WHERE id = ? AND venue_id = ?
             FOR UPDATE
@@ -2681,7 +2956,7 @@ class VenueMenuRepository(
     ): List<VenueMenuCategory> =
         connection.prepareStatement(
             """
-            SELECT id, venue_id, name, sort_order, category_type
+            SELECT id, venue_id, name, sort_order, category_type, is_active
             FROM menu_categories
             WHERE venue_id = ?
             ORDER BY id
@@ -2703,7 +2978,8 @@ class VenueMenuRepository(
     ): VenueMenuItem? {
         return connection.prepareStatement(
             """
-            SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type
+            SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type,
+                   description, featured_order
             FROM menu_items
             WHERE id = ? AND venue_id = ?
             """.trimIndent(),
@@ -2723,7 +2999,8 @@ class VenueMenuRepository(
     ): VenueMenuItem? {
         return connection.prepareStatement(
             """
-            SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type
+            SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type,
+                   description, featured_order
             FROM menu_items
             WHERE id = ? AND venue_id = ?
             FOR UPDATE
@@ -2744,7 +3021,8 @@ class VenueMenuRepository(
     ): List<VenueMenuItem> =
         connection.prepareStatement(
             """
-            SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type
+            SELECT id, venue_id, category_id, name, price_minor, currency, is_available, sort_order, item_type,
+                   description, featured_order
             FROM menu_items
             WHERE venue_id = ? AND category_id = ?
             ORDER BY id

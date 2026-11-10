@@ -25,6 +25,8 @@ data class MenuItemDto(
     val isAvailable: Boolean,
     val itemType: String? = null,
     val effectiveItemType: String,
+    val description: String? = null,
+    val featuredOrder: Int? = null,
     val options: List<MenuItemOptionDto> = emptyList(),
 )
 

@@ -1,6 +1,22 @@
 # Security / RBAC Permission Matrix
 
 
+## Menu content scope — HT-MENU-DESCRIPTIONS-FEATURED-01-R1
+
+`MENU-DESCRIPTIONS-001` / `MENU-FEATURED-001`: **LOCAL IMPLEMENTED / REVIEW PENDING**.
+Existing own-venue `MENU_MANAGE` allows OWNER/MANAGER description authoring and manual featured
+selection/order. STAFF, foreign/unaffiliated, revoked membership and Platform-only users gain no
+such write authority. Guest reads descriptions and available featured items under existing venue
+access; ordering still requires the active guest context and existing server-side validation.
+Featured ids are verified against the same venue inside the locked transaction; stale replacement
+is `409 MENU_FEATURED_STALE`. Description audit excludes text; featured audit contains at most six
+old/new ids plus version and operation UUID. `HT-MENU-DESCRIPTIONS-FEATURED-FIX-01` requires
+version CAS and durable operation replay under the same own-venue MENU_MANAGE guard; revoked
+membership cannot replay a completed request through the route. Operation ids are scoped by venue,
+request hash binds version + ordered ids, and replay returns current state without a write.
+Writes, receipt and audits roll back together. No new pricing, order, billing or staff-chat power.
+See [menu contract](MENU_OPTIONS_STOPLIST.md#item-descriptions-and-manual-recommendations--ht-menu-descriptions-featured-01-r1).
+
 ## Hall/seating permissions (HT-HALLS-SEATING-TABLE-BOOKING-01)
 
 | Operation | OWNER / MANAGER | STAFF | Guest |

@@ -845,6 +845,7 @@ export type VenueTableRotateTokensResponse = {
 }
 
 export type VenueMenuResponse = {
+  featuredVersion?: string
   venueId: number
   categories: VenueMenuCategoryDto[]
 }
@@ -886,6 +887,7 @@ export type VenueMenuCategoryDto = {
   id: number
   name: string
   sortOrder: number
+  isActive?: boolean
   categoryType: MenuSemanticType
   items: VenueMenuItemDto[]
 }
@@ -899,6 +901,8 @@ export type VenueMenuItemDto = {
   isAvailable: boolean
   sortOrder: number
   itemType?: MenuSemanticType | null
+  description?: string | null
+  featuredOrder?: number | null
   effectiveItemType: MenuSemanticType
   supportsBaseFlavorProfiles?: boolean
   missingBaseFlavorProfilesCount?: number
@@ -932,6 +936,7 @@ export type VenueUpdateCategoryRequest = {
 }
 
 export type VenueCreateItemRequest = {
+  description?: string | null
   categoryId: number
   name: string
   priceMinor: number
@@ -941,6 +946,8 @@ export type VenueCreateItemRequest = {
 }
 
 export type VenueUpdateItemRequest = {
+  description?: string | null
+  clearDescription?: boolean
   categoryId?: number | null
   name?: string | null
   priceMinor?: number | null
@@ -1231,4 +1238,13 @@ export type ShiftExtensionSettingsUpdateRequest = {
   priceRub?: string | null
   currency?: string | null
   maxExtensionsPerSession?: number | null
+}
+
+export type MenuFeaturedResponse = {
+  venueId: number
+  itemIds: number[]
+  version: string
+  operationId: string
+  appliedVersion: string
+  replayed: boolean
 }

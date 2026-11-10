@@ -1,8 +1,80 @@
 # Menu / Options / Stop-List Model
 
-Дата актуализации: 2026-08-13.
+Дата актуализации: 2026-11-10 (HT-MENU-DESCRIPTIONS-FEATURED-FIX-01).
 
 Статус: **current product reference / SPEC UPDATED**. Guest stale-menu cart recovery is **GUEST CART STALE MENU SELECTION RECOVERY / REMOVED OR UNAVAILABLE ITEMS AND OPTIONS / PAYLOAD-BOUND IDEMPOTENCY + ATOMIC REJECTION / DONE / MVP / STAGING-SMOKE-PASSED**; its **ITEM-LEVEL ACTION AND COPY POLISH / DONE / MVP / STAGING-SMOKE-PASSED**. Menu/options/flavors parity is documented as smoke-closed for the structured selected-option flow. The bounded shift-check and earlier menu audit slices remain release-closed. The current category/item closure is **VENUE MENU MANAGEMENT / EXISTING-CONTRACT AUDIT AND TRANSACTION CLOSURE / DONE / MVP / STAGING-SMOKE-PASSED**. Shared initial menu bootstrap is **VENUE MENU ONBOARDING / SHARED INITIAL MENU BOOTSTRAP / DONE / MVP / STAGING-SMOKE-PASSED**. The broader menu constructor, media/top-list governance, non-menu audit coverage and permission parity remain **PARTIAL** unless a specific implementation task proves them.
+
+## Item descriptions and manual recommendations — HT-MENU-DESCRIPTIONS-FEATURED-01-R1
+
+`MENU-DESCRIPTIONS-001` and `MENU-FEATURED-001`: **LOCAL IMPLEMENTED / REVIEW PENDING**.
+No staging smoke is claimed. Structured menu-item media, AI copy, automatic rankings and paid
+placements remain outside these tasks.
+
+- `menu_items.description` remains nullable text. Authoring normalizes Unicode whitespace/control
+  characters to spaces, trims/collapses spaces and allows at most **500 Unicode code points after
+  normalization**. No generated ingredients, allergen or health claims. Existing rows are not
+  rewritten. Venue/Guest DTOs expose nullable `description`.
+- Create accepts optional `description`. PATCH without it (including legacy Bot edits) preserves
+  the stored value; JSON null is treated as omitted. Empty/whitespace text clears it, or send
+  `clearDescription: true`. A non-null `description` combined with that command is rejected.
+- OWNER/MANAGER use existing `MENU_MANAGE`; STAFF retains only existing availability authority.
+  Venue create/edit has a counter, clear action, help and retryable local drafts. An untouched
+  description is omitted from edits, including after form restoration or re-entering the same
+  normalized text; a changed value or explicit clear keeps its intent across a failed save/retry
+  (`HT-MENU-DESCRIPTIONS-FEATURED-FIX-01`). Guest lists use
+  two-line text with an expandable full description; choosing a described item also shows full
+  text. All rendering is plain text. Ordering still requires the current guest table/session/tab.
+- PostgreSQL **V134** / H2 **V135** append nullable `menu_items.featured_order`, range 1–6, with a
+  unique `(venue_id, featured_order)` index. Null means unpinned. No items are pinned by migration.
+  Positions may have gaps after deletion; reads use `(featured_order, id)` deterministically.
+- `HT-MENU-DESCRIPTIONS-FEATURED-FIX-01` adds PostgreSQL **V135** / H2 **V136**, preserving
+  the original pin migrations byte-for-byte. `venues.menu_featured_version` is a nonnegative
+  BIGINT, initially 0 even for an existing selection. Empty selections keep their version history.
+  `menu_featured_operations` persists `(venue_id, operation_id)`, a request hash and applied version;
+  receipts have no automatic expiry and survive application/pool restart.
+- `GET /api/venue/menu` returns `featuredVersion` with categories in one repeatable-read snapshot.
+  Versions are canonical decimal **strings** in JSON, preserving the full BIGINT range in JavaScript.
+  `PATCH /api/venue/menu/featured?venueId=…` requires ordered unique positive `itemIds` (at most 6),
+  `expectedVersion` and a canonical UUID `operationId`. The previous unversioned write contract is
+  rejected with 400; no unsafe `expectedItemIds` fallback is retained. Other menu APIs are unchanged.
+- New operations acquire the existing menu-scope lock, the venue version row (PostgreSQL
+  `FOR NO KEY UPDATE`), then categories/items by id. CAS checks version before no-op detection,
+  including when ids happen to match after A→B→A. Each real selection change increments once;
+  no-op records its receipt without changing version/audit. Pinned item deletion takes the same
+  scope/version lock before its existing delete locks and increments version in the delete/audit
+  transaction. An unpinned deletion needs no additional version-row lock or increment: the menu-scope
+  lock keeps its unpinned status stable. PostgreSQL preserves the existing delete-before-cart-validation
+  race; H2 retains the repository's venue-row implementation of the menu-scope lock.
+  A pinned deletion waits for an in-flight order's venue lock before taking item locks; committed
+  order snapshots remain intact. Existing order-item FK restrictions still reject deletion of a
+  referenced item; selection/version and delete audit roll back as well.
+  Name/price/category/availability changes retain the selection/version.
+- A completed operation replay with the same hash of expected version + ordered ids performs no
+  mutation/audit and returns the **current** ids/version plus its original `appliedVersion` and
+  `replayed: true`. Reusing an id with different content is `409 MENU_FEATURED_OPERATION_CONFLICT`;
+  a stale new operation is `409 MENU_FEATURED_STALE`, even if ids match. Receipt, version, item
+  updates and audit roll back together on failure. Tenant/role checks precede route replay access.
+- The editor retains one immutable request/id while its result is unknown; only retry of that
+  request is enabled until resolved. New edits after a known outcome/explicit conflict refresh use
+  a new UUID. Conflict refresh shows current saved data and preserves the local draft for review.
+  A successful replay adopts returned current state, never assumes the old desired state is current.
+- Venue editor supports selection, removal, keyboard reorder and a guest preview. Conflicts keep
+  the draft and require explicit refresh/review before save; removed ids are dropped on refresh.
+  Guest «Рекомендуем» precedes categories, uses the same itemId/options/cart and keeps the item in
+  its category. Stop-list or inactive categories hide it temporarily without unpinning; restoration
+  brings it back. Category moves preserve pinning. Hard delete removes the pin with the item.
+- `MENU_ITEM_DESCRIPTION_CHANGED` records venue/item/source and `hasDescription`, never content.
+  `MENU_FEATURED_CHANGED` records bounded old/new ordered ids, venue, version, operation UUID and server-owned source.
+  Real changes and audit commit together; failure rolls back, no-op writes no success audit.
+  Existing create/delete audits remain intact.
+- Bot Guest menu shows the same manual selection with ordinary `bot_menu_item:categoryId:itemId`
+  callbacks. Guest Mini App item handlers are rebound once by menu rendering, including category
+  and picker Back, refresh and venue changes. Category pages show short descriptions; item selection shows full text. No parse mode
+  is used; menu messages are capped below Telegram's 4096 UTF-16-unit budget without splitting
+  surrogate pairs. No new Telegram authoring dialog or ordering state is introduced.
+- Prices/options/stop-list validation, cart idempotency/stale confirmation, promotions/gifts/repeat,
+  table/session/tab identity, bill snapshots, accounting and Staff Chat/outbox stay unchanged.
+  Description and pin metadata never become an order line, surcharge or order source.
 
 ## Core Rule
 
@@ -58,17 +130,17 @@ does not expand the broader menu constructor, media/top-list or permission-parit
 | Area | Current implementation from docs | Target product model | Gap / risk / future note |
 | --- | --- | --- | --- |
 | Category CRUD | Existing create/rename/type/reorder paths are transaction-bound and release-closed; delete remains release-closed. Shared missing-only initial bootstrap is release-closed for Mini App and Telegram. | Owner/Manager manage existing own-venue category structure; Staff is denied. | Bootstrap is `DONE / MVP / STAGING-SMOKE-PASSED`; broader constructor/archive/media remains `PARTIAL`. |
-| Item CRUD | Existing create/delete/rename/price-currency/type/category-move/reorder paths are transaction-bound and audited; Staff remains denied for structure. | Owner/Manager manage item structure/commercial fields; featured/media remain separate. | Existing-contract closure is release-closed; description/media/featured and broader constructor work stay future. |
+| Item CRUD | Existing create/delete/rename/price-currency/type/category-move/reorder paths are transaction-bound and audited; Staff remains denied for structure. | Owner/Manager manage item structure/commercial fields; featured/media remain separate. | Existing-contract closure is release-closed; Descriptions and manual featured are local/review pending; media and broader constructor work stay future. |
 | Item availability | Owner/Manager/Staff direct Mini App and Telegram changes write one transaction-bound safe audit per real delta; Owner/Manager compound PATCH audits only its availability delta. | Availability toggle is operational state, fast and reversible, with safe actor/source evidence. | Release-closed only for this bounded audit contract. Per-venue `staff_stoplist_enabled` stays future. |
 | Option group/value support | Guest/Menu Options & Flavors parity is smoke-closed: item-scoped options/flavors, base profiles and selected-option submit exist. Atomic Telegram base-profile normalization and application-level locked canonical-profile collision checks are release-closed for their bounded contract. | General `OPTION_GROUP`/`OPTION_VALUE` model supports required single/multi modifiers with min/max validation. | Broader non-hookah modifier UX, DB-level uniqueness and Mini App atomic bulk apply remain separate. |
 | Option/value availability | Item option/flavor stop-list is documented and smoked. Preview/submit now identify own-cart removed/unavailable item or option lines with a typed server contract. | Guest sees only available choices or disabled copy by venue policy; stale preview/submit is rejected with actionable line recovery. | Keep option ownership, foreign-selection privacy, all-issues and stale availability tests in regression. |
 | Guest menu DTO | Guest Bot and Guest Mini App expose option picker where configured. | DTO includes item visibility/availability, option groups, values, price deltas and human copy without leaking internal media/provider data. | Needs verification before broad modifier expansion. |
 | Order item modifiers/options snapshot | Current docs say selected option id/name/price delta and line preference notes are preserved where implemented. | Snapshot item and selected option names/prices at submit time; later edits never rewrite old bills/history. | Keep cross-channel bill snapshots in regression; multi-option quantities/counts need future design if introduced. |
-| Photos/descriptions | Current structured menu item repositories/DTOs/rendering do not expose item photos, thumbnails or descriptions. The DB has a legacy `menu_items.description` column, but current Bot/Venue/Guest menu paths do not read or write it. | Item photos can be shown in structured menu; descriptions are guest-safe. | Structured menu-item media/description is `MISSING / FUTURE`; do not infer support from working info-section media. |
-| Featured/top-list | Product spec requires featured/top list; implementation evidence is partial. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
+| Photos/descriptions | Descriptions are locally implemented end to end; item photos and thumbnails remain absent. | Item photos can be shown in structured menu; descriptions are guest-safe. | Structured item media remains `MISSING / FUTURE`; description is `LOCAL IMPLEMENTED / REVIEW PENDING`. |
+| Featured/top-list | Manual own-venue selection of up to six items is `LOCAL IMPLEMENTED / REVIEW PENDING`. | Venue manually pins items; not paid placement. | Paid placement/boosting belongs to Growth/Platform, not menu featured. |
 | PDF/media | `Фото-меню` is a flat info/media section, separate from structured orders. Bot authoring and direct OWNER/MANAGER Venue Mini App JPEG/PNG/PDF management coexist under the canonical media contract. | PDF/photo menu is view-only; no direct order unless item exists in structured menu. | PDF Inline UX has bounded owner-confirmed staging acceptance; broader media operations and optional subsections remain open. See `MEDIA_STORAGE_UPLOAD.md`. |
 | Shift check | **DONE / MVP / STAGING-SMOKE-PASSED**: OWNER/MANAGER Venue Mini App uses saved menu state, readiness counts, search/filters, local draft, a separate mass-selection mode, confirmation summary and one atomic request. STAFF has no entry/direct permission. | Venue Mode keeps optimistic availability checks, one bounded batch, no-op completion evidence and recoverable stale-state handling. | Keep role/tenant, atomicity, stale-state, Guest availability and Telegram stop-list parity in regression; Telegram shift-check UI and a queryable history table are not part of Phase 1. |
-| Audit logs | Existing release-closed actions remain intact; nine category/item management actions are transaction-bound with exact-one/no-op/rollback rules. | All dangerous mutations write privacy-safe server-derived actor/source evidence. | Description/media/archive and the broader audit stay `PARTIAL`. |
+| Audit logs | Existing release-closed actions remain intact; nine category/item management actions are transaction-bound with exact-one/no-op/rollback rules. | All dangerous mutations write privacy-safe server-derived actor/source evidence. | Description and featured audits are local/review pending; media/archive and broader audit stay `PARTIAL`. |
 | Telegram vs Mini App parity | Options/flavors parity is smoke-closed; some Telegram owner flows remain richer. | Required menu/stop-list operations are aligned across Bot and Mini App or documented as exceptions. | Keep cross-surface parity smoke for Staff stop-list and selected options. |
 | Staff stop-list permissions | Current docs say STAFF has `MENU_AVAILABILITY_MANAGE` and can toggle item/option availability; STAFF cannot edit structure/prices/options schema. | Recommended MVP: Staff cannot change menu structure/prices; Staff stop-list works only when `staff_stoplist_enabled` or equivalent policy allows it, and is identical in Bot/Mini App. | Current global Staff stop-list permission is acceptable only if intentionally enabled and audited; per-venue toggle remains target/future. |
 
@@ -217,11 +289,12 @@ is not durable storage: leaving/reloading the app can discard drafts.
 | Item availability | Owner/Manager/Staff where permission allows. | Hides/disables unavailable by policy. | Owner/Manager/Staff where permission allows. | No. | No source-of-truth edits. |
 | Option group/value manage | Owner/Manager where implemented. | No management. | Owner/Manager where implemented. | No. | No. |
 | Option/value availability | Owner/Manager/Staff where permission allows. | Hides/disables/rejects unavailable. | Owner/Manager/Staff where permission allows. | No. | No. |
-| Structured item media/photos/descriptions | No current item photo/thumbnail/description management. | Current structured menu shows no item photo/thumbnail/description. | No current item photo/thumbnail/description management. | No. | No. |
+| Structured item media/photos | No current item photo/thumbnail management. | No structured item photo/thumbnail. | No current item photo/thumbnail management. | No. | No. |
+| Item descriptions | Safe short/full Guest display; legacy authoring preserves it. | Plain-text short/full display, including browse without ordering authority. | OWNER/MANAGER create/edit/clear under MENU_MANAGE; 500 Unicode code points. | No authoring authority. | No. |
 | Public info-section image/PDF | OWNER/MANAGER add/delete legacy attachments and hide/show the whole section; new R2 delivery preserves Bot compatibility. | Images and passive inline PDF pages through guarded public delivery before QR and in `PUBLISHED_PUBLIC`. | OWNER/MANAGER direct upload/replace/delete and attachment/section visibility on selected staging R2; Preview remains read-only, with authenticated scoped `PRIVATE_DRAFT` delivery and no raw refs. | No. | No. |
 | PDF/view-only menu | OWNER/MANAGER use the flat info-section image/PDF flow. | View-only `📖 Фото-меню`, with inline PDF navigation. | Direct information-media management under `MEDIA_STORAGE_UPLOAD.md`; both Preview modes remain read-only. | No. | No. |
 | Option/flavor media | No media fields/actions; name, price delta and availability only. | No option/flavor media. | No media fields/actions. | No. | No. |
-| Featured/top-list | Needs verification. | Guest display where implemented. | Needs verification. | Paid placement is separate. | No. |
+| Featured/top-list | «Рекомендуем» with ordinary item/category callbacks. | Ordered available own-venue items; same options/cart. | OWNER/MANAGER selection/reorder/guest preview; cap six and stale-edit conflict. | Paid placement is separate. | No. |
 | Shift check | No Phase 1 UI; existing individual stop-list flow is unchanged. | No. | OWNER/MANAGER Phase 1 is staging-smoke-passed; STAFF hidden and direct API denied. | No. | No. |
 | Mass stop-list | No new Telegram batch UI; existing callbacks are unchanged. | No. | Shift-check batch for OWNER/MANAGER only; local draft until one confirmation. | No. | No. |
 | Guest menu display | Bot table context only. | Mini App table context only. | Preview/future only. | No. | No. |
@@ -753,8 +826,9 @@ Audit payloads must use safe ids and old/new safe fields only. Do not include ra
 - Public info-section / Photo-PDF-menu media: direct Mini App management is deployed on selected
   staging R2; PDF Inline UX is `USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED` within its recorded
   scope. Broader media/storage operations remain open; Guest/Preview retain guarded delivery.
-- Structured menu-item media/description/thumbnail and option/flavor media: `MISSING / FUTURE`.
-- Featured/top-list: `PARTIAL/FUTURE` unless implementation evidence proves a given slice.
+- Structured menu-item media/thumbnail and option/flavor media: `MISSING / FUTURE`.
+- Descriptions (`MENU-DESCRIPTIONS-001`): `LOCAL IMPLEMENTED / REVIEW PENDING`.
+- Manual featured (`MENU-FEATURED-001`): `LOCAL IMPLEMENTED / REVIEW PENDING`; automatic ranking and paid placement are separate.
 - Shift check: `MENU SHIFT CHECK PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; keep the passed
   role/tenant, UX, atomicity, stale-state, Guest availability and Telegram parity scenarios in
   regression.

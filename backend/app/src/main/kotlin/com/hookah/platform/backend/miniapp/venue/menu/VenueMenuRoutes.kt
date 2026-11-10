@@ -49,11 +49,43 @@ fun Route.venueMenuRoutes(
             if (!permissions.contains(VenuePermission.MENU_VIEW)) {
                 throw ForbiddenException()
             }
-            val categories = venueMenuRepository.getMenu(venueId)
+            val snapshot = venueMenuRepository.getMenuSnapshot(venueId)
             call.respond(
                 VenueMenuResponse(
                     venueId = venueId,
-                    categories = categories.map { it.toDto() },
+                    categories = snapshot.categories.map { it.toDto() },
+                    featuredVersion = snapshot.featuredVersion.toString(),
+                ),
+            )
+        }
+
+        patch("/menu/featured") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            ensureMenuManage(venueAccessRepository, userId, venueId)
+            val payload = call.receive<UpdateFeaturedRequest>()
+            val expectedVersion = payload.expectedVersion.toLongOrNull()
+            if (expectedVersion == null || expectedVersion < 0 ||
+                expectedVersion.toString() != payload.expectedVersion
+            ) {
+                throw InvalidInputException("Некорректная версия подборки.")
+            }
+            val result =
+                venueMenuRepository.updateFeatured(
+                    venueId,
+                    payload.itemIds,
+                    expectedVersion,
+                    payload.operationId,
+                    userId,
+                )
+            call.respond(
+                MenuFeaturedResponse(
+                    venueId,
+                    result.state.itemIds,
+                    result.state.version.toString(),
+                    result.operationId,
+                    result.appliedVersion.toString(),
+                    result.replayed,
                 ),
             )
         }
@@ -166,6 +198,7 @@ fun Route.venueMenuRoutes(
                     actorUserId = userId,
                     source = MenuItemCreateSource.VENUE_MINI_APP,
                     itemType = itemType,
+                    description = payload.description,
                 ) ?: throw InvalidInputException("categoryId is invalid")
             call.respond(created.toDtoWithCategory(resolveCategoryForItem(venueMenuRepository, venueId, created)))
         }
@@ -180,6 +213,9 @@ fun Route.venueMenuRoutes(
             val payload = call.receive<UpdateItemRequest>()
             if (!venueMenuRepository.itemExists(venueId, itemId)) {
                 throw NotFoundException()
+            }
+            if (payload.clearDescription && payload.description != null) {
+                throw InvalidInputException("Передайте описание или команду очистки, не оба поля.")
             }
             val name = payload.name?.trim()
             if (name != null) {
@@ -207,6 +243,8 @@ fun Route.venueMenuRoutes(
                     source = MenuItemAvailabilitySource.VENUE_MINI_APP,
                     itemType = itemType,
                     itemTypeSpecified = payload.itemType != null,
+                    description = payload.description,
+                    descriptionSpecified = payload.clearDescription || payload.description != null,
                 ) ?: throw NotFoundException()
             call.respond(updated.toDtoWithCategory(resolveCategoryForItem(venueMenuRepository, venueId, updated)))
         }
@@ -576,6 +614,7 @@ private fun VenueMenuCategory.toDto(): VenueMenuCategoryDto =
         name = name,
         sortOrder = sortOrder,
         categoryType = categoryType.dbValue,
+        isActive = isActive,
         items = items.map { it.toDto(this) },
     )
 
@@ -608,6 +647,8 @@ private fun VenueMenuItem.toDto(
         sortOrder = sortOrder,
         itemType = itemType?.dbValue,
         effectiveItemType = effectiveType.dbValue,
+        description = description,
+        featuredOrder = featuredOrder,
         supportsBaseFlavorProfiles = supportsBaseFlavorProfiles,
         missingBaseFlavorProfilesCount =
             if (supportsBaseFlavorProfiles) {

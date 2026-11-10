@@ -15,6 +15,19 @@ STAGING-SMOKE-PASSED**. The complete Telegram parity model remains **PARTIAL / n
 for broad parity, platform menu placeholders, per-venue real delivery, callback audit completeness
 and notification history.
 
+## Guest menu content parity — HT-MENU-DESCRIPTIONS-FEATURED-01-R1
+
+`MENU-DESCRIPTIONS-001` / `MENU-FEATURED-001`: **LOCAL IMPLEMENTED / REVIEW PENDING**.
+Guest Bot root shows manual «Рекомендуем» before ordinary category buttons using the same item
+and category ids/callbacks. Category pages show bounded description snippets; item choice shows
+full description within the existing option/cart flow. Menu output has no parse mode and is bounded
+below Telegram's 4096 UTF-16-unit limit without splitting surrogate pairs. No new authoring dialog:
+OWNER/MANAGER use Venue Mini App; legacy Bot item edits preserve descriptions and pins.
+Unavailable/hidden-category items are filtered by the shared Guest repository. Order/session/tab,
+selected options, idempotency, snapshots and Staff Chat/outbox contracts remain unchanged.
+Dashboard/Alerts: PR #256 merged, staging `07a78d7cdb01af795de9ec36b268c4f240158088`, Flyway V133,
+HT70 technical smoke PASS per owner report; real Telegram/device sound acceptance remains OPEN.
+
 ## Addressed table booking fallback (HT-HALLS-SEATING-TABLE-BOOKING-01)
 
 When guest table choice is off, existing ordinary Bot bookings continue without a table guarantee.

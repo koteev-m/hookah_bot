@@ -1,12 +1,32 @@
 # Venue Mode Operations Model
 
-Current release evidence (2026-11-09): main `8292696…` is reported installed on staging with
-PostgreSQL V132 and technical smoke PASS; this task did not inspect the server. Halls/table editing,
+Current release evidence (2026-11-09): main through PR #256 is reported installed on staging with
+PostgreSQL V133 and technical smoke PASS; this task did not inspect the server. Halls/table editing,
 physical seating/manual and guest reservations, publication/links and accounting/auto-open are
 in main and that reported image. Their phone/product acceptance remains open. See
 [roadmap Section 13.0](UPDATED_PRODUCT_AI_ROADMAP.md#130-current-evidence-boundary--2026-11-09);
 older local-candidate headings do not mean the code still needs integration or deploy.
 
+
+VENUE-DASHBOARD-001 / Alerts are merged in main through PR #256 and, according to the
+owner-supplied HT70 release report, installed on staging at
+`07a78d7cdb01af795de9ec36b268c4f240158088`, PostgreSQL Flyway V133, technical smoke PASS.
+Real Telegram/device smoke, including sound, remains **OPEN**. This task performs no server or
+device actions; that release SHA is metadata, not the local implementation HEAD/BASE.
+
+## Menu content and recommendations
+
+`HT-MENU-DESCRIPTIONS-FEATURED-01-R1` implements `MENU-DESCRIPTIONS-001` and
+`MENU-FEATURED-001` locally (**LOCAL IMPLEMENTED / REVIEW PENDING**). OWNER/MANAGER can edit
+optional descriptions with a 500-code-point counter and clear action, and select/reorder up to six
+existing items in «Рекомендуем». Failed operations preserve drafts; stale selection requires
+refresh/review. `HT-MENU-DESCRIPTIONS-FEATURED-FIX-01` adds monotonic venue version + durable
+operation IDs: unknown-result retry keeps the original id, completed replay displays current server
+state, and conflicts never overwrite automatically. Untouched descriptions are omitted from item
+edits; explicit clear and failed-save drafts retain intent. Featured controls work after repeated
+Back/category/venue rendering. The preview hides unavailable items/inactive categories while retaining pins.
+STAFF has no description/featured editor or direct write permission. See
+[menu contract](MENU_OPTIONS_STOPLIST.md#item-descriptions-and-manual-recommendations--ht-menu-descriptions-featured-01-r1).
 
 ## Halls, physical seating and table booking (HT-HALLS-SEATING-TABLE-BOOKING-01)
 
@@ -109,7 +129,7 @@ Canonical dependencies:
 | Tabs / bill | Operational bill by personal/shared tabs. | Guest/Venue/Bot bill parity is smoke-closed; bill request/payment method is smoke-closed. | Tab reopen and force-close audit remain future/partial. |
 | Staff calls | Live operational requests from table context. | M5 lifecycle, ACK/DONE audit hardening and guest-visible terminal `CANCELLED` status are staging-smoked. | Manual cancel UI, quick replies and row-level actor/timestamps remain future. |
 | Bookings | Venue booking queue and lifecycle. | Booking queue/lifecycle, hold settings, confirmed-only arrival actions, state-aware staff-chat booking buttons, reminders and attendance indicators are partially/smoke-closed. | Broader lifecycle automation/preorder/reminder rollout remains partial/future. |
-| Menu | Structured order menu management. | Structured selected-option parity and OWNER/MANAGER atomic pre-shift availability review are staging-smoke-passed. Menu constructor broader status is partial. | Use `docs/MENU_OPTIONS_STOPLIST.md`; broad media/top-list governance remains open. |
+| Menu | Structured order menu management. | Structured selected-option parity and OWNER/MANAGER atomic pre-shift availability review are staging-smoke-passed. Menu constructor broader status is partial. | Descriptions/manual recommendations are local/review pending; see `docs/MENU_OPTIONS_STOPLIST.md`. Broader media remains open. |
 | Stop-list | Fast operational availability toggles. | Item/option availability parity is documented for current Staff/Manager/Owner paths; shift-check mass changes use an OWNER/MANAGER-only local draft and one batch confirmation. | Per-venue `staff_stoplist_enabled` and audit completeness outside shift check remain future/partial. |
 | Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
 | Staff / invites | Membership, roles, pending invite lifecycle and team cards. | `STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`; Platform Owner OWNER invite/revoke remains smoke-closed. | Keep Manager Staff-only authority, protected cards, invite revocation and identity privacy in regression. |
@@ -142,9 +162,11 @@ Current vs target:
 
 ### Venue cockpit and device alerts — HT-VENUE-DASHBOARD-ALERTS-01
 
-Local candidate, corrected by `HT-VENUE-DASHBOARD-ALERTS-FINDINGS-FIX-01`; independent review
-and separately authorized staging/device acceptance remain required. The previous unbounded
-creation manifest is superseded by protocol 2 below. Deployed evidence above is unchanged.
+Merged through PR #256; installed on staging SHA `07a78d7cdb01af795de9ec36b268c4f240158088`,
+Flyway V133; HT70 technical smoke PASS. Corrected by
+`HT-VENUE-DASHBOARD-ALERTS-FINDINGS-FIX-01`; real Telegram/device sound smoke OPEN. The previous
+unbounded creation manifest is superseded by protocol 2 below. Technical staging evidence does
+not close real-device product acceptance.
 
 Dashboard cards open existing Orders, Calls, Bookings, Hall, Accounting, Menu, Staff Chat and
 Subscription sections. NEW batches include append batches of the same order; active orders
@@ -226,7 +248,7 @@ retained creation history; it is not a production throughput/SLO guarantee. Prot
 index migration require a coordinated client/backend release; old active clients need reload.
 Closed Mini App has no guaranteed background push. Telegram alerts depend on Telegram/group/
 device settings. Real Telegram WebView/audio/OS notification and index-build rollout acceptance
-remain separate, unexecuted staging/device gates.
+remain separate gates; HT70 technical/index rollout passed, while real Telegram/device acceptance remains OPEN.
 
 ### Owner Mini App home and navigation (HT-VENUE-OWNER-UX02)
 
@@ -913,7 +935,7 @@ PDF result is bounded to its QA record; local browser/proxy tests alone are not 
 | --- | --- | --- | --- | --- |
 | Public card info-section image | OWNER/MANAGER can add multiple Telegram photos, delete an attachment and hide/show the whole section. Stored as Telegram `file_id`; no direct replace or per-attachment hide. | Deployed OWNER/MANAGER file picker, multi-file upload, replace/delete and attachment/section visibility. Preview remains view-only and scoped. Custom-section creation remains in Bot. | Guest Mini App and `PUBLISHED_PUBLIC` load the image through the guarded Guest proxy; Guest Bot sends legacy Telegram photos or bounded R2 documents. `PRIVATE_DRAFT` uses the authenticated preview proxy. Raw `file_id` is not exposed in either DTO. | Shared media source/compatible bridge, safe image upload, replace, section/attachment visibility policy, delete, audit and guest-safe delivery URL. |
 | Public card info-section PDF | OWNER/MANAGER can add PDF documents, delete an attachment and hide/show the whole section. PDF detection is MIME/filename based; no direct replace or per-attachment hide. | Deployed direct JPEG/PNG/PDF editor for OWNER/MANAGER; Preview stays view-only and guarded. | Guest Mini App and `PUBLISHED_PUBLIC` render passive inline pages with independent counters/navigation through guarded delivery; `PRIVATE_DRAFT` uses authenticated delivery. | PDF only on explicitly allowed surfaces, with server-side MIME/type/size validation, ownership/venue scoping, replace/delete/audit and safe delivery. |
-| Structured menu item photo / description / thumbnail | No current item-photo/thumbnail CRUD. The DB has a legacy `menu_items.description` column, but current Bot/menu repository flow does not read or write it. Option/flavor media is absent. | Current item CRUD covers name, price, type, availability, order and options; no item photo, description, thumbnail or option/flavor media fields/actions. | Current structured Guest menu DTO/rendering shows no item photo, description, thumbnail or option/flavor media. | Item-safe media/description contract after storage/proxy design; no raw provider/storage refs in Guest DTOs. |
+| Structured menu item photo / description / thumbnail | Description is read and displayed safely; legacy Bot edits preserve it. Item/option photos remain absent. | OWNER/MANAGER description create/edit/clear and manual recommendations are local/review pending; no item media CRUD. | Description short/full and ordered available «Рекомендуем» use existing item ids/options/cart; item/option media remains absent. | `MENU-DESCRIPTIONS-001` / `MENU-FEATURED-001`; media stays separate. |
 | Photo/PDF menu | Uses the `section_type=menu` info-section flow. OWNER/MANAGER add images/PDFs, delete attachments and hide/show the flat section. It is view-only and separate from the order menu. | Deployed direct information-media editor; both preview modes retain visible saved media and guarded/scoped delivery without raw refs. | Guest pre-QR `ℹ️ Информация` shows the flat `📖 Фото-меню`; it cannot create an order without matching structured items. | Keep view-only semantics and bounded PDF acceptance; broader media/storage/device gates remain open. |
 | Staff profile photo | No supported Bot photo upload/manage flow was found. | OWNER/MANAGER direct JPEG/PNG upload/replace/delete, including protected cards; STAFF own preview only. Owner-confirmed partial iPhone acceptance, no consent or publish step. | Existing card/Guest/Today rules gate the current photo through authenticated delivery; raw `photoRef` is never a capability. Guest display was not manually tested while unpublished. | R2 cleanup physical deletion verification, remaining live acceptance and production backup/privacy admission; see MEDIA_STORAGE_UPLOAD.md. |
 

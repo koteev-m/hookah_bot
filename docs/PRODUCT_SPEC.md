@@ -2,14 +2,31 @@
 
 Current implementation/release reconciliation: 2026-11-09, `HT-PRODUCT-DOCS-RECONCILIATION-01`.
 See [roadmap Section 13.0](UPDATED_PRODUCT_AI_ROADMAP.md#130-current-evidence-boundary--2026-11-09).
-Main `8292696…` and reported staging V132 include halls/seating/table booking, accounting/auto-open,
+Main through PR #256 and reported staging V133 include halls/seating/table booking, accounting/auto-open,
 publication/personal links and Guest loyalty reads. Dated local-candidate wording below is not a
 current integration/deploy blocker; feature-specific live acceptance remains separate and open.
+
+VENUE-DASHBOARD-001 / Alerts are merged in main through PR #256 and, according to the
+owner-supplied HT70 release report, installed on staging at
+`07a78d7cdb01af795de9ec36b268c4f240158088`, PostgreSQL Flyway V133, technical smoke PASS.
+Real Telegram/device smoke, including sound, remains **OPEN**. This task performs no server or
+device actions; that release SHA is metadata, not the local implementation HEAD/BASE.
+
+`MENU-DESCRIPTIONS-001` / `MENU-FEATURED-001` are **LOCAL IMPLEMENTED / REVIEW PENDING**
+under `HT-MENU-DESCRIPTIONS-FEATURED-01-R1`: optional normalized descriptions up to 500 code points;
+manual own-venue ordered selection of at most six existing items.
+`HT-MENU-DESCRIPTIONS-FEATURED-FIX-01` adds version CAS + durable operation-id replay and explicit
+description-edit intent; current saved state wins over historical successful operation output.
+OWNER/MANAGER author through
+MENU_MANAGE; Guest/Bot read plain text and current available recommendations. Existing ordering,
+options, prices, historical bills and accounting are unchanged. See the
+[canonical menu contract](MENU_OPTIONS_STOPLIST.md#item-descriptions-and-manual-recommendations--ht-menu-descriptions-featured-01-r1).
+No item-media, automatic rankings, paid placement or AI descriptions are included.
 
 ## Product summary
 A single Telegram bot + Telegram Mini App (WebApp) that serves many hookah lounges (“venues”) without code changes per new venue.
 Guests can browse a catalog, book a visit, and in-venue scan a table QR to open the Mini App, view menu, place orders and call staff.
-Venue OWNER/MANAGER/STAFF users manage their own venue according to runtime `venue_members` permissions: tables/QRs, menu with photos/options, stop-list, bookings, staff roles, and order processing.
+Venue OWNER/MANAGER/STAFF users manage their own venue according to runtime `venue_members` permissions: tables/QRs, structured menu/options and separate information media, stop-list, bookings, staff roles, and order processing.
 Platform Owner manages onboarding of venues, venue OWNER invitations/revocation, lifecycle (publish/hide/suspend/archive/delete), subscriptions (trial/prices), support and analytics.
 The Owner Bot and the local Venue Mini App publication flow share a server check and an
 Owner-only `DRAFT → PUBLISHED` operation. Venue Mini App exposes the flow under Settings → Venue

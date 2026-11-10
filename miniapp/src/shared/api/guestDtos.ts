@@ -138,6 +138,8 @@ export type MenuCategoryDto = {
 }
 
 export type MenuItemDto = {
+  description?: string | null
+  featuredOrder?: number | null
   id: number
   name: string
   priceMinor: number

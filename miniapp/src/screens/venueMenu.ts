@@ -18,6 +18,7 @@ import {
   venueSetOptionAvailability,
   venueUpdateCategory,
   venueUpdateItem,
+  venueUpdateFeatured,
   venueUpdateOption
 } from '../shared/api/venueApi'
 import type { VenueAccessDto, VenueMenuCategoryDto, VenueMenuItemDto, VenueMenuOptionDto } from '../shared/api/venueDtos'
@@ -27,6 +28,8 @@ import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPrese
 import { renderErrorDetails } from '../shared/ui/errorDetails'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
+
+import { menuDescriptionLength, normalizeMenuDescription } from '../shared/validation/menuDescription'
 
 const DEFAULT_CURRENCY = 'RUB'
 
@@ -418,6 +421,7 @@ type MenuMutationHandlers = {
     item: VenueMenuItemDto,
     name: string,
     priceMinor: number,
+    description: string | undefined,
     onFailure?: MutationFailureHandler
   ) => void
   onDeleteItem: (item: VenueMenuItemDto, onFailure?: MutationFailureHandler) => void
@@ -456,6 +460,27 @@ function buildField(labelText: string, placeholder: string, value = '') {
   input.placeholder = placeholder
   input.value = value
   append(field, label, input)
+  return { field, input }
+}
+
+function buildDescriptionField(value = '') {
+  const field = el('label', { className: 'venue-menu-field menu-description-field' })
+  const input = document.createElement('textarea')
+  input.className = 'venue-input'
+  input.rows = 3
+  input.value = value
+  input.setAttribute('aria-label', 'Описание')
+  const hint = el('span', { className: 'venue-menu-section-description', text: 'Состав, вкусовые особенности, крепость или другие полезные свойства. Необязательно.' })
+  const count = el('span', { className: 'menu-description-count' })
+  const update = () => {
+    const length = menuDescriptionLength(input.value)
+    count.textContent = `${length} / 500`
+    input.setAttribute('aria-invalid', String(length > 500))
+    input.setCustomValidity(length > 500 ? 'Описание: не более 500 символов.' : '')
+  }
+  input.addEventListener('input', update)
+  update()
+  append(field, el('span', { className: 'venue-menu-field-label', text: 'Описание' }), input, hint, count)
   return { field, input }
 }
 
@@ -633,6 +658,7 @@ function renderItemRow(
     name.setAttribute('role', 'heading')
     name.setAttribute('aria-level', '4')
     append(info, name, price)
+    if (item.description) info.appendChild(el('p', { className: 'menu-item-description', text: item.description }))
     if (!item.isAvailable) info.appendChild(el('span', { className: 'menu-item-badge', text: 'Стоп-лист' }))
 
     const primaryActions = el('div', { className: 'venue-menu-item-actions venue-menu-item-primary-actions' })
@@ -784,6 +810,25 @@ function renderItemRow(
   const renderEditForm = () => {
     const form = el('form', { className: 'venue-menu-inline-form venue-menu-item-edit-form' })
     const name = buildField('Название позиции', 'Название позиции', item.name)
+    const description = buildDescriptionField(item.description ?? '')
+    description.input.dataset.menuDescriptionOriginal = normalizeMenuDescription(description.input.value)
+    description.input.dataset.menuDescriptionForceClear = 'false'
+    description.input.dataset.menuDescriptionChanged = 'false'
+    description.input.addEventListener('input', () => {
+      const normalized = normalizeMenuDescription(description.input.value)
+      if (normalized) description.input.dataset.menuDescriptionForceClear = 'false'
+      description.input.dataset.menuDescriptionChanged = String(
+        description.input.dataset.menuDescriptionForceClear === 'true' || normalized !== description.input.dataset.menuDescriptionOriginal
+      )
+    })
+    const clear = el('button', { className: 'button-small button-secondary', text: 'Очистить описание' }) as HTMLButtonElement
+    clear.type = 'button'
+    clear.addEventListener('click', () => {
+      description.input.dataset.menuDescriptionForceClear = 'true'
+      description.input.value = ''
+      description.input.dispatchEvent(new Event('input'))
+      description.input.focus()
+    })
     const price = buildPriceField('Цена, ₽', 'Например 350', String(item.priceMinor / 100))
     const actions = el('div', { className: 'venue-inline-actions' })
     const save = el('button', { className: 'button-small', text: 'Сохранить' }) as HTMLButtonElement
@@ -806,10 +851,10 @@ function renderItemRow(
         return
       }
       feedback.hidden = true
-      handlers.onEditItem(item, trimmed, priceMinor, (message) => showMutationFeedback(feedback, message))
+      handlers.onEditItem(item, trimmed, priceMinor, description.input.dataset.menuDescriptionChanged === 'true' ? normalizeMenuDescription(description.input.value) : undefined, (message) => showMutationFeedback(feedback, message))
     })
     append(actions, save, cancel)
-    append(form, name.field, price.field, actions)
+    append(form, name.field, price.field, description.field, clear, actions)
     row.replaceChildren(form, feedback)
     if (handlers.canFocusEditor()) name.input.focus()
   }
@@ -837,6 +882,7 @@ function renderCategoryCard(
       name: string,
       priceMinor: number,
       currency: string,
+      description: string,
       onFailure?: MutationFailureHandler
     ) => void
   } & MenuMutationHandlers
@@ -942,6 +988,7 @@ function renderCategoryCard(
 
   const createRow = el('form', { className: 'venue-form-row venue-menu-item-create-form' })
   const name = buildField('Название позиции', 'Название позиции')
+  const description = buildDescriptionField()
   const price = buildPriceField('Цена, ₽', 'Например 350')
   const currencySelect = document.createElement('select')
   currencySelect.className = 'venue-select'
@@ -959,11 +1006,11 @@ function renderCategoryCard(
       return
     }
     createFeedback.hidden = true
-    handlers.onCreateItem(category, trimmed, priceMinor, currencySelect.value, (message) =>
+    handlers.onCreateItem(category, trimmed, priceMinor, currencySelect.value, normalizeMenuDescription(description.input.value), (message) =>
       showMutationFeedback(createFeedback, message)
     )
   })
-  append(createRow, name.field, price.field, currencySelect, createButton, createFeedback)
+  append(createRow, name.field, price.field, description.field, currencySelect, createButton, createFeedback)
 
   if (canManage) {
     body.appendChild(header)
@@ -1000,6 +1047,156 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   let programmaticScrollPosition: { x: number; y: number } | null = null
   let activeInteractionScrollFrame: number | null = null
   let menu: VenueMenuCategoryDto[] = []
+  const featuredPanel = el('details', { className: 'card venue-menu-featured' })
+  if (canManage) refs.editingDetails.before(featuredPanel)
+  let featuredExpected: number[] | null = null
+  let featuredExpectedVersion: string | null = null
+  let featuredServerVersion: string | null = null
+  let featuredServerIds: number[] | null = null
+  let featuredAttempt: { itemIds: number[]; expectedVersion: string; operationId: string } | null = null
+  let featuredUnknown = false
+  let featuredDraft: number[] = []
+  let featuredBusy = false
+  let featuredNeedsRefresh = false
+  let featuredMessage = ''
+  const featuredIds = () => menu.flatMap(c => c.items).filter(i => i.featuredOrder != null)
+    .sort((a, b) => a.featuredOrder! - b.featuredOrder! || a.id - b.id).map(i => i.id)
+  const sameIds = (a: number[], b: number[]) => a.length === b.length && a.every((id, i) => id === b[i])
+  const renderFeatured = () => {
+    if (!canManage) return
+    const focused = featuredPanel.contains(document.activeElement) ? document.activeElement : null
+    const focusedLabel = focused?.getAttribute('aria-label')
+    const focusedText = focused?.textContent
+    const current = featuredServerIds ?? featuredIds()
+    if (featuredExpected === null || (!featuredNeedsRefresh && !featuredAttempt && sameIds(featuredDraft, featuredExpected))) {
+      featuredExpected = [...current]
+      featuredExpectedVersion = featuredServerVersion
+      featuredDraft = [...current]
+    } else if (featuredExpectedVersion !== featuredServerVersion) featuredNeedsRefresh = true
+    const summary = el('summary', { text: `Рекомендуем · ${featuredDraft.length} / 6` })
+    const body = el('div', { className: 'venue-menu-featured-body' })
+    body.appendChild(el('p', { text: 'Выберите до 6 позиций. Порядок задаётся вручную. Стоп-лист и скрытые категории временно убирают товар из гостевой подборки.' }))
+    const select = document.createElement('select')
+    select.className = 'venue-select'
+    select.setAttribute('aria-label', 'Позиция для рекомендаций')
+    menu.forEach(c => c.items.filter(i => !featuredDraft.includes(i.id)).forEach(i => select.add(new Option(`${c.name} · ${i.name}`, String(i.id)))))
+    const add = el('button', { text: 'В рекомендации', className: 'button-small' }) as HTMLButtonElement
+    add.disabled = featuredBusy || featuredUnknown || !featuredExpectedVersion || featuredDraft.length >= 6 || !select.options.length
+    add.addEventListener('click', () => { featuredAttempt = null; featuredDraft.push(Number(select.value)); renderFeatured() })
+    append(body, select, add)
+    const list = el('ol')
+    featuredDraft.forEach((id, index) => {
+      const item = menu.flatMap(c => c.items).find(i => i.id === id)
+      const row = el('li')
+      row.appendChild(el('span', { text: item?.name ?? 'Позиция удалена' }))
+      ;(['up', 'down', 'remove'] as const).forEach(action => {
+        const label = action === 'up' ? 'Выше' : action === 'down' ? 'Ниже' : 'Убрать'
+        const button = el('button', { text: label, className: 'button-small button-secondary' }) as HTMLButtonElement
+        button.setAttribute('aria-label', `${label}: ${item?.name ?? id}`)
+        button.disabled = featuredBusy || featuredUnknown || !featuredExpectedVersion || (action === 'up' && index === 0) || (action === 'down' && index === featuredDraft.length - 1)
+        button.addEventListener('click', () => {
+          featuredAttempt = null
+          if (action === 'remove') featuredDraft.splice(index, 1)
+          else { const next = index + (action === 'up' ? -1 : 1); [featuredDraft[index], featuredDraft[next]] = [featuredDraft[next], featuredDraft[index]] }
+          renderFeatured()
+        })
+        row.appendChild(button)
+      })
+      list.appendChild(row)
+    })
+    body.appendChild(list)
+    body.appendChild(el('p', { className: 'venue-menu-featured-saved', text: `Сейчас сохранено: ${current.map(id => menu.flatMap(c => c.items).find(i => i.id === id)?.name ?? `#${id}`).join(', ') || 'нет позиций'}` }))
+    const preview = el('section', { className: 'menu-featured-preview' })
+    preview.setAttribute('aria-label', 'Предпросмотр гостевой подборки')
+    preview.appendChild(el('h4', { text: 'Гостевой вид · Рекомендуем' }))
+    const visible = featuredDraft.flatMap(id => menu.filter(c => c.isActive !== false).flatMap(c => c.items.filter(i => i.id === id && i.isAvailable)))
+    visible.forEach(item => {
+      const card = el('div', { className: 'menu-item' })
+      const info = el('div', { className: 'menu-item-info' })
+      append(info, el('strong', { text: item.name }), el('span', { text: formatPrice(item.priceMinor, item.currency) }))
+      if (item.description) info.appendChild(el('p', { className: 'menu-item-description', text: item.description }))
+      card.appendChild(info)
+      preview.appendChild(card)
+    })
+    if (!visible.length) preview.appendChild(el('p', { text: 'Нет доступных рекомендаций — гость не увидит блок.' }))
+    const message = el('p', { text: featuredMessage || (!featuredServerVersion ? 'Для редактирования рекомендаций обновите меню и приложение.' : featuredNeedsRefresh ? 'Подборка изменилась. Обновите её, проверьте черновик и сохраните повторно.' : '') })
+    message.setAttribute('role', 'status')
+    const refresh = el('button', { text: 'Обновить подборку', className: 'button-small button-secondary' }) as HTMLButtonElement
+    refresh.disabled = featuredBusy || featuredUnknown
+    refresh.addEventListener('click', async () => {
+      featuredBusy = true; renderFeatured()
+      const loaded = await loadMenu()
+      if (disposed) return
+      featuredBusy = false
+      if (loaded) {
+        featuredExpected = [...(featuredServerIds ?? featuredIds())]
+        featuredExpectedVersion = featuredServerVersion
+        featuredAttempt = null
+        const ids = new Set(menu.flatMap(c => c.items).map(i => i.id))
+        featuredDraft = featuredDraft.filter(id => ids.has(id))
+        featuredNeedsRefresh = false
+        featuredMessage = 'Меню обновлено. Проверьте черновик и сохраните подборку.'
+      }
+      renderFeatured()
+    })
+    const save = el('button', { text: featuredUnknown ? 'Повторить сохранение' : 'Сохранить рекомендации', className: 'button-small' }) as HTMLButtonElement
+    save.disabled = featuredBusy || !featuredExpectedVersion || (!featuredUnknown && (featuredNeedsRefresh || sameIds(featuredDraft, featuredExpected ?? [])))
+    save.addEventListener('click', async () => {
+      if (!featuredExpectedVersion) return
+      featuredAttempt ??= { itemIds: [...featuredDraft], expectedVersion: featuredExpectedVersion, operationId: crypto.randomUUID() }
+      const attempt = featuredAttempt
+      featuredBusy = true; featuredMessage = ''; renderFeatured()
+      const result = await venueUpdateFeatured(backendUrl, { venueId, ...attempt }, deps)
+      if (disposed) return
+      featuredBusy = false
+      if (!result.ok) {
+        featuredUnknown = result.error.status === 0 || result.error.status >= 500
+        if (featuredUnknown) {
+          featuredMessage = 'Результат сохранения неизвестен. Повторите сохранение; уже выполненное изменение не будет применено повторно.'
+        } else {
+          featuredAttempt = null
+          if (result.error.status === 409) {
+            featuredNeedsRefresh = true
+            featuredMessage = 'Рекомендации изменились. Обновите подборку; черновик сохранён. Показано текущее сохранённое состояние.'
+            await loadMenu()
+            if (disposed) return
+          } else {
+            featuredMessage = 'Не удалось сохранить рекомендации. Черновик сохранён. Проверьте доступ, обновите подборку и повторите.'
+          }
+        }
+        renderFeatured()
+        return
+      }
+      if (result.data.venueId !== venueId || result.data.operationId !== attempt.operationId || !/^(0|[1-9]\d*)$/.test(result.data.version)) {
+        featuredUnknown = true
+        featuredMessage = 'Не удалось подтвердить результат. Повторите сохранение; уже выполненное изменение не будет применено повторно.'
+        renderFeatured()
+        return
+      }
+      featuredAttempt = null
+      featuredUnknown = false
+      featuredNeedsRefresh = false
+      featuredServerIds = [...result.data.itemIds]
+      featuredServerVersion = result.data.version
+      featuredExpected = [...result.data.itemIds]
+      featuredExpectedVersion = result.data.version
+      featuredDraft = [...result.data.itemIds]
+      featuredMessage = result.data.replayed
+        ? 'Операция уже была выполнена. Показана текущая подборка; она могла измениться после этой операции.'
+        : 'Рекомендации сохранены.'
+      await loadMenu()
+      if (!disposed) renderFeatured()
+    })
+    append(body, preview, message, refresh, save)
+    featuredPanel.replaceChildren(summary, body)
+    if (focused) {
+      const target = Array.from(featuredPanel.querySelectorAll<HTMLElement>('button, select, summary'))
+        .find(control => focusedLabel ? control.getAttribute('aria-label') === focusedLabel : control.textContent === focusedText)
+      const enabledTarget = target instanceof HTMLButtonElement && target.disabled
+        ? target.closest('li')?.querySelector<HTMLElement>('button:not(:disabled)') : target
+      ;(enabledTarget ?? summary).focus({ preventScroll: true })
+    }
+  }
   let shiftFilter: ShiftCheckFilter = 'all'
   let shiftSearch = ''
   let shiftMassMode = false
@@ -1191,6 +1388,9 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
   type MenuFormControlState = {
     value: string
     checked: boolean | null
+    descriptionChanged: string | undefined
+    descriptionOriginal: string | undefined
+    descriptionForceClear: string | undefined
     selectionStart: number | null
     selectionEnd: number | null
   }
@@ -1257,6 +1457,9 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
       formHidden: form?.hidden ?? false,
       formControls: formControls.map((control) => ({
         value: control.value,
+        descriptionChanged: control.dataset.menuDescriptionChanged,
+        descriptionOriginal: control.dataset.menuDescriptionOriginal,
+        descriptionForceClear: control.dataset.menuDescriptionForceClear,
         checked: control instanceof HTMLInputElement ? control.checked : null,
         selectionStart:
           control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement
@@ -1341,6 +1544,10 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
           const control = controls[index]
           if (!control) return
           control.value = state.value
+          if (state.descriptionOriginal !== undefined) control.dataset.menuDescriptionOriginal = state.descriptionOriginal
+          if (state.descriptionForceClear !== undefined) control.dataset.menuDescriptionForceClear = state.descriptionForceClear
+          control.dispatchEvent(new Event('input'))
+          if (state.descriptionChanged !== undefined) control.dataset.menuDescriptionChanged = state.descriptionChanged
           if (control instanceof HTMLInputElement && state.checked != null) {
             control.checked = state.checked
           }
@@ -2008,11 +2215,11 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             }
             await refreshAfterMutation(context, 'Порядок обновлён')
           },
-          onCreateItem: async (target, name, priceMinor, currency, onFailure) => {
+          onCreateItem: async (target, name, priceMinor, currency, description, onFailure) => {
             const context = captureMenuContext({ categoryId: target.id })
             const result = await venueCreateItem(
               backendUrl,
-              { venueId, body: { categoryId: target.id, name, priceMinor, currency, isAvailable: true } },
+              { venueId, body: { categoryId: target.id, name, priceMinor, currency, isAvailable: true, description } },
               deps
             )
             if (disposed) return
@@ -2025,7 +2232,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
               'Позиция добавлена'
             )
           },
-          onEditItem: async (item, name, priceMinor, onFailure) => {
+          onEditItem: async (item, name, priceMinor, description, onFailure) => {
             const context = captureMenuContext({
               categoryId: item.categoryId,
               itemId: item.id,
@@ -2033,7 +2240,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             })
             const result = await venueUpdateItem(
               backendUrl,
-              { venueId, itemId: item.id, body: { name, priceMinor, currency: item.currency } },
+              { venueId, itemId: item.id, body: { name, priceMinor, currency: item.currency, ...(description !== undefined ? { description } : {}) } },
               deps
             )
             if (disposed) return
@@ -2047,6 +2254,7 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
             if (
               !window.confirm(
                 'Позиция будет удалена из меню.\n\n' +
+                  (item.featuredOrder != null ? 'Позиция также исчезнет из рекомендаций.\n\n' : '') +
                   'Ссылки на неё в условиях акций и списках подарков на выбор будут удалены автоматически.\n\n' +
                   'Если позиция используется как фиксированный подарок, удалить её нельзя, ' +
                   'пока подарок не будет заменён в акции.'
@@ -2282,6 +2490,9 @@ export function renderVenueMenuScreen(options: VenueMenuOptions) {
         : null
     if (currentInteractionContext) refs.categories.style.overflowAnchor = 'none'
     menu = result.data.categories
+    featuredServerVersion = typeof result.data.featuredVersion === 'string' && /^(0|[1-9]\d*)$/.test(result.data.featuredVersion) ? result.data.featuredVersion : null
+    featuredServerIds = featuredIds()
+    renderFeatured()
     shiftNeedsRefresh = false
     if (canRestoreMenuContext(restoreContext) && restoreContext.categoryId != null) {
       expandedCategoryIds.add(restoreContext.categoryId)

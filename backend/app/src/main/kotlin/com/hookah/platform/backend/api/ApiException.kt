@@ -352,3 +352,17 @@ class TodayStaffSourceScheduleException :
         httpStatus = HttpStatusCode.Conflict,
         message = "Состав для гостей определяется активными сменами в графике.",
     )
+
+class MenuFeaturedStaleException :
+    ApiException(
+        code = "MENU_FEATURED_STALE",
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Рекомендации изменились. Обновите подборку и повторите изменения.",
+    )
+
+class MenuFeaturedOperationConflictException :
+    ApiException(
+        code = "MENU_FEATURED_OPERATION_CONFLICT",
+        httpStatus = HttpStatusCode.Conflict,
+        message = "Идентификатор операции уже использован для другого изменения. Обновите подборку.",
+    )
