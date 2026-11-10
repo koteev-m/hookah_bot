@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 data class VenueMenuResponse(
     val venueId: Long,
     val categories: List<VenueMenuCategoryDto>,
+    val featuredVersion: String,
 )
 
 @Serializable
@@ -19,6 +20,7 @@ data class VenueMenuCategoryDto(
     val name: String,
     val sortOrder: Int,
     val categoryType: String,
+    val isActive: Boolean = true,
     val items: List<VenueMenuItemDto>,
 )
 
@@ -33,6 +35,8 @@ data class VenueMenuItemDto(
     val sortOrder: Int,
     val itemType: String? = null,
     val effectiveItemType: String,
+    val description: String? = null,
+    val featuredOrder: Int? = null,
     val supportsBaseFlavorProfiles: Boolean = false,
     val missingBaseFlavorProfilesCount: Int = 0,
     val options: List<VenueMenuOptionDto>,
@@ -76,6 +80,7 @@ data class CreateItemRequest(
     val currency: String = "RUB",
     val isAvailable: Boolean = true,
     val itemType: String? = null,
+    val description: String? = null,
 )
 
 @Serializable
@@ -86,6 +91,8 @@ data class UpdateItemRequest(
     val currency: String? = null,
     val isAvailable: Boolean? = null,
     val itemType: String? = null,
+    val description: String? = null,
+    val clearDescription: Boolean = false,
 )
 
 @Serializable
@@ -150,4 +157,21 @@ data class UpdateOptionRequest(
     val name: String? = null,
     val priceDeltaMinor: Long? = null,
     val isAvailable: Boolean? = null,
+)
+
+@Serializable
+data class UpdateFeaturedRequest(
+    val itemIds: List<Long>,
+    val expectedVersion: String,
+    val operationId: String,
+)
+
+@Serializable
+data class MenuFeaturedResponse(
+    val venueId: Long,
+    val itemIds: List<Long>,
+    val version: String,
+    val operationId: String,
+    val appliedVersion: String,
+    val replayed: Boolean,
 )

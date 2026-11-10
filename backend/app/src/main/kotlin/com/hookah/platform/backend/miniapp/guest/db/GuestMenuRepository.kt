@@ -37,7 +37,7 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
                     val itemsByCategory =
                         connection.prepareStatement(
                             """
-                            SELECT id, category_id, name, price_minor, currency, is_available, sort_order, item_type
+                            SELECT id, category_id, name, price_minor, currency, is_available, sort_order, item_type, description, featured_order
                             FROM menu_items
                             WHERE venue_id = ?
                               AND is_available = true
@@ -226,6 +226,8 @@ class GuestMenuRepository(private val dataSource: DataSource?) {
             isAvailable = rs.getBoolean("is_available"),
             sortOrder = rs.getInt("sort_order"),
             itemType = MenuSemanticType.nullableFromDb(rs.getString("item_type")),
+            description = rs.getString("description"),
+            featuredOrder = rs.getInt("featured_order").let { if (rs.wasNull()) null else it },
             options = emptyList(),
         )
 }
@@ -252,6 +254,8 @@ data class MenuItemModel(
     val sortOrder: Int,
     val itemType: MenuSemanticType? = null,
     val options: List<MenuItemOptionModel> = emptyList(),
+    val description: String? = null,
+    val featuredOrder: Int? = null,
 )
 
 data class MenuItemOptionModel(

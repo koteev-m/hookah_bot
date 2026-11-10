@@ -165,6 +165,9 @@ jobs:
             --tests "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest" \
             --tests "com.hookah.platform.backend.telegram.db.VenuePromotionRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.menu.MenuContentH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.venue.menu.MenuContentPostgresTest" \
+            --tests "com.hookah.platform.backend.telegram.MenuPresentationTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.AuditLogRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest" \
@@ -256,6 +259,9 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.promotions.VenuePromotionRoutesTest",
               "com.hookah.platform.backend.telegram.db.VenuePromotionRepositoryTest",
               "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest",
+              "com.hookah.platform.backend.miniapp.venue.menu.MenuContentH2Test",
+              "com.hookah.platform.backend.miniapp.venue.menu.MenuContentPostgresTest",
+              "com.hookah.platform.backend.telegram.MenuPresentationTest",
               "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.AuditLogRepositoryTest",
               "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest",
@@ -323,7 +329,10 @@ jobs:
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 61,
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
               "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 54,
-              "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest": 46,
+              "com.hookah.platform.backend.miniapp.venue.menu.MenuContentH2Test": 15,
+              "com.hookah.platform.backend.miniapp.venue.menu.MenuContentPostgresTest": 15,
+              "com.hookah.platform.backend.telegram.MenuPresentationTest": 2,
+              "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest": 48,
               "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest": 34,
               "com.hookah.platform.backend.miniapp.venue.staff.StaffInviteRepositoryTest": 11,
               "com.hookah.platform.backend.platform.PlatformVenueRoutesTest": 16,
@@ -336,7 +345,7 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.VenueOnboardingRoutesTest": 8,
               "com.hookah.platform.backend.platform.PlatformOnboardingRoutesTest": 15,
               "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest": 18,
-              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 560,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 561,
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           required_test_names = {
@@ -540,7 +549,7 @@ jobs:
                       "TEST-com.hookah.platform.backend.telegram.db."
                       "GuestOrderIdempotencyConcurrencyPostgresTest.xml"
                   ),
-                  9,
+                  13,
               ),
               (
                   "venue onboarding serialization and create-link",
@@ -574,6 +583,10 @@ jobs:
           booking_message_required_test_names = {
               "traffic policy rejection rolls back and the same key commits once after allow",
               "allowed guest message commits its ack while a denied staff group creates no alert",
+          }
+          guest_menu_delete_required_test_names = {
+              "delete wins before menu lock and stale submit leaves only delete audit",
+              "pinned deletion waits before menu locks and rolls back when a committed order references the item",
           }
           for label, report, minimum_tests in required_suites:
               if not report.is_file():
@@ -616,6 +629,18 @@ jobs:
                       for case in suite.iter("testcase")
                   ]
                   for required_name in booking_message_required_test_names:
+                      occurrences = actual_names.count(required_name)
+                      if occurrences != 1:
+                          problems.append(
+                              "missing or duplicate mandatory PostgreSQL testcase: "
+                              f"name={required_name!r} actual={occurrences}"
+                          )
+              if report.name.endswith("GuestOrderIdempotencyConcurrencyPostgresTest.xml"):
+                  actual_names = [
+                      (case.attrib.get("name") or "").removesuffix("()")
+                      for case in suite.iter("testcase")
+                  ]
+                  for required_name in guest_menu_delete_required_test_names:
                       occurrences = actual_names.count(required_name)
                       if occurrences != 1:
                           problems.append(
@@ -1766,6 +1791,29 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("guest-smoke.spec.ts", 'menu P2-2 missing version blocks featured writes without a fallback'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-3 featured controls remain functional after category back'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-1 editing only price preserves another editor description'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-1 untouched description survives a concurrent update empty'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-1 untouched description survives a concurrent update existing'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-1 explicit clear is sent even when the stale editor was empty'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-1 failed save retries the explicitly edited description and keeps its draft'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-1 restoring an untouched description draft does not mark it as a user edit'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-2 lost successful response reuses operation id after ABA and renders current server state'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-2 unknown unapplied request keeps its id and stale same ids require refresh'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-3 repeated category back binds an ordinary featured add exactly once'): 1,
+              ("guest-smoke.spec.ts", 'menu P2-3 venue change discards old featured closures and keeps the active visit scope'): 1,
+              ("guest-smoke.spec.ts", 'menu content deleting a pinned item explains removal and clears the saved selection'): 1,
+              ("guest-smoke.spec.ts", 'menu content authoring unicode draft and clear light'): 1,
+              ("guest-smoke.spec.ts", 'menu content authoring unicode draft and clear dark'): 1,
+              ("guest-smoke.spec.ts", 'menu content failed description edit keeps the entered text'): 1,
+              ("guest-smoke.spec.ts", 'menu content featured ordering conflict refresh preview and reload'): 1,
+              ("guest-smoke.spec.ts", 'menu content guest featured item options plain text and mobile light'): 1,
+              ("guest-smoke.spec.ts", 'menu content guest featured item options plain text and mobile dark'): 1,
+              ("guest-smoke.spec.ts", 'menu content staff has no description or featured management'): 1,
+              ("guest-smoke.spec.ts", 'menu content caps featured at six and preserves keyboard reorder focus'): 1,
+              ("guest-smoke.spec.ts", 'menu content browse full description without ordering context and no empty featured block'): 1,
+              ("guest-smoke.spec.ts", 'menu content stale removed options never add a replacement as an ordinary described item'): 1,
               ("venue-dashboard-alerts.spec.ts", 'first connection is silent, first batch and append of one order plus calls coalesce and replay is silent'): 1,
               ("venue-dashboard-alerts.spec.ts", 'offline recovery catches lower delayed IDs and already handled creations without a sound storm'): 1,
               ("venue-dashboard-alerts.spec.ts", 'bounded repeats and local mute do not ACK, toggle and volume are device only'): 1,

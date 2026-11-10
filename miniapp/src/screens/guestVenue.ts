@@ -386,7 +386,14 @@ function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, Men
     const info = el('div', { className: 'menu-item-info' })
     const name = el('strong', { text: item.name })
     const price = el('span', { className: 'menu-item-price', text: formatPrice(item.priceMinor, item.currency) })
-    append(info, name, price)
+    append(info, name)
+    if (item.description) {
+      info.appendChild(el('p', { className: 'menu-item-description', text: item.description }))
+      const details = el('details', { className: 'menu-item-description-details' })
+      append(details, el('summary', { text: 'Подробнее' }), el('p', { className: 'menu-item-description-full', text: item.description }))
+      info.appendChild(details)
+    }
+    info.appendChild(price)
     if (itemOptions.length > 0) {
       info.appendChild(el('span', { className: 'menu-item-option-hint', text: getOptionCopy(item, category).hint }))
     }
@@ -418,7 +425,7 @@ function renderMenuCategory(category: MenuCategoryDto, itemRefs: Map<number, Men
       plusButton,
       qtyControls,
       isAvailable: item.isAvailable,
-      hasOptions: itemOptions.length > 0
+      hasOptions: itemOptions.length > 0 || Boolean(item.description)
     })
 
     row.appendChild(info)
@@ -867,7 +874,6 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
           }
           if (menuRendererReady && renderedOrderMenuMode === true) {
             renderMenu(latestCategories)
-            bindItemActions()
           }
         }
       })
@@ -1369,7 +1375,6 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         selectedOptionItemId = null
         selectedOptionChoice = null
         renderMenu(categories)
-        bindItemActions()
       }
       button.addEventListener('click', handler)
       itemDisposables.push(() => button.removeEventListener('click', handler))
@@ -1416,6 +1421,22 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       selectedOptionChoice && options.some((option) => option.id === selectedOptionChoice?.id) ? selectedOptionChoice : null
     if (selectedOptionChoice && !selectedOption) {
       selectedOptionChoice = null
+    }
+    if (item.description) section.appendChild(el('p', { className: 'menu-item-description-full', text: item.description }))
+    if (!options.length && item.description && !replaceCartLineRef) {
+      section.appendChild(el('h4', { text: item.name }))
+      section.appendChild(el('p', { text: formatPrice(item.priceMinor, item.currency) }))
+      const add = el('button', { className: 'button-small', text: 'Добавить в корзину' }) as HTMLButtonElement
+      add.disabled = !canPlaceOrders() || !item.isAvailable
+      add.addEventListener('click', () => {
+        if (!canPlaceOrders()) return
+        const result = addToCart(item.id)
+        if (!result.ok) { setMessage('Не удалось добавить позицию. Проверьте корзину.'); return }
+        selectedOptionItemId = null
+        renderMenu(categories)
+      })
+      section.appendChild(add)
+      return section
     }
     if (selectedOption) {
       section.appendChild(el('h4', { text: 'Пожелания к приготовлению' }))
@@ -1480,7 +1501,6 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
         selectedOptionChoice = null
         setMessage('')
         renderMenu(categories)
-        bindItemActions()
       }
       backButton.addEventListener('click', backHandler)
       addButton.addEventListener('click', addHandler)
@@ -1578,7 +1598,6 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
           selectedOptionItemId = null
           selectedOptionChoice = null
           renderMenu(categories)
-          bindItemActions()
         }
         backButton.addEventListener('click', backHandler)
         itemDisposables.push(() => backButton.removeEventListener('click', backHandler))
@@ -1592,7 +1611,16 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
       : null
     if (!selectedCategory) {
       selectedCategoryId = null
+      const featured = categories.flatMap(c => c.items).filter(i => i.isAvailable && i.featuredOrder != null)
+        .sort((a, b) => a.featuredOrder! - b.featuredOrder! || a.id - b.id).slice(0, 6)
+      if (featured.length) {
+        const section = renderMenuCategory({ id: -1, name: 'Рекомендуем', categoryType: 'OTHER', items: featured }, itemRefs)
+        section.classList.add('menu-featured')
+        refs.menuBody.appendChild(section)
+        updateMenuOrderState(getCartSnapshot())
+      }
       refs.menuBody.appendChild(renderMenuCategoryList(categories))
+      bindItemActions()
       return
     }
 
@@ -1610,6 +1638,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.menuBody.appendChild(renderMenuCategory(selectedCategory, itemRefs))
 
     updateMenuOrderState(getCartSnapshot())
+    bindItemActions()
   }
 
   menuRendererReady = true
@@ -1934,7 +1963,6 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
           selectedOptionChoice = null
         }
         renderMenu(categories)
-        bindItemActions()
 
         const itemsToCache: MenuItemDto[] = categories.flatMap((category) => category.items)
         if (canPlaceOrders()) updateItemCache(

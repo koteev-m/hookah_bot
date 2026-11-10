@@ -1,9 +1,9 @@
 # Testing / QA Smoke Strategy
 
-Current evidence boundary (2026-11-09, `HT-PRODUCT-DOCS-RECONCILIATION-01`): the owner reports
-main `8292696b2f1c8c0916a2673aa3e0326a015e5d3d` installed on staging, PostgreSQL V132 and
-technical smoke PASS. GitHub PRs #252/#253 are merged; this docs task reran no runtime tests and
-performed no server/device actions. Existing automated suites and prior PR result counts are
+Current evidence boundary (2026-11-10, `HT-MENU-DESCRIPTIONS-FEATURED-FIX-01`): the PR #256 /
+HT70 release metadata below supersedes the earlier `HT-PRODUCT-DOCS-RECONCILIATION-01` staging
+V132 checkpoint. This task runs local menu regression only and performs no server/device actions.
+Prior automated counts retain their original scope; current implementation/release boundaries are
 recorded in [roadmap Section 13.0](UPDATED_PRODUCT_AI_ROADMAP.md#130-current-evidence-boundary--2026-11-09).
 The deferred phone checklist below and accounting/auto-open live acceptance remain NOT EXECUTED.
 Run them within `QA-PILOT-READINESS-001`, alongside existing `QA-TG-FALLBACK-SMOKE-001`,
@@ -12,9 +12,101 @@ Do not treat the 2570/703 prior automated results, installed migration head or h
 product acceptance. Preserve `REPEAT-MANUAL-001`, `CATALOG-SEARCH-MANUAL-001` and
 `STAFF-IDENTITY-MANUAL-001` with their exact fixture/cleanup requirements.
 
+VENUE-DASHBOARD-001 / Alerts are merged in main through PR #256 and, according to the
+owner-supplied HT70 release report, installed on staging at
+`07a78d7cdb01af795de9ec36b268c4f240158088`, PostgreSQL Flyway V133, technical smoke PASS.
+Real Telegram/device smoke, including sound, remains **OPEN**. This task performs no server or
+device actions; that release SHA is metadata, not the local implementation HEAD/BASE.
+
+## Menu P2 fixes — HT-MENU-DESCRIPTIONS-FEATURED-FIX-01
+
+Status: **LOCAL IMPLEMENTED / REVIEW PENDING**. Prior R1 2599/738 results below are historical
+inputs and do not validate this changed contract. Review evidence is the supplied Chromium and
+ABA failures plus successful baseline H2 pin migration. Permanent regression coverage lives in
+`MenuContentH2Test` / `MenuContentPostgresTest`, `VenueMenuRoutesTest` and `guest-smoke.spec.ts`.
+
+- P2-1: untouched/price-only/same-value description omitted; explicit empty clear; failed retry keeps input;
+  restored untouched forms retain intent even after a concurrent description edit.
+- P2-2: A→B→A replay after response loss and a fresh repository/pool; stale version with identical
+  ids; operation-id payload binding; durable no-op/empty receipts; same-op and different-op races;
+  current-state response vs historical applied version; pinned deletion and immutable previous SQL.
+  PostgreSQL observes an actual CAS waiter through `pg_blocking_pids` while a separate transaction
+  holds the venue version row; release gives one winner, no deadlock. H2 also executes the contract.
+  Keep the existing unpinned delete-before-cart-validation PG test unchanged; pinned deletion/order
+  concurrency additionally observes the real blocker and preserves the committed order snapshot,
+  pin/version and audit when the existing order-item FK rejects deletion.
+- P2-3: initial Featured picker, three category/Back cycles, options/cart, one ordinary add per click
+  and venue change with preserved active table scope. No extra ordering mechanism is introduced.
+- New PostgreSQL V135 / H2 V136 upgrade preserves nonempty V134/V135 menus, descriptions/prices/pins,
+  starts version 0/empty ledger, validates and repeats without migrations. Current-state snapshot
+  and BIGINT-as-string API precision are checked. Old unversioned writes must fail explicitly.
+- Run focused tests first, then fresh full backend (TZ=UTC, max-workers=1, Docker API 1.44) and
+  Chromium, compile/ktlint, TypeScript/Vite and all seven local CI result parsers. CI requires both
+  15-case content suites without skips and all new P2 Chromium regressions. Portable exact-manifest
+  and runtime fixture contracts advance to V135 without changing pinned V1–V134 SQL bytes.
+
+Fresh fix evidence (2026-11-10, HEAD `24e3d73…` plus the uncommitted fix): final full backend
+**2613 tests / 216 suites**, zero failures/errors/skips; full Chromium **750/750**, zero
+unexpected/flaky/skipped and one attempt per test. Final targeted lock/CAS coverage is **87/87**,
+including the unchanged delete-before-cart-validation case and new pinned-delete/order rollback
+case. Content contracts execute **15 PostgreSQL + 15 H2** tests; Venue menu routes **48** and
+Guest order concurrency **13** pass. Kotlin compile/ktlint and TypeScript/Vite PASS; portable
+contracts **72/72**, runtime diagnostics **24/24**, all **7/7** current CI result parsers PASS locally.
+Two separate JVMs on the final backend classes also validate PostgreSQL **17.11** V134→V135 and
+persisted ABA replay/current-state/audit-once behavior. The first full run found one deletion-lock
+regression (2612 tests, one failure); limiting the extra version lock to pinned deletion fixed it
+without weakening the original test. The final full run above supersedes that failed run.
+Native XML/JSON, commands, exact file/status lists and input hashes are recorded in
+`backend/build/ht-menu-fix-result.json` and `backend/build/HT-MENU-DESCRIPTIONS-FEATURED-FIX-01-REPORT.md`.
+
+No staging/deploy, hosted Linux runtime-image CI or real Telegram/device smoke is claimed.
+`PROJECT_STATUS.md` checkpoint remains deferred because it contains user changes.
+
+## Menu descriptions and recommendations — HT-MENU-DESCRIPTIONS-FEATURED-01-R1
+
+`MENU-DESCRIPTIONS-001` / `MENU-FEATURED-001`: **LOCAL IMPLEMENTED / REVIEW PENDING**.
+
+Prior R1 local automated evidence (2026-11-09, starting HEAD `24e3d73…`, R1 working diff): full backend
+**2599 tests / 216 suites**, zero failures/errors/skips, using `TZ=UTC` and
+`_JAVA_OPTIONS='-Xmx4g -Dapi.version=1.44'` with the offline Gradle command below. Content contracts
+execute **9 PostgreSQL + 9 H2** cases; Bot router **583** and presentation **2** pass. Kotlin
+compile/ktlint and TypeScript/Vite pass. Portable staging/manifest **72/72** and runtime diagnostics
+**24/24** pass. The compiled Java current-head fixture also executes nonempty V133→V134 on actual
+PostgreSQL **17.11**, validates exact applied count/checksums and preserves the legacy row; repeat
+migration is a no-op. Hosted Linux/native runtime-image CI is not executed by this local task.
+Full Chromium on the final UI/normalization code: **738/738**, zero unexpected/flaky/skipped and
+no browser retries. All **7/7** current CI result parsers execute locally PASS, using the native
+JUnit XML and Playwright JSON (only the local report path is mapped). `git diff --check` and the
+seven canonical docs sanity checks pass. These are local checks, not hosted Actions or live smoke.
+
+```bash
+TZ=UTC _JAVA_OPTIONS='-Xmx4g -Dapi.version=1.44' ./gradlew --offline --no-daemon --max-workers=1 :backend:app:compileKotlin :backend:app:ktlintCheck :backend:app:test --console=plain
+npm --prefix miniapp run build
+MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke -- --reporter=list,json
+```
+
+Original R1 local gate: shared `MenuContentH2Test` / `MenuContentPostgresTest` contracts (no PG
+skips), Venue/Guest routes, Bot router/keyboards/presentation, unchanged order/options/gift/repeat/
+accounting regression, Kotlin compile/ktlint, TypeScript/Vite, focused then full Chromium and CI XML
+result gates. Migration checks include nonempty PostgreSQL V133→V134 / H2 V134→V135 with existing
+description/price preservation, no seeded recommendations, validate and second-migrate no-op.
+
+Check Unicode 500/501, omitted/null/empty/clear and legacy edits, role revocation/cross-venue,
+transactional audit rollback/privacy/no-op, 0/1/6/7 pins, concurrent/stale ordering, move/delete,
+stop-list/category hide/restore, options from Featured, plain-text/XSS, reload, account/venue
+isolation and narrow mobile light/dark layout. CI explicitly selects both content contracts and
+rejects missing/below-nine/skipped/failed XML suites. No previous result count is this task's PASS.
+
+After a separately authorized publication/deploy, smoke real Telegram/device Venue authoring,
+Guest/Bot descriptions and recommendations, stale editor with two accounts, stop-list restoration,
+options/cart/confirmation and unchanged historical bills. These live checks remain **NOT EXECUTED**;
+Dashboard/Alerts real-device sound smoke remains **OPEN**. `PROJECT_STATUS.md` is user-owned in
+this task and its checkpoint update is deferred.
+
 ## Venue dashboard and operational alerts — HT-VENUE-DASHBOARD-ALERTS-FINDINGS-FIX-01
 
-Local review-fix candidate; live Telegram/device/staging smoke is NOT EXECUTED. The previous
+Merged through PR #256 and installed on staging V133 with HT70 technical smoke PASS; real
+Telegram/device smoke including sound remains OPEN. The previous
 2575/714 automated evidence belongs to the pre-fix implementation and does not close these
 findings. Run fresh full backend and Chromium after shared API/shell changes, plus Kotlin
 compile/ktlint, TypeScript/Vite, local result gates and affected migration/release contracts.

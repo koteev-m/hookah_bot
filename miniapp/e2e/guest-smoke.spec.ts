@@ -206,6 +206,8 @@ type GuestMenuOption = {
 }
 
 type GuestMenuItem = {
+  description?: string | null
+  featuredOrder?: number | null
   id: number
   name: string
   priceMinor: number
@@ -233,6 +235,8 @@ type VenueMenuOptionFixture = {
 }
 
 type VenueMenuItemFixture = {
+  description?: string | null
+  featuredOrder?: number | null
   id: number
   categoryId: number
   name: string
@@ -7397,6 +7401,7 @@ async function mockVenueMenuApi(
     menuErrors?: ApiErrorFixture[]
     deleteItemErrors?: Record<number, ApiErrorFixture>
     updateItemErrors?: Record<number, ApiErrorFixture>
+    loseFeaturedResponseOnce?: boolean
   } = {}
 ) {
   const role = options.role ?? 'MANAGER'
@@ -7446,6 +7451,35 @@ async function mockVenueMenuApi(
     'Цветочный'
   ]
 
+  let featuredVersion = 0
+  let loseFeaturedResponse = options.loseFeaturedResponseOnce ?? false
+  const featuredRequests: Array<{ itemIds: number[]; expectedVersion: string; operationId: string }> = []
+  const featuredOperations = new Map<string, { payload: string; appliedVersion: string }>()
+  const currentFeaturedIds = () => categories.flatMap(c => c.items).filter(i => i.featuredOrder != null)
+    .sort((a, b) => a.featuredOrder! - b.featuredOrder!).map(i => i.id)
+  const setFeaturedSelection = (ids: number[]) => {
+    if (JSON.stringify(ids) !== JSON.stringify(currentFeaturedIds())) featuredVersion++
+    categories.flatMap(c => c.items).forEach(i => { i.featuredOrder = ids.includes(i.id) ? ids.indexOf(i.id) + 1 : null })
+  }
+  await page.route('**/api/venue/menu/featured?**', async route => {
+    const body = route.request().postDataJSON()
+    featuredRequests.push(body)
+    if (!permissions.includes('MENU_MANAGE')) { await route.fulfill(jsonResponse({ error: { code: 'FORBIDDEN' } }, 403)); return }
+    if (typeof body.expectedVersion !== 'string' || typeof body.operationId !== 'string') {
+      await route.fulfill(jsonResponse({ error: { code: 'INVALID_INPUT' } }, 400)); return
+    }
+    const payload = JSON.stringify([body.expectedVersion, body.itemIds])
+    const prior = featuredOperations.get(body.operationId)
+    if (prior && prior.payload !== payload) { await route.fulfill(jsonResponse({ error: { code: 'MENU_FEATURED_OPERATION_CONFLICT' } }, 409)); return }
+    if (!prior && body.expectedVersion !== String(featuredVersion)) { await route.fulfill(jsonResponse({ error: { code: 'MENU_FEATURED_STALE' } }, 409)); return }
+    if (!prior) {
+      setFeaturedSelection(body.itemIds)
+      featuredOperations.set(body.operationId, { payload, appliedVersion: String(featuredVersion) })
+    }
+    if (loseFeaturedResponse) { loseFeaturedResponse = false; await route.abort('failed'); return }
+    await route.fulfill(jsonResponse({ venueId: 1, itemIds: currentFeaturedIds(), version: String(featuredVersion), operationId: body.operationId,
+      appliedVersion: featuredOperations.get(body.operationId)!.appliedVersion, replayed: Boolean(prior) }))
+  })
   const allItems = () => categories.flatMap((category) => category.items)
   const allOptions = () => allItems().flatMap((item) => item.options)
   const findCategory = (categoryId: number) => categories.find((category) => category.id === categoryId) ?? null
@@ -7581,7 +7615,7 @@ async function mockVenueMenuApi(
         )
         return
       }
-      await route.fulfill(jsonResponse({ venueId: 1, categories: snapshot }))
+      await route.fulfill(jsonResponse({ venueId: 1, categories: snapshot, featuredVersion: String(featuredVersion) }))
     } catch {
       // A disposed menu screen aborts its own request during venue or account switching.
     } finally {
@@ -7709,6 +7743,7 @@ async function mockVenueMenuApi(
         priceMinor: number
         currency: string
         isAvailable: boolean
+        description?: string | null
         itemType?: string | null
       }
       createItemRequests.push({
@@ -7731,6 +7766,7 @@ async function mockVenueMenuApi(
         currency: body.currency,
         isAvailable: body.isAvailable,
         sortOrder: category.items.length,
+        description: body.description ?? null,
         itemType: body.itemType ?? null,
         effectiveItemType: body.itemType ?? category.categoryType,
         supportsBaseFlavorProfiles: itemSupportsBaseFlavorProfiles,
@@ -7786,6 +7822,7 @@ async function mockVenueMenuApi(
         priceMinor?: number | null
         currency?: string | null
         isAvailable?: boolean | null
+        description?: string | null
         itemType?: string | null
       }
       if (!item) {
@@ -7803,6 +7840,7 @@ async function mockVenueMenuApi(
         )
         return
       }
+      if (body.description !== undefined) item.description = body.description || null
       if (body.name != null) item.name = body.name
       if (body.priceMinor != null) item.priceMinor = body.priceMinor
       if (body.currency != null) item.currency = body.currency
@@ -7940,6 +7978,9 @@ async function mockVenueMenuApi(
     getDeleteOptionCalls: () => deleteOptionCalls,
     getAvailabilityCalls: () => availabilityCalls,
     getApplyBaseFlavorProfileCalls: () => applyBaseFlavorProfileCalls,
+    getFeaturedRequests: () => [...featuredRequests],
+    setFeaturedSelection,
+    getFeaturedVersion: () => featuredVersion,
     getCreateItemCalls: () => createItemCalls,
     getUpdateItemCalls: () => updateItemCalls,
     getCreateItemRequests: () => [...createItemRequests],
@@ -20969,6 +21010,7 @@ test('venue menu isolates form scroll focus and success across a venue switch', 
   const oldDraftForm = oldDraftItem.locator('.venue-menu-item-edit-form')
   const oldDraftName = oldDraftForm.getByLabel('Название позиции', { exact: true })
   const oldDraftPrice = oldDraftForm.getByLabel('Цена, ₽', { exact: true })
+  await oldDraftForm.getByLabel('Описание', { exact: true }).fill('Описание старого заведения')
   await oldDraftName.fill('Черновик старого заведения')
   await oldDraftPrice.fill('777')
   await oldDraftItem.scrollIntoViewIfNeeded()
@@ -20993,6 +21035,7 @@ test('venue menu isolates form scroll focus and success across a venue switch', 
       inputs.map((input) => (input as HTMLInputElement).value)
     )
   ).not.toContain('Черновик старого заведения')
+  expect(await secondBuilder.locator('textarea').evaluateAll(nodes => nodes.map(node => (node as HTMLTextAreaElement).value))).not.toContain('Описание старого заведения')
   await expect(secondBuilder.locator('[data-category-id="30"], [data-item-id="311"]')).toHaveCount(0)
   await expect(secondBuilder.locator('.venue-menu-success')).toBeHidden()
   await expect(secondBuilder.locator('.venue-menu-success')).toHaveText('')
@@ -21054,6 +21097,7 @@ test('venue menu isolates form scroll focus and success across an account replac
   const oldDraftForm = oldDraftItem.locator('.venue-menu-item-edit-form')
   const oldDraftName = oldDraftForm.getByLabel('Название позиции', { exact: true })
   const oldDraftPrice = oldDraftForm.getByLabel('Цена, ₽', { exact: true })
+  await oldDraftForm.getByLabel('Описание', { exact: true }).fill('Описание старого аккаунта')
   await oldDraftName.fill('Черновик старого аккаунта')
   await oldDraftPrice.fill('888')
   await oldDraftItem.scrollIntoViewIfNeeded()
@@ -21085,6 +21129,7 @@ test('venue menu isolates form scroll focus and success across an account replac
       inputs.map((input) => (input as HTMLInputElement).value)
     )
   ).not.toContain('Черновик старого аккаунта')
+  expect(await otherBuilder.locator('textarea').evaluateAll(nodes => nodes.map(node => (node as HTMLTextAreaElement).value))).not.toContain('Описание старого аккаунта')
   await expect(otherBuilder.locator('[data-category-id="30"], [data-item-id="311"]')).toHaveCount(0)
   await expect(otherBuilder.locator('.venue-menu-success')).toBeHidden()
   await expect(otherBuilder.locator('.venue-menu-success')).toHaveText('')
@@ -29139,3 +29184,577 @@ for (const role of ['OWNER', 'PLATFORM'] as const) {
     await expectUnifiedContrast(page)
   })
 }
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`menu content authoring unicode draft and clear ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 320, height: 800 })
+    await page.emulateMedia({ colorScheme: theme })
+    await installTelegramWebApp(page, 123456789)
+    await installPolishTheme(page, theme)
+    const categories = buildMenuShiftCheckFixture()
+    const api = await mockVenueMenuApi(page, { categories })
+    await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    await openVenueSection(page, 'Заказное меню')
+    const editing = page.locator('details.venue-menu-editing')
+    const category = editing.locator('[data-category-id="30"]')
+    await editing.locator(':scope > summary').click()
+    await category.locator(':scope > summary').click()
+    const create = category.locator('.venue-menu-item-create-form')
+    await create.getByLabel('Название позиции', { exact: true }).fill('Описание тест')
+    await create.getByLabel('Цена, ₽', { exact: true }).fill('100')
+    await create.getByLabel('Описание', { exact: true }).fill('\uFEFF' + 'я'.repeat(500))
+    await expect(create.locator('.menu-description-count')).toHaveText('501 / 500')
+    await create.getByLabel('Описание', { exact: true }).fill('🍋'.repeat(501))
+    await expect(create.locator('.menu-description-count')).toHaveText('501 / 500')
+    await create.getByRole('button', { name: 'Добавить позицию', exact: true }).click()
+    expect(api.getCreateItemCalls()).toBe(0)
+    await create.getByLabel('Описание', { exact: true }).fill('🍋'.repeat(500))
+    await expect(create.locator('.menu-description-count')).toHaveText('500 / 500')
+    await create.getByRole('button', { name: 'Добавить позицию', exact: true }).click()
+    await expect.poll(() => api.getCreateItemCalls()).toBe(1)
+    const item = category.locator('.venue-menu-item[data-item-id="950"]')
+    await expect(item.locator('.menu-item-description')).toHaveText('🍋'.repeat(500))
+    await item.getByRole('button', { name: 'Править позицию' }).click()
+    const form = item.locator('form')
+    await form.getByLabel('Описание', { exact: true }).fill('  <img src=x onerror=alert(1)>  & вкус ')
+    await form.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await expect(item.locator('.menu-item-description')).toHaveText('<img src=x onerror=alert(1)> & вкус')
+    await expect(item.locator('img')).toHaveCount(0)
+    await item.getByRole('button', { name: 'Править позицию' }).click()
+    await item.getByRole('button', { name: 'Очистить описание' }).click()
+    await item.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await expect(item.locator('.menu-item-description')).toHaveCount(0)
+    await expectNoHorizontalOverflow(page)
+    await page.screenshot({ path: testInfo.outputPath(`menu-description-${theme}.png`), fullPage: true })
+  })
+}
+
+test('menu content failed description edit keeps the entered text', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueMenuApi(page, { categories: buildMenuShiftCheckFixture(), updateItemErrors: { 310: { status: 500 } } })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const editing = page.locator('details.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  const category = editing.locator('[data-category-id="30"]')
+  await category.locator(':scope > summary').click()
+  const item = category.locator('[data-item-id="310"]')
+  await item.getByRole('button', { name: 'Править позицию' }).click()
+  await item.getByLabel('Описание', { exact: true }).fill('Сохранить черновик 🍋')
+  await item.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(item.locator('.venue-menu-mutation-feedback')).toBeVisible()
+  await expect(item.getByLabel('Описание', { exact: true })).toHaveValue('Сохранить черновик 🍋')
+})
+
+test('menu content featured ordering conflict refresh preview and reload', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildMenuShiftCheckFixture()
+  const items = categories.flatMap(c => c.items)
+  items[0].description = 'Свежий вкус'
+  items[0].featuredOrder = 1
+  const api = await mockVenueMenuApi(page, { categories })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const panel = page.locator('.venue-menu-featured')
+  await panel.locator('summary').click()
+  await panel.getByLabel('Позиция для рекомендаций').selectOption(String(items[1].id))
+  await panel.getByRole('button', { name: 'В рекомендации', exact: true }).click()
+  await panel.getByRole('button', { name: `Выше: ${items[1].name}`, exact: true }).click()
+  await expect(panel.locator('ol li span')).toHaveText([items[1].name, items[0].name])
+  api.setFeaturedSelection([items[0].id, items[1].id])
+  await panel.getByRole('button', { name: 'Сохранить рекомендации' }).click()
+  await expect(panel).toContainText('черновик сохранён')
+  await expect(panel.getByRole('button', { name: 'Сохранить рекомендации' })).toBeDisabled()
+  await panel.getByRole('button', { name: 'Обновить подборку' }).click()
+  await expect(panel).toContainText('Проверьте черновик')
+  await expect(panel.locator('ol li span')).toHaveText([items[1].name, items[0].name])
+  await panel.getByRole('button', { name: 'Сохранить рекомендации' }).click()
+  await expect(panel).toContainText('Рекомендации сохранены')
+  const requests = api.getFeaturedRequests()
+  expect(requests[0].expectedVersion).toBe('0')
+  expect(requests[1]).toMatchObject({ itemIds: [items[1].id, items[0].id], expectedVersion: '1' })
+  expect(requests[1].operationId).not.toBe(requests[0].operationId)
+  await page.reload()
+  await openVenueSection(page, 'Заказное меню')
+  await page.locator('.venue-menu-featured summary').click()
+  await expect(page.locator('.venue-menu-featured ol li span')).toHaveText([items[1].name, items[0].name])
+})
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`menu content guest featured item options plain text and mobile ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 320, height: 800 })
+    await page.emulateMedia({ colorScheme: theme })
+    await installTelegramWebApp(page, 123456789)
+    await installPolishTheme(page, theme)
+    const categories = buildDefaultGuestMenu()
+    const items = categories.flatMap(c => c.items)
+    const first = items[0]
+    first.description = '<img src=x onerror=alert(1)> ' + 'Вкус манго. '.repeat(30)
+    first.featuredOrder = 2
+    first.options = [{ id: 900, name: 'Манго', priceDeltaMinor: 5000, isAvailable: true }]
+    items[1] && (items[1].featuredOrder = 1)
+    await mockGuestApi(page, { menuCategories: categories })
+    await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    const featured = page.locator('.menu-featured')
+    await expect(featured.getByRole('heading', { name: 'Рекомендуем' })).toBeVisible()
+    const card = featured.locator('.menu-item').filter({ has: page.getByText(first.name, { exact: true }) })
+    await expect(card.locator('.menu-item-description')).toHaveText(first.description)
+    await expect(card.locator('img')).toHaveCount(0)
+    await card.getByRole('button', { name: 'Выбрать' }).click()
+    await expect(page.locator('.menu-item-description-full')).toHaveText(first.description)
+    await page.getByRole('button', { name: /Манго/ }).click()
+    await page.getByRole('button', { name: 'Добавить в корзину', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+    await page.screenshot({ path: testInfo.outputPath(`menu-featured-${theme}.png`), fullPage: true })
+    await page.reload()
+    await expect(page.locator('.menu-featured')).toBeVisible()
+  })
+}
+
+test('menu content staff has no description or featured management', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueMenuApi(page, { role: 'STAFF', permissions: ['MENU_VIEW', 'MENU_AVAILABILITY_MANAGE'] })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  await expect(page.locator('.venue-menu-featured')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Править позицию' })).toHaveCount(0)
+  await expect(page.getByLabel('Описание', { exact: true })).toHaveCount(0)
+})
+
+
+test('menu content caps featured at six and preserves keyboard reorder focus', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildMenuShiftCheckFixture()
+  const template = categories[0].items[0]
+  categories[0].items = Array.from({ length: 7 }, (_, index) => ({ ...template, id: 5000 + index, name: `Товар ${index}`, featuredOrder: index < 6 ? index + 1 : null }))
+  categories[1].items = []
+  await mockVenueMenuApi(page, { categories })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const panel = page.locator('.venue-menu-featured')
+  await panel.locator('summary').click()
+  await expect(panel.getByRole('button', { name: 'В рекомендации', exact: true })).toBeDisabled()
+  await panel.getByRole('button', { name: 'Выше: Товар 1', exact: true }).focus()
+  await page.keyboard.press('Enter')
+  await expect(panel.getByRole('button', { name: 'Ниже: Товар 1', exact: true })).toBeFocused()
+  await expect(panel.locator('ol li span').first()).toHaveText('Товар 1')
+  await panel.getByRole('button', { name: 'Убрать: Товар 0', exact: true }).click()
+  await expect(panel.getByRole('button', { name: 'В рекомендации', exact: true })).toBeEnabled()
+})
+
+test('menu content browse full description without ordering context and no empty featured block', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildDefaultGuestMenu()
+  const item = categories[0].items[0]
+  item.description = 'Полный текст о позиции'
+  item.featuredOrder = 1
+  const api = await mockGuestApi(page, { menuCategories: categories })
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+  await page.getByRole('button', { name: 'Меню', exact: true }).click()
+  const featured = page.locator('.menu-featured')
+  await featured.getByText('Подробнее', { exact: true }).click()
+  await expect(featured.locator('.menu-item-description-full')).toBeVisible()
+  await expect(featured.locator('.menu-item-controls button').first()).toBeDisabled()
+  item.featuredOrder = null
+  item.description = null
+  api.setMenuCategories(categories)
+  await page.getByRole('button', { name: 'Обновить', exact: true }).click()
+  await expect(page.locator('.menu-featured')).toHaveCount(0)
+})
+
+test('menu content stale removed options never add a replacement as an ordinary described item', async ({ page }) => {
+    const scenario = { reason: 'REMOVED', copy: 'Выбранного варианта «Ягодный» для позиции «Кальян» больше нет в меню.' }
+    await installTelegramWebApp(page, 123456789)
+    const currentMenu = (includeStaleOption: boolean): GuestMenuCategory[] => [
+      {
+        id: 20,
+        name: 'Кальянное меню',
+        categoryType: 'HOOKAH',
+        items: [
+          {
+            id: 200,
+            name: 'Кальян',
+            priceMinor: 150000,
+            currency: 'RUB',
+            isAvailable: true,
+            effectiveItemType: 'HOOKAH',
+            description: 'Полное описание позиции',
+            options: [
+              ...(includeStaleOption
+                ? [{ id: 301, name: 'Ягодный', priceDeltaMinor: 0, isAvailable: true }]
+                : []),
+              ...(includeStaleOption ? [{ id: 302, name: 'Цитрус', priceDeltaMinor: 0, isAvailable: true }] : [])
+            ]
+          }
+        ]
+      }
+    ]
+    const api = await mockGuestApi(page, {
+      menuCategories: currentMenu(true),
+      cartPreviewResponseResolver: (request) => {
+        const staleLine = request.items.find((line) => line.selectedOptionId === 301)
+        if (!staleLine) {
+          return { preview: buildStaleRecoveryPreview(request) }
+        }
+        return {
+          error: {
+            status: 409,
+            code: 'CART_MENU_SELECTION_UNAVAILABLE',
+            message: 'Корзину нужно обновить.',
+            details: {
+              issues: [
+                {
+                  cartLineRef: staleLine.cartLineRef,
+                  itemId: 200,
+                  optionId: 301,
+                  selectionKind: 'OPTION',
+                  reason: scenario.reason
+                }
+              ]
+            }
+          }
+        }
+      }
+    })
+
+    await page.goto(
+      `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
+    )
+    await page.getByRole('button', { name: /Кальянное меню/ }).click()
+    await page.getByRole('button', { name: 'Выбрать' }).click()
+    await page.getByRole('button', { name: /Ягодный/ }).click()
+    await page.getByLabel('Пожелания к приготовлению').fill('покрепче')
+    await page.getByRole('button', { name: 'Добавить в корзину' }).click()
+    await page.getByRole('button', { name: 'Корзина (1)' }).click()
+
+    const staleLine = page.locator('.cart-item').filter({ hasText: 'Вариант: Ягодный' })
+    const warning = staleLine.locator('.cart-line-warning')
+    await expect(warning).toContainText(scenario.copy)
+    await expect(warning).toContainText('Выберите другой вариант или удалите позицию из корзины.')
+    await expect(warning.getByText('Удалить и выбрать другую', { exact: true })).toHaveCount(0)
+    await expect(warning.getByText(/Чтобы продолжить заказ, удалите её из корзины/)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Отправить' })).toBeDisabled()
+
+    await staleLine.locator('.qty-input').fill('2')
+    await staleLine.locator('.qty-input').press('Enter')
+    api.setMenuCategories(currentMenu(false))
+    const replaceButton = warning.getByRole('button', { name: 'Выбрать другой вариант для позиции Кальян' })
+    await replaceButton.click()
+
+    await expect(page.getByText('Для этой позиции сейчас нет доступных вариантов.')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Добавить в корзину', exact: true })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Корзина (2)' }).click()
+    await expect(page.locator('.cart-item').filter({ hasText: 'Вариант: Ягодный' }).locator('.qty-input')).toHaveValue('2')
+    await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeDisabled()
+})
+
+
+test('menu content deleting a pinned item explains removal and clears the saved selection', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildMenuShiftCheckFixture()
+  categories[0].items[0].featuredOrder = 1
+  const api = await mockVenueMenuApi(page, { categories })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const panel = page.locator('.venue-menu-featured')
+  await panel.locator('summary').click()
+  await expect(panel.locator('ol li')).toHaveCount(1)
+  const editing = page.locator('details.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  const category = editing.locator('[data-category-id="30"]')
+  await category.locator(':scope > summary').click()
+  const item = category.locator('[data-item-id="310"]')
+  page.once('dialog', async dialog => {
+    expect(dialog.message()).toContain('Позиция также исчезнет из рекомендаций.')
+    expect(dialog.message()).toContain('Ссылки на неё в условиях акций')
+    await dialog.accept()
+  })
+  await item.getByRole('button', { name: 'Удалить', exact: true }).click()
+  await expect(item).toHaveCount(0)
+  await expect(panel.locator('ol li')).toHaveCount(0)
+  expect(api.getDeleteItemRequests()).toEqual([310])
+})
+
+test('menu P2-3 featured controls remain functional after category back', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildDefaultGuestMenu()
+  const item = categories[0].items[0]
+  item.featuredOrder = 1
+  item.description = 'Проверка'
+  item.options = [{ id: 901, name: 'Манго', priceDeltaMinor: 5000, isAvailable: true }]
+  await mockGuestApi(page, { menuCategories: categories })
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await expect(page.locator('.menu-featured')).toBeVisible()
+  await page.locator('.menu-featured').getByRole('button', { name: 'Выбрать', exact: true }).click()
+  await expect(page.locator('.menu-option-picker')).toBeVisible()
+  await page.getByRole('button', { name: '← Назад', exact: true }).click()
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await page.getByRole('button', { name: new RegExp(categories[0].name) }).click()
+    await page.getByRole('button', { name: '← К разделам меню', exact: true }).click()
+    await page.locator('.menu-featured').getByRole('button', { name: 'Выбрать', exact: true }).click()
+    await expect(page.locator('.menu-option-picker')).toBeVisible()
+    if (cycle < 2) await page.getByRole('button', { name: '← Назад', exact: true }).click()
+  }
+  await page.getByRole('button', { name: /Манго/ }).click()
+  await page.getByRole('button', { name: 'Добавить в корзину', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Корзина (1)', exact: true })).toBeVisible()
+})
+
+test('menu P2-1 editing only price preserves another editor description', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildMenuShiftCheckFixture()
+  const storedItem = categories[0].items[0]
+  storedItem.description = null
+  const api = await mockVenueMenuApi(page, { categories })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const editing = page.locator('details.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  const category = editing.locator(`[data-category-id="${categories[0].id}"]`)
+  await category.locator(':scope > summary').click()
+  const item = category.locator(`[data-item-id="${storedItem.id}"]`)
+  await item.getByRole('button', { name: 'Править позицию' }).click()
+  await expect(item.getByLabel('Описание', { exact: true })).toHaveValue('')
+  storedItem.description = 'Новое описание от другого менеджера'
+  await item.getByLabel('Цена, ₽', { exact: true }).fill('777')
+  const requestPromise = page.waitForRequest(r => r.method() === 'PATCH' && new URL(r.url()).pathname === `/api/venue/menu/items/${storedItem.id}`)
+  await item.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  const body = (await requestPromise).postDataJSON()
+  expect(body).not.toHaveProperty('description')
+  await expect.poll(() => api.getUpdateItemCalls()).toBe(1)
+  expect(storedItem.description).toBe('Новое описание от другого менеджера')
+})
+
+for (const initialDescription of [null, 'Исходное описание']) {
+  test(`menu P2-1 untouched description survives a concurrent update ${initialDescription ? 'existing' : 'empty'}`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const categories = buildMenuShiftCheckFixture()
+    const stored = categories[0].items[0]
+    stored.description = initialDescription
+    await mockVenueMenuApi(page, { categories })
+    await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    await openVenueSection(page, 'Заказное меню')
+    const editing = page.locator('.venue-menu-editing')
+    await editing.locator(':scope > summary').click()
+    const category = editing.locator('[data-category-id="30"]')
+    await category.locator(':scope > summary').click()
+    const card = category.locator('[data-item-id="310"]')
+    await card.getByRole('button', { name: 'Править позицию' }).click()
+    if (initialDescription) await card.getByLabel('Описание', { exact: true }).fill(initialDescription)
+    stored.description = 'Описание другого менеджера'
+    const request = page.waitForRequest(r => r.method() === 'PATCH' && new URL(r.url()).pathname === '/api/venue/menu/items/310')
+    await card.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    expect((await request).postDataJSON()).not.toHaveProperty('description')
+    await expect(card.locator('.menu-item-description')).toHaveText('Описание другого менеджера')
+  })
+}
+
+test('menu P2-1 explicit clear is sent even when the stale editor was empty', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildMenuShiftCheckFixture()
+  const stored = categories[0].items[0]
+  stored.description = null
+  await mockVenueMenuApi(page, { categories })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const editing = page.locator('.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  const category = editing.locator('[data-category-id="30"]')
+  await category.locator(':scope > summary').click()
+  const card = category.locator('[data-item-id="310"]')
+  await card.getByRole('button', { name: 'Править позицию' }).click()
+  stored.description = 'Новое описание'
+  await card.getByRole('button', { name: 'Очистить описание' }).click()
+  const request = page.waitForRequest(r => r.method() === 'PATCH' && new URL(r.url()).pathname === '/api/venue/menu/items/310')
+  await card.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  expect((await request).postDataJSON()).toMatchObject({ description: '' })
+  await expect(card.locator('.menu-item-description')).toHaveCount(0)
+})
+
+test('menu P2-1 failed save retries the explicitly edited description and keeps its draft', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const errors: Record<number, ApiErrorFixture> = { 310: { status: 500 } }
+  await mockVenueMenuApi(page, { categories: buildMenuShiftCheckFixture(), updateItemErrors: errors })
+  const bodies: Array<Record<string, unknown>> = []
+  page.on('request', r => { if (r.method() === 'PATCH' && new URL(r.url()).pathname === '/api/venue/menu/items/310') bodies.push(r.postDataJSON()) })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const editing = page.locator('.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  const category = editing.locator('[data-category-id="30"]')
+  await category.locator(':scope > summary').click()
+  const card = category.locator('[data-item-id="310"]')
+  await card.getByRole('button', { name: 'Править позицию' }).click()
+  await card.getByLabel('Описание', { exact: true }).fill('Мой черновик 🍋')
+  await card.getByLabel('Цена, ₽', { exact: true }).fill('777')
+  await card.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(card.locator('.venue-menu-mutation-feedback')).toBeVisible()
+  await expect(card.getByLabel('Описание', { exact: true })).toHaveValue('Мой черновик 🍋')
+  delete errors[310]
+  await card.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(card.locator('.menu-item-description')).toHaveText('Мой черновик 🍋')
+  expect(bodies).toHaveLength(2)
+  expect(bodies[0]).toEqual(bodies[1])
+  expect(bodies[1]).toMatchObject({ description: 'Мой черновик 🍋', priceMinor: 77700 })
+})
+
+test('menu P2-1 restoring an untouched description draft does not mark it as a user edit', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildMenuShiftCheckFixture()
+  const stored = categories[0].items[0]
+  stored.description = null
+  await mockVenueMenuApi(page, { categories })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const editing = page.locator('.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  const category = editing.locator('[data-category-id="30"]')
+  await category.locator(':scope > summary').click()
+  const card = category.locator('[data-item-id="310"]')
+  await card.getByRole('button', { name: 'Править позицию' }).click()
+  await card.getByLabel('Цена, ₽', { exact: true }).fill('777')
+  stored.description = 'Сохранено другим менеджером'
+  await category.locator('[data-item-id="311"]').getByRole('checkbox').first().check()
+  await expect(card.getByLabel('Цена, ₽', { exact: true })).toHaveValue('777')
+  const request = page.waitForRequest(r => r.method() === 'PATCH' && new URL(r.url()).pathname === '/api/venue/menu/items/310')
+  await card.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  expect((await request).postDataJSON()).not.toHaveProperty('description')
+  await expect(card.locator('.menu-item-description')).toHaveText('Сохранено другим менеджером')
+})
+
+test('menu P2-2 lost successful response reuses operation id after ABA and renders current server state', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildMenuShiftCheckFixture()
+  const [a, b] = categories[0].items
+  a.featuredOrder = 1
+  const api = await mockVenueMenuApi(page, { categories, loseFeaturedResponseOnce: true })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const panel = page.locator('.venue-menu-featured')
+  await panel.locator('summary').click()
+  await panel.getByLabel('Позиция для рекомендаций').selectOption(String(b.id))
+  await panel.getByRole('button', { name: 'В рекомендации', exact: true }).click()
+  await panel.getByRole('button', { name: `Убрать: ${a.name}`, exact: true }).click()
+  await panel.getByRole('button', { name: 'Сохранить рекомендации', exact: true }).click()
+  await expect(panel).toContainText('Результат сохранения неизвестен')
+  await expect(panel.getByRole('button', { name: 'В рекомендации', exact: true })).toBeDisabled()
+  expect(api.getFeaturedVersion()).toBe(1)
+  api.setFeaturedSelection([a.id])
+  await panel.getByRole('button', { name: 'Повторить сохранение', exact: true }).click()
+  await expect(panel).toContainText('Операция уже была выполнена')
+  await expect(panel.locator('ol li span')).toHaveText([a.name])
+  expect(api.getFeaturedVersion()).toBe(2)
+  const requests = api.getFeaturedRequests()
+  expect(requests[1]).toEqual(requests[0])
+  await panel.getByLabel('Позиция для рекомендаций').selectOption(String(b.id))
+  await panel.getByRole('button', { name: 'В рекомендации', exact: true }).click()
+  await panel.getByRole('button', { name: `Убрать: ${a.name}`, exact: true }).click()
+  await panel.getByRole('button', { name: 'Сохранить рекомендации', exact: true }).click()
+  await expect(panel).toContainText('Рекомендации сохранены')
+  const next = api.getFeaturedRequests()[2]
+  expect(next.operationId).not.toBe(requests[0].operationId)
+  expect(next.expectedVersion).toBe('2')
+  await expect(panel.locator('ol li span')).toHaveText([b.name])
+})
+
+test('menu P2-2 unknown unapplied request keeps its id and stale same ids require refresh', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildMenuShiftCheckFixture()
+  const [a, b] = categories[0].items
+  a.featuredOrder = 1
+  const api = await mockVenueMenuApi(page, { categories })
+  const requests: Array<Record<string, unknown>> = []
+  await page.route('**/api/venue/menu/featured?**', async route => {
+    requests.push(route.request().postDataJSON())
+    if (requests.length === 1) { await route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE' } }, 503)); return }
+    await route.fallback()
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const panel = page.locator('.venue-menu-featured')
+  await panel.locator('summary').click()
+  await panel.getByLabel('Позиция для рекомендаций').selectOption(String(b.id))
+  await panel.getByRole('button', { name: 'В рекомендации', exact: true }).click()
+  await panel.getByRole('button', { name: `Убрать: ${a.name}`, exact: true }).click()
+  await panel.getByRole('button', { name: 'Сохранить рекомендации', exact: true }).click()
+  await expect(panel).toContainText('Результат сохранения неизвестен')
+  api.setFeaturedSelection([b.id]); api.setFeaturedSelection([a.id])
+  await panel.getByRole('button', { name: 'Повторить сохранение', exact: true }).click()
+  await expect(panel).toContainText('черновик сохранён')
+  await expect(panel.locator('.venue-menu-featured-saved')).toContainText(a.name)
+  await expect(panel.locator('ol li span')).toHaveText([b.name])
+  await expect(panel.getByRole('button', { name: 'Сохранить рекомендации', exact: true })).toBeDisabled()
+  expect(requests[1]).toEqual(requests[0])
+  await panel.getByRole('button', { name: 'Обновить подборку', exact: true }).click()
+  await panel.getByRole('button', { name: 'Сохранить рекомендации', exact: true }).click()
+  await expect(panel).toContainText('Рекомендации сохранены')
+  expect(requests[2].expectedVersion).toBe('2')
+  expect(requests[2].operationId).not.toBe(requests[0].operationId)
+})
+
+test('menu P2-3 repeated category back binds an ordinary featured add exactly once', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildDefaultGuestMenu()
+  categories[0].items[0].featuredOrder = 1
+  await mockGuestApi(page, { menuCategories: categories })
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  for (let cycle = 0; cycle < 3; cycle++) {
+    await page.getByRole('button', { name: /Кальянное меню ·/ }).click()
+    await page.getByRole('button', { name: '← К разделам меню', exact: true }).click()
+  }
+  await page.locator('.menu-featured').getByRole('button', { name: 'Добавить', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Корзина (1)', exact: true })).toBeVisible()
+  await expect(page.locator('.menu-featured .qty-label')).toHaveText('1')
+})
+
+test('menu P2-3 venue change discards old featured closures and keeps the active visit scope', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildDefaultGuestMenu()
+  const a = categories[0].items[0]
+  a.featuredOrder = 1
+  a.options = [{ id: 901, name: 'Манго A', priceDeltaMinor: 0, isAvailable: true }]
+  await mockGuestApi(page, { menuCategories: categories, restoreContext: buildRestoreContext() })
+  await mockPersonalVenue(page)
+  await page.route('**/api/guest/venue/2/menu', route => route.fulfill(jsonResponse({ venueId: 2, categories: [{ id: 80, name: 'Другое меню', categoryType: 'DRINK', items: [{ id: 9000, name: 'Товар B', priceMinor: 10000, currency: 'RUB', isAvailable: true, effectiveItemType: 'DRINK', featuredOrder: 1 }] }] })))
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.locator('.menu-featured').getByRole('button', { name: 'Выбрать', exact: true }).click()
+  await expect(page.locator('.menu-option-picker')).toContainText(a.name)
+  await page.getByRole('button', { name: '← Назад', exact: true }).click()
+  await page.evaluate(() => { location.hash = '#/venue/2?browseMenu=1' })
+  await expect(page.locator('.menu-featured')).toContainText('Товар B')
+  await expect(page.locator('.menu-featured')).not.toContainText(a.name)
+  await expect(page.locator('.menu-featured .menu-item-controls button').first()).toBeDisabled()
+  await page.getByRole('button', { name: 'К столу · Микс', exact: true }).click()
+  await page.locator('.menu-featured').getByRole('button', { name: 'Выбрать', exact: true }).click()
+  await expect(page.locator('.menu-option-picker')).toContainText(a.name)
+  await page.getByRole('button', { name: /Манго A/ }).click()
+  await page.getByRole('button', { name: 'Добавить в корзину', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Корзина (1)', exact: true })).toBeVisible()
+})
+
+
+test('menu P2-2 missing version blocks featured writes without a fallback', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const categories = buildMenuShiftCheckFixture()
+  const api = await mockVenueMenuApi(page, { categories })
+  await page.route('**/api/venue/menu?**', route => route.fulfill(jsonResponse({ venueId: 1, categories })))
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказное меню')
+  const panel = page.locator('.venue-menu-featured')
+  await panel.locator('summary').click()
+  await expect(panel).toContainText('обновите меню и приложение')
+  await expect(panel.getByRole('button', { name: 'В рекомендации', exact: true })).toBeDisabled()
+  await expect(panel.getByRole('button', { name: 'Сохранить рекомендации', exact: true })).toBeDisabled()
+  expect(api.getFeaturedRequests()).toHaveLength(0)
+  const editing = page.locator('.venue-menu-editing')
+  await editing.locator(':scope > summary').click()
+  const category = editing.locator('[data-category-id="30"]')
+  await category.locator(':scope > summary').click()
+  const item = category.locator('[data-item-id="310"]')
+  await item.getByRole('button', { name: 'Править позицию' }).click()
+  await item.getByLabel('Цена, ₽', { exact: true }).fill('777')
+  await item.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect.poll(() => api.getUpdateItemCalls()).toBe(1)
+})

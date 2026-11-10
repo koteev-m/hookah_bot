@@ -1,6 +1,6 @@
 # Product + Telegram AI Bots Roadmap
 
-Дата обновления: 2026-11-09 (HT-PRODUCT-DOCS-RECONCILIATION-01; main/staging/acceptance reconciliation).
+Дата обновления: 2026-11-09 (HT-MENU-DESCRIPTIONS-FEATURED-01-R1; local menu and Dashboard/Alerts release evidence).
 
 Current evidence boundary: [Section 13.0](#130-current-evidence-boundary--2026-11-09) supersedes
 older `local`, `review before commit`, `NOT_DEPLOYED` and selected-next wording below where stated.
@@ -9,6 +9,15 @@ Historical acceptance remains bounded to its recorded feature/release; deploy is
 Статус документа: canonical roadmap. Этот файл объединяет актуальный product roadmap, Mini App launch roadmap и Telegram-native AI Bots roadmap. Старые audit-файлы в `docs/audit/` остаются evidence/history, но не являются текущим backlog без сверки с этим roadmap и текущим кодом.
 
 Назначение: дать рабочий план разработки до market launch и после него. Это не маркетинговый пресс-релиз и не описание одного LLM-провайдера.
+
+VENUE-DASHBOARD-001 / Alerts are merged in main through PR #256 and, according to the
+owner-supplied HT70 release report, installed on staging at
+`07a78d7cdb01af795de9ec36b268c4f240158088`, PostgreSQL Flyway V133, technical smoke PASS.
+Real Telegram/device smoke, including sound, remains **OPEN**. This task performs no server or
+device actions; that release SHA is metadata, not the local implementation HEAD/BASE.
+
+`HT-MENU-DESCRIPTIONS-FEATURED-01-R1`: descriptions and manual recommendations are local only;
+see [menu contract](MENU_OPTIONS_STOPLIST.md#item-descriptions-and-manual-recommendations--ht-menu-descriptions-featured-01-r1).
 
 ## 1. Executive Summary
 
@@ -2266,20 +2275,26 @@ runtime tests were intentionally not run for this docs-only inventory.
 
 ### 13.0 Current evidence boundary — 2026-11-09
 
-Task `HT-PRODUCT-DOCS-RECONCILIATION-01`, PROJECT_IDENTITY_OK: `Hookah_Tootah` /
-`hookah_bot_ANT`, primary root/common dir and `github.com/koteev-m/hookah_bot` verified.
-GitHub main was read through the connected GitHub API without fetch or checkout:
-[`8292696b2f1c8c0916a2673aa3e0326a015e5d3d`](https://github.com/koteev-m/hookah_bot/commit/8292696b2f1c8c0916a2673aa3e0326a015e5d3d).
-Its tree `95a05db1e8b6f82c439f1ec6b6a7d455af26a193` equals local HEAD
-`87002a7eb5ed584b0797de6b2cdc6934a261f060` on `codex/ht-venue-shift-sales-mvp-01`;
-the remote comparison has zero changed files. EXPECTED_HEAD/BASE/branch/parent: NOT_SUPPLIED.
-The dirty user `PROJECT_STATUS.md` and four `scripts/dev/` files are preserved, not reconciled in place.
+Updated by `HT-MENU-DESCRIPTIONS-FEATURED-01-R1`, following
+`HT-PRODUCT-DOCS-RECONCILIATION-01`. PROJECT_IDENTITY_OK: `Hookah_Tootah` / `hookah_bot_ANT`,
+primary root/common dir/index and `github.com/koteev-m/hookah_bot` verified locally.
+Local starting HEAD `24e3d73a3be79a24e6ae968cee014fbd55426ecf` on
+`codex/ht-venue-dashboard-alerts` has tree `1d5c5621049ac820a85ab7826d20d2b0a9b97664`, exactly
+the owner-supplied main tree. EXPECTED_HEAD/BASE/branch/parent: NOT_SUPPLIED. No fetch or checkout.
+The dirty user `PROJECT_STATUS.md` and four `scripts/dev/` files remain untouched.
 
-The owner reports this exact main installed on staging, PostgreSQL V132 and technical smoke PASS.
-This is supplied deployment evidence, not a fresh server inspection in this task. Code present in
-that image does not prove feature enablement, Main Mini App/BotFather configuration, DNS/R2 cases,
-live Telegram behavior or product acceptance. H2 V133 is the source/test migration head, not the
-reported staging database. No tests, deployment, SSH or live product mutations were run here.
+The owner-supplied HT70 report records PR #256 merged and staging SHA
+`07a78d7cdb01af795de9ec36b268c4f240158088`, PostgreSQL V133, technical smoke PASS. That SHA is
+release metadata, not an implementation HEAD/BASE constraint. Dashboard/Alerts real Telegram/device
+smoke including sound remains OPEN. This is no fresh server inspection; code in the image does
+not establish feature enablement, BotFather/DNS/R2 settings or product acceptance.
+
+Menu descriptions and manual recommendations are **LOCAL IMPLEMENTED / REVIEW PENDING**;
+PostgreSQL V134 / H2 V135 add pins; PostgreSQL V135 / H2 V136 add the monotonic version and
+persistent operation ledger under `HT-MENU-DESCRIPTIONS-FEATURED-FIX-01`. These remain local candidate migrations. Local validation is recorded in the
+[QA gate](TESTING_QA_SMOKE_STRATEGY.md#menu-descriptions-and-recommendations--ht-menu-descriptions-featured-01-r1).
+No publication, deploy, SSH or live product mutation was performed. Existing task evidence and
+acceptance remainders below retain their original scope.
 
 | Existing task / scope | Main and automated evidence | Staging / live acceptance / real remainder |
 | --- | --- | --- |
@@ -2383,7 +2398,7 @@ real Telegram/staff-chat smoke, `D` = explicit product decision. The final colum
 
 | Stable ID / user-visible outcome | Status | Canonical owner; other sources | Current evidence; works → remains | User value / delay risk | Dependencies | Delivery |
 | --- | --- | --- | --- | --- | --- | --- |
-| `VENUE-DASHBOARD-001` — one actionable Venue cockpit | `LOCAL_FIX / REVIEW_PENDING` | MRWI; Venue, Product Spec; `HT-VENUE-DASHBOARD-ALERTS-FINDINGS-FIX-01` | Existing cockpit corrected: immediate private-context invalidation on lost access; v2 indexed current-event snapshot (256 + explicit capacity), bounded device receipts and leased cross-tab audio. First/append/call IDs remain distinct; terminal-before-first-observation is outside guarantee. PostgreSQL V133 / H2 V134 are index-only candidates. | Venue speed / fragmented operations. | Independent review, coordinated release and separately authorized device/staging acceptance remain. | F+PG+capacity+full E2E+A locally; S/device NOT EXECUTED; no production-readiness claim. |
+| `VENUE-DASHBOARD-001` — one actionable Venue cockpit | `IN_MAIN / STAGING_TECHNICAL_SMOKE_PASS / DEVICE_OPEN` | PR #256; HT70; Venue, Product Spec | Merged and installed on staging `07a78d7cdb01af795de9ec36b268c4f240158088`, PostgreSQL V133; technical smoke PASS per owner report. Bounded operational Alerts protocol remains as implemented. | Venue speed / fragmented operations. | Real Telegram/device smoke including sound remains OPEN. | Existing local backend/PG/Chromium evidence; no new server/device verification in this task. |
 | `VENUE-ORDER-QUEUE-ADVANCED-001` — SLA-aware order queue | `DEFERRED_AFTER_MVP` | MRWI; Venue, Analytics | Queue/detail/status/full bill are working. Rich filters/grouping, SLA timers and event-derived metrics remain. | Venue throughput / missed or delayed orders. | Event fidelity. | M/L / POSSIBLE; order queries/UI/analytics; F+A+S; at real queue volume; P2 deferred. |
 | `VENUE-TABLE-CRUD-001` — complete table edit/deactivate diagnostics | `IN_MAIN / ACCEPTANCE_OPEN` | MRWI; Venue | PR #252 implements edit/rename/capacity/hall assignment/deactivation and active-obligation guards in the existing physical table registry (`SeatingRepository.saveTable`), plus list/scheme diagnostics. Existing table/QR creation/export is retained. Code/tests are present on reported staging; complete the deferred phone scenarios before declaring product acceptance. | Venue setup / disruptive table changes. | No new editor prerequisite. Guarded physical RELEASE exists; exceptional session-close policy remains a separate decision. | Existing PostgreSQL V132/H2 V133; Seating API/Venue Hall UI; automated HTTP/PG/browser coverage exists, live acceptance open; P1 QA, no duplicate implementation. |
 | `VENUE-SETTINGS-PARITY-001` — backend-backed settings parity | `OPEN_CONFIRMED` | MRWI; Venue, Telegram | Team/schedule, public card, hours/exceptions, booking hold and shift extension work; timezone and notification toggles exist in DB/Bot but lack complete Venue Mini App management. | Venue self-service / Bot-only configuration drift. | Notification policy. | M / NO; settings repo/API/UI/Bot regression; F+E2E+A+S; next settings epic; P1 operations. |
@@ -2433,8 +2448,8 @@ real Telegram/staff-chat smoke, `D` = explicit product decision. The final colum
 | --- | --- | --- | --- | --- | --- | --- |
 | `MENU-CONC-001` — race-safe menu item relocation | `OPEN_CONFIRMED` | MRWI; QA, Menu | updateItem reads a non-locking sourceCategoryHint, then locks sorted categories and rereads the item. A changed source safely returns null through the not-found contract. The narrower remaining defect recorded in QA is false not-found instead of retryable conflict, not a proved lost update. Preserve deterministic locks and tenant privacy. | Venue correctness / misleading not-found under relocation contention; safe retry semantics. | Existing repository transaction model. | S / NO; menu repository/conflict and concurrency tests; F+A+S; before the next item move/update lock change; P2 existing registry. |
 | `MENU-TEST-002` — stronger category rollback proof | `OPEN_CONFIRMED` | MRWI; QA, Menu | Category create/seed/compound/reorder tests exist; not every injected same-connection failure asserts all immediate pre-state. Add bounded rollback invariants. | Venue data integrity / false confidence in atomicity. | No product decision. | S / NO; repository tests/CI; F+A; now with low scope; P2 existing registry. |
-| `MENU-DESCRIPTIONS-001` — item descriptions end to end | `OPEN_CONFIRMED` | MRWI; Menu, Product Spec | `menu_items.description` exists since V1; active repository/DTO/Guest/Venue UI paths do not expose it. Add bounded authoring, safe display and audit. | Guest choice/Venue content / impoverished menu. | Copy and payload privacy. | M / NO; menu repo/API/Bot/Mini Apps; F+E2E+A+S; content-quality epic; P1/P2 user value. |
-| `MENU-FEATURED-001` — venue-managed featured/top-list | `OPEN_CONFIRMED` | MRWI; Menu, Product Spec | Stats top items exist but no manual FEATURED/TOP_LIST field, ordering rule, API or UI. Keep separate from Platform paid placement. | Guest discovery/Venue merchandising / missed upsell. | Product ordering and caps. | M / YES likely; menu DB/API/UI/Bot; PG+F+E2E+A+S; when merchandising is prioritized; P2. |
+| `MENU-DESCRIPTIONS-001` — item descriptions end to end | `LOCAL IMPLEMENTED / REVIEW PENDING` | `HT-MENU-DESCRIPTIONS-FEATURED-01-R1`, `HT-MENU-DESCRIPTIONS-FEATURED-FIX-01`; Menu, Product Spec | Optional normalized 500-code-point description, preserve/clear PATCH and explicit UI field intent, MENU_MANAGE authoring, safe Venue/Guest/Bot display and transactional privacy-safe audit. Existing nullable column retained. | Guest choice / Venue content. | Independent review and separately authorized staging/device smoke. | NO description migration; API/Bot/Mini Apps and Unicode/RBAC/no-op/rollback checks; see QA gate. |
+| `MENU-FEATURED-001` — venue-managed featured/top-list | `LOCAL IMPLEMENTED / REVIEW PENDING` | `HT-MENU-DESCRIPTIONS-FEATURED-01-R1`, `HT-MENU-DESCRIPTIONS-FEATURED-FIX-01`; Menu, Product Spec | Manual ordered selection of up to six existing own-venue items; version CAS + durable operation-id replay (including ABA), transactional audit, availability/category filtering, Venue editor/preview and Guest/Bot display. Separate from sales stats and paid placement. | Guest discovery / Venue merchandising. | Independent review and separately authorized staging/device smoke. | PostgreSQL V134/V135 + H2 V135/V136; backend/PG/H2/Bot/Chromium and migration checks; see QA gate. |
 | `MENU-ADVANCED-CONSTRUCTOR-001` — advanced modifiers and bulk governance | `DEFERRED_AFTER_MVP` | MRWI; Menu, QA | Flat selected option, CRUD, shift check and bounded audit families work. Remaining bundle: modifier groups/required/min-max/multi-select, bulk import, unavailable display policy, general option uniqueness, Telegram shift-check/history. | Venue setup/Guest choice / large schema and combinatorial order risk. | Explicit demand and compatibility design. | XL / YES; menu/order DB/API/Bot/Mini Apps; D+PG+F+A+S; only with concrete venue use cases; P3. |
 | `MEDIA-STORAGE-DECISION-001` — complete remaining media operating model | `BLOCKED_PRODUCT_DECISION` | MRWI; Media, Ops | Existing private staging R2 is selected/enabled and information-media lifecycle is implemented; the staging provider choice is closed. Production separation/admission, full credentials/retention/deletion policy, backup/restore RPO/RTO, budget and incident ownership remain open. | Media expansion / security, durability and cost risk. | Remaining production/product/operations decisions; not a blocker to the accepted staging PDF slice. | S decision / NO runtime migration; architecture/ops docs; D; before production/media expansion; P1 blocker at trigger. |
 | `MEDIA-INFO-UPLOAD-001` — Mini App Photo/PDF management | `PARTIAL / PDF STAGING-SMOKE-PASSED` | MRWI; Media, Venue, QA | Direct OWNER/MANAGER JPEG/PNG/PDF upload/management, hybrid registry and guarded Guest/Preview delivery are implemented. PDF Inline UX release `099a5b7a9ab3d8e9a03b352daf548b5858d056ec` has green CI, HT70 staging SUCCESS and 2026-11-01 owner-confirmed iPhone PASS in the QA record. Broader live operations, physical cleanup, restore and unreported error/device cases remain unverified; scanning is not claimed. | Venue self-service/Guest content delivered for the bounded PDF slice; remaining media operations need evidence. | Selected staging R2 is in use; remaining production/operations gates are separate. | Existing V128 / no new migration for PDF Inline UX; media/Venue+Guest UI; F+A+bounded S complete, broader gates open; preserve regression before expansion. |

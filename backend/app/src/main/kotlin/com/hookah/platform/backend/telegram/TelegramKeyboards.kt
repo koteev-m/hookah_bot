@@ -6624,10 +6624,21 @@ object TelegramKeyboards {
         categories: List<Pair<Long, String>>,
         includeTableActionsBack: Boolean = false,
         includeShiftExtension: Boolean = false,
+        featuredItems: List<Triple<Long, Long, String>> = emptyList(),
     ): InlineKeyboardMarkup =
         InlineKeyboardMarkup(
             inlineKeyboard =
                 buildList {
+                    featuredItems.take(6).forEach { (categoryId, itemId, name) ->
+                        add(
+                            listOf(
+                                InlineKeyboardButton(
+                                    text = "Рекомендуем · $name",
+                                    callbackData = "bot_menu_item:$categoryId:$itemId",
+                                ),
+                            ),
+                        )
+                    }
                     categories.forEach { (id, name) ->
                         add(
                             listOf(

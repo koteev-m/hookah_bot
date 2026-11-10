@@ -28058,16 +28058,37 @@ class TelegramBotRouter internal constructor(
             enqueueMessage(chatId, "В ${context.table.venueName} пока нет категорий меню.")
             return
         }
+        val featured =
+            menu.categories.flatMap { c -> c.items.map { c.id to it } }
+                .filter { it.second.featuredOrder != null }
+                .sortedWith(compareBy({ it.second.featuredOrder }, { it.second.id })).take(6)
         upsertBotMenuMessage(
             chatId,
             tableToken = context.table.tableToken,
-            if (reorderMode) {
-                "Выберите позицию в меню, затем откройте корзину и нажмите «Оформить заказ»."
-            } else {
-                "${context.table.venueName}\nВыберите категорию."
-            },
+            (
+                if (reorderMode) {
+                    "Выберите позицию в меню, затем откройте корзину и нажмите «Оформить заказ»."
+                } else {
+                    "${context.table.venueName}\nВыберите категорию."
+                }
+            ) +
+                if (featured.isEmpty()) {
+                    ""
+                } else {
+                    featured.joinToString(
+                        separator = "\n", prefix = "\n\nРекомендуем\n",
+                    ) { (_, item) ->
+                        "${menuPlainText(item.name, 120)} — ${formatPrice(item.priceMinor, item.currency)}" +
+                            menuDescriptionLine(item.description, 100)
+                    }
+                },
             TelegramKeyboards.inlineBotMenuCategories(
                 categories = categories,
+                featuredItems =
+                    featured.map {
+                            (categoryId, item) ->
+                        Triple(categoryId, item.id, menuPlainText(item.name, 48))
+                    },
                 includeTableActionsBack = reorderMode,
                 includeShiftExtension = includeShiftExtension,
             ),
@@ -28320,6 +28341,10 @@ class TelegramBotRouter internal constructor(
                 append(category.name)
                 append("\n")
                 append("Выберите позицию.")
+                pageItems.filter { !it.description.isNullOrBlank() }.forEach { item ->
+                    append("\n\n${menuPlainText(item.name, 120)} — ${formatPrice(item.priceMinor, item.currency)}")
+                    append(menuDescriptionLine(item.description, 100))
+                }
                 if (totalPages > 1) {
                     append("\n")
                     append("Страница ${page + 1}/$totalPages")
@@ -28391,6 +28416,7 @@ class TelegramBotRouter internal constructor(
                 tableToken = context.table.tableToken,
                 buildString {
                     append(item.name)
+                    append(menuDescriptionLine(item.description, 1000))
                     append("\n")
                     append("Цена: ${formatPrice(item.priceMinor, item.currency)}")
                     append("\n\n")
@@ -28425,6 +28451,7 @@ class TelegramBotRouter internal constructor(
             tableToken = context.table.tableToken,
             buildString {
                 append(item.name)
+                append(menuDescriptionLine(item.description, 1000))
                 append("\n")
                 append("Цена: ${formatPrice(item.priceMinor, item.currency)}")
                 append("\n\n")
@@ -30532,17 +30559,18 @@ class TelegramBotRouter internal constructor(
         replyMarkup: ReplyMarkup,
         sourceMessageId: Long? = null,
     ) {
+        val safeText = menuPlainText(text, 3900)
         val key = BotDraftCartKey(chatId = chatId, tableToken = tableToken)
         clearBotTransientScreens(chatId, key)
         val messageId =
-            runCatching { apiClient.sendMessage(chatId, text, replyMarkup)?.messageId }
+            runCatching { apiClient.sendMessage(chatId, safeText, replyMarkup)?.messageId }
                 .onFailure { logBestEffort("telegram direct menu send", it) }
                 .getOrNull()
         if (messageId != null) {
             botMenuMessageIds[key] = messageId
             return
         }
-        enqueueMessage(chatId, text, replyMarkup)
+        enqueueMessage(chatId, safeText, replyMarkup)
     }
 
     private suspend fun clearBotTransientScreens(

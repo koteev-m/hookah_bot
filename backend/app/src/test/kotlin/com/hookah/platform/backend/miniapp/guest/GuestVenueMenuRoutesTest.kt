@@ -60,6 +60,14 @@ class GuestVenueMenuRoutesTest {
 
             val venues = seedVenues(jdbcUrl)
             val menu = seedMenu(jdbcUrl, venues.publishedId)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use {
+                    it.executeUpdate(
+                        "UPDATE menu_items SET description = '<b>Манго & мята</b>', featured_order = 1 " +
+                            "WHERE id = ${menu.firstCategoryItemIds[0]}",
+                    )
+                }
+            }
             val token = issueToken(config)
 
             val response =
@@ -78,6 +86,8 @@ class GuestVenueMenuRoutesTest {
             assertEquals(1, firstCategoryItems.size)
             assertEquals(menu.firstCategoryItemIds[0], firstCategoryItems[0].id)
             assertTrue(firstCategoryItems[0].isAvailable)
+            assertEquals("<b>Манго & мята</b>", firstCategoryItems[0].description)
+            assertEquals(1, firstCategoryItems[0].featuredOrder)
             assertEquals(1, firstCategoryItems[0].options.size)
             assertEquals(menu.activeOptionId, firstCategoryItems[0].options[0].id)
             assertEquals("Яблоко", firstCategoryItems[0].options[0].name)

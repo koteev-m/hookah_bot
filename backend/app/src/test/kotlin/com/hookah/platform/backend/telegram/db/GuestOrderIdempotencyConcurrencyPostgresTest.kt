@@ -4,6 +4,7 @@ import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.api.CartMenuSelectionKind
 import com.hookah.platform.backend.api.CartMenuSelectionReason
 import com.hookah.platform.backend.api.CartMenuSelectionUnavailableException
+import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.OrderIdempotencyPayloadMismatchException
 import com.hookah.platform.backend.miniapp.guest.db.GuestOrderTransactionCoordinator
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
@@ -27,6 +28,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
+import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -350,6 +352,108 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
                 assertEquals(before.copy(auditRows = before.auditRows + 1), readSnapshot(dataSource))
                 assertEquals(0, countRows(dataSource, "menu_items"))
                 assertEquals(1, countMenuItemDeleteAudits(dataSource, fixture.itemId))
+            } finally {
+                submitDataSource.allowMenuLock.countDown()
+                shutdown(executor)
+            }
+        }
+    }
+
+    @Test
+    fun `pinned deletion waits before menu locks and rolls back when a committed order references the item`() {
+        withFixture { dataSource, fixture ->
+            val menuRepository = VenueMenuRepository(dataSource)
+            runBlocking {
+                menuRepository.updateFeatured(
+                    fixture.venueId,
+                    listOf(fixture.itemId),
+                    0,
+                    UUID.randomUUID().toString(),
+                    DELETE_ACTOR_ID,
+                )
+            }
+            val submitDataSource = BeforeMenuSelectionLockDataSource(dataSource)
+            val writerDataSource = RecordingDataSource(dataSource)
+            val executor = Executors.newFixedThreadPool(2)
+            try {
+                val submit =
+                    executor.submit(
+                        Callable {
+                            submit(
+                                ordersRepository(submitDataSource),
+                                fixture,
+                                fixture.primaryPersonalScope(),
+                                DELETE_RACE_KEY,
+                            )
+                        },
+                    )
+                await(submitDataSource.menuLockReached, "submit menu lock")
+                val deletion =
+                    executor.submit(
+                        Callable {
+                            runCatching {
+                                runBlocking {
+                                    VenueMenuRepository(writerDataSource).deleteItem(
+                                        fixture.venueId,
+                                        fixture.itemId,
+                                        DELETE_ACTOR_ID,
+                                        MenuItemDeleteSource.VENUE_MINI_APP,
+                                    )
+                                }
+                            }
+                        },
+                    )
+                var blocked = false
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_TIMEOUT_SECONDS)
+                dataSource.connection.use { connection ->
+                    while (!blocked && System.nanoTime() < deadline) {
+                        val writerPid = writerDataSource.backendPid.get()
+                        if (writerPid > 0) {
+                            connection.createStatement().use { it.execute("SELECT pg_stat_clear_snapshot()") }
+                            connection.prepareStatement("SELECT ? = ANY(pg_blocking_pids(?))").use { statement ->
+                                statement.setInt(1, submitDataSource.backendPid.get())
+                                statement.setInt(2, writerPid)
+                                statement.executeQuery().use { rs ->
+                                    assertTrue(rs.next())
+                                    blocked = rs.getBoolean(1)
+                                }
+                            }
+                        }
+                        Thread.yield()
+                    }
+                }
+                assertTrue(blocked, "Pinned deletion must wait for the venue version before taking menu row locks")
+                submitDataSource.allowMenuLock.countDown()
+                assertFalse(submit.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS).idempotencyReplay)
+                assertIs<DatabaseUnavailableException>(
+                    deletion.get(WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS).exceptionOrNull(),
+                )
+                assertOrderWriteCounts(dataSource, expected = 1)
+                assertEquals(1, countRows(dataSource, "menu_items"))
+                assertEquals(0, countMenuItemDeleteAudits(dataSource, fixture.itemId))
+                val snapshot = runBlocking { menuRepository.getMenuSnapshot(fixture.venueId) }
+                assertEquals(1L, snapshot.featuredVersion)
+                assertEquals(1, snapshot.categories.flatMap { it.items }.single().featuredOrder)
+                dataSource.connection.use { connection ->
+                    connection.createStatement().use { statement ->
+                        statement.executeQuery(
+                            "SELECT item_name_snapshot, base_unit_price_minor_snapshot, currency_snapshot " +
+                                "FROM order_batch_items",
+                        ).use { rs ->
+                            assertTrue(rs.next())
+                            assertEquals("Concurrency item", rs.getString("item_name_snapshot"))
+                            assertEquals(1000L, rs.getLong("base_unit_price_minor_snapshot"))
+                            assertEquals("RUB", rs.getString("currency_snapshot"))
+                        }
+                        statement.executeQuery(
+                            "SELECT option_name_snapshot, price_delta_minor_snapshot FROM order_batch_item_options",
+                        ).use { rs ->
+                            assertTrue(rs.next())
+                            assertEquals("Concurrency option", rs.getString("option_name_snapshot"))
+                            assertEquals(100L, rs.getLong("price_delta_minor_snapshot"))
+                        }
+                    }
+                }
             } finally {
                 submitDataSource.allowMenuLock.countDown()
                 shutdown(executor)

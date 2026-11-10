@@ -64,6 +64,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class VenueMenuRoutesTest {
@@ -218,7 +219,8 @@ class VenueMenuRoutesTest {
                 }
             assertEquals(HttpStatusCode.OK, readOnlyGet.status)
             val readOnlyJson = json.parseToJsonElement(readOnlyGet.bodyAsText()).jsonObject
-            assertEquals(setOf("venueId", "categories"), readOnlyJson.keys)
+            assertEquals(setOf("venueId", "categories", "featuredVersion"), readOnlyJson.keys)
+            assertEquals("0", readOnlyJson["featuredVersion"]?.jsonPrimitive?.content)
             assertTrue(readOnlyJson.getValue("categories").jsonArray.isEmpty())
             assertTrue(menuDeleteAudits(jdbcUrl, MENU_CATEGORY_CREATED_AUDIT_ACTION).isEmpty())
 
@@ -3830,6 +3832,230 @@ class VenueMenuRoutesTest {
             )
             assertTrue(menuItemAvailabilityChangeAudits(jdbcUrl).isEmpty())
             assertTrue(menuOptionAvailabilityChangeAudits(jdbcUrl).isEmpty())
+        }
+
+    @Test
+    fun `menu content PATCH preserves omitted description and enforces role tenant and stale selection`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-content")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val token = issueToken(config)
+            val repository = menuRepository(jdbcUrl)
+            val category =
+                repository.createCategory(
+                    venueId,
+                    "Меню",
+                    actorUserId = TELEGRAM_USER_ID,
+                    source = MenuItemAvailabilitySource.VENUE_MINI_APP,
+                )
+            val create =
+                postMenuItem(
+                    client,
+                    token,
+                    "/api/venue/menu/items?venueId=$venueId",
+                    """
+                    {"categoryId":${category.id},"name":"Товар","priceMinor":10000,"description":"  Манго  и мята "}
+                    """.trimIndent(),
+                )
+            assertEquals(HttpStatusCode.OK, create.status)
+            val item =
+                json.decodeFromString<com.hookah.platform.backend.miniapp.venue.menu.VenueMenuItemDto>(
+                    create.bodyAsText(),
+                )
+            assertEquals("Манго и мята", item.description)
+            val url = "/api/venue/menu/items/${item.id}?venueId=$venueId"
+            assertEquals(HttpStatusCode.OK, patchItem(client, token, url, """{"name":"Новое"}""").status)
+            assertEquals(item.description, repository.getMenu(venueId).single().items.single().description)
+            assertEquals(HttpStatusCode.OK, patchItem(client, token, url, """{"clearDescription":true}""").status)
+            assertNull(repository.getMenu(venueId).single().items.single().description)
+            assertEquals(HttpStatusCode.OK, patchItem(client, token, url, """{"description":"🍋"}""").status)
+            assertEquals(
+                HttpStatusCode.BadRequest,
+                patchItem(client, token, url, """{"description":"${"🍋".repeat(501)}"}""").status,
+            )
+            assertEquals(
+                HttpStatusCode.BadRequest,
+                patchItem(client, token, url, """{"description":"x","clearDescription":true}""").status,
+            )
+            val featuredUrl = "/api/venue/menu/featured?venueId=$venueId"
+            val pin = """{"itemIds":[${item.id}],"expectedVersion":"0","operationId":"${UUID.randomUUID()}"}"""
+            assertEquals(
+                HttpStatusCode.BadRequest,
+                patchItem(client, token, featuredUrl, """{"itemIds":[],"expectedItemIds":[]}""").status,
+            )
+            assertEquals(HttpStatusCode.OK, patchItem(client, token, featuredUrl, pin).status)
+            assertEquals(HttpStatusCode.OK, patchItem(client, token, featuredUrl, pin).status)
+            assertEquals(
+                HttpStatusCode.Conflict,
+                patchItem(
+                    client,
+                    token,
+                    featuredUrl,
+                    """{"itemIds":[],"expectedVersion":"0","operationId":"${UUID.randomUUID()}"}""",
+                ).status,
+            )
+            val foreignVenue = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            assertEquals(
+                HttpStatusCode.NotFound,
+                patchItem(
+                    client,
+                    token,
+                    "/api/venue/menu/items/${item.id}?venueId=$foreignVenue",
+                    """{"description":"Foreign"}""",
+                ).status,
+            )
+            assertEquals(
+                HttpStatusCode.BadRequest,
+                patchItem(
+                    client,
+                    token,
+                    "/api/venue/menu/featured?venueId=$foreignVenue",
+                    pin,
+                ).status,
+            )
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use {
+                    it.executeUpdate("UPDATE venue_members SET role = 'MANAGER' WHERE venue_id = $venueId")
+                }
+            }
+            assertEquals(HttpStatusCode.OK, patchItem(client, token, url, """{"description":"Manager"}""").status)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use {
+                    it.executeUpdate("UPDATE venue_members SET role = 'STAFF' WHERE venue_id = $venueId")
+                }
+            }
+            assertEquals(HttpStatusCode.Forbidden, patchItem(client, token, url, """{"description":"Staff"}""").status)
+            assertEquals(HttpStatusCode.Forbidden, patchItem(client, token, featuredUrl, pin).status)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use {
+                    it.executeUpdate(
+                        "DELETE FROM venue_members WHERE venue_id = $venueId",
+                    )
+                }
+            }
+            assertEquals(
+                HttpStatusCode.Forbidden,
+                patchItem(client, token, url, """{"description":"Revoked"}""").status,
+            )
+            assertEquals(HttpStatusCode.Forbidden, patchItem(client, token, featuredUrl, pin).status)
+            assertEquals("Manager", repository.getMenu(venueId).single().items.single().description)
+        }
+
+    @Test
+    fun `featured API replay returns current version after ABA and legacy writes are rejected`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("menu-featured-version")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venueId = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            val token = issueToken(config)
+            val repository = menuRepository(jdbcUrl)
+            val category =
+                repository.createCategory(
+                    venueId,
+                    "Меню",
+                    TELEGRAM_USER_ID,
+                    MenuItemAvailabilitySource.VENUE_MINI_APP,
+                )
+            val a =
+                requireNotNull(
+                    repository.createItem(
+                        venueId,
+                        category.id,
+                        "A",
+                        10000,
+                        "RUB",
+                        true,
+                        TELEGRAM_USER_ID,
+                        MenuItemCreateSource.VENUE_MINI_APP,
+                    ),
+                ).id
+            val b =
+                requireNotNull(
+                    repository.createItem(
+                        venueId,
+                        category.id,
+                        "B",
+                        10000,
+                        "RUB",
+                        true,
+                        TELEGRAM_USER_ID,
+                        MenuItemCreateSource.VENUE_MINI_APP,
+                    ),
+                ).id
+            val url = "/api/venue/menu/featured?venueId=$venueId"
+
+            fun body(
+                id: Long,
+                version: String,
+                operation: String,
+            ) = """{"itemIds":[$id],"expectedVersion":"$version","operationId":"$operation"}"""
+            val first = UUID.randomUUID().toString()
+            val lost = UUID.randomUUID().toString()
+            assertEquals(HttpStatusCode.OK, patchItem(client, token, url, body(a, "0", first)).status)
+            val applied = patchItem(client, token, url, body(b, "1", lost))
+            assertEquals(
+                "2",
+                json.parseToJsonElement(applied.bodyAsText()).jsonObject.getValue("version").jsonPrimitive.content,
+            )
+            assertEquals(
+                HttpStatusCode.OK,
+                patchItem(client, token, url, body(a, "2", UUID.randomUUID().toString())).status,
+            )
+            val replay = patchItem(client, token, url, body(b, "1", lost))
+            assertEquals(HttpStatusCode.OK, replay.status)
+            val result = json.parseToJsonElement(replay.bodyAsText()).jsonObject
+            assertEquals("3", result.getValue("version").jsonPrimitive.content)
+            assertEquals("2", result.getValue("appliedVersion").jsonPrimitive.content)
+            assertEquals("true", result.getValue("replayed").jsonPrimitive.content)
+            assertEquals(a.toString(), result.getValue("itemIds").jsonArray.single().jsonPrimitive.content)
+            val reused = patchItem(client, token, url, body(a, "1", lost))
+            assertEquals(HttpStatusCode.Conflict, reused.status)
+            assertApiErrorEnvelope(reused, "MENU_FEATURED_OPERATION_CONFLICT")
+            val stale = patchItem(client, token, url, body(a, "1", UUID.randomUUID().toString()))
+            assertEquals(HttpStatusCode.Conflict, stale.status)
+            assertApiErrorEnvelope(stale, "MENU_FEATURED_STALE")
+            assertEquals(
+                HttpStatusCode.BadRequest,
+                patchItem(
+                    client,
+                    token,
+                    url,
+                    """{"itemIds":[$a],"expectedItemIds":[$a]}""",
+                ).status,
+            )
+            val noOp = patchItem(client, token, url, body(a, "3", UUID.randomUUID().toString()))
+            assertEquals(
+                "3",
+                json.parseToJsonElement(noOp.bodyAsText()).jsonObject.getValue("version").jsonPrimitive.content,
+            )
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use {
+                    it.executeUpdate("UPDATE venues SET menu_featured_version = 9007199254740993 WHERE id = $venueId")
+                }
+            }
+            val large = patchItem(client, token, url, body(b, "9007199254740993", UUID.randomUUID().toString()))
+            assertEquals(HttpStatusCode.OK, large.status)
+            assertEquals(
+                "9007199254740994",
+                json.parseToJsonElement(large.bodyAsText()).jsonObject
+                    .getValue("version").jsonPrimitive.content,
+            )
+            assertEquals(4, auditActions(jdbcUrl).count { it == "MENU_FEATURED_CHANGED" })
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use {
+                    it.executeUpdate(
+                        "DELETE FROM venue_members WHERE venue_id = $venueId",
+                    )
+                }
+            }
+            assertEquals(HttpStatusCode.Forbidden, patchItem(client, token, url, body(b, "1", lost)).status)
         }
 
     private fun buildJdbcUrl(prefix: String): String {

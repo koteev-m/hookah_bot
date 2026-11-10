@@ -1,3 +1,4 @@
+import type { MenuFeaturedResponse } from './venueDtos'
 import { requestApi, requestBinary, type RequestDependencies } from './request'
 import type { OwnerBillingOverviewResponse } from './billingDtos'
 import type {
@@ -2155,4 +2156,17 @@ export async function venueRejectShiftExtensionRequest(
     },
     deps
   )
+}
+
+export async function venueUpdateFeatured(
+  backendUrl: string,
+  params: { venueId: number; itemIds: number[]; expectedVersion: string; operationId: string },
+  deps: RequestDependencies
+) {
+  const search = new URLSearchParams({ venueId: String(params.venueId) })
+  return requestApi<MenuFeaturedResponse>(backendUrl, `/api/venue/menu/featured?${search}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ itemIds: params.itemIds, expectedVersion: params.expectedVersion, operationId: params.operationId })
+  }, deps)
 }

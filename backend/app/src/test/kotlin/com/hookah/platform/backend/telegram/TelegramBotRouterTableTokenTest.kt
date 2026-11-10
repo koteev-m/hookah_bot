@@ -27574,6 +27574,77 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `guest bot menu renders manual recommendations as plain text with existing item callbacks`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Кальяны",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                            description = "<b>Манго & мята</b>",
+                                            featuredOrder = 1,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            router.process(
+                TelegramUpdate(
+                    updateId = 18_601,
+                    message =
+                        Message(
+                            messageId = 21,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "🍽️ Меню",
+                        ),
+                ),
+            )
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("Рекомендуем") && text.contains("<b>Манго & мята</b>") && text.length <= 4096
+                    },
+                    match { markup ->
+                        markup is InlineKeyboardMarkup &&
+                            markup.hasInlineButton("Кальяны", "bot_menu_category:500") &&
+                            markup.hasInlineButton("Рекомендуем · Кальян классический", "bot_menu_item:500:1000") &&
+                            markup.hasInlineButton("Продление работы заведения", "guest_shift_extension_open")
+                    },
+                )
+            }
+        }
+
+    @Test
     fun `guest bot menu section list hides shift extension when disabled`() =
         runBlocking {
             val context =
@@ -28697,6 +28768,89 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(
                     100,
                     "Кальян классический\nЦена: 250.00 ₽\n\nПозиция добавлена в корзину.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "⬅️ К позициям категории" &&
+                                    button.callbackData == "bot_menu_back_category:500"
+                            } &&
+                            it.inlineKeyboard.flatten().any { button ->
+                                button.text == "⬅️ К категориям" &&
+                                    button.callbackData == "bot_menu_back_categories"
+                            }
+                    },
+                )
+            }
+        }
+
+    @Test
+    fun `item callback shows full unicode description and keeps existing cart navigation`() =
+        runBlocking {
+            val context =
+                TableContext(
+                    venueId = 10L,
+                    venueName = "Venue",
+                    tableId = 11L,
+                    tableNumber = 5,
+                    tableToken = "TOKEN",
+                    staffChatId = null,
+                )
+            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
+            coEvery { guestMenuRepository.getMenu(10L) } returns
+                MenuModel(
+                    venueId = 10L,
+                    categories =
+                        listOf(
+                            MenuCategoryModel(
+                                id = 500L,
+                                name = "Основное меню",
+                                sortOrder = 0,
+                                items =
+                                    listOf(
+                                        MenuItemModel(
+                                            id = 1000L,
+                                            name = "Кальян классический",
+                                            priceMinor = 25000L,
+                                            currency = "RUB",
+                                            isAvailable = true,
+                                            sortOrder = 0,
+                                            description = "🍋".repeat(500),
+                                            featuredOrder = 1,
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+
+            val update =
+                TelegramUpdate(
+                    updateId = 13,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-item",
+                            from = User(id = 200),
+                            message =
+                                Message(
+                                    messageId = 23,
+                                    chat = Chat(id = 100, type = "private"),
+                                    text = null,
+                                ),
+                            data = "bot_menu_item:500:1000",
+                        ),
+                )
+
+            router.process(update)
+
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { text ->
+                        text.contains("🍋".repeat(500)) && text.contains("Позиция добавлена в корзину.") &&
+                            text.length <= 4096
+                    },
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
