@@ -8265,6 +8265,10 @@ extra = {
     'h2/V133__halls_seating_table_booking.sql': '699f48004ec72e40e2b815327368f25a750b0c420a736998cf2287035066d3d6',
     'postgresql/V133__venue_dashboard_monitor_indexes.sql': 'b22025ab2f5a7f586f9f9c9db2ef3208e89568bfca6659eca2bc8451dbeda058',
     'h2/V134__venue_dashboard_monitor_indexes.sql': 'b22025ab2f5a7f586f9f9c9db2ef3208e89568bfca6659eca2bc8451dbeda058',
+    'postgresql/V134__menu_featured.sql': 'c9aed98599540bad2cfbb5d7b9614a273ef910659e6b3bd6af82d04987c5b356',
+    'h2/V135__menu_featured.sql': 'c9aed98599540bad2cfbb5d7b9614a273ef910659e6b3bd6af82d04987c5b356',
+    'postgresql/V135__menu_featured_operations.sql': 'a7e4cf7261d525fd724a10df71de85db2604d539e8de569aab93efd1b4185a2e',
+    'h2/V136__menu_featured_operations.sql': 'a7e4cf7261d525fd724a10df71de85db2604d539e8de569aab93efd1b4185a2e',
 }
 paths = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if not p.is_dir() or p.is_symlink()}
 if set(paths) != set(historical) | set(extra):
@@ -8338,10 +8342,10 @@ PY
   expect_failure 'missing early SQL rejects current lineage' 'migration inventory drift' \
     verify_current_migration_lineage "${fixture}"
   cp "${REPO_ROOT}/${migration_root}/postgresql/$(basename "${early}")" "${early}"
-  printf 'SELECT 1;\n' > "${fixture}/postgresql/V134__unreviewed.sql"
+  printf 'SELECT 1;\n' > "${fixture}/postgresql/V999__unreviewed.sql"
   expect_failure 'unreviewed future SQL rejects current lineage' 'migration inventory drift' \
     verify_current_migration_lineage "${fixture}"
-  rm "${fixture}/postgresql/V134__unreviewed.sql"
+  rm "${fixture}/postgresql/V999__unreviewed.sql"
   printf '\n-- forbidden tail drift\n' >> "${fixture}/postgresql/V127__staff_profile_photos.sql"
   expect_failure 'changed reviewed tail SQL rejects current lineage' 'reviewed migration drift' \
     verify_current_migration_lineage "${fixture}"
@@ -8365,12 +8369,38 @@ PY
     postgresql/V132__halls_seating_table_booking.sql \
     h2/V133__halls_seating_table_booking.sql \
     postgresql/V133__venue_dashboard_monitor_indexes.sql \
-    h2/V134__venue_dashboard_monitor_indexes.sql; do
+    h2/V134__venue_dashboard_monitor_indexes.sql \
+    postgresql/V134__menu_featured.sql \
+    h2/V135__menu_featured.sql \
+    postgresql/V135__menu_featured_operations.sql \
+    h2/V136__menu_featured_operations.sql; do
     printf '\n-- forbidden reviewed tail drift\n' >> "${fixture}/${addition}"
     expect_failure "changed reviewed tail SQL rejects lineage: ${addition}" 'reviewed migration drift' \
       verify_current_migration_lineage "${fixture}"
     cp "${REPO_ROOT}/${migration_root}/${addition}" "${fixture}/${addition}"
   done
+  for addition in \
+    postgresql/V134__menu_featured.sql \
+    h2/V135__menu_featured.sql \
+    postgresql/V135__menu_featured_operations.sql \
+    h2/V136__menu_featured_operations.sql; do
+    rm "${fixture}/${addition}"
+    expect_failure "missing reviewed menu SQL rejects lineage: ${addition}" 'migration inventory drift' \
+      verify_current_migration_lineage "${fixture}"
+    cp "${REPO_ROOT}/${migration_root}/${addition}" "${fixture}/${addition}"
+    chmod +x "${fixture}/${addition}"
+    expect_failure "executable reviewed menu SQL rejects lineage: ${addition}" 'migration object type drift' \
+      verify_current_migration_lineage "${fixture}"
+    chmod -x "${fixture}/${addition}"
+    rm "${fixture}/${addition}"
+    ln -s "${REPO_ROOT}/${migration_root}/${addition}" "${fixture}/${addition}"
+    expect_failure "symlink reviewed menu SQL rejects lineage: ${addition}" 'migration object type drift' \
+      verify_current_migration_lineage "${fixture}"
+    rm "${fixture}/${addition}"
+    cp "${REPO_ROOT}/${migration_root}/${addition}" "${fixture}/${addition}"
+  done
+  expect_success 'restored reviewed menu inventory accepts exact lineage' \
+    verify_current_migration_lineage "${fixture}"
   rm "${fixture}/postgresql/V129__venue_public_addresses.sql"
   expect_failure 'missing reviewed personal address SQL rejects lineage' 'migration inventory drift' \
     verify_current_migration_lineage "${fixture}"
