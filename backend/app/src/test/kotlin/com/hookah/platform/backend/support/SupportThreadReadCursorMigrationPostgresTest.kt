@@ -48,6 +48,8 @@ class SupportThreadReadCursorMigrationPostgresTest {
                     "133" to "V133__venue_dashboard_monitor_indexes.sql",
                     "134" to "V134__menu_featured.sql",
                     "135" to "V135__menu_featured_operations.sql",
+                    "136" to "V136__loyalty_paid_lifecycle.sql",
+                    "137" to "V137__loyalty_unit_corrections.sql",
                 ),
             ddlFailureContract = MigrationDdlFailureContract.TRANSACTIONAL,
             close = dataSource::close,

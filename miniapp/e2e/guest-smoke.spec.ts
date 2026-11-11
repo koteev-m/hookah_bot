@@ -1,3 +1,4 @@
+import type { OrderDetailDto } from '../src/shared/api/venueDtos'
 import { infoMediaPdf } from './fixtures/info-media'
 import { readFileSync } from 'node:fs'
 import { expect, type Locator, type Page, type Route, test } from '@playwright/test'
@@ -2903,6 +2904,8 @@ async function mockVenueShiftExtensionApi(
     promotionFacts?: boolean
     activePromotionReward?: boolean
     staffModuleSettings?: VenueStaffModuleSettingsFixture
+    closedOrder?: boolean
+    loyaltyState?: (venueId: number) => { rewards: NonNullable<OrderDetailDto['loyaltyRewards']>; expenses: NonNullable<OrderDetailDto['loyaltyExpenses']>; units?: NonNullable<OrderDetailDto['loyaltyUnits']>; history?: NonNullable<OrderDetailDto['loyaltyHistory']> }
   } = {}
 ) {
   const role = options.role ?? 'STAFF'
@@ -3095,6 +3098,10 @@ async function mockVenueShiftExtensionApi(
     await route.fulfill(
       jsonResponse({
         order: {
+          loyaltyRewards: options.loyaltyState?.(Number(new URL(route.request().url()).searchParams.get('venueId')) || 1).rewards ?? [],
+          loyaltyExpenses: options.role === 'STAFF' ? [] : options.loyaltyState?.(Number(new URL(route.request().url()).searchParams.get('venueId')) || 1).expenses ?? [],
+          loyaltyUnits: options.role === 'STAFF' ? undefined : options.loyaltyState?.(Number(new URL(route.request().url()).searchParams.get('venueId')) || 1).units,
+          loyaltyHistory: options.role === 'STAFF' ? undefined : options.loyaltyState?.(Number(new URL(route.request().url()).searchParams.get('venueId')) || 1).history,
           orderId: 900,
           displayNumber: 42,
           displayDate: '2026-06-09',
@@ -3102,7 +3109,7 @@ async function mockVenueShiftExtensionApi(
           tableId: 7,
           tableNumber: '4',
           tableLabel: '4',
-          status: 'accepted',
+          status: options.closedOrder ? 'closed' : 'accepted',
           createdAt: '2026-06-09T21:30:00+03:00',
           updatedAt: '2026-06-09T21:45:00+03:00',
           bill: orderBill(),
@@ -28482,7 +28489,11 @@ test('guest experience catalog promotions, history categories and loyalty use se
   await expect(page.getByText('Завершённых заказов пока нет.')).toBeVisible()
   await page.getByRole('button', { name: 'Профиль', exact: true }).click()
   await page.getByRole('button', { name: 'Лояльность' }).click()
-  await expect(page.getByText('Оплачено по программе · 3 из 4')).toBeVisible()
+  await expect(page.getByText('Прогресс программы · 3 из 4')).toBeVisible()
+  await expect(page.getByText('Прогресс начисляется после выдачи кальянов, закрытия заказа и полной подтверждённой оплаты соответствующего счёта. Частичная оплата не начисляет прогресс.')).toBeVisible()
+  await expect(page.getByText('При отправке заказа награда резервируется. После подтверждённой выдачи она использована. При отмене до выдачи статус обновится; повторное использование зависит от условий программы. После выдачи автоматического возврата нет.')).toBeVisible()
+  await expect(page.getByText(/Отмена до выдачи возвращает резерв/)).toHaveCount(0)
+  await expect(page.getByText(/Оплачено по программе|оплаченных по программе/)).toHaveCount(0)
   await expect(page.getByText('Доступно наград · 2')).toBeVisible()
   await expect(page.getByText('Зарезервировано в заказах · 1')).toBeVisible()
   await expect(page.getByText(/Мятный кальян/)).toBeVisible()
@@ -29757,4 +29768,394 @@ test('menu P2-2 missing version blocks featured writes without a fallback', asyn
   await item.getByLabel('Цена, ₽', { exact: true }).fill('777')
   await item.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect.poll(() => api.getUpdateItemCalls()).toBe(1)
+})
+
+
+test('loyalty venue delivery correction preserves draft and operation id after lost response', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 820 })
+  await installTelegramWebApp(page, 123456789)
+  page.on('dialog', dialog => dialog.accept())
+  let state = 'RESERVED'
+  const requests: { reason: string; requestId: string }[] = []
+  const completed = new Set<string>()
+  let lost = true
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ['ORDER_QUEUE_VIEW', 'ORDER_STATUS_UPDATE'],
+    loyaltyState: () => ({ rewards: [{ id: 77, batchItemId: 700, status: state, origin: 'PAYMENT_POLICY', correctionAllowed: state === 'APPLIED' }], expenses: [] }) })
+  await page.route('**/api/venue/orders/900/loyalty/77/confirm-delivery?**', async route => {
+    state = 'APPLIED'
+    await route.fulfill(jsonResponse({ order: {} }))
+  })
+  await page.route('**/api/venue/orders/900/loyalty/77/correct-delivery?**', async route => {
+    const body = route.request().postDataJSON() as { reason: string; requestId: string }
+    requests.push(body)
+    if (!completed.has(body.requestId)) { completed.add(body.requestId); state = 'RESERVED' }
+    if (lost) { lost = false; await route.abort('failed'); return }
+    await route.fulfill(jsonResponse({ order: {} }))
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказы')
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  await page.getByRole('button', { name: 'Подтвердить выдачу наградного кальяна' }).click()
+  await expect(page.getByRole('button', { name: 'Исправить ошибочную выдачу' })).toBeVisible()
+  await page.getByLabel('Причина исправления выдачи').fill('Ошибочная отметка <img src=x onerror=alert(1)>')
+  await page.getByRole('button', { name: 'Исправить ошибочную выдачу' }).click()
+  await expect(page.getByText(/Введённая причина сохранена/)).toBeVisible()
+  await expect(page.getByLabel('Причина исправления выдачи')).toHaveValue('Ошибочная отметка <img src=x onerror=alert(1)>')
+  await page.getByRole('button', { name: 'Исправить ошибочную выдачу' }).click()
+  await expect(page.getByRole('button', { name: 'Подтвердить выдачу наградного кальяна' })).toBeVisible()
+  expect(requests).toHaveLength(2)
+  expect(requests[0].requestId).toBe(requests[1].requestId)
+  expect(completed.size).toBe(1)
+  await expectNoHorizontalOverflow(page)
+})
+
+test('loyalty staff can confirm fulfillment but cannot administer correction', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'STAFF', permissions: ['ORDER_QUEUE_VIEW', 'ORDER_STATUS_UPDATE'],
+    loyaltyState: () => ({ rewards: [{ id: 77, batchItemId: 700, status: 'APPLIED', origin: 'PAYMENT_POLICY', correctionAllowed: true }], expenses: [] }) })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openVenueSection(page, 'Заказы')
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  await expect(page.getByText('Позиция 700: Награда использована. Выдача подтверждена.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Исправить ошибочную выдачу' })).toHaveCount(0)
+  await expect(page.getByLabel('Причина исправления выдачи')).toHaveCount(0)
+})
+
+test('loyalty guest sees frozen cycles legacy origin and paused reward restrictions after reload', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 780 })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  let status = 'PAUSED'
+  let used = true
+  await page.route('**/api/guest/loyalty**', route => route.fulfill(jsonResponse({ items: [{
+    programId: 17, status, currentSessionRewardUsed: used, venueId: 1, venueName: 'Микс', programType: 'NTH_HOOKAH_FREE', nthValue: 5,
+    progressCount: 3, rewardsAvailable: 2, rewardsReserved: 1, rewardsApplied: 1, legacyProgress: 3, legacyAvailable: 1,
+    earnTargets: [{ type: 'MENU_ITEM', name: 'Новые условия' }], rewardTargets: [{ type: 'MENU_ITEM', name: 'Новые наградные позиции' }],
+    cycles: [{ nthValue: 5, progressCount: 2, earnTargets: ['Мятный'], origin: 'PAYMENT_POLICY' }, { nthValue: 3, progressCount: 1, earnTargets: ['Классический'], origin: 'LEGACY_CUTOVER' }],
+    rewardConditions: [{ nthValue: 5, count: 2, rewardTargets: ['<img src=x onerror=alert(1)>'], origin: 'LEGACY_CUTOVER' }]
+  }] })))
+  await page.goto('?mode=guest#/catalog')
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Лояльность', exact: true }).click()
+  await expect(page.getByText('Бесплатная единица по награде не участвует в новом накоплении. Уже сохранённая в заказе скидка не создаёт долг гостя.')).toBeVisible()
+  await expect(page.getByText('Выдано наград · 1')).toBeVisible()
+  await expect(page.getByText('Прогресс программы · 2 из 4')).toBeVisible()
+  await expect(page.getByText('Участвуют в накоплении · Мятный')).toBeVisible()
+  await expect(page.getByText('Можно выбрать в награду · Новые наградные позиции')).toHaveCount(0)
+  await expect(page.getByText(/Накопления сохранены; использование сейчас недоступно/)).toBeVisible()
+  await expect(page.getByText('Сохранены исторические остатки. Их происхождение не является подтверждением оплаты.')).toBeVisible()
+  await expect(page.getByText('Цикл: 2 из 4 · Мятный')).toBeVisible()
+  await expect(page.getByText('Цикл: 1 из 2 · Классический')).toBeVisible()
+  await expect(page.locator('.guest-loyalty-program img')).toHaveCount(0)
+  await expect(page.getByText(/Награды на сохранённых условиях: 2/)).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Лояльность', exact: true }).click()
+  await expect(page.getByText('Выдано наград · 1')).toBeVisible()
+  status = 'ACTIVE'
+  await page.getByRole('button', { name: 'Обновить', exact: true }).click()
+  await expect(page.getByText(/Другие доступные награды сохранены до следующего посещения/)).toBeVisible()
+  await expect(page.getByText('Чтобы использовать награду, отсканируйте QR стола в этом заведении и добавьте подходящий кальян.')).toHaveCount(0)
+  used = false
+  await page.getByRole('button', { name: 'Обновить', exact: true }).click()
+  await expect(page.getByText('Чтобы использовать награду, отсканируйте QR стола в этом заведении и добавьте подходящий кальян.')).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+})
+
+function loyaltyCorrectionUnits(): NonNullable<OrderDetailDto['loyaltyUnits']> {
+  return [1, 2, 3].map(index => ({ id: 500 + index, batchId: 300, batchItemId: 700, unitIndex: index, qty: 3,
+    name: 'Кальян <img src=x onerror=alert(1)>', priceMinor: 100000, guestUserId: 444444444,
+    paymentFact: 'sale:order:900:v:1', earnedAt: '2026-11-10T10:00:00Z', canCorrect: true,
+    correctedAt: null, correctedBy: null, correctedByLabel: null, correctionReason: null }))
+}
+
+async function openLoyaltyOrder(page: Page) {
+  await openVenueSection(page, 'Заказы')
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+}
+
+test('loyalty003 manager corrects one explicit unit with reason confirmation and unchanged closed bill', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 820 })
+  await installPolishTheme(page, 'dark')
+  await installTelegramWebApp(page, 123456789)
+  const units = loyaltyCorrectionUnits()
+  const requests: { unit: string; reason: string; requestId: string }[] = []
+  await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: ['ORDER_QUEUE_VIEW'], closedOrder: true,
+    loyaltyState: () => ({ rewards: [], expenses: [], units }) })
+  await page.route('**/api/venue/orders/900/loyalty/units/*/correct?**', async route => {
+    const body = route.request().postDataJSON() as { reason: string; requestId: string }
+    const id = new URL(route.request().url()).pathname.split('/').at(-2)!
+    requests.push({ unit: id, ...body })
+    const unit = units.find(unit => String(unit.id) === id)!
+    unit.canCorrect = false; unit.correctedAt = '2026-11-10T11:00:00Z'; unit.correctedByLabel = 'Анна Менеджер'; unit.correctionReason = body.reason
+    await route.fulfill(jsonResponse({ replayed: false, order: {} }))
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openLoyaltyOrder(page)
+  await expect(page.locator('.venue-order-bill')).toContainText('К оплате')
+  const bill = await page.locator('.venue-order-bill').innerText()
+  await expect(page.getByText(/Начисление основано на полной подтверждённой оплате/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Исправить начисление выбранной единицы' })).toBeDisabled()
+  await page.getByLabel('Единица для корректировки').selectOption('502')
+  await page.getByRole('button', { name: 'Исправить начисление выбранной единицы' }).click()
+  await expect(page.getByText(/Укажите конкретную причину/)).toBeVisible()
+  await page.getByLabel('Причина корректировки начисления').fill('Ошибка только во второй единице <script>alert(1)</script>')
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('единица 2 из 3'); expect(dialog.message()).toContain('Закрытый счёт и оплаты не меняются'); await dialog.dismiss() })
+  await page.getByRole('button', { name: 'Исправить начисление выбранной единицы' }).click()
+  expect(requests).toHaveLength(0)
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Исправить начисление выбранной единицы' }).click()
+  await expect(page.getByText(/Анна Менеджер.*Причина: Ошибка только во второй/)).toBeVisible()
+  expect(requests).toHaveLength(1); expect(requests[0].unit).toBe('502')
+  expect(await page.locator('.venue-order-bill').innerText()).toBe(bill)
+  await expect(page.locator('.venue-order-detail img')).toHaveCount(0)
+  await expect(page.getByLabel('Единица для корректировки').locator('option[value="502"]')).toHaveCount(0)
+  await expectNoHorizontalOverflow(page)
+})
+
+test('loyalty003 unknown correction retains operation and input across reload and explicit retry', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  page.on('dialog', dialog => dialog.accept())
+  const units = loyaltyCorrectionUnits()
+  const requests: { requestId: string; reason: string }[] = []
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ['ORDER_QUEUE_VIEW'], closedOrder: true,
+    loyaltyState: () => ({ rewards: [], expenses: [], units }) })
+  await page.route('**/api/venue/orders/900/loyalty/units/501/correct?**', async route => {
+    const body = route.request().postDataJSON() as { requestId: string; reason: string }; requests.push(body)
+    if (requests.length === 1) { await route.abort('failed'); return }
+    units[0].canCorrect = false; units[0].correctedAt = '2026-11-10T11:00:00Z'; units[0].correctedByLabel = 'Ирина'; units[0].correctionReason = body.reason
+    await route.fulfill(jsonResponse({ replayed: false, order: {} }))
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`); await openLoyaltyOrder(page)
+  await page.getByLabel('Единица для корректировки').selectOption('501')
+  await page.getByLabel('Причина корректировки начисления').fill('  Причина с сохранённым вводом  ')
+  await page.getByRole('button', { name: 'Исправить начисление выбранной единицы' }).click()
+  await expect(page.getByText(/Результат операции не подтверждён/)).toBeVisible()
+  await page.reload(); await openLoyaltyOrder(page)
+  await expect(page.getByLabel('Единица для корректировки')).toHaveValue('501')
+  await expect(page.getByLabel('Причина корректировки начисления')).toHaveValue('  Причина с сохранённым вводом  ')
+  await page.getByRole('button', { name: 'Исправить начисление выбранной единицы' }).click()
+  await expect(page.getByText(/Ирина.*Причина: Причина с сохранённым вводом/)).toBeVisible()
+  expect(requests).toHaveLength(2); expect(requests[1]).toEqual(requests[0])
+  await page.reload(); await openLoyaltyOrder(page)
+  await expect(page.getByLabel('Единица для корректировки').locator('option[value="501"]')).toHaveCount(0)
+})
+
+test('loyalty003 conflict denied and Unicode errors preserve reason without false success', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789); page.on('dialog', dialog => dialog.accept())
+  const units = loyaltyCorrectionUnits(); let status = 409; let calls = 0
+  await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: ['ORDER_QUEUE_VIEW'],
+    loyaltyState: () => ({ rewards: [], expenses: [], units }) })
+  await page.route('**/api/venue/orders/900/loyalty/units/501/correct?**', route => {
+    calls++; return route.fulfill(jsonResponse({ error: { code: status === 409 ? 'ACCOUNTING_CONFLICT' : 'FORBIDDEN', message: 'Эта единица уже скорректирована. Обновите заказ.' } }, status))
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`); await openLoyaltyOrder(page)
+  await page.getByLabel('Единица для корректировки').selectOption('501')
+  await page.getByLabel('Причина корректировки начисления').fill('💨'.repeat(501))
+  await expect(page.getByText('501/500 символов')).toBeVisible()
+  await page.getByRole('button', { name: 'Исправить начисление выбранной единицы' }).click()
+  expect(calls).toBe(0)
+  await page.getByLabel('Причина корректировки начисления').fill('Причина для сверки')
+  await page.getByRole('button', { name: 'Исправить начисление выбранной единицы' }).click()
+  await expect(page.getByText(/Эта единица уже скорректирована.*Введённая причина сохранена/)).toBeVisible()
+  await expect(page.getByLabel('Причина корректировки начисления')).toHaveValue('Причина для сверки')
+  status = 403
+  await page.getByRole('button', { name: 'Исправить начисление выбранной единицы' }).click()
+  await expect(page.getByText(/Финансовую корректировку выполняет только управляющий или владелец/)).toBeVisible()
+  await expect(page.getByText('Начисление одной единицы исправлено; счёт гостя сохранён')).toHaveCount(0)
+})
+
+test('loyalty003 staff sees safe sponsored states and must confirm physical issue without financial controls', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 780 }); await installTelegramWebApp(page, 123456789)
+  let state = 'RESERVED'; let calls = 0
+  await mockVenueShiftExtensionApi(page, { role: 'STAFF', permissions: ['ORDER_QUEUE_VIEW', 'ORDER_STATUS_UPDATE'],
+    loyaltyState: () => ({ rewards: [{ id: 77, batchItemId: 700, status: state, origin: 'PAYMENT_POLICY', correctionAllowed: true, venueFunded: true }], expenses: [{ amountMinor: 100000, reason: 'СЛУЖЕБНАЯ ПРИЧИНА', resolved: false }], units: loyaltyCorrectionUnits() }) })
+  await page.route('**/api/venue/orders/900/loyalty/77/confirm-delivery?**', route => { calls++; state = 'APPLIED'; return route.fulfill(jsonResponse({ order: {} })) })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`); await openLoyaltyOrder(page)
+  await expect(page.getByText(/Награда зарезервирована. Бесплатный кальян ещё не выдан/)).toBeVisible()
+  await expect(page.getByText('Бонус предоставляется за счёт заведения. Сумма счёта гостя не меняется.')).toBeVisible()
+  await expect(page.getByText(/Передайте заказ управляющему. Изменить бонус самостоятельно нельзя/)).toBeVisible()
+  await expect(page.getByText('СЛУЖЕБНАЯ ПРИЧИНА')).toHaveCount(0)
+  await expect(page.getByLabel('Единица для корректировки')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Отменить невыданный бонус' })).toHaveCount(0)
+  page.once('dialog', async dialog => { expect(dialog.message()).toContain('Обычная отмена её не вернёт'); expect(dialog.message()).toContain('за счёт заведения'); await dialog.dismiss() })
+  await page.getByRole('button', { name: 'Подтвердить выдачу наградного кальяна' }).click(); expect(calls).toBe(0)
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Подтвердить выдачу наградного кальяна' }).click()
+  await expect(page.getByText(/Награда использована. Выдача подтверждена/)).toBeVisible(); expect(calls).toBe(1)
+  await expect(page.getByRole('button', { name: 'Исправить ошибочную выдачу' })).toHaveCount(0)
+  await expectNoHorizontalOverflow(page)
+})
+
+test('loyalty003 manager cancels only unissued compensation and preserves closed bill on retry', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789); page.on('dialog', dialog => dialog.accept())
+  let state = 'RESERVED'; const requests: { requestId: string; reason: string }[] = []
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ['ORDER_QUEUE_VIEW', 'ORDER_STATUS_UPDATE'], closedOrder: true,
+    loyaltyState: () => ({ rewards: [{ id: 77, batchItemId: 700, status: state, origin: 'PAYMENT_POLICY', correctionAllowed: false, venueFunded: true }], expenses: [] }) })
+  await page.route('**/api/venue/orders/900/loyalty/77/cancel-compensation?**', async route => {
+    requests.push(route.request().postDataJSON() as { requestId: string; reason: string })
+    if (requests.length === 1) { await route.abort('failed'); return }
+    state = 'CANCELED'; await route.fulfill(jsonResponse({ replayed: false, order: {} }))
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`); await openLoyaltyOrder(page)
+  await expect(page.locator('.venue-order-bill')).toContainText('К оплате')
+  const bill = await page.locator('.venue-order-bill').innerText()
+  await expect(page.getByText(/Недействительное право не вернётся в доступные награды/)).toBeVisible()
+  await page.getByLabel('Причина отмены невыданного бонуса').fill('Гость отказался от бонуса до выдачи')
+  await page.getByRole('button', { name: 'Отменить невыданный бонус' }).click()
+  await expect(page.getByText(/Результат операции не подтверждён/)).toBeVisible()
+  await page.getByRole('button', { name: 'Отменить невыданный бонус' }).click()
+  await expect(page.getByText(/Награда отменена до выдачи. Повторно использовать её нельзя/)).toBeVisible()
+  expect(requests).toHaveLength(2); expect(requests[1]).toEqual(requests[0])
+  expect(await page.locator('.venue-order-bill').innerText()).toBe(bill)
+  await expect(page.getByRole('button', { name: 'Подтвердить выдачу наградного кальяна' })).toHaveCount(0)
+})
+
+test('loyalty003 correction drafts stay scoped to account and venue and late response cannot replace another venue', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789); page.on('dialog', dialog => dialog.accept())
+  const permissions = ['ORDER_QUEUE_VIEW']; let meUser = 123456789
+  const units = loyaltyCorrectionUnits(); let release: (() => void) | undefined
+  await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions,
+    loyaltyState: venue => ({ rewards: [], expenses: [], units: venue === 1 ? units : [] }) })
+  await page.route('**/api/venue/me', route => route.fulfill(jsonResponse({ userId: meUser, venues: [1, 2].map(venueId => ({ venueId, venueName: `Заведение ${venueId}`, venueStatus: 'PUBLISHED', role: 'OWNER', permissions })) })))
+  await page.route('**/api/venue/orders/900/loyalty/units/501/correct?**', async route => {
+    await new Promise<void>(resolve => { release = resolve })
+    try { await route.fulfill(jsonResponse({ replayed: false, order: {} })) } catch { /* disposed request */ }
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`); await openLoyaltyOrder(page)
+  await page.getByLabel('Единица для корректировки').selectOption('501')
+  await page.getByLabel('Причина корректировки начисления').fill('Частный черновик первого аккаунта')
+  await page.locator('.venue-controls select.venue-select').selectOption('2')
+  await expect(page.getByLabel('Причина корректировки начисления')).toHaveCount(0)
+  await page.locator('.venue-controls select.venue-select').selectOption('1')
+  if (await page.getByRole('button', { name: 'Открыть', exact: true }).count()) await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+  await expect(page.getByLabel('Причина корректировки начисления')).toHaveValue('Частный черновик первого аккаунта')
+  await page.getByRole('button', { name: 'Исправить начисление выбранной единицы' }).click()
+  await expect.poll(() => Boolean(release)).toBe(true)
+  await page.locator('.venue-controls select.venue-select').selectOption('2'); release?.()
+  await expect(page.locator('.venue-controls select.venue-select')).toHaveValue('2')
+  await expect(page.getByText('Начисление одной единицы исправлено; счёт гостя сохранён')).toHaveCount(0)
+  meUser = 987654321
+  await page.evaluate(({ userId, initData }) => { window.localStorage.setItem('__e2e_telegram_user_id', String(userId)); window.localStorage.setItem('__e2e_telegram_init_data', initData) }, { userId: 987654321, initData: otherMockInitData })
+  await page.goto(`?mode=venue&smokeUser=other#tgWebAppData=${encodeURIComponent(otherMockInitData)}`)
+  await page.locator('.venue-controls select.venue-select').selectOption('1'); await openLoyaltyOrder(page)
+  await expect(page.getByLabel('Причина корректировки начисления')).toHaveValue('')
+})
+
+
+for (const role of ['OWNER', 'MANAGER'] as const) test(`loyalty confirm history ${role} shows CONFIRM CORRECT CANCEL after reload`, async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 820 })
+  await installPolishTheme(page, 'dark')
+  await installTelegramWebApp(page, 123456789)
+  let state = 'APPLIED'
+  const reason = 'Ошибочная выдача <img src=x onerror=alert(1)>'
+  const cancelReason = 'Невыданный бонус больше не нужен'
+  const base = { actorUserId: 9001001, redemptionId: 77, batchItemId: 700, itemName: 'Кальян', compensationCancellation: false }
+  const history: NonNullable<OrderDetailDto['loyaltyHistory']> = [{ ...base, id: 'delivery-confirmation:500', action: 'DELIVERY_CONFIRMED', result: 'REWARD_APPLIED', actorUserId: 9001003, occurredAt: '2026-11-10T09:59:00Z', reason: null }]
+  await mockVenueShiftExtensionApi(page, { role, permissions: ['ORDER_QUEUE_VIEW', 'ORDER_STATUS_UPDATE'], closedOrder: true,
+    loyaltyState: () => ({ rewards: [{ id: 77, batchItemId: 700, status: state, origin: 'PAYMENT_POLICY', correctionAllowed: state === 'APPLIED', venueFunded: true }], expenses: [], history }) })
+  await page.route('**/api/venue/orders/900/loyalty/77/correct-delivery?**', async route => {
+    expect(route.request().postDataJSON().reason).toBe(reason)
+    state = 'RESERVED'
+    if (history.length === 1) history.push({ ...base, id: 'delivery-correction:501', action: 'DELIVERY_CORRECTED', result: 'DELIVERY_MARK_CORRECTED', occurredAt: '2026-11-10T10:00:00Z', reason })
+    await route.fulfill(jsonResponse({ order: {} }))
+  })
+  await page.route('**/api/venue/orders/900/loyalty/77/cancel-compensation?**', async route => {
+    expect(route.request().postDataJSON().reason).toBe(cancelReason)
+    state = 'CANCELED'; history.forEach(entry => { entry.compensationCancellation = true })
+    if (history.length === 2) history.push({ ...base, id: 'compensation-cancellation:77', action: 'COMPENSATION_CANCELED', result: 'UNISSUED_COMPENSATION_CANCELED', compensationCancellation: true, occurredAt: '2026-11-10T10:01:00Z', reason: cancelReason })
+    await route.fulfill(jsonResponse({ replayed: false, order: {} }))
+  })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openLoyaltyOrder(page)
+  await expect(page.locator('.venue-order-bill')).toContainText('К оплате')
+  const bill = await page.locator('.venue-order-bill').innerText()
+  await expect(page.locator('.loyalty-history-entry')).toHaveCount(1)
+  await expect(page.locator('.loyalty-history-entry').first()).toContainText('Выдача награды подтверждена')
+  await expect(page.locator('.loyalty-history-entry').first()).toContainText('Награда использована')
+  await expect(page.locator('.loyalty-history-entry').first().getByText(/^Причина:/)).toHaveCount(0)
+  page.on('dialog', dialog => dialog.accept())
+  await page.getByLabel('Причина исправления выдачи').fill(reason)
+  await page.getByRole('button', { name: 'Исправить ошибочную выдачу', exact: true }).focus()
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.loyalty-history-entry')).toHaveCount(2)
+  await expect(page.locator('.loyalty-history-entry').nth(1)).toContainText('Исправлена отметка о выдаче')
+  await expect(page.locator('.loyalty-history-entry').nth(1)).toContainText(reason)
+  await page.getByLabel('Причина отмены невыданного бонуса').fill(cancelReason)
+  await page.getByRole('button', { name: 'Отменить невыданный бонус' }).click()
+  await expect(page.locator('.loyalty-history-entry')).toHaveCount(3)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.reload(); await openLoyaltyOrder(page)
+    const entries = page.locator('.loyalty-history-entry')
+    await expect(entries).toHaveCount(3)
+    await expect(page.getByText('История награды', { exact: true })).toBeVisible()
+    await expect(entries.nth(0)).toContainText('Выдача награды подтверждена')
+    await expect(entries.nth(1)).toContainText('Исправлена отметка о выдаче')
+    await expect(entries.nth(2)).toContainText('Отменена компенсация')
+    await expect(entries.nth(0)).toContainText('сотрудник №9001003')
+    await expect(entries.nth(1)).toContainText('сотрудник №9001001')
+    await expect(entries.nth(0).getByText(/^Причина:/)).toHaveCount(0)
+    await expect(entries.nth(1)).toContainText(reason)
+    await expect(entries.nth(2)).toContainText(cancelReason)
+    await expect(entries.nth(0)).toContainText('2026')
+    await expect(entries.nth(0)).toContainText('Кальян · одна наградная единица')
+    expect(await page.locator('.venue-order-bill').innerText()).toBe(bill)
+    await expect(entries.locator('img')).toHaveCount(0)
+  }
+  await expectNoHorizontalOverflow(page)
+})
+
+test('loyalty review P2 staff has operational reward facts without financial history', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockVenueShiftExtensionApi(page, { role: 'STAFF', permissions: ['ORDER_QUEUE_VIEW', 'ORDER_STATUS_UPDATE'],
+    loyaltyState: () => ({ rewards: [{ id: 77, batchItemId: 700, status: 'CANCELED', origin: 'PAYMENT_POLICY', correctionAllowed: false, venueFunded: true }], expenses: [], history: [{ id: 'compensation-cancellation:77', action: 'COMPENSATION_CANCELED', result: 'UNISSUED_COMPENSATION_CANCELED', actorUserId: 9001001, occurredAt: '2026-11-10T10:01:00Z', reason: 'СЛУЖЕБНАЯ ПРИЧИНА', redemptionId: 77, batchItemId: 700, itemName: 'Кальян', compensationCancellation: true }] }) })
+  await page.goto(`?mode=venue#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await openLoyaltyOrder(page)
+  await expect(page.getByText('Позиция 700: Награда отменена до выдачи. Повторно использовать её нельзя.')).toBeVisible()
+  await expect(page.locator('.loyalty-history-entry')).toHaveCount(0)
+  await expect(page.getByText('СЛУЖЕБНАЯ ПРИЧИНА')).toHaveCount(0)
+  await expect(page.getByText('История награды')).toHaveCount(0)
+  await expect(page.getByText('Обнаружена ошибка в начислении? Передайте заказ управляющему. Изменить бонус самостоятельно нельзя.')).toBeVisible()
+})
+
+function usedLoyaltyProgram() {
+  return { programId: 17, status: 'ACTIVE', venueId: 1, venueName: 'Микс', programType: 'NTH_HOOKAH_FREE', nthValue: 3,
+    progressCount: 0, rewardsAvailable: 0, rewardsReserved: 0, rewardsApplied: 1,
+    earnTargets: [{ type: 'CATEGORY_TYPE', name: 'Кальяны' }], rewardTargets: [{ type: 'CATEGORY_TYPE', name: 'Кальяны' }] }
+}
+
+test('loyalty review P2 applied only guest program stays visible after reload and next earn', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789); await mockGuestApi(page)
+  const program = usedLoyaltyProgram()
+  await page.route('**/api/guest/loyalty**', route => route.fulfill(jsonResponse({ items: [program] })))
+  await page.goto('?mode=guest#/catalog')
+  const open = async () => { await page.getByRole('button', { name: 'Профиль', exact: true }).click(); await page.getByRole('button', { name: 'Лояльность', exact: true }).click() }
+  await open()
+  await expect(page.getByText('Доступно наград · 0')).toBeVisible()
+  await expect(page.getByText('Зарезервировано в заказах · 0')).toBeVisible()
+  await expect(page.getByText('Выдано наград · 1')).toBeVisible()
+  await page.reload(); await open()
+  await expect(page.getByText('Выдано наград · 1')).toBeVisible()
+  program.progressCount = 1
+  await page.getByRole('button', { name: 'Обновить', exact: true }).click()
+  await expect(page.getByText('Прогресс программы · 1 из 2')).toBeVisible()
+  await expect(page.getByText('Доступно наград · 0')).toBeVisible()
+})
+
+for (const kind of ['earned', 'compensation'] as const) test(`loyalty review P2 guest cancellation ${kind} promises only conditional reuse`, async ({ page }) => {
+  await installTelegramWebApp(page, 123456789); await mockGuestApi(page)
+  const program = { ...usedLoyaltyProgram(), rewardsAvailable: 1, rewardsReserved: 1, rewardsApplied: 0 }
+  await page.route('**/api/guest/loyalty**', route => route.fulfill(jsonResponse({ items: [program] })))
+  await page.goto('?mode=guest#/catalog')
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Лояльность', exact: true }).click()
+  await expect(page.getByText(/повторное использование зависит от условий программы/)).toBeVisible()
+  await expect(page.getByText(/Отмена до выдачи возвращает/)).toHaveCount(0)
+  program.rewardsReserved = 0
+  program.rewardsAvailable = kind === 'earned' ? 2 : 1
+  await page.getByRole('button', { name: 'Обновить', exact: true }).click()
+  await expect(page.getByText(`Доступно наград · ${program.rewardsAvailable}`)).toBeVisible()
+  await expect(page.getByText('Зарезервировано в заказах · 0')).toBeVisible()
+  await expect(page.getByText(/VENUE_COMPENSATION|СЛУЖЕБНАЯ ПРИЧИНА|actorUserId|loyaltyHistory/)).toHaveCount(0)
 })

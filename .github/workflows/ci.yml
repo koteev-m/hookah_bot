@@ -167,6 +167,9 @@ jobs:
             --tests "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.menu.MenuContentH2Test" \
             --tests "com.hookah.platform.backend.miniapp.venue.menu.MenuContentPostgresTest" \
+            --tests "com.hookah.platform.backend.telegram.db.LoyaltyLifecycleH2Test" \
+            --tests "com.hookah.platform.backend.telegram.db.LoyaltyLifecyclePostgresTest" \
+            --tests "com.hookah.platform.backend.telegram.db.LoyaltyPaidMigrationTest" \
             --tests "com.hookah.platform.backend.telegram.MenuPresentationTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.AuditLogRepositoryTest" \
@@ -261,6 +264,9 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest",
               "com.hookah.platform.backend.miniapp.venue.menu.MenuContentH2Test",
               "com.hookah.platform.backend.miniapp.venue.menu.MenuContentPostgresTest",
+              "com.hookah.platform.backend.telegram.db.LoyaltyLifecycleH2Test",
+              "com.hookah.platform.backend.telegram.db.LoyaltyLifecyclePostgresTest",
+              "com.hookah.platform.backend.telegram.db.LoyaltyPaidMigrationTest",
               "com.hookah.platform.backend.telegram.MenuPresentationTest",
               "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.AuditLogRepositoryTest",
@@ -331,6 +337,10 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.menu.VenueMenuRepositoryTest": 54,
               "com.hookah.platform.backend.miniapp.venue.menu.MenuContentH2Test": 15,
               "com.hookah.platform.backend.miniapp.venue.menu.MenuContentPostgresTest": 15,
+              "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest": 29,
+              "com.hookah.platform.backend.telegram.db.LoyaltyLifecycleH2Test": 43,
+              "com.hookah.platform.backend.telegram.db.LoyaltyLifecyclePostgresTest": 44,
+              "com.hookah.platform.backend.telegram.db.LoyaltyPaidMigrationTest": 4,
               "com.hookah.platform.backend.telegram.MenuPresentationTest": 2,
               "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest": 48,
               "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest": 34,
@@ -345,7 +355,7 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.VenueOnboardingRoutesTest": 8,
               "com.hookah.platform.backend.platform.PlatformOnboardingRoutesTest": 15,
               "com.hookah.platform.backend.telegram.TelegramBotRouterVenueConnectionRequestFlowTest": 18,
-              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 561,
+              "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": 562,
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           required_test_names = {
@@ -391,7 +401,14 @@ jobs:
                   "second operational owner invite preserves existing commercial owner across audit rollback and retry",
                   "product admission supports platform owner to new venue owner to external staff and manager",
               },
+              "com.hookah.platform.backend.telegram.db.LoyaltyLifecycleH2Test": {
+                  "confirm history original sequence is exactly CONFIRM CORRECT CANCEL",
+              },
+              "com.hookah.platform.backend.telegram.db.LoyaltyLifecyclePostgresTest": {
+                  "confirm history original sequence is exactly CONFIRM CORRECT CANCEL",
+              },
               "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": {
+                  "review P2 guest bot shows applied only history and makes cancellation conditional",
                   "bot booking create uses zone A once when resolver would next return zone B",
                   "product mode gives a brand new private identity the normal guest menu",
                   "product mode lets unknown identities preview and accept staff manager and owner invites",
@@ -1791,6 +1808,21 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("guest-smoke.spec.ts", 'loyalty venue delivery correction preserves draft and operation id after lost response'): 1,
+              ("guest-smoke.spec.ts", 'loyalty staff can confirm fulfillment but cannot administer correction'): 1,
+              ("guest-smoke.spec.ts", 'loyalty guest sees frozen cycles legacy origin and paused reward restrictions after reload'): 1,
+              ("guest-smoke.spec.ts", 'loyalty confirm history OWNER shows CONFIRM CORRECT CANCEL after reload'): 1,
+              ("guest-smoke.spec.ts", 'loyalty confirm history MANAGER shows CONFIRM CORRECT CANCEL after reload'): 1,
+              ("guest-smoke.spec.ts", 'loyalty review P2 staff has operational reward facts without financial history'): 1,
+              ("guest-smoke.spec.ts", 'loyalty review P2 applied only guest program stays visible after reload and next earn'): 1,
+              ("guest-smoke.spec.ts", 'loyalty review P2 guest cancellation earned promises only conditional reuse'): 1,
+              ("guest-smoke.spec.ts", 'loyalty review P2 guest cancellation compensation promises only conditional reuse'): 1,
+              ("guest-smoke.spec.ts", 'loyalty003 manager corrects one explicit unit with reason confirmation and unchanged closed bill'): 1,
+              ("guest-smoke.spec.ts", 'loyalty003 unknown correction retains operation and input across reload and explicit retry'): 1,
+              ("guest-smoke.spec.ts", 'loyalty003 conflict denied and Unicode errors preserve reason without false success'): 1,
+              ("guest-smoke.spec.ts", 'loyalty003 staff sees safe sponsored states and must confirm physical issue without financial controls'): 1,
+              ("guest-smoke.spec.ts", 'loyalty003 manager cancels only unissued compensation and preserves closed bill on retry'): 1,
+              ("guest-smoke.spec.ts", 'loyalty003 correction drafts stay scoped to account and venue and late response cannot replace another venue'): 1,
               ("guest-smoke.spec.ts", 'menu P2-2 missing version blocks featured writes without a fallback'): 1,
               ("guest-smoke.spec.ts", 'menu P2-3 featured controls remain functional after category back'): 1,
               ("guest-smoke.spec.ts", 'menu P2-1 editing only price preserves another editor description'): 1,

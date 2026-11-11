@@ -1,5 +1,11 @@
 package com.hookah.platform.backend.miniapp.venue.orders
 
+import com.hookah.platform.backend.telegram.db.OrderLoyaltyExpense
+import com.hookah.platform.backend.telegram.db.OrderLoyaltyHistoryEntry
+import com.hookah.platform.backend.telegram.db.OrderLoyaltyReward
+import com.hookah.platform.backend.telegram.db.OrderLoyaltyUnit
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -28,6 +34,7 @@ data class OrderDetailResponse(
     val order: OrderDetailDto,
 )
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class OrderDetailDto(
     val orderId: Long,
@@ -43,6 +50,13 @@ data class OrderDetailDto(
     val bill: OrderBillDto,
     val batches: List<OrderBatchDto>,
     val pendingShiftExtension: OrderPendingShiftExtensionDto? = null,
+    val loyaltyRewards: List<OrderLoyaltyReward> = emptyList(),
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val loyaltyExpenses: List<OrderLoyaltyExpense> = emptyList(),
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val loyaltyUnits: List<OrderLoyaltyUnit>? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val loyaltyHistory: List<OrderLoyaltyHistoryEntry>? = null,
 )
 
 @Serializable
@@ -217,3 +231,12 @@ data class OrderAuditEntryDto(
     val reasonText: String? = null,
     val createdAt: String,
 )
+
+@Serializable
+data class LoyaltyDeliveryCorrectionRequest(val requestId: String, val reason: String)
+
+@Serializable
+data class LoyaltyUnitCorrectionRequest(val requestId: String, val reason: String)
+
+@Serializable
+data class LoyaltyUnitCorrectionResponse(val replayed: Boolean, val order: OrderDetailDto)

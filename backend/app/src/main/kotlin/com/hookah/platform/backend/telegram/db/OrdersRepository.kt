@@ -2007,9 +2007,10 @@ class OrdersRepository(
                 preference_note,
                 item_name_snapshot,
                 base_unit_price_minor_snapshot,
-                currency_snapshot
+                currency_snapshot,
+                loyalty_semantic_type_snapshot
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
@@ -2028,6 +2029,7 @@ class OrdersRepository(
                 statement.setString(5, menuItem.name)
                 statement.setLong(6, menuItem.priceMinor)
                 statement.setString(7, menuItem.currency)
+                statement.setString(8, menuItem.effectiveType?.dbValue)
                 statement.executeUpdate()
                 statement.generatedKeys.use { keys ->
                     if (!keys.next()) error("Failed to insert batch item")
@@ -2067,9 +2069,10 @@ class OrdersRepository(
                 preference_note,
                 item_name_snapshot,
                 base_unit_price_minor_snapshot,
-                currency_snapshot
+                currency_snapshot,
+                loyalty_semantic_type_snapshot
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
         ).use { statement ->
@@ -2084,6 +2087,7 @@ class OrdersRepository(
             statement.setString(5, checkoutMenuItem.name)
             statement.setLong(6, checkoutMenuItem.priceMinor)
             statement.setString(7, checkoutMenuItem.currency)
+            statement.setString(8, checkoutMenuItem.effectiveType?.dbValue)
             statement.executeUpdate()
             statement.generatedKeys.use { keys ->
                 if (!keys.next()) error("Failed to insert batch item")
@@ -2514,6 +2518,7 @@ class OrdersRepository(
             loyaltyRepository?.previewRedemptionForCart(
                 venueId = venueId,
                 userId = userId,
+                tableSessionId = tableSessionId,
                 items =
                     baseItems.map { item ->
                         LoyaltyCartItem(

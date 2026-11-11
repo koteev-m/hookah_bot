@@ -1116,6 +1116,10 @@ export type OrderDetailDto = {
   bill: OrderBillDto
   batches: OrderBatchDto[]
   pendingShiftExtension?: OrderPendingShiftExtensionDto | null
+  loyaltyRewards?: { id: number; batchItemId: number; status: string; origin: string; correctionAllowed: boolean; venueFunded?: boolean }[]
+  loyaltyExpenses?: { amountMinor: number; reason: string; resolved: boolean; id?: number; recordedAt?: string; actorUserId?: number; issuedAt?: string; correctionId?: number }[]
+  loyaltyUnits?: { id: number; batchId: number; batchItemId: number; unitIndex: number; qty: number; name: string; priceMinor: number | null; guestUserId: number; paymentFact: string; earnedAt: string | null; canCorrect: boolean; correctedAt: string | null; correctedBy: number | null; correctedByLabel: string | null; correctionReason: string | null }[]
+  loyaltyHistory?: { id: string; action: 'DELIVERY_CONFIRMED' | 'DELIVERY_CORRECTED' | 'COMPENSATION_CANCELED'; result: string; actorUserId: number; occurredAt: string; reason: string | null; redemptionId: number; batchItemId: number; itemName: string; compensationCancellation: boolean }[] | null
 }
 
 export type OrderPendingShiftExtensionDto = {

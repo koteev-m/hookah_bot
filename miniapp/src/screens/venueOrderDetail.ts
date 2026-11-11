@@ -1,3 +1,5 @@
+import { getTelegramContext } from '../shared/telegram'
+import { requestApi } from '../shared/api/request'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
@@ -66,6 +68,7 @@ type OrderDetailRefs = {
   shiftExtensionCard: HTMLDivElement
   bill: HTMLDivElement
   batches: HTMLDivElement
+  loyalty: HTMLDivElement
   managementNotice: HTMLDivElement
   actionsCard: HTMLDivElement
   actions: HTMLDivElement
@@ -116,6 +119,9 @@ function buildOrderDetailDom(root: HTMLDivElement): OrderDetailRefs {
 
   const bill = el('div', { className: 'card venue-order-bill' })
 
+  const loyalty = el('div', { className: 'card' }) as HTMLDivElement
+  loyalty.hidden = true
+  bill.after(loyalty)
   const managementNotice = el('div', { className: 'card' })
   append(
     managementNotice,
@@ -159,7 +165,9 @@ function buildOrderDetailDom(root: HTMLDivElement): OrderDetailRefs {
   append(wrapper, header, shiftExtensionCard, batches, bill, managementNotice, actions, rejectCard, backButton, error)
   root.replaceChildren(wrapper)
 
+  bill.after(loyalty)
   return {
+    loyalty,
     title,
     meta,
     status,
@@ -678,6 +686,7 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
   const updateStatus = async (nextStatus: OrderDetailDto['status']) => {
     if (!orderId || isUpdating) return
     if (!canUpdate) return
+    if (nextStatus === 'delivered' && hasReservedReward && !window.confirm('Подтвердить фактическую доставку всех действующих позиций? Зарезервированные награды станут использованными. Обычная отмена после выдачи их не вернёт; бонусы за счёт заведения будут учтены без изменения счёта гостя.')) return
     isUpdating = true
     refs.rejectButton.disabled = true
     const result = await venueUpdateOrderStatus(
@@ -740,6 +749,212 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
     void load()
   }
 
+  const correctionDrafts = new Map<number, { reason: string; requestId: string }>()
+  const unitDrafts = new Map<number, { reason: string; requestId: string }>()
+  const issueRequests = new Map<number, string>()
+  const actorScope = getTelegramContext().telegramUserId
+  const isCurrentLoyaltyContext = () => !disposed && getTelegramContext().telegramUserId === actorScope
+  const unitDraftKey = actorScope && canEditBill
+    ? `hookah:loyalty-unit:${new URL(backendUrl || window.location.origin, window.location.origin).origin}:${actorScope}:${venueId}:${orderId}`
+    : null
+  try {
+    const saved = unitDraftKey && JSON.parse(window.sessionStorage.getItem(unitDraftKey) ?? 'null')
+    if (saved && typeof saved.at === 'number' && Date.now() - saved.at < 86_400_000 && Array.isArray(saved.items)) {
+      for (const [id, draft] of saved.items.slice(0, 100)) if (Number.isSafeInteger(id) && typeof draft?.reason === 'string' && typeof draft?.requestId === 'string') unitDrafts.set(id, draft)
+    }
+  } catch { /* Storage is optional; server idempotency remains authoritative. */ }
+  const saveUnitDrafts = () => {
+    if (!unitDraftKey || !isCurrentLoyaltyContext()) return
+    try {
+      if (unitDrafts.size) window.sessionStorage.setItem(unitDraftKey, JSON.stringify({ at: Date.now(), items: [...unitDrafts].slice(0, 100) }))
+      else window.sessionStorage.removeItem(unitDraftKey)
+    } catch { /* Keep the current input when storage is unavailable. */ }
+  }
+  let hasReservedReward = false
+  const loyaltyError = (error: ApiErrorInfo) => {
+    if (error.status === 403) return 'Изменение недоступно: проверьте роль и выбранное заведение. Финансовую корректировку выполняет только управляющий или владелец.'
+    if ((error.status === 400 || error.status === 409) && error.message) return error.message
+    return 'Результат операции не подтверждён. Введённая причина сохранена; повторите тот же запрос или обновите заказ.'
+  }
+  const renderLoyalty = (order: OrderDetailDto) => {
+    refs.loyalty.replaceChildren()
+    refs.loyalty.style.overflowWrap = 'anywhere'
+    const rewards = order.loyaltyRewards ?? []
+    const expenses = access.role === 'STAFF' ? [] : order.loyaltyExpenses ?? []
+    const units = access.role === 'STAFF' ? [] : order.loyaltyUnits ?? []
+    const history = access.role === 'STAFF' ? [] : order.loyaltyHistory ?? []
+    hasReservedReward = rewards.some(reward => reward.status === 'RESERVED' && reward.origin === 'PAYMENT_POLICY')
+    refs.loyalty.hidden = rewards.length + expenses.length + units.length + history.length === 0
+    if (refs.loyalty.hidden) return
+    append(refs.loyalty, el('h3', { text: 'Награды лояльности' }), el('p', { className: 'status', text: 'Доступная награда может быть выбрана в заказе. Резерв сохраняет скидку до выдачи; использованной награда становится после подтверждения фактической выдачи. Бесплатная единица не участвует в новом накоплении.' }))
+    if (access.role === 'STAFF') refs.loyalty.appendChild(el('p', { className: 'status', text: 'Обнаружена ошибка в начислении? Передайте заказ управляющему. Изменить бонус самостоятельно нельзя.' }))
+    for (const reward of rewards) {
+      const state = reward.origin === 'LEGACY' ? 'Историческое состояние: выдача новой политикой не подтверждалась.'
+        : reward.status === 'RESERVED' ? 'Награда зарезервирована. Бесплатный кальян ещё не выдан.'
+          : reward.status === 'APPLIED' ? 'Награда использована. Выдача подтверждена.'
+            : reward.venueFunded ? 'Награда отменена до выдачи. Повторно использовать её нельзя.' : 'Резерв этой позиции отменён. Доступная награда возвращена гостю для нового заказа.'
+      refs.loyalty.appendChild(el('p', { text: `Позиция ${reward.batchItemId}: ${state}` }))
+      if (reward.venueFunded && reward.status !== 'CANCELED') refs.loyalty.appendChild(el('p', { className: 'status', text: 'Бонус предоставляется за счёт заведения. Сумма счёта гостя не меняется.' }))
+      if (reward.origin === 'PAYMENT_POLICY' && reward.status === 'RESERVED' && canUpdate) {
+        refs.loyalty.appendChild(el('p', { className: 'status', text: 'Подтверждайте только фактическую выдачу. «Доставлено» для заявки подтверждает все её действующие позиции. После выдачи автоматического возврата награды нет.' }))
+        const issue = el('button', { className: 'button-secondary', text: 'Подтвердить выдачу наградного кальяна' }) as HTMLButtonElement
+        const resultText = el('p', { className: 'status' }); resultText.setAttribute('role', 'status')
+        issue.disabled = isUpdating
+        issue.addEventListener('click', async () => {
+          if (!isCurrentLoyaltyContext() || isUpdating) return
+          if (!window.confirm(`Подтвердить, что наградной кальян по позиции ${reward.batchItemId} фактически выдан? Награда станет использованной. Обычная отмена её не вернёт.${reward.venueFunded ? ' Будет учтён бонус за счёт заведения; счёт гостя не изменится.' : ''}`)) return
+          const requestId = issueRequests.get(reward.id) ?? crypto.randomUUID(); issueRequests.set(reward.id, requestId)
+          isUpdating = true; issue.disabled = true
+          const result = await requestApi(backendUrl, `/api/venue/orders/${order.orderId}/loyalty/${reward.id}/confirm-delivery?venueId=${venueId}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId, reason: '' })
+          }, deps)
+          if (!isCurrentLoyaltyContext()) return
+          isUpdating = false; issue.disabled = false
+          if (!result.ok) { resultText.textContent = loyaltyError(result.error); return }
+          issueRequests.delete(reward.id); void load()
+        })
+        append(refs.loyalty, issue, resultText)
+      }
+      if (reward.status === 'CANCELED') { unitDrafts.delete(-reward.id); saveUnitDrafts() }
+      if (reward.origin === 'PAYMENT_POLICY' && reward.status === 'RESERVED' && reward.venueFunded && canEditBill) {
+        refs.loyalty.appendChild(el('p', { className: 'status', text: 'Если этот бонус не будет выдан, управляющий может завершить только его компенсационный резерв. Количество и цены соседних единиц, закрытый счёт и оплаты останутся прежними. Недействительное право не вернётся в доступные награды; расход выдачи не возникнет.' }))
+        const key = -reward.id
+        const input = el('textarea', { className: 'venue-input' }) as HTMLTextAreaElement
+        input.setAttribute('aria-label', 'Причина отмены невыданного бонуса'); input.value = unitDrafts.get(key)?.reason ?? ''
+        const button = el('button', { className: 'button-secondary', text: 'Отменить невыданный бонус' }) as HTMLButtonElement
+        const message = el('p', { className: 'status' }); message.setAttribute('role', 'status')
+        input.addEventListener('input', () => { const old = unitDrafts.get(key); unitDrafts.set(key, { reason: input.value, requestId: old?.reason.trim() === input.value.trim() ? old.requestId : '' }); saveUnitDrafts() })
+        button.disabled = isUpdating
+        button.addEventListener('click', async () => {
+          if (!isCurrentLoyaltyContext() || isUpdating) return
+          const reason = input.value.trim()
+          if (!reason || Array.from(reason).length > 500) { message.textContent = 'Укажите причину отмены до 500 символов.'; return }
+          if (!window.confirm('Отменить только невыданный бонус за счёт заведения? Скидка и исторический счёт сохранятся. Недействительная награда не станет доступной снова; расход выдачи не создаётся.')) return
+          const old = unitDrafts.get(key)
+          const requestId = old?.requestId && old.reason.trim() === reason ? old.requestId : crypto.randomUUID()
+          unitDrafts.set(key, { reason: input.value, requestId }); saveUnitDrafts()
+          isUpdating = true; button.disabled = true; input.disabled = true
+          const result = await requestApi<{ replayed: boolean }>(backendUrl, `/api/venue/orders/${order.orderId}/loyalty/${reward.id}/cancel-compensation?venueId=${venueId}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId, reason })
+          }, deps)
+          if (!isCurrentLoyaltyContext()) return
+          isUpdating = false; button.disabled = false; input.disabled = false
+          if (!result.ok) { message.textContent = `${loyaltyError(result.error)} Ввод сохранён.`; return }
+          unitDrafts.delete(key); saveUnitDrafts(); showToast(result.data.replayed ? 'Отмена уже была выполнена. Обновляем состояние.' : 'Невыданный бонус отменён; счёт сохранён'); void load()
+        })
+        append(refs.loyalty, input, button, message)
+      }
+      if (reward.origin === 'PAYMENT_POLICY' && reward.status === 'APPLIED' && canEditBill && reward.correctionAllowed) {
+        refs.loyalty.appendChild(el('p', { className: 'status', text: 'Ошибочную отметку выдачи можно исправить с причиной: действующая позиция вернётся в резерв. Для отменённой позиции заработанное право возвращается только если оно действительно; неиспользованная компенсация заведения завершается. Денежного возврата нет.' }))
+        const input = el('input', { className: 'venue-input' }) as HTMLInputElement
+        input.setAttribute('aria-label', 'Причина исправления выдачи'); input.placeholder = 'Причина ошибочной отметки о выдаче'
+        input.value = correctionDrafts.get(reward.id)?.reason ?? ''
+        const button = el('button', { className: 'button-secondary', text: 'Исправить ошибочную выдачу' }) as HTMLButtonElement
+        const message = el('p', { className: 'status' }); message.setAttribute('role', 'status')
+        button.disabled = isUpdating
+        button.addEventListener('click', async () => {
+          if (!isCurrentLoyaltyContext() || isUpdating) return
+          const reason = input.value.trim()
+          if (!reason || Array.from(reason).length > 500) { message.textContent = 'Укажите причину до 500 символов.'; return }
+          if (!window.confirm('Исправить ошибочную отметку о выдаче? Счёт и подтверждённые оплаты не меняются. История и причина сохранятся; действующая позиция снова будет ожидать подтверждения выдачи.')) return
+          let draft = correctionDrafts.get(reward.id)
+          if (!draft || draft.reason !== reason) { draft = { reason, requestId: crypto.randomUUID() }; correctionDrafts.set(reward.id, draft) }
+          isUpdating = true; button.disabled = true
+          const result = await requestApi(backendUrl, `/api/venue/orders/${order.orderId}/loyalty/${reward.id}/correct-delivery?venueId=${venueId}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft)
+          }, deps)
+          if (!isCurrentLoyaltyContext()) return
+          isUpdating = false; button.disabled = false
+          if (!result.ok) { message.textContent = loyaltyError(result.error); return }
+          correctionDrafts.delete(reward.id); showToast('Ошибочная выдача исправлена; история сохранена'); void load()
+        })
+        append(refs.loyalty, input, button, message)
+      }
+    }
+    if (units.length) {
+      append(refs.loyalty, el('h4', { text: 'Корректировка начисления' }), el('p', { className: 'status', text: 'Начисление основано на полной подтверждённой оплате конкретной закрытой цифровой продажи и фактической выдаче подходящей платной единицы. Исправляется только выбранная единица: количество, цены, закрытый счёт и подтверждённые оплаты не меняются. Уже обещанная скидка сохраняется за счёт заведения; расход фиксируется после фактической выдачи, без долга гостя и удержания будущих наград.' }))
+      const eligible = units.filter(unit => unit.canCorrect)
+      for (const unit of units.filter(unit => unit.correctedAt)) {
+        unitDrafts.delete(unit.id)
+        refs.loyalty.appendChild(el('p', { className: 'status', text: `${unit.name} · единица ${unit.unitIndex} из ${unit.qty}: начисление исправлено. ${unit.correctedByLabel || 'Управляющий'} · ${new Date(unit.correctedAt!).toLocaleString()} · Причина: ${unit.correctionReason}. Повторная коррекция не требуется.` }))
+      }
+      saveUnitDrafts()
+      if (!eligible.length) refs.loyalty.appendChild(el('p', { className: 'status', text: 'Нет единиц для корректировки. Уже исправленные начисления повторно не изменяются. Если данные неполные, передайте заказ управляющему для сверки.' }))
+      else {
+        const select = el('select', { className: 'venue-input' }) as HTMLSelectElement
+        select.setAttribute('aria-label', 'Единица для корректировки')
+        const placeholder = el('option', { text: 'Выберите одну единицу кальяна' }); placeholder.value = ''; select.appendChild(placeholder)
+        for (const unit of eligible) { const option = el('option', { text: `${unit.name} · заявка ${unit.batchId} · единица ${unit.unitIndex} из ${unit.qty}` }) as HTMLOptionElement; option.value = String(unit.id); select.appendChild(option) }
+        const pending = eligible.find(unit => unitDrafts.has(unit.id)); if (pending) select.value = String(pending.id)
+        const basis = el('p', { className: 'status' })
+        const reason = el('textarea', { className: 'venue-input' }) as HTMLTextAreaElement
+        reason.setAttribute('aria-label', 'Причина корректировки начисления'); reason.placeholder = 'Почему эта единица была учтена ошибочно'
+        const count = el('p', { className: 'status' })
+        const button = el('button', { className: 'button-secondary', text: 'Исправить начисление выбранной единицы' }) as HTMLButtonElement
+        const message = el('p', { className: 'status' }); message.setAttribute('role', 'status')
+        const remember = () => {
+          const id = Number(select.value); if (!id) return
+          const old = unitDrafts.get(id)
+          unitDrafts.set(id, { reason: reason.value, requestId: old?.reason.trim() === reason.value.trim() ? old.requestId : '' }); saveUnitDrafts()
+        }
+        const update = (restore = false) => {
+          const unit = eligible.find(item => item.id === Number(select.value))
+          if (restore) reason.value = unit ? unitDrafts.get(unit.id)?.reason ?? '' : ''
+          basis.textContent = unit ? `Выбрана единица ${unit.unitIndex} из ${unit.qty} · ${formatPrice(unit.priceMinor ?? 0, order.bill.currency)}. Начисление подтверждено ${unit.earnedAt ? new Date(unit.earnedAt).toLocaleString() : 'в истории оплаты'}.` : 'Выберите конкретную единицу. Соседние оплаченные единицы останутся без изменений.'
+          count.textContent = `${Array.from(reason.value).length}/500 символов`
+          button.disabled = !unit || isUpdating; reason.disabled = !unit || isUpdating; select.disabled = isUpdating
+        }
+        select.addEventListener('change', () => { message.textContent = ''; update(true) })
+        reason.addEventListener('input', () => { remember(); update() })
+        button.addEventListener('click', async () => {
+          if (!isCurrentLoyaltyContext() || isUpdating) return
+          const unit = eligible.find(item => item.id === Number(select.value)); if (!unit) return
+          const text = reason.value.trim()
+          if (!text || Array.from(text).length > 500) { message.textContent = 'Укажите конкретную причину до 500 символов. Ввод сохранён.'; return }
+          if (!window.confirm(`Исправить начисление за «${Array.from(unit.name).slice(0, 80).join('')}», единица ${unit.unitIndex} из ${unit.qty}? Закрытый счёт и оплаты не меняются. Обещанная скидка сохраняется за счёт заведения. Причина: ${Array.from(text).slice(0, 160).join('')}`)) return
+          const draft = unitDrafts.get(unit.id)
+          const requestId = draft?.requestId && draft.reason.trim() === text ? draft.requestId : crypto.randomUUID()
+          unitDrafts.set(unit.id, { reason: reason.value, requestId }); saveUnitDrafts()
+          isUpdating = true; update(); message.textContent = 'Сохраняем корректировку…'
+          const result = await requestApi<{ replayed: boolean }>(backendUrl, `/api/venue/orders/${order.orderId}/loyalty/units/${unit.id}/correct?venueId=${venueId}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId, reason: text })
+          }, deps)
+          if (!isCurrentLoyaltyContext()) return
+          isUpdating = false; update()
+          if (!result.ok) { message.textContent = `${loyaltyError(result.error)} Введённая причина сохранена.`; return }
+          unitDrafts.delete(unit.id); saveUnitDrafts()
+          showToast(result.data.replayed ? 'Корректировка уже была выполнена. Показаны актуальные данные.' : 'Начисление одной единицы исправлено; счёт гостя сохранён')
+          void load()
+        })
+        update(true); append(refs.loyalty, select, basis, reason, count, button, message)
+      }
+    }
+    if (history.length) {
+      refs.loyalty.appendChild(el('h4', { text: 'История награды' }))
+      for (const entry of history) {
+        const confirmed = entry.action === 'DELIVERY_CONFIRMED'
+        const title = confirmed ? 'Выдача награды подтверждена' : entry.action === 'DELIVERY_CORRECTED' ? 'Исправлена отметка о выдаче' : 'Отменена компенсация'
+        const record = el('section', { className: 'loyalty-history-entry' })
+        const result = confirmed ? 'Награда использована: фактическая выдача подтверждена.' : entry.action === 'DELIVERY_CORRECTED'
+          ? 'Исправление сохранено. Текущее состояние награды показано выше.'
+          : 'Невыданный бонус отменён. Недействительное право не возвращается в доступные награды.'
+        append(record,
+          el('p', { text: title }),
+          el('p', { text: `${entry.itemName} · одна наградная единица · позиция №${entry.batchItemId} · награда №${entry.redemptionId}` }),
+          el('p', { className: 'status', text: `${new Date(entry.occurredAt).toLocaleString()} · сотрудник №${entry.actorUserId}` }),
+        )
+        if (entry.reason != null) record.appendChild(el('p', { text: `Причина: ${entry.reason}` }))
+        record.appendChild(el('p', { className: 'status', text: result }))
+        if (entry.action === 'DELIVERY_CORRECTED' && entry.compensationCancellation) record.appendChild(el('p', { className: 'status', text: 'Для этой же награды сохранена связанная отмена компенсации.' }))
+        refs.loyalty.appendChild(record)
+      }
+    }
+    if (expenses.length) {
+      refs.loyalty.appendChild(el('p', { className: 'status', text: 'Расход отражает фактически выданный бонус по исторической цене скидки. Это неденежный факт лояльности: поступления наличными, по карте и переводом не увеличиваются. Отдельной строки этого расхода в кассовом отчёте пока нет.' }))
+      for (const expense of expenses) refs.loyalty.appendChild(el('p', { className: 'status', text: `${expense.resolved ? 'История исправления расхода' : 'Бонус за счёт заведения'} · ${formatPrice(expense.amountMinor, order.bill.currency)} · ${expense.recordedAt ? new Date(expense.recordedAt).toLocaleString() : ''}${expense.actorUserId ? ` · сотрудник №${expense.actorUserId}` : ''} · ${expense.reason}` }))
+    }
+  }
+
   const load = async () => {
     if (!orderId) {
       refs.title.textContent = 'Заказ не найден'
@@ -761,7 +976,7 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
     isLoading = true
     updateRefreshState()
     const result = await venueGetOrderDetail(backendUrl, { venueId, orderId }, deps, controller.signal)
-    if (disposed || loadSeq !== seq) return
+    if (disposed || loadSeq !== seq || getTelegramContext().telegramUserId !== actorScope) return
     loadAbort = null
     isLoading = false
     updateRefreshState()
@@ -788,6 +1003,7 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
       }
     )
     renderBill(refs.bill, order)
+    renderLoyalty(order)
     renderManagementNotice()
     renderBatches(
       refs.batches,

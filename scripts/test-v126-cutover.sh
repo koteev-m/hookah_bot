@@ -8269,6 +8269,10 @@ extra = {
     'h2/V135__menu_featured.sql': 'c9aed98599540bad2cfbb5d7b9614a273ef910659e6b3bd6af82d04987c5b356',
     'postgresql/V135__menu_featured_operations.sql': 'a7e4cf7261d525fd724a10df71de85db2604d539e8de569aab93efd1b4185a2e',
     'h2/V136__menu_featured_operations.sql': 'a7e4cf7261d525fd724a10df71de85db2604d539e8de569aab93efd1b4185a2e',
+    'postgresql/V136__loyalty_paid_lifecycle.sql': 'a7a427fe485b97ed16f2d9cdbb58919ec632f87918fc6a419b8fcb15c3a6538a',
+    'h2/V137__loyalty_paid_lifecycle.sql': 'a7a427fe485b97ed16f2d9cdbb58919ec632f87918fc6a419b8fcb15c3a6538a',
+    'postgresql/V137__loyalty_unit_corrections.sql': 'c0873f2adee8f39659a4c28f569425e8373517b7ba51a32a0615f6af919f27a5',
+    'h2/V138__loyalty_unit_corrections.sql': 'c0873f2adee8f39659a4c28f569425e8373517b7ba51a32a0615f6af919f27a5',
 }
 paths = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if not p.is_dir() or p.is_symlink()}
 if set(paths) != set(historical) | set(extra):
@@ -8373,7 +8377,11 @@ PY
     postgresql/V134__menu_featured.sql \
     h2/V135__menu_featured.sql \
     postgresql/V135__menu_featured_operations.sql \
-    h2/V136__menu_featured_operations.sql; do
+    h2/V136__menu_featured_operations.sql \
+    postgresql/V136__loyalty_paid_lifecycle.sql \
+    h2/V137__loyalty_paid_lifecycle.sql \
+    postgresql/V137__loyalty_unit_corrections.sql \
+    h2/V138__loyalty_unit_corrections.sql; do
     printf '\n-- forbidden reviewed tail drift\n' >> "${fixture}/${addition}"
     expect_failure "changed reviewed tail SQL rejects lineage: ${addition}" 'reviewed migration drift' \
       verify_current_migration_lineage "${fixture}"
@@ -8383,7 +8391,11 @@ PY
     postgresql/V134__menu_featured.sql \
     h2/V135__menu_featured.sql \
     postgresql/V135__menu_featured_operations.sql \
-    h2/V136__menu_featured_operations.sql; do
+    h2/V136__menu_featured_operations.sql \
+    postgresql/V136__loyalty_paid_lifecycle.sql \
+    h2/V137__loyalty_paid_lifecycle.sql \
+    postgresql/V137__loyalty_unit_corrections.sql \
+    h2/V138__loyalty_unit_corrections.sql; do
     rm "${fixture}/${addition}"
     expect_failure "missing reviewed menu SQL rejects lineage: ${addition}" 'migration inventory drift' \
       verify_current_migration_lineage "${fixture}"

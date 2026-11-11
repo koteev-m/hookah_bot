@@ -8,6 +8,7 @@ import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
 import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -31,6 +32,7 @@ class AccountingRepository(
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val orders = VenueOrdersRepository(dataSource)
+    private val loyalty = LoyaltyRepository(dataSource, audit)
     private val json = Json { encodeDefaults = true }
 
     suspend fun state(
@@ -322,6 +324,13 @@ class AccountingRepository(
                 put("new", money(accountingTotals(listOf(changed))))
             },
             command.reason?.trim(),
+        )
+        loyalty.reconcilePaidSale(
+            c,
+            report.venueId,
+            changed,
+            "accounting:${command.requestId}:v:${changed.version}",
+            actor,
         )
     }
 

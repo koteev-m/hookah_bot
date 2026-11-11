@@ -271,6 +271,7 @@ function renderOrderBill(container: HTMLElement, order: ActiveOrderDto) {
   }
   if (order.loyaltyDiscountTotalMinor > 0) {
     appendBillRow(bill, 'Лояльность', formatDiscount(order.loyaltyDiscountTotalMinor, order.currency))
+    bill.appendChild(el('p', { className: 'status', text: 'Скидка по награде сохранена в счёте. Бесплатная единица не участвует в новом накоплении; использованной награда считается после подтверждения выдачи.' }))
   }
   renderDiscountBreakdown(bill, order)
   serviceCharges.forEach((charge) => {

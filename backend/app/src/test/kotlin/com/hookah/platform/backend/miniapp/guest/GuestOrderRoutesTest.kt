@@ -8056,6 +8056,34 @@ class GuestOrderRoutesTest {
                 statement.setInt(4, rewardsAvailable)
                 statement.executeUpdate()
             }
+            // Explicit legacy initial reward fixture, matching the cutover migration rather than fabricating payment.
+            connection.createStatement().use { st ->
+                st.executeUpdate(
+                    "INSERT INTO loyalty_terms_versions " +
+                        "(id,program_id,nth_value,origin) SELECT " +
+                        "'test-legacy-' || " +
+                        "id,id,nth_value,'LEGACY_CUTOVER' FROM " +
+                        "loyalty_programs WHERE id=$programId",
+                )
+                st.executeUpdate(
+                    "INSERT INTO loyalty_terms_targets " +
+                        "(version_id,target_kind,target_type,semantic_" +
+                        "type,menu_item_id,menu_item_name) SELECT " +
+                        "'test-legacy-$programId','REWARD',t.target_ty" +
+                        "pe,t.semantic_type,t.menu_item_id,mi.name " +
+                        "FROM loyalty_program_reward_targets t LEFT " +
+                        "JOIN menu_items mi ON mi.id=t.menu_item_id " +
+                        "WHERE t.program_id=$programId",
+                )
+                st.executeUpdate(
+                    "INSERT INTO loyalty_legacy_balances " +
+                        "(program_id,user_id,terms_id,progress_initial" +
+                        ",rewards_initial,rewards_remaining,reserved_i" +
+                        "nitial) VALUES " +
+                        "($programId,$userId,'test-legacy-$programId'," +
+                        "0,$rewardsAvailable,$rewardsAvailable,0)",
+                )
+            }
             return programId
         }
     }

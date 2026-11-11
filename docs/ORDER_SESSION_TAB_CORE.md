@@ -1,5 +1,15 @@
 # Order / Session / Tab Core Model
 
+Loyalty boundary (`HT-GROWTH-LOYALTY-PRODUCTIZE-002/003`): CLOSED alone never earns.
+Only fully settled, undisputed digital sales qualify fulfilled, attributed snapshot-priced units.
+Checkout reserves; explicit confirmed delivery applies. One active reward slot belongs to
+program + guest + table session across batches/orders. OWNER/MANAGER can compensate one proven
+paid-unit id/index without changing quantities, prices, receipts or historical bills. An affected
+RESERVED/APPLIED promise keeps its discount as venue-funded; only actual issue creates a noncash
+expense fact. Canceling unissued compensation frees the slot without restoring invalid entitlement;
+other paid units and future rewards stay intact. All dependent facts/audit commit atomically under
+the existing venue-first locks. See `GROWTH_RETENTION.md`; no second checkout/order lifecycle.
+
 Evidence reconciliation (2026-11-09): PR #252 is in main `8292696…` and reported staging V132.
 Normal recorded seating RELEASE (`SeatingRepository.release`) refuses active orders/calls, ends
 the physical session, closes active tabs and removes their invites. It neither records payment

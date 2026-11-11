@@ -5,6 +5,8 @@ import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.venue.VenueRole
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingCommand
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepository
 import com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
@@ -471,7 +473,7 @@ class VenueOrdersRepositoryTest {
         }
 
     @Test
-    fun `closing order accrues loyalty only for eligible paid hookah and is idempotent`() =
+    fun `closed order earns only after full payment for eligible hookah and is idempotent`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("loyalty-close-eligible")
             val fixture = seedActiveOrder(jdbcUrl)
@@ -513,8 +515,8 @@ class VenueOrdersRepositoryTest {
                     Instant.now().minusSeconds(20),
                     authorUserId = STAFF_USER_ID,
                 )
-            seedVenueMember(jdbcUrl, fixture.venueId, STAFF_USER_ID, "STAFF")
             seedBatchItem(jdbcUrl, fixture.venueId, staffBatchId, "Staff кальян", categoryType = "HOOKAH")
+            prepareLoyaltyPayment(jdbcUrl, fixture)
             val repository =
                 VenueOrdersRepository(
                     dataSource = dataSource(jdbcUrl),
@@ -540,12 +542,14 @@ class VenueOrdersRepositoryTest {
             assertTrue(first.applied)
             assertNotNull(second)
             assertFalse(second.applied)
+            assertEquals(0, fetchLoyaltyLedgerCount(jdbcUrl, programId))
+            settleLoyaltyPayment(jdbcUrl, fixture)
             assertEquals(1 to 0, fetchLoyaltyProgress(jdbcUrl, programId, GUEST_USER_ID))
             assertEquals(1, fetchLoyaltyLedgerCount(jdbcUrl, programId))
         }
 
     @Test
-    fun `closing order accrues loyalty only for selected earn menu item target`() =
+    fun `full payment accrues only for selected earn target after close`() =
         runBlocking {
             val jdbcUrl = migratedJdbcUrl("loyalty-close-selected-earn")
             val fixture = seedActiveOrder(jdbcUrl)
@@ -559,6 +563,7 @@ class VenueOrdersRepositoryTest {
                     fetchMenuItemIdForBatchItem(connection, selectedBatchItemId)
                 }
             replaceLoyaltyEarnTargetWithMenuItem(jdbcUrl, programId, selectedMenuItemId)
+            prepareLoyaltyPayment(jdbcUrl, fixture)
             val repository =
                 VenueOrdersRepository(
                     dataSource = dataSource(jdbcUrl),
@@ -575,6 +580,8 @@ class VenueOrdersRepositoryTest {
 
             assertNotNull(result)
             assertTrue(result.applied)
+            assertEquals(0, fetchLoyaltyLedgerCount(jdbcUrl, programId))
+            settleLoyaltyPayment(jdbcUrl, fixture)
             assertEquals(1 to 0, fetchLoyaltyProgress(jdbcUrl, programId, GUEST_USER_ID))
             assertEquals(1, fetchLoyaltyLedgerCount(jdbcUrl, programId))
         }
@@ -587,6 +594,7 @@ class VenueOrdersRepositoryTest {
             val programId = seedActiveLoyaltyProgram(jdbcUrl, fixture.venueId, nthValue = 3)
             val batchId = seedBatch(jdbcUrl, fixture.orderId, "DELIVERED", Instant.now())
             seedBatchItem(jdbcUrl, fixture.venueId, batchId, "Два кальяна", categoryType = "HOOKAH", qty = 2)
+            prepareLoyaltyPayment(jdbcUrl, fixture)
             val repository =
                 VenueOrdersRepository(
                     dataSource = dataSource(jdbcUrl),
@@ -603,8 +611,10 @@ class VenueOrdersRepositoryTest {
 
             assertNotNull(result)
             assertTrue(result.applied)
+            assertEquals(0, fetchLoyaltyLedgerCount(jdbcUrl, programId))
+            settleLoyaltyPayment(jdbcUrl, fixture)
             assertEquals(0 to 1, fetchLoyaltyProgress(jdbcUrl, programId, GUEST_USER_ID))
-            assertEquals(1, fetchLoyaltyLedgerCount(jdbcUrl, programId))
+            assertEquals(2, fetchLoyaltyLedgerCount(jdbcUrl, programId))
         }
 
     @Test
@@ -615,6 +625,7 @@ class VenueOrdersRepositoryTest {
             val programId = seedActiveLoyaltyProgram(jdbcUrl, fixture.venueId, nthValue = 6)
             val batchId = seedBatch(jdbcUrl, fixture.orderId, "DELIVERED", Instant.now())
             seedBatchItem(jdbcUrl, fixture.venueId, batchId, "Пять кальянов", categoryType = "HOOKAH", qty = 5)
+            prepareLoyaltyPayment(jdbcUrl, fixture)
             val repository =
                 VenueOrdersRepository(
                     dataSource = dataSource(jdbcUrl),
@@ -631,8 +642,10 @@ class VenueOrdersRepositoryTest {
 
             assertNotNull(result)
             assertTrue(result.applied)
+            assertEquals(0, fetchLoyaltyLedgerCount(jdbcUrl, programId))
+            settleLoyaltyPayment(jdbcUrl, fixture)
             assertEquals(0 to 1, fetchLoyaltyProgress(jdbcUrl, programId, GUEST_USER_ID))
-            assertEquals(1, fetchLoyaltyLedgerCount(jdbcUrl, programId))
+            assertEquals(5, fetchLoyaltyLedgerCount(jdbcUrl, programId))
         }
 
     @Test
@@ -643,6 +656,7 @@ class VenueOrdersRepositoryTest {
             val programId = seedActiveLoyaltyProgram(jdbcUrl, fixture.venueId, nthValue = 6)
             val batchId = seedBatch(jdbcUrl, fixture.orderId, "DELIVERED", Instant.now())
             seedBatchItem(jdbcUrl, fixture.venueId, batchId, "Шесть кальянов", categoryType = "HOOKAH", qty = 6)
+            prepareLoyaltyPayment(jdbcUrl, fixture)
             val repository =
                 VenueOrdersRepository(
                     dataSource = dataSource(jdbcUrl),
@@ -659,8 +673,10 @@ class VenueOrdersRepositoryTest {
 
             assertNotNull(result)
             assertTrue(result.applied)
+            assertEquals(0, fetchLoyaltyLedgerCount(jdbcUrl, programId))
+            settleLoyaltyPayment(jdbcUrl, fixture)
             assertEquals(1 to 1, fetchLoyaltyProgress(jdbcUrl, programId, GUEST_USER_ID))
-            assertEquals(1, fetchLoyaltyLedgerCount(jdbcUrl, programId))
+            assertEquals(6, fetchLoyaltyLedgerCount(jdbcUrl, programId))
         }
 
     @Test
@@ -1621,8 +1637,8 @@ class VenueOrdersRepositoryTest {
                 }
             return connection.prepareStatement(
                 """
-                INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty, is_excluded)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO order_batch_items (order_batch_id, menu_item_id, qty, is_excluded, base_unit_price_minor_snapshot)
+                VALUES (?, ?, ?, ?, ?)
                 """.trimIndent(),
                 Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
@@ -1630,6 +1646,7 @@ class VenueOrdersRepositoryTest {
                 statement.setLong(2, menuItemId)
                 statement.setInt(3, qty)
                 statement.setBoolean(4, isExcluded)
+                statement.setLong(5, priceMinor)
                 statement.executeUpdate()
                 statement.generatedKeys.use { rs ->
                     if (rs.next()) rs.getLong(1) else error("Failed to insert batch item")
@@ -2104,6 +2121,77 @@ class VenueOrdersRepositoryTest {
                 }
             }
         }
+
+    private suspend fun prepareLoyaltyPayment(
+        jdbcUrl: String,
+        fixture: OrderFixture,
+    ) {
+        seedVenueMember(jdbcUrl, fixture.venueId, STAFF_USER_ID, "STAFF")
+        val shift =
+            AccountingRepository(dataSource(jdbcUrl)).execute(
+                fixture.venueId,
+                STAFF_USER_ID,
+                AccountingCommand(UUID.randomUUID().toString(), "OPEN"),
+            )
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { c ->
+            c.createStatement().use { st ->
+                st.executeUpdate("UPDATE orders SET accounting_shift_id=${shift.shiftId} WHERE id=${fixture.orderId}")
+                st.executeUpdate(
+                    "UPDATE order_batch_items i SET " +
+                        "item_name_snapshot=(SELECT name FROM " +
+                        "menu_items WHERE id=i.menu_item_id), " +
+                        "currency_snapshot='RUB', " +
+                        "loyalty_semantic_type_snapshot=(SELECT " +
+                        "COALESCE(mi.item_type,mc.category_type,'OTHER" +
+                        "') FROM menu_items mi LEFT JOIN " +
+                        "menu_categories mc ON mc.id=mi.category_id " +
+                        "WHERE mi.id=i.menu_item_id) WHERE " +
+                        "order_batch_id IN (SELECT id FROM " +
+                        "order_batches WHERE " +
+                        "order_id=${fixture.orderId})",
+                )
+                st.executeUpdate(
+                    "UPDATE order_batch_items i SET " +
+                        "item_name_snapshot=(SELECT name FROM " +
+                        "menu_items WHERE id=i.menu_item_id), " +
+                        "currency_snapshot='RUB', " +
+                        "loyalty_semantic_type_snapshot=(SELECT " +
+                        "COALESCE(mi.item_type,mc.category_type,'OTHER" +
+                        "') FROM menu_items mi LEFT JOIN " +
+                        "menu_categories mc ON mc.id=mi.category_id " +
+                        "WHERE mi.id=i.menu_item_id), " +
+                        "fulfilled_at=CURRENT_TIMESTAMP, " +
+                        "fulfilled_by_user_id=$STAFF_USER_ID WHERE " +
+                        "order_batch_id IN (SELECT id FROM " +
+                        "order_batches WHERE " +
+                        "order_id=${fixture.orderId} AND " +
+                        "status='DELIVERED')",
+                )
+            }
+        }
+    }
+
+    private suspend fun settleLoyaltyPayment(
+        jdbcUrl: String,
+        fixture: OrderFixture,
+    ) {
+        val accounting = AccountingRepository(dataSource(jdbcUrl))
+        val report = accounting.state(fixture.venueId, STAFF_USER_ID).current!!
+        val sale = report.sales.single { it.orderId == fixture.orderId }
+        accounting.execute(
+            fixture.venueId,
+            STAFF_USER_ID,
+            AccountingCommand(
+                UUID.randomUUID().toString(),
+                "PAY",
+                shiftId = report.shiftId,
+                saleId = sale.id,
+                expectedVersion = sale.version,
+                paymentMethod = "CASH",
+                amountMinor = sale.payable,
+            ),
+        )
+    }
 
     private fun seedActiveLoyaltyProgram(
         jdbcUrl: String,

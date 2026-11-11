@@ -1,5 +1,40 @@
 # Venue Mode Operations Model
 
+Loyalty (`HT-GROWTH-LOYALTY-PRODUCTIZE-002/003`): fully settled receipts of a particular
+CLOSED digital sale and explicit fulfillment qualify earning; operational close alone does not.
+Existing «Доставлено» or individual reward confirmation records actual issue. Before confirming,
+staff sees that the reserve becomes used and ordinary cancellation will not restore it.
+
+In existing order detail OWNER/MANAGER selects one proven paid unit (index of quantity), enters
+a reason, reviews consequences and confirms. A closed/multi-unit bill and receipts stay unchanged.
+The screen shows the earning event, historical price and correction actor/time/reason. A reward
+already promised to Guest remains reserved/issued as a bonus at venue expense, with no debt or
+loss of other rewards. Only actual issue records the noncash expense; no cash receipt is invented.
+The cash report has no separate expense row yet; linked facts appear in management order detail.
+An unissued sponsored promise can be canceled separately with reason/confirmation, including
+in a closed bill: its invalid entitlement never becomes available again. Repeated successful
+requests return current state; a new correction of the same unit conflicts. Failed/unknown results
+retain the draft and operation id; reload/venue/account switches keep authority scoped.
+
+STAFF sees «Награда зарезервирована. Бесплатный кальян ещё не выдан», confirmed use,
+venue-funded/no bill-change and final cancellation explanations. STAFF can perform existing
+operational delivery, with confirmation, but cannot change accruals, correct issue marks or manage
+compensation/programs. «Обнаружена ошибка в начислении? Передайте заказ управляющему.
+Изменить бонус самостоятельно нельзя». Guest receives no internal reasons or expense details.
+Exact frozen-term/legacy/cancellation rules and remaining manual gates: `GROWTH_RETENTION.md`.
+
+`HT-GROWTH-LOYALTY-REVIEW-FIX-01` / `HT-GROWTH-LOYALTY-CONFIRM-HISTORY-FIX-01`:
+OWNER/MANAGER sees «История награды» in existing order details after reload/reopening:
+«Выдача награды подтверждена» → «Исправлена отметка о выдаче» → «Отменена компенсация».
+Each entry shows its actual actor ID, event time, result and linked reward position. A STAFF issue
+keeps that STAFF actor in history; it is never attributed to the manager viewing it. A normal
+confirmation has no invented reason; the reason appears only when the source event saved it.
+Correction/cancellation show their stored reasons. Issue/correction audit and cancellation receipt
+remain authoritative after current reward state changes; the order-audit tab need not contain them.
+STAFF retains safe operational explanations and has no access to management history. Guest copy
+and balances are unchanged: reuse after cancellation depends on the preserved right and conditions.
+Payment, issue, compensation, receipts and historical bills are unchanged.
+
 Current release evidence (2026-11-09): main through PR #256 is reported installed on staging with
 PostgreSQL V133 and technical smoke PASS; this task did not inspect the server. Halls/table editing,
 physical seating/manual and guest reservations, publication/links and accounting/auto-open are

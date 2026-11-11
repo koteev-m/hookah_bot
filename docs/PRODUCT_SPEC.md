@@ -1,5 +1,14 @@
 # Product Spec v1 — Telegram Hookah Platform (Multi-tenant)
 
+Nth Hookah loyalty (`HT-GROWTH-LOYALTY-PRODUCTIZE-001/002/003`, feature
+`GROWTH-LOYALTY-PRODUCTIZE-001`): **LOCAL IMPLEMENTED / REVIEW PENDING**. The approved paid-sale,
+RESERVED/confirmed-issue lifecycle includes exact paid-unit correction in closed multi-unit bills.
+The original bill/receipts and promised discount stay intact; an underfunded reserved/issued
+promise becomes a venue-funded bonus, without debt, negative balances or consuming other rewards.
+Actual issue creates an idempotent noncash expense fact; its separate cash-report projection is
+not implemented. Existing accounting/checkout remain authoritative. See `GROWTH_RETENTION.md`
+for legacy preservation, permissions, explanations and validation/release limits.
+
 Current implementation/release reconciliation: 2026-11-09, `HT-PRODUCT-DOCS-RECONCILIATION-01`.
 See [roadmap Section 13.0](UPDATED_PRODUCT_AI_ROADMAP.md#130-current-evidence-boundary--2026-11-09).
 Main through PR #256 and reported staging V133 include halls/seating/table booking, accounting/auto-open,

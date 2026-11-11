@@ -1,5 +1,92 @@
 # Testing / QA Smoke Strategy
 
+## Loyalty confirmation history — HT-GROWTH-LOYALTY-CONFIRM-HISTORY-FIX-01
+
+**LOCAL IMPLEMENTED / REVIEW PENDING**. The targeted-review-02 PostgreSQL/browser evidence found
+CONFIRM absent: two delivery operations plus one cancellation produced two visible entries.
+The literal acceptance test is **one CONFIRM → one CORRECT → one CANCEL**, not two corrections.
+Permanent PostgreSQL/H2 tests must prove two delivery operation receipts, one cancellation and
+exactly three ordered history entries, actual action/result/actor/time, no invented CONFIRM reason,
+linked reward position, reload/reopen and no duplicates on replay. Use a STAFF confirmer distinct
+from the OWNER/MANAGER correction actor, without changing writers. Read-only table snapshots,
+source receipts, paid neighbors and bills remain unchanged. Keep the separate multi-cycle test.
+
+HTTP/RBAC verifies own OWNER/MANAGER access and Staff/Guest/foreign/revoked omission or denial,
+including that the confirming STAFF has no management-history privilege. Chromium checks the
+three readable action labels and absent CONFIRM reason after reopening. Preserve APPLIED-only
+Guest visibility and conditional cancellation copy tests; their implementation files remain unchanged.
+Run relevant DB/HTTP/Bot/browser selectors, compile/ktlint, TypeScript/Vite and current CI result gates,
+then the required full backend/Chromium regression for the changed projection/UI. Use the confirmed
+6 GiB local full-test heap, never production changes. Old 2712/765 results are baseline, not a fresh
+PASS. Native results, input hashes and limits are in
+`backend/build/HT-GROWTH-LOYALTY-CONFIRM-HISTORY-FIX-01-REPORT.md` and
+`ht-loyalty-confirm-history-result.json`. Hosted CI, staging and real-device smoke remain OPEN.
+
+## Nth Hookah targeted review fixes — HT-GROWTH-LOYALTY-REVIEW-FIX-01
+
+**LOCAL IMPLEMENTED / REVIEW PENDING**. Confirm the three original P2 against the hash-matched
+independent review evidence; old 003 totals are baseline only, not validation of this candidate.
+Permanent PostgreSQL/H2 tests cover committed confirmation/correction/cancellation history without
+`order_audit_log`, DB actor/time/reason equality, deterministic ties, reload/replay, venue scope and
+no financial writes on read. HTTP verifies OWNER/MANAGER access, STAFF omission, Guest/foreign/
+revoked denial and private DTOs. The list regression earns N=3, applies the only reward, verifies
+zero current counters plus APPLIED=1 in general/specific reads, then next earn/multiple applications,
+status visibility and other-user isolation. Existing concurrent financial tests remain required.
+
+Bot/Chromium cover applied-only visibility, conditional cancellation copy, ordinary valid return
+versus invalid compensation, OWNER/MANAGER history after keyboard action/reload/reopen, STAFF privacy,
+plain-text reasons and narrow/dark layout. Run targeted checks before fresh full backend/Chromium,
+compile/ktlint, TypeScript/Vite and seven current CI result gates. Full backend uses the confirmed
+6 GiB **local test** heap; production settings stay unchanged. SQL/migration inventory hashes are
+unchanged: no new migrations or financial writers are part of this fix.
+
+Fresh commands/native results/file hashes are recorded in
+`backend/build/HT-GROWTH-LOYALTY-REVIEW-FIX-01-REPORT.md` and `ht-loyalty-review-fix-result.json`.
+Independent targeted review, hosted CI/full Linux fixtures, staging and Telegram/device acceptance
+remain OPEN. Menu/Dashboard deferred manual smoke is not executed.
+
+## Nth Hookah financial lifecycle — HT-GROWTH-LOYALTY-PRODUCTIZE-002 / 003
+
+Status: **LOCAL IMPLEMENTED / REVIEW PENDING** under `GROWTH-LOYALTY-PRODUCTIZE-001`.
+The 003 owner decision closes the former closed/multi-unit RESERVED correction gap.
+Keep all 002 qualification, frozen-term, legacy, reserve/issue/session-slot and compatibility cases.
+Permanent H2/PostgreSQL suites additionally require nonzero zero-skip execution for:
+
+- exact paid-unit correction at `qty > 1`, fully paid CLOSED source and closed reward quote;
+  unchanged paid neighbors, orders, bill/receipt/history snapshots; permanent exclusion on reconcile;
+- RESERVED venue-funded promise, APPLIED expense on actual issue, no pre-issue expense; cancel
+  before issue without invalid AVAILABLE restoration, debt or withholding other/future rewards;
+- same/different unit corrections, correction vs issue/cancel/checkout, actual PostgreSQL blocked
+  writers under deterministic venue-first locks, no deadlock, durable replay in separate JVMs;
+- exact operation replay, changed-payload refusal, already-corrected conflict, missing snapshot
+  refusal; ledger/audit/expense failures roll back all dependent facts;
+- expense exactly once per physical-issue version, receipt restoration/reactivation and erroneous
+  issue correction history; canceled discounted free unit never earns;
+- Owner/Manager same-venue authority and role revocation on every retry, Staff direct API/Bot denial,
+  Guest/Staff DTO privacy, real actor/source and management-only reasons.
+
+`LoyaltyPaidMigrationTest` validates nonempty PostgreSQL V135→V136 and V136→V137,
+H2 V136→V137 and V137→V138. It preserves legacy balance/timestamps/ledger, existing paid
+sales/discounts/expense amounts and all old Flyway checksums. The reviewed exact migration inventory
+includes the new tail; mutation/removal/unknown SQL/executable/symlink/historical drift must reject.
+Immutable V126 release and production guard are unchanged; full Linux runtime/cutover is a hosted gate.
+
+Chromium covers exact unit/reason/confirmation, conflict/denied/Unicode validation, preserved draft
+and stable operation id across lost response/reload, private-role rendering, actor/venue switch and
+late responses, narrow/dark layout, issue confirmation and cancel without changing closed bills.
+Telegram tests require meaningful actor-bound confirmation, role recheck, bounded callback data,
+forged financial callback denial and existing Guest text/checkout parity.
+Run targeted tests first, then fresh full backend/Chromium, compile/ktlint, TypeScript/Vite and the
+current local CI result gates. Use the previously measured 6 GiB local full-backend test heap;
+production settings are unchanged. Previous 002 totals (2663 backend/753 Chromium) are baseline
+only. Fresh 003 native results, commands and hashes are in
+`backend/build/HT-GROWTH-LOYALTY-PRODUCTIZE-003-REPORT.md` and `ht-loyalty3-result.json`.
+
+Independent review, exact-SHA hosted CI/full Linux fixtures, authorized staging and actual
+Telegram/device smoke remain OPEN. Local Chromium mocks are not live financial/device acceptance.
+The cash report has no separate bonus expense row; verify the truthful noncash loyalty fact in
+management order detail. Menu/Dashboard deferred manual smoke is not executed by this task.
+
 Current evidence boundary (2026-11-10, `HT-MENU-DESCRIPTIONS-FEATURED-FIX-01`): the PR #256 /
 HT70 release metadata below supersedes the earlier `HT-PRODUCT-DOCS-RECONCILIATION-01` staging
 V132 checkpoint. This task runs local menu regression only and performs no server/device actions.

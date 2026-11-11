@@ -10,6 +10,15 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepository
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
+import com.hookah.platform.backend.telegram.db.OrderLoyaltyExpense
+import com.hookah.platform.backend.telegram.db.OrderLoyaltyHistoryEntry
+import com.hookah.platform.backend.telegram.db.OrderLoyaltyReward
+import com.hookah.platform.backend.telegram.db.OrderLoyaltyUnit
+import com.hookah.platform.backend.telegram.db.loyaltyOrderExpenses
+import com.hookah.platform.backend.telegram.db.loyaltyOrderHistory
+import com.hookah.platform.backend.telegram.db.loyaltyOrderRewards
+import com.hookah.platform.backend.telegram.db.loyaltyOrderUnits
+import com.hookah.platform.backend.telegram.db.lq
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -95,6 +104,10 @@ data class OrderDetail(
     val promotionDiscounts: List<OrderPromotionDiscount> = emptyList(),
     val serviceCharges: List<OrderServiceChargeDetail> = emptyList(),
     val pendingShiftExtension: OrderPendingShiftExtension? = null,
+    val loyaltyRewards: List<OrderLoyaltyReward> = emptyList(),
+    val loyaltyExpenses: List<OrderLoyaltyExpense> = emptyList(),
+    val loyaltyUnits: List<OrderLoyaltyUnit> = emptyList(),
+    val loyaltyHistory: List<OrderLoyaltyHistoryEntry> = emptyList(),
 )
 
 data class OrderPendingShiftExtension(
@@ -681,6 +694,25 @@ class VenueOrdersRepository(
         return items
     }
 
+    suspend fun loadOrderDetailForBatch(
+        venueId: Long,
+        batchId: Long,
+    ): OrderDetail? {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val order =
+            withContext(Dispatchers.IO) {
+                ds.connection.use { c ->
+                    c.lq(
+                        "SELECT b.order_id FROM order_batches b JOIN " +
+                            "orders o ON o.id = b.order_id WHERE b.id = ? " +
+                            "AND o.venue_id = ?",
+                        batchId, venueId,
+                    ) { it.getLong(1) }.singleOrNull()
+                }
+            } ?: return null
+        return loadOrderDetail(venueId, order)
+    }
+
     suspend fun loadOrderDetail(
         venueId: Long,
         orderId: Long,
@@ -854,7 +886,133 @@ class VenueOrdersRepository(
             promotionDiscounts = mappedBatches.flatMap { it.promotionDiscounts }.mergePromotionDiscounts(),
             serviceCharges = serviceCharges,
             pendingShiftExtension = pendingShiftExtension,
+            loyaltyRewards = connection.loyaltyOrderRewards(venueId, orderId),
+            loyaltyExpenses = connection.loyaltyOrderExpenses(venueId, orderId),
+            loyaltyUnits = connection.loyaltyOrderUnits(venueId, orderId),
+            loyaltyHistory = connection.loyaltyOrderHistory(venueId, orderId),
         )
+    }
+
+    suspend fun correctLoyaltyDelivery(
+        venueId: Long,
+        orderId: Long,
+        redemptionId: Long,
+        actor: OrderActionActor,
+        requestId: String,
+        reason: String,
+        confirm: Boolean = false,
+    ) {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        withContext(Dispatchers.IO) {
+            ds.connection.use { c ->
+                c.autoCommit = false
+                try {
+                    val loyalty = loyaltyRepository ?: LoyaltyRepository(ds)
+                    loyalty.authorizeOperator(c, venueId, actor.userId, actor.role.name)
+                    if (selectOrderForUpdate(c, orderId, venueId) == null) throw ForbiddenException()
+                    if (confirm) {
+                        loyalty.confirmRewardDelivery(c, venueId, orderId, redemptionId, actor.userId, requestId)
+                    } else {
+                        loyalty.correctRewardDelivery(
+                            c,
+                            venueId,
+                            orderId,
+                            redemptionId,
+                            actor.userId,
+                            requestId,
+                            reason.trim(),
+                        )
+                    }
+                    c.commit()
+                } catch (e: SQLException) {
+                    c.rollback()
+                    throw DatabaseUnavailableException()
+                } catch (e: Throwable) {
+                    c.rollback()
+                    throw e
+                }
+            }
+        }
+    }
+
+    suspend fun cancelLoyaltyCompensation(
+        venueId: Long,
+        orderId: Long,
+        redemptionId: Long,
+        actor: OrderActionActor,
+        requestId: String,
+        reason: String,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { c ->
+                c.autoCommit = false
+                try {
+                    val loyalty = loyaltyRepository ?: LoyaltyRepository(ds)
+                    loyalty.authorizeOperator(c, venueId, actor.userId, actor.role.name)
+                    if (actor.role !in setOf(VenueRole.OWNER, VenueRole.MANAGER)) throw ForbiddenException()
+                    if (selectOrderForUpdate(c, orderId, venueId) == null) throw ForbiddenException()
+                    val replayed =
+                        loyalty.cancelCompensatedReward(
+                            c,
+                            venueId,
+                            orderId,
+                            redemptionId,
+                            actor.userId,
+                            requestId,
+                            reason.trim(),
+                        )
+                    c.commit()
+                    replayed
+                } catch (e: SQLException) {
+                    c.rollback()
+                    throw DatabaseUnavailableException()
+                } catch (e: Throwable) {
+                    c.rollback()
+                    throw e
+                }
+            }
+        }
+    }
+
+    suspend fun correctLoyaltyUnit(
+        venueId: Long,
+        orderId: Long,
+        unitId: Long,
+        actor: OrderActionActor,
+        requestId: String,
+        reason: String,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { c ->
+                c.autoCommit = false
+                try {
+                    val loyalty = loyaltyRepository ?: LoyaltyRepository(ds)
+                    loyalty.authorizeOperator(c, venueId, actor.userId, actor.role.name)
+                    if (actor.role !in setOf(VenueRole.OWNER, VenueRole.MANAGER)) throw ForbiddenException()
+                    if (selectOrderForUpdate(c, orderId, venueId) == null) throw ForbiddenException()
+                    val replayed =
+                        loyalty.correctPaidUnit(
+                            c,
+                            venueId,
+                            orderId,
+                            unitId,
+                            actor.userId,
+                            requestId,
+                            reason.trim(),
+                        )
+                    c.commit()
+                    replayed
+                } catch (e: SQLException) {
+                    c.rollback()
+                    throw DatabaseUnavailableException()
+                } catch (e: Throwable) {
+                    c.rollback()
+                    throw e
+                }
+            }
+        }
     }
 
     suspend fun loadAudit(
@@ -931,6 +1089,7 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         // Hall and accounting writers take venue before context/order locks. Closing an
                         // order also inserts visits (session FKs), so it must enter that hierarchy first.
                         val venueLock =
@@ -975,7 +1134,6 @@ class VenueOrdersRepository(
                         if (nextStatus == OrderWorkflowStatus.CLOSED) {
                             updateOrderStatusOnly(connection, orderId)
                             visitRepository?.recordOrderClosedVisits(connection, orderId, now.toInstant())
-                            loyaltyRepository?.accrueForClosedOrder(connection, orderId)
                         } else {
                             val batchStatus =
                                 OrderBatchStatus.fromWorkflow(nextStatus)
@@ -1048,6 +1206,16 @@ class VenueOrdersRepository(
                                     ),
                             )
                         }
+                        if (nextStatus == OrderWorkflowStatus.DELIVERED && changedBatchId != null) {
+                            loyaltyRepository?.confirmBatchDelivery(
+                                connection,
+                                venueId,
+                                orderId,
+                                listOf(changedBatchId),
+                                actor.userId,
+                            )
+                        }
+                        loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -1084,6 +1252,7 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val batchRow =
                             selectBatchForUpdate(connection, venueId, batchId) ?: run {
                                 runCatching { connection.rollback() }
@@ -1164,6 +1333,16 @@ class VenueOrdersRepository(
                                             nextStatus.toWorkflow().toApi(),
                                 ),
                         )
+                        if (nextStatus == OrderBatchStatus.DELIVERED) {
+                            loyaltyRepository?.confirmBatchDelivery(
+                                connection,
+                                venueId,
+                                batchRow.orderId,
+                                listOf(batchId),
+                                actor.userId,
+                            )
+                        }
+                        loyaltyRepository?.reconcileOrder(connection, venueId, batchRow.orderId, actor.userId)
                         connection.commit()
                         BatchStatusUpdateResult(
                             orderId = batchRow.orderId,
@@ -1199,6 +1378,7 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
                                 runCatching { connection.rollback() }
@@ -1281,6 +1461,7 @@ class VenueOrdersRepository(
                                     ),
                             )
                         }
+                        loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -1315,6 +1496,7 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
                                 runCatching { connection.rollback() }
@@ -1397,6 +1579,14 @@ class VenueOrdersRepository(
                                     ),
                             )
                         }
+                        loyaltyRepository?.confirmBatchDelivery(
+                            connection,
+                            venueId,
+                            orderId,
+                            acceptedBatchIds,
+                            actor.userId,
+                        )
+                        loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -1433,6 +1623,7 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
                                 runCatching { connection.rollback() }
@@ -1504,6 +1695,7 @@ class VenueOrdersRepository(
                                     idempotencyKey = "batch_status_changed:$venueId:$orderId:$latestBatchId:closed",
                                 ),
                         )
+                        loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -1540,6 +1732,7 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
                                 runCatching { connection.rollback() }
@@ -1613,6 +1806,7 @@ class VenueOrdersRepository(
                                     idempotencyKey = "batch_status_changed:$venueId:$orderId:$latestBatchId:rejected",
                                 ),
                         )
+                        loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -1649,6 +1843,7 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
                                 runCatching { connection.rollback() }
@@ -1723,6 +1918,7 @@ class VenueOrdersRepository(
                             reasonCode = "VENUE_ITEM_EXCLUDED_FROM_BILL",
                             reasonText = reasonText,
                         )
+                        loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
                         connection.commit()
                         true
                     } catch (e: SQLException) {
@@ -1753,6 +1949,7 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
                                 runCatching { connection.rollback() }
@@ -1762,6 +1959,20 @@ class VenueOrdersRepository(
                         if (current == OrderWorkflowStatus.CLOSED) {
                             runCatching { connection.rollback() }
                             return@use false
+                        }
+                        val returnedReward =
+                            connection.prepareStatement(
+                                "SELECT id FROM loyalty_redemptions WHERE order_batch_item_id = ? AND " +
+                                    "origin = 'PAYMENT_POLICY' AND status = 'CANCELED'",
+                            ).use {
+                                it.setLong(1, batchItemId)
+                                it.executeQuery().use { rows -> rows.next() }
+                            }
+                        if (returnedReward) {
+                            throw InvalidInputException(
+                                "Награда возвращена гостю. Добавьте позицию новым заказом, чтобы заново " +
+                                    "проверить право на бонус.",
+                            )
                         }
                         val now = OffsetDateTime.now(ZoneOffset.UTC)
                         val updated =
@@ -1833,6 +2044,7 @@ class VenueOrdersRepository(
                             reasonCode = "VENUE_ITEM_RESTORED_TO_BILL",
                             reasonText = null,
                         )
+                        loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
                         connection.commit()
                         true
                     } catch (e: SQLException) {
@@ -1864,6 +2076,7 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
                                 runCatching { connection.rollback() }
@@ -1955,6 +2168,7 @@ class VenueOrdersRepository(
                         } catch (_: SQLException) {
                             // Audit must not roll back the guest-facing correction of an unavailable item.
                         }
+                        loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
                         connection.commit()
                         CancelBatchItemResult(
                             orderId = orderId,
@@ -1996,6 +2210,7 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
                                 runCatching { connection.rollback() }

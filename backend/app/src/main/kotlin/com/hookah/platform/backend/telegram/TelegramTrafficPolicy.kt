@@ -319,6 +319,8 @@ class TelegramTrafficPolicy private constructor(
                 "fb_reply:",
                 "sc_ob_a:",
                 "sc_ob_d:",
+                "loyalty_issue_ok:",
+                "loyalty_issue_no:",
                 "sc_se_a:",
                 "sc_se_r:",
                 "sc_oc_ask:",
