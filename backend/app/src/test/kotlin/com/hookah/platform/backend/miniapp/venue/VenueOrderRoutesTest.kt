@@ -16,6 +16,9 @@ import com.hookah.platform.backend.telegram.StaffBillUpdateChange
 import com.hookah.platform.backend.telegram.StaffBillUpdateNotifier
 import com.hookah.platform.backend.telegram.StaffBillUpdatedNotification
 import com.hookah.platform.backend.telegram.StaffChatNotificationResult
+import com.hookah.platform.backend.telegram.db.le
+import com.hookah.platform.backend.telegram.db.li
+import com.hookah.platform.backend.telegram.db.lq
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
@@ -30,6 +33,10 @@ import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.h2.jdbcx.JdbcDataSource
 import java.sql.DriverManager
 import java.sql.Statement
@@ -40,11 +47,670 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class VenueOrderRoutesTest {
     private val json = Json { ignoreUnknownKeys = true }
     private val appEnv = "test"
+
+    @Test
+    fun `review P2 management history exposes committed reasons only to own owner and manager`() =
+        testApplication {
+            val jdbc = buildJdbcUrl("loyalty-history-review")
+            val config = buildConfig(jdbc)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venue = seedVenueWithRole(jdbc, TELEGRAM_USER_ID, "OWNER")
+            val data = seedPaidLoyaltyHttp(jdbc, venue)
+            val token = issueToken(config)
+            val correctionReason = "Ошибка выдачи: внутренний комментарий <img src=x>"
+            val cancellationReason = "Отменён невыданный бонус: внутренний комментарий"
+
+            suspend fun post(
+                action: String,
+                reason: String,
+                id: String = UUID.randomUUID().toString(),
+                who: String = token,
+            ) = client.post(
+                "/api/venue/orders/${data.quote}/loyalty/${data.redemption}/$action?venueId=$venue",
+            ) {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $who")
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                }
+                setBody("""{"requestId":"$id","reason":"$reason"}""")
+            }
+            val ds =
+                JdbcDataSource().apply {
+                    setURL(jdbc)
+                    user = "sa"
+                    password = ""
+                }
+            ds.connection.use { c ->
+                c.le("INSERT INTO venue_members(venue_id,user_id,role) VALUES (?,9910003,'STAFF')", venue)
+            }
+            val staffToken = issueToken(config, 9910003)
+            val confirm = UUID.randomUUID().toString()
+            assertEquals(HttpStatusCode.OK, post("confirm-delivery", "", confirm, staffToken).status)
+            val correct = UUID.randomUUID().toString()
+            val cancel = UUID.randomUUID().toString()
+            assertEquals(HttpStatusCode.OK, post("correct-delivery", correctionReason, correct).status)
+            VenueOrdersRepository(ds).correctLoyaltyUnit(
+                venue,
+                data.source,
+                data.unit,
+                com.hookah.platform.backend.miniapp.venue.orders.OrderActionActor(TELEGRAM_USER_ID, VenueRole.OWNER),
+                UUID.randomUUID().toString(),
+                "Ошибочно учтена исходная единица",
+            )
+            assertEquals(HttpStatusCode.OK, post("cancel-compensation", cancellationReason, cancel).status)
+            assertEquals(HttpStatusCode.OK, post("confirm-delivery", "", confirm, staffToken).status)
+            assertEquals(HttpStatusCode.OK, post("correct-delivery", correctionReason, correct).status)
+            assertEquals(HttpStatusCode.OK, post("cancel-compensation", cancellationReason, cancel).status)
+
+            suspend fun get(
+                v: Long = venue,
+                who: String = token,
+            ) = client.get("/api/venue/orders/${data.quote}?venueId=$v") {
+                headers { append(HttpHeaders.Authorization, "Bearer $who") }
+            }
+            val before =
+                ds.connection.use {
+                        c ->
+                    listOf("audit_log", "guest_loyalty_ledger").map {
+                            t ->
+                        c.lq("SELECT count(*) FROM $t") { it.getInt(1) }.single()
+                    }
+                }
+            val owner = Json.parseToJsonElement(get().bodyAsText()).jsonObject.getValue("order").jsonObject
+            val history = owner.getValue("loyaltyHistory").jsonArray
+            assertEquals(3, history.size)
+            assertEquals(
+                setOf(correctionReason, cancellationReason),
+                history.mapNotNull {
+                    it.jsonObject["reason"]?.jsonPrimitive?.contentOrNull
+                }.toSet(),
+            )
+            assertEquals(
+                listOf("DELIVERY_CONFIRMED", "DELIVERY_CORRECTED", "COMPENSATION_CANCELED"),
+                history.map { it.jsonObject.getValue("action").jsonPrimitive.content },
+            )
+            assertEquals(
+                listOf("REWARD_APPLIED", "DELIVERY_MARK_CORRECTED", "UNISSUED_COMPENSATION_CANCELED"),
+                history.map { it.jsonObject.getValue("result").jsonPrimitive.content },
+            )
+            assertEquals(
+                listOf("9910003", TELEGRAM_USER_ID.toString(), TELEGRAM_USER_ID.toString()),
+                history.map { it.jsonObject.getValue("actorUserId").jsonPrimitive.content },
+            )
+            assertNull(history.first().jsonObject["reason"]?.jsonPrimitive?.contentOrNull)
+            val issuingStaff = get(who = staffToken)
+            assertEquals(HttpStatusCode.OK, issuingStaff.status)
+            assertFalse(
+                "loyaltyHistory" in
+                    Json.parseToJsonElement(issuingStaff.bodyAsText()).jsonObject
+                        .getValue("order").jsonObject,
+            )
+            assertTrue(history.all { it.jsonObject.getValue("occurredAt").jsonPrimitive.content.isNotBlank() })
+            assertTrue(VenueOrdersRepository(ds).loadAudit(venue, data.quote).isEmpty())
+            repeat(2) {
+                assertEquals(
+                    history,
+                    Json.parseToJsonElement(
+                        get().bodyAsText(),
+                    ).jsonObject.getValue("order").jsonObject.getValue("loyaltyHistory"),
+                )
+            }
+            ds.connection.use {
+                it.le("UPDATE venue_members SET role='ADMIN' WHERE venue_id=? AND user_id=?", venue, TELEGRAM_USER_ID)
+            }
+            assertEquals(
+                history,
+                Json.parseToJsonElement(
+                    get().bodyAsText(),
+                ).jsonObject.getValue("order").jsonObject.getValue("loyaltyHistory"),
+            )
+            ds.connection.use {
+                it.le("UPDATE venue_members SET role='STAFF' WHERE venue_id=? AND user_id=?", venue, TELEGRAM_USER_ID)
+            }
+            val staff = get().bodyAsText()
+            assertFalse("loyaltyHistory" in Json.parseToJsonElement(staff).jsonObject.getValue("order").jsonObject)
+            assertFalse(staff.contains(correctionReason))
+            assertFalse(staff.contains(cancellationReason))
+            val guest = issueToken(config, 9910002)
+            assertEquals(HttpStatusCode.Forbidden, get(who = guest).status)
+            val guestBody =
+                client.get("/api/guest/loyalty") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guest") }
+                }.bodyAsText()
+            for (internal in listOf(
+                "loyaltyHistory",
+                correctionReason,
+                cancellationReason,
+                "actorUserId",
+                "compensationCancellation",
+            )) assertFalse(guestBody.contains(internal), internal)
+            val foreign = seedVenueWithRole(jdbc, TELEGRAM_USER_ID, "OWNER")
+            assertEquals(HttpStatusCode.NotFound, get(foreign).status)
+            ds.connection.use {
+                it.le(
+                    "DELETE FROM venue_members WHERE venue_id=? AND user_id=?",
+                    venue,
+                    TELEGRAM_USER_ID,
+                )
+            }
+            assertEquals(HttpStatusCode.Forbidden, get().status)
+            assertEquals(
+                before,
+                ds.connection.use {
+                        c ->
+                    listOf("audit_log", "guest_loyalty_ledger").map {
+                            t ->
+                        c.lq("SELECT count(*) FROM $t") { it.getInt(1) }.single()
+                    }
+                },
+            )
+        }
+
+    @Test
+    fun `review P2 guest HTTP keeps used only program and scoped counts without private history`() =
+        testApplication {
+            val jdbc = buildJdbcUrl("loyalty-used-review")
+            val config = buildConfig(jdbc)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venue = seedVenueWithRole(jdbc, TELEGRAM_USER_ID, "OWNER")
+            val data = seedPaidLoyaltyHttp(jdbc, venue)
+            val token = issueToken(config)
+            val confirmed =
+                client.post(
+                    "/api/venue/orders/${data.quote}/loyalty/${data.redemption}/confirm-delivery?venueId=$venue",
+                ) {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"requestId":"${UUID.randomUUID()}","reason":""}""")
+                }
+            ;assertEquals(HttpStatusCode.OK, confirmed.status)
+
+            suspend fun guest(
+                suffix: String = "",
+                user: Long = 9910002,
+            ) = client.get("/api/guest/loyalty$suffix") {
+                headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config,user)}") }
+            }
+            val all = guest()
+            val selected = guest("?venueId=$venue")
+            assertEquals(HttpStatusCode.OK, all.status)
+            assertEquals(HttpStatusCode.OK, selected.status)
+            val item =
+                Json.parseToJsonElement(
+                    all.bodyAsText(),
+                ).jsonObject.getValue("items").jsonArray.single().jsonObject
+            assertEquals(
+                listOf(
+                    "0",
+                    "0",
+                    "0",
+                    "1",
+                ),
+                listOf("progressCount", "rewardsAvailable", "rewardsReserved", "rewardsApplied").map {
+                    item.getValue(it).jsonPrimitive.content
+                },
+            )
+            assertEquals(
+                item,
+                Json.parseToJsonElement(selected.bodyAsText()).jsonObject.getValue("items").jsonArray.single(),
+            )
+            assertEquals(
+                0,
+                Json.parseToJsonElement(guest(user = 9910003).bodyAsText()).jsonObject.getValue("items").jsonArray.size,
+            )
+            for (internal in listOf(
+                "loyaltyHistory",
+                "actorUserId",
+                "compensationCancellation",
+                "venueFunded",
+            )) assertFalse(item.toString().contains(internal), internal)
+        }
+
+    @Test
+    fun `loyalty unit HTTP correction is manager only durable scoped and refuses a second intent`() =
+        testApplication {
+            val jdbc = buildJdbcUrl("loyalty-unit-http")
+            val config = buildConfig(jdbc)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venue = seedVenueWithRole(jdbc, TELEGRAM_USER_ID, "OWNER")
+            val data = seedPaidLoyaltyHttp(jdbc, venue)
+            val token = issueToken(config)
+            val request = UUID.randomUUID().toString()
+
+            suspend fun submit(
+                id: String = request,
+                reason: String = "Исправлена одна ошибочная единица",
+            ) = client.post(
+                "/api/venue/orders/${data.source}/loyalty/unit" +
+                    "s/${data.unit}/correct?venueId=$venue",
+            ) {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $token")
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                }
+                setBody("""{"requestId":"$id","reason":"$reason"}""")
+            }
+            val first = submit()
+            assertEquals(HttpStatusCode.OK, first.status)
+            val firstBody = Json.parseToJsonElement(first.bodyAsText()).jsonObject
+            assertEquals("false", firstBody.getValue("replayed").jsonPrimitive.content)
+            val unit =
+                firstBody.getValue("order").jsonObject.getValue("loyaltyUnits").jsonArray.first {
+                    it.jsonObject.getValue("id").jsonPrimitive.content == data.unit.toString()
+                }.jsonObject
+            assertEquals("Исправлена одна ошибочная единица", unit.getValue("correctionReason").jsonPrimitive.content)
+            assertEquals("false", unit.getValue("canCorrect").jsonPrimitive.content)
+            assertEquals(
+                "true",
+                Json.parseToJsonElement(submit().bodyAsText()).jsonObject.getValue("replayed").jsonPrimitive.content,
+            )
+            assertEquals(HttpStatusCode.BadRequest, submit(reason = "Подмена причины").status)
+            val conflict = submit(UUID.randomUUID().toString())
+            assertEquals(HttpStatusCode.Conflict, conflict.status)
+            assertTrue(conflict.bodyAsText().contains("уже скорректирована"))
+            DriverManager.getConnection(jdbc, "sa", "").use { c ->
+                c.le(
+                    "UPDATE venue_members SET role='STAFF' WHERE " +
+                        "venue_id=? AND user_id=?",
+                    venue,
+                    TELEGRAM_USER_ID,
+                )
+            }
+            assertEquals(HttpStatusCode.Forbidden, submit().status)
+            DriverManager.getConnection(jdbc, "sa", "").use {
+                    c ->
+                assertEquals(1, c.lq("SELECT count(*) FROM loyalty_unit_corrections") { it.getInt(1) }.single())
+            }
+        }
+
+    @Test
+    fun `loyalty management metadata stays out of staff and guest DTO while sponsored discount remains`() =
+        testApplication {
+            val jdbc = buildJdbcUrl("loyalty-private-http")
+            val config = buildConfig(jdbc)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venue = seedVenueWithRole(jdbc, TELEGRAM_USER_ID, "OWNER")
+            val data = seedPaidLoyaltyHttp(jdbc, venue)
+            val token = issueToken(config)
+
+            suspend fun getOrder(id: Long) =
+                client.get("/api/venue/orders/$id?venueId=$venue") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            val before =
+                Json.parseToJsonElement(
+                    getOrder(data.quote).bodyAsText(),
+                ).jsonObject.getValue("order").jsonObject.getValue("bill")
+            val secret = "СЛУЖЕБНЫЙ СЕКРЕТ только управляющему"
+            val correction =
+                client.post(
+                    "/api/venue/orders/${data.source}/loyalty/unit" +
+                        "s/${data.unit}/correct?venueId=$venue",
+                ) {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"requestId":"${UUID.randomUUID()}","reason":"$secret"}""")
+                }
+            assertEquals(HttpStatusCode.OK, correction.status)
+            assertTrue(getOrder(data.source).bodyAsText().contains(secret))
+            val confirmed =
+                client.post(
+                    "/api/venue/orders/${data.quote}/loyalty/" +
+                        "${data.redemption}/confirm-delivery?venueId=$venue",
+                ) {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"requestId":"${UUID.randomUUID()}","reason":"Подтверждена фактическая выдача"}""")
+                }
+            assertEquals(HttpStatusCode.OK, confirmed.status, confirmed.bodyAsText())
+            val manager =
+                Json.parseToJsonElement(
+                    getOrder(data.quote).bodyAsText(),
+                ).jsonObject.getValue("order").jsonObject
+            assertEquals(before, manager.getValue("bill"))
+            assertEquals(1, manager.getValue("loyaltyExpenses").jsonArray.size)
+            DriverManager.getConnection(jdbc, "sa", "").use { c ->
+                c.le(
+                    "UPDATE venue_members SET role='STAFF' WHERE " +
+                        "venue_id=? AND user_id=?",
+                    venue,
+                    TELEGRAM_USER_ID,
+                )
+            }
+            val staffSource = getOrder(data.source).bodyAsText()
+            assertFalse(staffSource.contains(secret))
+            val staff =
+                Json.parseToJsonElement(
+                    getOrder(data.quote).bodyAsText(),
+                ).jsonObject.getValue("order").jsonObject
+            assertFalse("loyaltyUnits" in staff)
+            assertFalse("loyaltyExpenses" in staff)
+            val reward = staff.getValue("loyaltyRewards").jsonArray.single().jsonObject
+            assertEquals("true", reward.getValue("venueFunded").jsonPrimitive.content)
+            assertEquals("false", reward.getValue("correctionAllowed").jsonPrimitive.content)
+            val guest =
+                client.get("/api/guest/loyalty") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config,9910002)}") }
+                }
+            assertEquals(HttpStatusCode.OK, guest.status)
+            val guestText = guest.bodyAsText()
+            for (privateValue in listOf(
+                secret,
+                "funding_basis",
+                "venueFunded",
+                "paid_unit_id",
+                "correctionReason",
+                "loyaltyExpenses",
+                "paymentFact",
+            )) assertFalse(guestText.contains(privateValue), privateValue)
+            val other =
+                client.get("/api/guest/loyalty") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config,9910003)}") }
+                }
+            assertEquals(0, Json.parseToJsonElement(other.bodyAsText()).jsonObject.getValue("items").jsonArray.size)
+        }
+
+    @Test
+    fun `loyalty compensation cancel HTTP denies staff and foreign scope before writes`() =
+        testApplication {
+            val jdbc = buildJdbcUrl("loyalty-cancel-http")
+            val config = buildConfig(jdbc)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venue = seedVenueWithRole(jdbc, TELEGRAM_USER_ID, "OWNER")
+            val data = seedPaidLoyaltyHttp(jdbc, venue)
+            val token = issueToken(config)
+            val request = UUID.randomUUID().toString()
+
+            suspend fun cancel(v: Long = venue) =
+                client.post(
+                    "/api/venue/orders/${data.quote}/loyalty/" +
+                        "${data.redemption}/cancel-compensation?venueI" +
+                        "d=$v",
+                ) {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"requestId":"$request","reason":"Гость не получил бонус и отказался от него"}""")
+                }
+            val correction =
+                client.post(
+                    "/api/venue/orders/${data.source}/loyalty/unit" +
+                        "s/${data.unit}/correct?venueId=$venue",
+                ) {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"requestId":"${UUID.randomUUID()}","reason":"Ошибка единицы"}""")
+                }
+            ;assertEquals(HttpStatusCode.OK, correction.status)
+            val foreign = seedVenueWithRole(jdbc, TELEGRAM_USER_ID, "MANAGER")
+            assertEquals(HttpStatusCode.Forbidden, cancel(foreign).status)
+            DriverManager.getConnection(jdbc, "sa", "").use { c ->
+                c.le(
+                    "UPDATE venue_members SET role='STAFF' WHERE " +
+                        "venue_id=? AND user_id=?",
+                    venue,
+                    TELEGRAM_USER_ID,
+                )
+            }
+            assertEquals(HttpStatusCode.Forbidden, cancel().status)
+            DriverManager.getConnection(jdbc, "sa", "").use { c ->
+                assertEquals(
+                    0,
+                    c.lq(
+                        "SELECT count(*) FROM " +
+                            "loyalty_compensation_cancellations",
+                    ) { it.getInt(1) }.single(),
+                )
+                ;c.le(
+                    "UPDATE venue_members SET role='ADMIN' WHERE " +
+                        "venue_id=? AND user_id=?",
+                    venue,
+                    TELEGRAM_USER_ID,
+                )
+            }
+            assertEquals(HttpStatusCode.OK, cancel().status)
+            assertEquals(
+                "true",
+                Json.parseToJsonElement(cancel().bodyAsText()).jsonObject.getValue("replayed").jsonPrimitive.content,
+            )
+            DriverManager.getConnection(jdbc, "sa", "").use { c ->
+                c.le(
+                    "DELETE FROM venue_members WHERE venue_id=? " +
+                        "AND user_id=?",
+                    venue,
+                    TELEGRAM_USER_ID,
+                )
+            }
+            assertEquals(HttpStatusCode.Forbidden, cancel().status)
+        }
+
+    private data class LoyaltyHttpSeed(val source: Long, val quote: Long, val unit: Long, val redemption: Long)
+
+    private fun seedPaidLoyaltyHttp(
+        jdbc: String,
+        venue: Long,
+    ): LoyaltyHttpSeed =
+        runBlocking {
+            val ds =
+                JdbcDataSource().apply {
+                    setURL(jdbc)
+                    user = "sa"
+                    password = ""
+                }
+            ds.connection.use { c -> c.le("INSERT INTO users(telegram_user_id) VALUES (9910002),(9910003)") }
+            val repo = com.hookah.platform.backend.telegram.db.LoyaltyRepository(ds)
+            val program = repo.createProgram(venue, 3, TELEGRAM_USER_ID).id
+            repo.setProgramStatus(venue, program, com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus.ACTIVE)
+            val accounting = com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepository(ds)
+            val shift =
+                accounting.execute(
+                    venue,
+                    TELEGRAM_USER_ID,
+                    com.hookah.platform.backend.miniapp.venue.accounting.AccountingCommand(
+                        UUID.randomUUID().toString(),
+                        "OPEN",
+                    ),
+                ).shiftId
+            val ids =
+                ds.connection.use { c ->
+                    val table = c.li("INSERT INTO venue_tables(venue_id,table_number) VALUES (?,1)", venue)
+                    val session =
+                        c.li(
+                            "INSERT INTO " +
+                                "table_sessions(venue_id,table_id,status,start" +
+                                "ed_at,last_activity_at,expires_at) VALUES " +
+                                "(?,?,'ACTIVE',CURRENT_TIMESTAMP,CURRENT_TIMES" +
+                                "TAMP,TIMESTAMP '2099-01-01 00:00:00')",
+                            venue,
+                            table,
+                        )
+                    val category =
+                        c.li(
+                            "INSERT INTO " +
+                                "menu_categories(venue_id,name,category_type) " +
+                                "VALUES (?,'Hookahs','HOOKAH')",
+                            venue,
+                        )
+                    val item =
+                        c.li(
+                            "INSERT INTO " +
+                                "menu_items(venue_id,category_id,name,price_mi" +
+                                "nor,currency) VALUES " +
+                                "(?,?,'Hookah',1000,'RUB')",
+                            venue,
+                            category,
+                        )
+
+                    fun order(
+                        qty: Int,
+                        closed: Boolean,
+                    ): List<Long> {
+                        val order =
+                            c.li(
+                                "INSERT INTO " +
+                                    "orders(venue_id,table_id,table_session_id,sta" +
+                                    "tus,accounting_shift_id) VALUES (?,?,?,?,?)",
+                                venue,
+                                table,
+                                session,
+                                if (closed)"CLOSED" else "ACTIVE",
+                                shift,
+                            )
+                        val batch =
+                            c.li(
+                                "INSERT INTO " +
+                                    "order_batches(order_id,author_user_id,source," +
+                                    "status) VALUES (?,9910002,'MINIAPP',?)",
+                                order,
+                                if (closed)"DELIVERED" else "ACCEPTED",
+                            )
+                        val line =
+                            c.li(
+                                "INSERT INTO " +
+                                    "order_batch_items(order_batch_id,menu_item_id" +
+                                    ",qty,base_unit_price_minor_snapshot,item_name" +
+                                    "_snapshot,currency_snapshot,loyalty_semantic_" +
+                                    "type_snapshot,fulfilled_at,fulfilled_by_user_" +
+                                    "id) VALUES " +
+                                    "(?,?,?,1000,'Hookah','RUB','HOOKAH',?,?)",
+                                batch,
+                                item,
+                                qty,
+                                if (closed)java.sql.Timestamp.from(Instant.parse("2026-10-01T10:00:00Z"))else null,
+                                if (closed)TELEGRAM_USER_ID else null,
+                            )
+                        return listOf(order, batch, line)
+                    }
+                    listOf(order(2, true), order(3, false), listOf(item))
+                }
+            val source = accounting.state(venue, TELEGRAM_USER_ID).current!!.sales.single { it.orderId == ids[0][0] }
+            accounting.execute(
+                venue,
+                TELEGRAM_USER_ID,
+                com.hookah.platform.backend.miniapp.venue.accounting.AccountingCommand(
+                    UUID.randomUUID().toString(),
+                    "PAY",
+                    shiftId = shift,
+                    saleId = source.id,
+                    expectedVersion = source.version,
+                    paymentMethod = "CASH",
+                    amountMinor = source.payable,
+                ),
+            )
+            ds.connection.use {
+                    c ->
+                c.autoCommit = false
+                repo.applyRedemptionForBatch(
+                    c,
+                    ids[1][0],
+                    ids[1][1],
+                    venue,
+                    9910002,
+                    listOf(
+                        com.hookah.platform.backend.telegram.db.LoyaltyCheckoutItem(
+                            ids[1][2],
+                            ids[2][0],
+                            "Hookah",
+                            3,
+                            1000,
+                            "RUB",
+                            com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType.HOOKAH,
+                        ),
+                    ),
+                )
+                c.commit()
+            }
+            ds.connection.use {
+                    c ->
+                LoyaltyHttpSeed(
+                    ids[0][0],
+                    ids[1][0],
+                    c.lq("SELECT id FROM loyalty_paid_units ORDER BY id") {
+                        it.getLong(1)
+                    }.first(),
+                    c.lq("SELECT id FROM loyalty_redemptions") { it.getLong(1) }.single(),
+                )
+            }
+        }
+
+    @Test
+    fun `loyalty delivery correction denies staff and rechecks revoked membership`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("loyalty-delivery-permissions")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venue = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "STAFF")
+            val token = issueToken(config)
+            val path = "/api/venue/orders/999/loyalty/999/correct-delivery?venueId=$venue"
+
+            suspend fun send() =
+                client.post(path) {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"requestId":"${UUID.randomUUID()}","reason":"Ошибочная отметка"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, send().status)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use {
+                    c ->
+                c.createStatement().use {
+                    it.executeUpdate("DELETE FROM venue_members WHERE venue_id=$venue AND user_id=$TELEGRAM_USER_ID")
+                }
+            }
+            assertEquals(HttpStatusCode.Forbidden, send().status)
+        }
+
+    @Test
+    fun `loyalty confirmation cannot target order in another venue`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("loyalty-delivery-foreign")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val own = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "MANAGER")
+            val foreign = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID + 1, "OWNER")
+            val table = seedTable(jdbcUrl, foreign, 10)
+            val order = seedOrder(jdbcUrl, foreign, table, "ACTIVE")
+            val token = issueToken(config)
+            val result =
+                client.post("/api/venue/orders/$order/loyalty/999/confirm-delivery?venueId=$own") {
+                    headers {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                    }
+                    setBody("""{"requestId":"${UUID.randomUUID()}","reason":"Подтверждена фактическая выдача"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, result.status)
+        }
 
     @Test
     fun `manager can update status and audit is recorded`() =
@@ -1301,9 +1967,12 @@ class VenueOrderRoutesTest {
         )
     }
 
-    private fun issueToken(config: MapApplicationConfig): String {
+    private fun issueToken(
+        config: MapApplicationConfig,
+        userId: Long = TELEGRAM_USER_ID,
+    ): String {
         val service = SessionTokenService(SessionTokenConfig.from(config, appEnv))
-        return service.issueToken(TELEGRAM_USER_ID).token
+        return service.issueToken(userId).token
     }
 
     private fun seedVenueWithRole(

@@ -54,6 +54,7 @@
 
 | ID | Feature | Priority | Current status | Blocking impact |
 | --- | --- | --- | --- | --- |
+| [`GROWTH-LOYALTY-PRODUCTIZE-001`](#growth-loyalty-productize-001) | Nth Hookah financial cycle | P1 | `PLANNED` | Local paid-lifecycle validation/review precedes separately authorized financial/device acceptance. |
 | [`ORDER-CONTEXT-MANUAL-001`](#order-context-manual-001) | Guest order/tab authorization and monetary isolation | P0 privacy | `BLOCKED_BY_ENVIRONMENT` | The merged feature has green CI; staging privacy/order release evidence remains blocked by environment prerequisites. |
 | [`REPEAT-MANUAL-001`](#repeat-manual-001) | Repeat as Template Phase 1 | P1 | `BLOCKED_BY_ENVIRONMENT` | Repeat production-readiness remains open for environment-dependent parity/privacy/context scenarios; independent bounded development may continue. |
 | [`CATALOG-SEARCH-MANUAL-001`](#catalog-search-manual-001) | Catalog Search and Filter Phase 1 | P2 | `BLOCKED_BY_ENVIRONMENT` | Does not block the current MVP/release; required before catalog pagination, ranking, map/geo or a large pilot rollout. |
@@ -583,3 +584,25 @@ A и Guest B.
 - [`docs/TESTING_QA_SMOKE_STRATEGY.md`](TESTING_QA_SMOKE_STRATEGY.md)
 - [`docs/audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md`](audit/MINI_APP_LAUNCH_SMOKE_CHECKLIST.md)
 - [`docs/audit/ROLE_GUEST.md`](audit/ROLE_GUEST.md)
+
+
+## GROWTH-LOYALTY-PRODUCTIZE-001
+
+- Feature/priority/status: existing Nth Hookah earn/redeem/correction cycle; P1; PLANNED.
+- Deferred: owner-approved policies are implemented locally in HT-GROWTH-LOYALTY-PRODUCTIZE-002/003;
+  no authorized test account/venue or physical Telegram/device run is consumed by local fixes.
+- Prerequisites: completed local validation, independent review, exact-SHA CI and separately
+  authorized staging with isolated test venue/accounts and agreed restoration of test state.
+- Local automated scope: exact digital-sale settlement, frozen cycles/legacy preservation, reserve/issue/compensation, PG/H2 concurrency, rollback and API/Bot/Chromium. Local results are not live payment/device acceptance.
+- Manual steps after approval: record attributed purchases on personal/shared tabs; confirm the
+  approved payment event and partial/full settlement; cross thresholds; preview and spend once;
+  cancel/exclude/restore only test lines; correct a receipt before/after spend; pause/change terms;
+  compare Guest/Venue/History/accounting and repeat after reload/backend restart with two guests;
+  correct one paid unit of a closed multi-unit bill, preserve a reserved sponsored promise, issue/cancel
+  it, verify unchanged bill/receipts, STAFF confirmation/denial and management expense/correction history.
+- Expected: approved policy, ledger and immutable financial snapshots agree; no double earn/spend,
+  privacy leak, negative balance or unsupported automatic compensation.
+- Cleanup: only approved test data/restoration; preserve receipts/audits/ledger and prior archives;
+  never delete financial history as an incidental cleanup.
+- Result/date/actor: NOT EXECUTED / — / —. Blocks full financial/device release acceptance.
+- Related: GROWTH_RETENTION.md, ORDER_SESSION_TAB_CORE.md, TESTING_QA_SMOKE_STRATEGY.md.

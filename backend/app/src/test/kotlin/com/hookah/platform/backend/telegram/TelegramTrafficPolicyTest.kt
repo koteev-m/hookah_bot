@@ -324,6 +324,8 @@ class TelegramTrafficPolicyTest {
                 "sbc_r:10:77:reason",
                 "sbc_y:10:77:reason",
                 "fb_reply:92",
+                "loyalty_issue_ok:00000000-0000-0000-0000-000000000000",
+                "loyalty_issue_no:00000000-0000-0000-0000-000000000000",
                 "sc_ob_a:10:57",
                 "sc_ob_d:10:57",
                 "sc_se_a:10:501",

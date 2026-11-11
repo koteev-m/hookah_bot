@@ -1,5 +1,27 @@
 # Security / RBAC Permission Matrix
 
+Nth Hookah (`HT-GROWTH-LOYALTY-PRODUCTIZE-002/003`): OWNER/MANAGER alone manage their
+program and correct an exact earning unit or erroneous issue, or cancel an unissued sponsored
+promise. These operations require current membership, own venue, required reason, durable request
+id and transactional audit. STAFF has only existing ORDER_STATUS_UPDATE delivery authority and
+safe reward-status/funding explanations; STAFF never receives paid-unit correction choices,
+internal reasons/history or expense DTOs. Direct API/callback and retry cannot bypass these checks.
+Guest sees only own progress/conditions/reward state; no internal funding, correction, payment-fact
+or expense fields. Session pointers are read hints, not authority. Preview never writes.
+
+Writers lock venue → current membership → order/context → loyalty facts and recheck role after
+waiting. Corrected-unit and operation uniqueness are durable. Actor/chat-bound Telegram delivery
+confirmation still rechecks role, and cannot author a financial correction. Audit records real
+actor/source, exact unit, old/new eligibility/funding and unchanged payable; reasons are management
+only, never ordinary Guest/Bot messages. Receipts, immutable snapshots and tenant/guest attribution
+remain existing server-side sources of truth.
+
+`HT-GROWTH-LOYALTY-REVIEW-FIX-01`: `loyaltyHistory` in existing order detail is management-only
+(OWNER/MANAGER, current own-venue membership). STAFF/Guest receive no financial operation reasons,
+actor/time history or cancellation links in DTOs. Reads join the redemption's actual order/venue
+and recorded audit/operation facts; they never write financial data. Existing mutation permissions
+are unchanged. The general Guest loyalty list includes only that user's own APPLIED facts; no
+extra ordering, financial or venue authority is derived from a displayed program.
 
 ## Menu content scope — HT-MENU-DESCRIPTIONS-FEATURED-01-R1
 

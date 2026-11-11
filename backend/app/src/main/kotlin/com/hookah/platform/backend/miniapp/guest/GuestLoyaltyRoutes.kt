@@ -4,9 +4,11 @@ import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
+import com.hookah.platform.backend.telegram.db.LoyaltyCycleSummary
 import com.hookah.platform.backend.telegram.db.LoyaltyProgramTarget
 import com.hookah.platform.backend.telegram.db.LoyaltyProgramType
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
+import com.hookah.platform.backend.telegram.db.LoyaltyRewardCondition
 import io.ktor.server.application.call
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -18,6 +20,9 @@ private data class GuestLoyaltyResponse(val items: List<GuestLoyaltyProgramRespo
 
 @Serializable
 private data class GuestLoyaltyProgramResponse(
+    val programId: Long,
+    val status: String,
+    val currentSessionRewardUsed: Boolean,
     val venueId: Long,
     val venueName: String,
     val programType: String,
@@ -27,6 +32,12 @@ private data class GuestLoyaltyProgramResponse(
     val rewardsReserved: Int,
     val earnTargets: List<GuestLoyaltyTarget>,
     val rewardTargets: List<GuestLoyaltyTarget>,
+    val cycles: List<LoyaltyCycleSummary>,
+    val rewardConditions: List<LoyaltyRewardCondition>,
+    val rewardsApplied: Int,
+    val legacyProgress: Int,
+    val legacyAvailable: Int,
+    val legacyUnresolvedProgress: Int,
 )
 
 @Serializable
@@ -43,6 +54,11 @@ fun Route.guestLoyaltyRoutes(
             call.request.queryParameters["venueId"]?.let {
                 it.toLongOrNull()?.takeIf { id -> id > 0 } ?: throw InvalidInputException("Invalid venue id")
             }
+        // A read hint for the authenticated user's own reward facts, never checkout authority.
+        val sessionId =
+            call.request.queryParameters["tableSessionId"]?.let {
+                it.toLongOrNull()?.takeIf { id -> id > 0 } ?: throw InvalidInputException("Invalid session id")
+            }
         val programs =
             if (venueId != null) {
                 ensureGuestBrowseAvailableReadOnly(venueId, venues, subscriptions)
@@ -53,6 +69,18 @@ fun Route.guestLoyaltyRoutes(
         val items =
             programs.map { program ->
                 GuestLoyaltyProgramResponse(
+                    programId = program.programId,
+                    status = program.status,
+                    currentSessionRewardUsed =
+                        sessionId?.let {
+                            loyalty.rewardUsedInSession(program.venueId, program.programId, userId, it)
+                        } ?: false,
+                    cycles = program.cycles,
+                    rewardConditions = program.rewardConditions,
+                    rewardsApplied = program.rewardsApplied,
+                    legacyProgress = program.legacyProgress,
+                    legacyAvailable = program.legacyAvailable,
+                    legacyUnresolvedProgress = program.legacyUnresolvedProgress,
                     venueId = program.venueId,
                     venueName = program.venueName,
                     programType = LoyaltyProgramType.NTH_HOOKAH_FREE.dbValue,

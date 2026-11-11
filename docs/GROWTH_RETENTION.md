@@ -13,6 +13,194 @@ screen (`GuestLoyaltyRoutes`, `guestLoyalty.ts`, authenticated route and browser
 
 Статус: **current product reference / SPEC UPDATED**. Runtime-фичи growth/retention не считаются release-ready, пока для них нет требуемого CI/staging evidence. Guest visit/order history foundation, Post-Visit Feedback MVP, Guest Favorites Phase 1 and Simple Venue Promotions Phase 1 are **DONE / MVP / STAGING-SMOKE-PASSED**. Repeat as Template Phase 1 is **MVP IMPLEMENTED / LOCAL VALIDATION PASSED / DEFERRED MANUAL SMOKE**; its environment-dependent production-readiness gate remains open in [`REPEAT-MANUAL-001`](DEFERRED_MANUAL_SMOKE_BACKLOG.md#repeat-manual-001), while independent bounded development may continue. Executable Promotions Phase 2 / Happy Hours Percent is **DONE / STAGING-SMOKE-PASSED**. Gift parity is **GIFT_WITH_ITEM BOT/MINIAPP PARITY / MVP IMPLEMENTED / LOCAL VALIDATION PASSED / REVIEW REQUIRED BEFORE COMMIT**; CI and staging evidence remain open. Promotion creation audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION CREATION AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Promotion effective state clarity is **PROMOTION EFFECTIVE STATE CLARITY / DONE / MVP / STAGING-SMOKE-PASSED**. Promotion lifecycle status/archive audit is **DANGEROUS ACTION AUDIT SLICE / PROMOTION LIFECYCLE STATUS AUDIT / DONE / MVP / STAGING-SMOKE-PASSED**. Venue promotions tabs are **VENUE PROMOTIONS LIST / CURRENT AND ARCHIVED TABS UX / DONE / MVP / STAGING-SMOKE-PASSED**. Promotion configuration edit audit and broader dangerous-action audit remain partial/future.
 
+## Nth Hookah productization — HT-GROWTH-LOYALTY-PRODUCTIZE-001 / 002 / 003
+
+Owner decisions for `HT-GROWTH-LOYALTY-PRODUCTIZE-002` and `003` supersede the earlier
+CLOSED/payment, reservation, terms, limits and closed/multi-unit correction questions.
+Status: **LOCAL IMPLEMENTED / REVIEW PENDING** under the existing feature ID
+`GROWTH-LOYALTY-PRODUCTIZE-001`. Retained 001/002 fixes are not replaced. No program is
+activated automatically; old balances are neither reset nor retrospectively declared paid.
+
+### Authoritative qualification and prospective cutover
+
+- Earn requires a real digital `order:<id>` accounting sale bound to that order/venue/shift,
+  operational `orders.status = CLOSED`, no cancellation/dispute/issue, positive payable,
+  and non-void external receipts whose sum equals that sale's payable. Partial payments earn
+  nothing. Manual sales, global shift totals, bill requests and operational close are not payment.
+- Reconciliation runs inside the existing accounting mutation transaction after its immutable event
+  and audit. Receipt, command idempotency, loyalty units/ledger, balances and audit commit or roll
+  back together. The old `accrueForClosedOrder` entry point is a safe no-op for legacy callers.
+- PostgreSQL V136 / H2 V137 capture the first prospective item id and preserve existing
+  progress/rewards as `LEGACY` / `LEGACY_CUTOVER`, including a cutover snapshot of the currently
+  effective N/targets. This is a forward-use baseline, **not proof of old payment or historical
+  terms**. Old SQL/checksums and ledger rows remain intact; no mass backfill occurs.
+- Old partial progress within its cutover threshold continues the frozen legacy cycle. An old
+  progress value already outside that threshold stays preserved separately for venue review;
+  it is neither converted into guessed rewards nor deducted from new paid cycles. Legacy rewards
+  remain distinguishable from payment-origin units.
+- Only explicitly fulfilled, positive-price, attributable units qualify. Checkout stores semantic
+  type and immutable base/option price snapshots; current menu price/type never revalues them.
+  Rejected/canceled/excluded/gift units do not earn. A loyalty adjustment covers exactly one unit;
+  other charged units on that line remain eligible. Minor-unit rounding never credits more
+  positive-charge units than the line's actual payable supports.
+- Attribution uses existing guest batch idempotency, then non-venue-member batch author, then
+  personal-tab owner. Shared membership alone does not distribute a purchase. The earned unit's
+  original cycle/guest attribution is preserved for subsequent financial compensation.
+
+### Cycles, reservations and actual delivery
+
+- A cycle stores immutable N−1 and earn/reward targets. Later N/target edits affect the next
+  cycle, not a started one or earned reward. Units fill the oldest unfinished cycle under its
+  frozen targets. Historical corrections may expose several unfinished cycles; Guest reads show
+  them separately. Available rewards retain their own target snapshot; current item/option
+  availability and server price still validate in the existing checkout.
+- Preview has no writes. Checkout reserves one concrete reward and its unit in the same transaction
+  as the existing batch, promotion application/adjustment and idempotency. The financial discount
+  is persisted at reservation; confirmation never adds another discount.
+- AVAILABLE → RESERVED → APPLIED is authoritative. RESERVED is not physical delivery. The existing
+  explicit audited `Доставлено` action records fulfillment for its actual batch/items and applies
+  their reservations. CREATED, ACCEPTED and CLOSED never infer delivery, and old delivered rows
+  are not backfilled with new fulfillment facts.
+- Venue order detail also provides `Подтвердить выдачу наградного кальяна` for an explicit single
+  reward-unit confirmation, including after a corrected mark on a closed order. It uses existing
+  ORDER_STATUS_UPDATE authority, current membership and the same order transaction/locks. Confirming
+  this unit does not assert fulfillment of other paid units; normal batch delivery must precede close.
+- The DB enforces one active RESERVED/APPLIED slot per **program + guest + table session**.
+  Different guests in a shared order use their own entitlements. More batches/orders do not reset
+  the guest's visit limit. A canceled reserve frees that slot; an applied reward keeps it.
+- Delivery operations persist actor, request id, action and payload plus the previous issue fact.
+  A successful replay returns current state without applying again, even after a later correction;
+  reuse with different content fails. Delivery versions distinguish a later legitimate confirmation.
+
+### Cancellation, exact-unit correction and venue funding
+
+- Ordinary cancellation/rejection/exclusion before physical issue releases an **earned** RESERVED
+  entitlement once. An APPLIED reward is never refunded by ordinary cancellation. OWNER/MANAGER
+  alone may correct an erroneous issue with a reason and durable operation id; its prior actual
+  issue, correction and later legitimate reissue versions remain in history. A live line returns
+  to RESERVED; an already canceled line returns only a still-valid earned entitlement.
+- An OWNER/MANAGER corrects one explicit paid unit in existing order detail, including a fully
+  paid CLOSED sale or `qty > 1`. The server verifies paid-unit id, original batch/item and
+  one-based index, authenticated venue/actor, EARN provenance, fulfillment and historical
+  base/option/accounting snapshots. Missing proof rejects before writes. A reason (1–500 Unicode
+  code points), confirmation and stable operation id are required. A different operation on the
+  same corrected unit conflicts; exact replay returns current state and is identified as replay.
+- PostgreSQL V137 / H2 V138 append `loyalty_unit_corrections` and compensation cancellation
+  receipts plus funding/expense provenance fields. The correction stores original payment fact,
+  guest, cycle, historical unit price, actor/actor-label snapshot, reason and time. It deactivates
+  only that paid unit and appends an ADJUST and detailed audit. No order quantity, price, bill,
+  receipt, promotion or gift snapshot is changed. Later accounting reconciliation cannot reactivate
+  a permanently corrected unit. Historical SQL/checksums remain unchanged.
+- Unused progress/available rewards reconcile without negative balances. If the original cycle
+  already promised a RESERVED/APPLIED reward, the same redemption stays in place and changes
+  from `EARNED` to `VENUE_COMPENSATION`; audit records the cause and unchanged guest payable.
+  This is **not** a new reward credit. It neither consumes other available rewards nor withholds
+  future ones. Remaining valid contributions already allocated to that cycle stay allocated to
+  the honored promise; a later canceled unissued promise releases only its valid remainder to
+  unfinished progress. The corrected unit never returns. No guest debt is created.
+- The promised discount remains unchanged even in a closed multi-unit bill. Explicit authoritative
+  delivery moves this RESERVED reward to APPLIED as usual. An already APPLIED promise remains
+  issued. In either case the venue-funded issue creates one `loyalty_correction_expenses` fact for
+  the redemption and physical delivery version, using the original stored discount amount, with
+  actual issue and correction provenance. Concurrent/replayed correction or issue cannot duplicate
+  it. An erroneous-issue correction resolves the expense with history; legitimate reissue has its
+  own version. Receipt void/reconfirmation may resolve/reactivate the same physical-issue fact,
+  never charge twice for it.
+- Before actual issue, ordinary supported cancellation or the narrow OWNER/MANAGER action
+  «Отменить невыданную компенсацию» releases the sponsored reserve once, including after CLOSED
+  and for one free unit of a multi-unit line. This changes only the loyalty obligation: historical
+  line/discount/payable/receipts and paid neighbors are intact. No invalid entitlement returns to
+  AVAILABLE and no issue expense arises. A repeated cancellation is a no-op; a new delivery after
+  cancellation is refused. The canceled discounted unit remains ineligible for earning.
+- Voiding/correcting an earning receipt or canceling its sale still reconciles exact original paid
+  units through the existing accounting transaction and ADJUST ledger. Reconfirmed receipts retain
+  provenance/terms and never duplicate entitlement. The same venue-funded promise policy applies
+  to an underfunded reserved cycle; the old atomic-refusal limitation is removed.
+- Expense is a verifiable **noncash loyalty fact**, not a CASH/CARD/TRANSFER receipt, payment or
+  refund. Existing accounting cash totals and historical sales remain unchanged. The current cash
+  report has no dedicated projection row for this expense; managers see the linked expense in
+  order detail. This display limitation is explicit, not a fabricated accounting posting.
+- Venue → current membership → order/context → loyalty facts is the established writer lock order.
+  Correction, cancellation, delivery, checkout and accounting reconciliation use it. Each state,
+  balance, operation receipt, ledger, expense and audit write commits together or rolls back.
+  Operation receipts and corrected-unit uniqueness survive backend restart. No second order or
+  payment lifecycle is introduced.
+
+### Staff, management and Guest explanation
+
+- STAFF sees safe RESERVED/APPLIED/canceled and venue-funded explanations in existing operational
+  order views. Delivery requires a meaningful confirmation explaining actual issue and why ordinary
+  cancellation cannot restore a used reward. An earning error directs STAFF to the manager;
+  STAFF cannot correct earnings, issue marks, compensation or program settings.
+- OWNER/MANAGER sees exact eligible units, original confirmed earning event, historical price,
+  explanation of unchanged closed bills and expense timing, mandatory reason/confirmation, and
+  correction actor/time/reason. Conflicts and denial preserve the draft and explain the next safe
+  step. Unknown-result retries keep the same request id; account/venue-scoped browser drafts do
+  not grant authority. Already corrected units are marked with history, never offered as new work.
+- Telegram's existing delivery callbacks use a short actor/chat-bound expiring confirmation token;
+  role is rechecked on confirmation. Lost/restarted UI confirmation safely requires reopening;
+  financial idempotency remains in the database. Management authoring stays in Venue Mini App.
+- Guest Mini App/Bot explains confirmed full payment, frozen progress, available/reserved/used
+  rewards and that a free unit does not earn. A honored sponsored promise looks like the same
+  promised reward with the same discount, without debt or internal cause. Guest DTOs exclude
+  correction reasons, actor history, paid-unit/payment-fact ids and venue expense/funding metadata.
+
+Guest/Bot show saved cycle/reward targets. Guest refresh reloads confirmed facts, explains full shared-order settlement, and reads the authenticated user’s own session-limit hint; a client session pointer never authorizes checkout.
+
+PAUSED/ARCHIVED preserve balances and conditions. Existing active-only redemption authority is
+retained; Guest/Bot disclose the unavailable state. General `GROWTH-PROMO-COMPAT-001` remains
+**BLOCKED_PRODUCT_DECISION**: the existing loyalty-first selected-line exclusion, Happy Hours,
+Gift and manual-discount guards remain, without a new STACKABLE/EXCLUSIVE resolver.
+
+### Read visibility and cancellation guidance — HT-GROWTH-LOYALTY-REVIEW-FIX-01 / CONFIRM-HISTORY-FIX-01
+
+Status remains **LOCAL IMPLEMENTED / REVIEW PENDING**. Existing financial writers are unchanged.
+The general Guest/Bot list retains a program with the authenticated user's payment-origin APPLIED
+rewards even when progress/available/reserved are zero. It uses a scoped EXISTS rather than a
+one-to-many join, preserves ACTIVE/PAUSED/ARCHIVED visibility and does not fabricate a balance.
+Venue-specific and general counts agree; empty users do not acquire another guest's history.
+
+OWNER/MANAGER order detail includes read-only `loyaltyHistory` for **CONFIRM → CORRECT → CANCEL**.
+Authoritative payment-origin issue/correction facts are `audit_log` events
+LOYALTY_REWARD_APPLIED / LOYALTY_DELIVERY_CORRECTED; explicit compensation cancellations come from
+`loyalty_compensation_cancellations`. Each issue audit becomes one DELIVERY_CONFIRMED / REWARD_APPLIED
+entry, with its actual actor/time, including operational STAFF confirmation. Its outcome remains
+historical APPLIED even after correction clears the current issued_at and cancellation changes the
+redemption. Confirmation through existing batch delivery uses the same authoritative issue fact;
+joining each audit to all command receipts would duplicate it and is not used.
+
+`issued_at_snapshot` in delivery operations is the prior issue time, not an operation timestamp.
+CONFIRM audit normally has no reason: `reason` is nullable and the UI omits it unless the source
+event actually saved one. It never invents a reason from a role, command label or current state.
+CORRECT/CANCEL retain their stored reasons, actual actor IDs and timestamps. The ordinary
+`order_audit_log` need not contain any of these events. No copy/backfill, writer change or new
+financial table is introduced; legacy APPLIED is not reinterpreted as proof of physical issue.
+
+Entries link the original position/name and one reward unit by redemption id, without inventing an
+unrecorded physical-unit index or historical staff name. A cancellation link means the same
+redemption has that recorded cancellation; it does not assert past funding conditions. Sort is
+operation instant then stable source key. Exact replays do not add entries. Reload/reopen reads the
+same facts without changing ledger, audit, expenses, receipts, neighboring quantities/prices or bill.
+STAFF/Guest DTOs omit management history entirely; existing own-venue role checks remain authority.
+
+Guest Mini App/Bot makes cancellation conditional: before issue the status updates, and reuse
+depends on program conditions. Ordinary valid earned reserves still return once; an invalid
+venue-funded promise does not become AVAILABLE on cancellation. Guest sees the actual balance,
+without internal funding/expense/audit reasons. Operational STAFF explanations remain role scoped.
+
+### Local evidence and release boundary
+
+Permanent H2/PostgreSQL, HTTP/RBAC, Telegram and Chromium regressions cover the policy,
+including exact-unit closed bills, sponsorship/issue/cancel races, durable cross-process replay,
+rollback and private DTOs. Fresh 003 commands, native results and content hashes are recorded in
+`backend/build/HT-GROWTH-LOYALTY-PRODUCTIZE-003-REPORT.md` and `ht-loyalty3-result.json`;
+002 counts prove only the prior candidate. The local full backend uses the previously measured
+6 GiB test heap; production settings are unchanged. Hosted CI/full Linux cutover, independent
+review, staging and physical Telegram/device acceptance remain separate, unexecuted gates.
+The existing deferred manual checklist keeps the same feature ID.
+A separately authorized release must drain old runtime writers before the policy migration;
+mixed old CLOSED/APPLIED writers and new payment/reservation writers are not an admitted rollout.
+
 ## Core Rule
 
 Growth не должен превращать QR-меню в спам-канал. Retention-фичи используют только подтверждённый guest context, не создают заказ без active table context and selected tab, не обходят stop-list/menu availability and do not send marketing notifications without opt-in.
@@ -352,7 +540,7 @@ Broader Growth smoke remains future:
 - Reviews/post-visit feedback: `DONE / MVP / STAGING-SMOKE-PASSED`.
 - Manual `5/5` public review link CTA: `DONE / MVP`; automated review prompts and public review automation remain `FUTURE / disabled`.
 - Low-rating manual follow-up through exact `VENUE_CHAT`: `DONE / MVP`; Platform feedback analytics dashboard remains `FUTURE`.
-- Nth Hookah loyalty: substantial runtime foundation, `UNKNOWN_NEEDS_RESEARCH` until product/release reconciliation; points/cashback/tiers and referrals remain future.
+- Nth Hookah loyalty: the approved paid lifecycle, frozen terms and exact-unit closed/multi-unit compensation are LOCAL IMPLEMENTED / REVIEW PENDING; promised discounts are honored as venue-funded bonuses. Points/cashback/tiers and referrals remain future.
 - Manual placement foundation exists; Mini App parity is open, while charging/boosting remains a separate blocked product decision.
 - Visit history foundation: implemented on top of order/session/booking lifecycle; keep privacy, dedup and terminal-status tests in regression.
 

@@ -1264,6 +1264,7 @@ export function renderCartScreen(options: CartScreenOptions) {
           )
         })
       }
+      if (loyaltyDiscounts.length) refs.previewContent.appendChild(el('p', { className: 'status', text: 'Предпросмотр не резервирует награду. При отправке заказа сервер проверит её повторно. Бесплатной будет одна единица; она не участвует в новом накоплении.' }))
       const promotedItems = previewData.items.filter(
         (item) => item.isPromotionReward || (item.promotionAdjustment != null && item.promotionAdjustment.discountMinor > 0)
       )

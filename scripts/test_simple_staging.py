@@ -601,10 +601,10 @@ class ContractTests(unittest.TestCase):
         self.assertEqual([r['version'] for r in rows], list(range(1, 127)))
         self.assertEqual(rows[-1]['script'], 'V126__support_thread_read_message_cursor.sql')
 
-    def test_current_manifest_is_exact_append_only_v135(self):
+    def test_current_manifest_is_exact_append_only_v137(self):
         historical, current = real_manifest(True), real_manifest()
         self.assertEqual(current[:126], historical)
-        self.assertEqual([r['version'] for r in current], list(range(1, 136)))
+        self.assertEqual([r['version'] for r in current], list(range(1, 138)))
         self.assertEqual(current[126:], [
             {'version': 127, 'script': 'V127__staff_profile_photos.sql',
              'sha256': '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846', 'checksum': 881920632},
@@ -624,16 +624,20 @@ class ContractTests(unittest.TestCase):
              'sha256': 'c9aed98599540bad2cfbb5d7b9614a273ef910659e6b3bd6af82d04987c5b356', 'checksum': -2093614118},
             {'version': 135, 'script': 'V135__menu_featured_operations.sql',
              'sha256': 'a7e4cf7261d525fd724a10df71de85db2604d539e8de569aab93efd1b4185a2e', 'checksum': -19194965},
+            {'version': 136, 'script': 'V136__loyalty_paid_lifecycle.sql',
+             'sha256': 'a7a427fe485b97ed16f2d9cdbb58919ec632f87918fc6a419b8fcb15c3a6538a', 'checksum': 175921982},
+            {'version': 137, 'script': 'V137__loyalty_unit_corrections.sql',
+             'sha256': 'c0873f2adee8f39659a4c28f569425e8373517b7ba51a32a0615f6af919f27a5', 'checksum': 291752703},
         ])
         review = dict(from_manifest=s.digest(historical), to_manifest=s.digest(current),
-                      backward_compatible=True, reason='Synthetic test review of exact additive migration inventory through V135; not staging approval.')
+                      backward_compatible=True, reason='Synthetic test review of exact additive migration inventory through V137; not staging approval.')
         with self.assertRaisesRegex(s.Refused, 'EXACT_COMPATIBILITY_REVIEW'): s.compatibility(historical, current)
         s.compatibility(historical, current, review)
         for field in ('sha256', 'checksum', 'script'):
             drift = copy.deepcopy(current); drift[0][field] = 'changed'
             with self.subTest(field=field), self.assertRaisesRegex(s.Refused, 'APPEND_ONLY'):
                 s.compatibility(historical, drift, review)
-        for version in (127, 128, 129, 130, 131, 132, 133, 134, 135):
+        for version in (127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137):
             for field in ('sha256', 'checksum', 'script'):
                 drift = copy.deepcopy(current); drift[version - 1][field] = 'changed'
                 with self.subTest(version=version, field=field), self.assertRaisesRegex(s.Refused, 'EXACT_COMPATIBILITY_REVIEW'):
@@ -648,7 +652,7 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(runtime.apply('install', record(bootstrap))['schema'], 126)
             with self.assertRaisesRegex(s.Refused, 'REVIEW'): runtime.apply('deploy', record(target))
             self.assertEqual(runtime.history(), s.history_for(historical))
-            self.assertEqual(runtime.apply('deploy', record(target), review)['schema'], 135)
+            self.assertEqual(runtime.apply('deploy', record(target), review)['schema'], 137)
             self.assertEqual(runtime.history(), s.history_for(current))
             self.assertEqual(len(runtime.backups), 1)
             with self.assertRaisesRegex(s.Refused, 'SCHEMA_ROLLBACK'): runtime.apply('rollback')

@@ -123,9 +123,114 @@ fun Route.venueOrderRoutes(
                         detail.toDto(
                             includePendingShiftExtension =
                                 permissions.contains(VenuePermission.SHIFT_EXTENSION_VIEW),
+                            includeLoyaltyExpenses = role != VenueRole.STAFF,
                         ),
                 ),
             )
+        }
+
+        post("/orders/{orderId}/loyalty/{redemptionId}/cancel-compensation") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            if (role !in setOf(VenueRole.OWNER, VenueRole.MANAGER)) throw ForbiddenException()
+            val orderId =
+                call.parameters["orderId"]?.toLongOrNull()?.takeIf {
+                    it > 0
+                } ?: throw InvalidInputException("Выберите заказ.")
+            val rewardId =
+                call.parameters["redemptionId"]?.toLongOrNull()?.takeIf {
+                    it > 0
+                } ?: throw InvalidInputException("Выберите награду.")
+            val request = call.receive<LoyaltyDeliveryCorrectionRequest>()
+            val replayed =
+                venueOrdersRepository.cancelLoyaltyCompensation(
+                    venueId,
+                    orderId,
+                    rewardId,
+                    OrderActionActor(userId, role),
+                    request.requestId,
+                    request.reason,
+                )
+            val detail = venueOrdersRepository.loadOrderDetail(venueId, orderId) ?: throw NotFoundException()
+            call.respond(LoyaltyUnitCorrectionResponse(replayed, detail.toDto(includeLoyaltyExpenses = true)))
+        }
+
+        post("/orders/{orderId}/loyalty/units/{unitId}/correct") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            if (role !in setOf(VenueRole.OWNER, VenueRole.MANAGER)) throw ForbiddenException()
+            val orderId =
+                call.parameters["orderId"]?.toLongOrNull()?.takeIf {
+                    it > 0
+                } ?: throw InvalidInputException("Выберите заказ.")
+            val unitId =
+                call.parameters["unitId"]?.toLongOrNull()?.takeIf {
+                    it > 0
+                } ?: throw InvalidInputException("Выберите единицу кальяна.")
+            val request = call.receive<LoyaltyUnitCorrectionRequest>()
+            val replayed =
+                venueOrdersRepository.correctLoyaltyUnit(
+                    venueId,
+                    orderId,
+                    unitId,
+                    OrderActionActor(userId, role),
+                    request.requestId,
+                    request.reason,
+                )
+            val detail = venueOrdersRepository.loadOrderDetail(venueId, orderId) ?: throw NotFoundException()
+            call.respond(LoyaltyUnitCorrectionResponse(replayed, detail.toDto(includeLoyaltyExpenses = true)))
+        }
+
+        post("/orders/{orderId}/loyalty/{redemptionId}/confirm-delivery") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            if (!VenuePermissions.forRole(
+                    role,
+                ).contains(VenuePermission.ORDER_STATUS_UPDATE)
+            ) {
+                throw ForbiddenException()
+            }
+            val orderId = call.parameters["orderId"]?.toLongOrNull() ?: throw InvalidInputException("Invalid orderId")
+            val rewardId =
+                call.parameters["redemptionId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("Invalid redemptionId")
+            val request = call.receive<LoyaltyDeliveryCorrectionRequest>()
+            venueOrdersRepository.correctLoyaltyDelivery(
+                venueId,
+                orderId,
+                rewardId,
+                OrderActionActor(userId, role),
+                request.requestId,
+                "",
+                confirm = true,
+            )
+            val detail = venueOrdersRepository.loadOrderDetail(venueId, orderId) ?: throw NotFoundException()
+            call.respond(OrderDetailResponse(detail.toDto(includeLoyaltyExpenses = role != VenueRole.STAFF)))
+        }
+
+        post("/orders/{orderId}/loyalty/{redemptionId}/correct-delivery") {
+            val userId = call.requireUserId()
+            val venueId = call.requireVenueId()
+            val role = resolveVenueRole(venueAccessRepository, userId, venueId)
+            if (role !in setOf(VenueRole.OWNER, VenueRole.MANAGER)) throw ForbiddenException()
+            val orderId = call.parameters["orderId"]?.toLongOrNull() ?: throw InvalidInputException("Invalid orderId")
+            val rewardId =
+                call.parameters["redemptionId"]?.toLongOrNull()
+                    ?: throw InvalidInputException("Invalid redemptionId")
+            val request = call.receive<LoyaltyDeliveryCorrectionRequest>()
+            venueOrdersRepository.correctLoyaltyDelivery(
+                venueId,
+                orderId,
+                rewardId,
+                OrderActionActor(userId, role),
+                request.requestId,
+                request.reason,
+            )
+            val detail = venueOrdersRepository.loadOrderDetail(venueId, orderId) ?: throw NotFoundException()
+            call.respond(OrderDetailResponse(detail.toDto(includeLoyaltyExpenses = true)))
         }
 
         get("/orders/{orderId}/audit") {
@@ -642,7 +747,10 @@ private fun isCurrentBatchFirstInOrder(
     return firstBatch.batchId == currentBatch.batchId
 }
 
-private fun OrderDetail.toDto(includePendingShiftExtension: Boolean = true): OrderDetailDto {
+private fun OrderDetail.toDto(
+    includePendingShiftExtension: Boolean = true,
+    includeLoyaltyExpenses: Boolean = false,
+): OrderDetailDto {
     val tabLabels = tabDisplayLabelsById(batches)
     return OrderDetailDto(
         orderId = orderId,
@@ -677,6 +785,15 @@ private fun OrderDetail.toDto(includePendingShiftExtension: Boolean = true): Ord
                         },
                 )
             },
+        loyaltyRewards =
+            loyaltyRewards.map {
+                it.copy(
+                    correctionAllowed = it.correctionAllowed && includeLoyaltyExpenses,
+                )
+            },
+        loyaltyExpenses = loyaltyExpenses.takeIf { includeLoyaltyExpenses }.orEmpty(),
+        loyaltyUnits = loyaltyUnits.takeIf { includeLoyaltyExpenses },
+        loyaltyHistory = loyaltyHistory.takeIf { includeLoyaltyExpenses },
         pendingShiftExtension = pendingShiftExtension.takeIf { includePendingShiftExtension }?.toDto(),
     )
 }

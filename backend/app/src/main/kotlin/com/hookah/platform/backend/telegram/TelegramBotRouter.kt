@@ -386,6 +386,16 @@ class TelegramBotRouter internal constructor(
     private val defaultBookingHoldMinutes = GuestBookingRepository.DEFAULT_HOLD_MINUTES
     private val minBookingHoldMinutes = GuestBookingRepository.MIN_HOLD_MINUTES
     private val maxBookingHoldMinutes = GuestBookingRepository.MAX_HOLD_MINUTES
+
+    private data class LoyaltyDeliveryConfirmation(
+        val chat: Long,
+        val actor: Long,
+        val expiresAt: Instant,
+        val action: suspend (String) -> Unit,
+    )
+
+    private val loyaltyDeliveryConfirmations = ConcurrentHashMap<String, LoyaltyDeliveryConfirmation>()
+
     private val botDraftCarts = ConcurrentHashMap<BotDraftCartKey, ConcurrentHashMap<Long, BotDraftCartItem>>()
     private val botDraftCartComments = ConcurrentHashMap<BotDraftCartKey, String>()
     private val botMenuMessageIds = ConcurrentHashMap<BotDraftCartKey, Long>()
@@ -2176,6 +2186,8 @@ class TelegramBotRouter internal constructor(
                 acceptAllNewVenueStaffOrderBatches(chatId, callbackQuery.from.id, data)
             data?.startsWith("staff_venue_orders_deliver_all_accepted:") == true ->
                 deliverAllAcceptedVenueStaffOrderBatches(chatId, callbackQuery.from.id, data)
+            data?.startsWith("loyalty_issue_ok:") == true || data?.startsWith("loyalty_issue_no:") == true ->
+                handleLoyaltyDeliveryConfirmation(chatId, callbackQuery.from.id, callbackQuery.id, data)
             data?.startsWith("staff_venue_orders_status:") == true ->
                 updateVenueStaffOrderStatus(chatId, callbackQuery.from.id, data)
             data?.startsWith("staff_venue_stoplist_root:") == true ->
@@ -3113,7 +3125,7 @@ class TelegramBotRouter internal constructor(
                         runCatching { loyaltyRepository.listRewardTargets(item.venueId, item.programId) }
                             .getOrDefault(emptyList())
                 }
-        enqueueMessage(
+        enqueueLoyaltyPages(
             chatId,
             buildString {
                 append("🎁 Лояльность\n\n")
@@ -3132,6 +3144,21 @@ class TelegramBotRouter internal constructor(
         )
     }
 
+    private suspend fun enqueueLoyaltyPages(
+        chatId: Long,
+        text: String,
+        markup: ReplyMarkup,
+    ) {
+        var rest = text
+        while (rest.length > 3500) {
+            var end = rest.lastIndexOf('\n', 3500).takeIf { it > 0 } ?: 3500
+            if (Character.isHighSurrogate(rest[end - 1])) end--
+            enqueueMessage(chatId, rest.substring(0, end))
+            rest = rest.substring(end).trimStart('\n')
+        }
+        enqueueMessage(chatId, rest, markup)
+    }
+
     private fun buildGuestLoyaltyProgressLine(
         progress: GuestLoyaltyProgress,
         rewardTargets: List<LoyaltyProgramTarget> = emptyList(),
@@ -3145,17 +3172,53 @@ class TelegramBotRouter internal constructor(
                     append("У вас есть бесплатные кальяны: ").append(progress.rewardsAvailable).append(".")
                 }
                 append("\n\n")
-                append(formatGuestLoyaltyRewardTargets(rewardTargets))
+                if (progress.rewardConditions.isNotEmpty()) {
+                    progress.rewardConditions.take(3).forEach { condition ->
+                        append("Условия награды: каждый ").append(condition.nthValue).append("-й · ")
+                        append(
+                            condition.rewardTargets.take(3).joinToString(", ") {
+                                it.take(80).dropLastWhile { char -> Character.isHighSurrogate(char) }
+                            },
+                        ).append("\n")
+                    }
+                } else {
+                    append(formatGuestLoyaltyRewardTargets(rewardTargets))
+                }
             } else {
                 val paidRequired = loyaltyPaidRequired(progress.nthValue)
                 val remaining = (paidRequired - progress.progressCount).coerceAtLeast(0)
                 append(progress.venueName).append("\n")
+                append("Сейчас доступных наград нет.\n")
                 append("Вы накопили ")
                     .append(progress.progressCount)
                     .append(" из ")
                     .append(paidRequired)
-                    .append(" оплаченных кальянов.")
+                    .append(" подтверждённо оплаченных кальянов.")
                 append("\nДо бесплатного кальяна осталось: ").append(remaining).append(".")
+            }
+            progress.cycles.drop(1).take(2).forEach { cycle ->
+                append("\nДругой сохранённый цикл: ").append(cycle.progressCount)
+                    .append(" из ").append(loyaltyPaidRequired(cycle.nthValue)).append(".")
+            }
+            if (progress.legacyUnresolvedProgress > 0) {
+                append("\nИсторический прогресс для проверки заведением: ")
+                    .append(progress.legacyUnresolvedProgress).append(". Он сохранён без пересчёта.")
+            }
+            append("\nВ резерве: ").append(progress.rewardsReserved)
+            append(". Подтверждённо выдано: ").append(progress.rewardsApplied).append(".")
+            append(
+                "\nРезерв создаётся при заказе. При отмене до " +
+                    "выдачи статус обновится; повторное использование " +
+                    "зависит от условий программы. После выдачи " +
+                    "автоматического возврата нет.",
+            )
+            append("\nПрогресс — после полной оплаты закрытого заказа; частичная оплата не учитывается.")
+            append("\nБесплатная единица не участвует в новом накоплении.")
+            if (progress.status != "ACTIVE") append("\nПрограмма временно недоступна. Накопления сохранены.")
+            if (progress.legacyProgress > 0 || progress.legacyAvailable > 0) {
+                append(
+                    "\nИсторические остатки сохранены; это не подтверждение их оплаты.",
+                )
             }
         }
 
@@ -8720,12 +8783,18 @@ class TelegramBotRouter internal constructor(
             buildString {
                 append("🎁 Лояльность\n\n")
                 append("Лояльность помогает гостям возвращаться. ")
-                append("Гость копит оплаченные кальяны, ")
-                append("а бонус отображается в профиле.\n\n")
+                append("Гость копит выданные и подтверждённо оплаченные кальяны, ")
+                append(
+                    "а бонус отображается в профиле. Требуются " +
+                        "закрытие заказа и полная оплата его учётной " +
+                        "продажи.\n\n",
+                )
                 append("Гость копит только те кальяны, которые входят в условия программы. ")
                 append("Когда накопит нужное количество, в профиле появится бонус. ")
                 append(
-                    "Например, если выбрать «каждый 6-й», гость оплачивает 5 кальянов, а 6-й получает бесплатно.\n\n",
+                    "Например, при «каждом 6-м» после оплаты 5 " +
+                        "подходящих кальянов гость получает " +
+                        "бесплатный кальян.\n\n",
                 )
                 if (program == null) {
                     append("Программа пока не настроена.")
@@ -8777,8 +8846,16 @@ class TelegramBotRouter internal constructor(
             buildString {
                 append("🎁 Каждый N-й кальян\n\n")
                 append(buildVenueLoyaltyProgramSummary(program, earnTargets, rewardTargets))
-                append("\n\nНачисление происходит после закрытия счёта. ")
-                append("Считаются только оплаченные позиции с типом «Кальяны».")
+                append(
+                    "\n\nНачисление происходит после выдачи, " +
+                        "закрытия заказа и полной подтверждённой " +
+                        "оплаты его учётной продажи. ",
+                )
+                append(
+                    "Частичная оплата не начисляет прогресс. " +
+                        "Начатый цикл и заработанные награды " +
+                        "сохраняют свои условия.",
+                )
             },
             TelegramKeyboards.inlineVenueMarketingLoyaltyProgramActions(
                 venueId = venueId,
@@ -8803,8 +8880,8 @@ class TelegramBotRouter internal constructor(
             chatId,
             "🎁 Каждый N-й кальян\n\n" +
                 "Выберите, какой по счёту кальян будет бесплатным. " +
-                "Например, если выбрать «каждый 6-й», гость оплачивает 5 кальянов, а 6-й получает бесплатно. " +
-                "В этом шаге система только копит прогресс и показывает его гостю.",
+                "Например, при «каждом 6-м» после оплаты 5 подходящих кальянов гость получает бесплатный кальян. " +
+                "Настройка сама не включает новую программу. Действующая программа сохраняет статус.",
             TelegramKeyboards.inlineVenueMarketingLoyaltyNthActions(venueId),
         )
     }
@@ -22081,6 +22158,7 @@ class TelegramBotRouter internal constructor(
         data: String,
         expectedStatus: OrderBatchStatus,
         nextStatus: OrderBatchStatus,
+        loyaltyConfirmed: Boolean = false,
     ) {
         try {
             handleStaffChatOrderBatchActionUnsafe(
@@ -22091,6 +22169,7 @@ class TelegramBotRouter internal constructor(
                 data = data,
                 expectedStatus = expectedStatus,
                 nextStatus = nextStatus,
+                loyaltyConfirmed = loyaltyConfirmed,
             )
         } catch (e: CancellationException) {
             throw e
@@ -22108,6 +22187,7 @@ class TelegramBotRouter internal constructor(
         data: String,
         expectedStatus: OrderBatchStatus,
         nextStatus: OrderBatchStatus,
+        loyaltyConfirmed: Boolean = false,
     ) {
         val prefix =
             when (nextStatus) {
@@ -22125,6 +22205,18 @@ class TelegramBotRouter internal constructor(
         if (role == null) {
             enqueueCallbackAnswer(chatId, callbackQueryId, text = "Нет доступа", showAlert = true)
             return
+        }
+        if (!loyaltyConfirmed && nextStatus == OrderBatchStatus.DELIVERED) {
+            val detail = venueOrdersRepository.loadOrderDetailForBatch(venueId, batchId)
+            if (detail != null &&
+                askLoyaltyDeliveryConfirmation(chatId, user.id, detail) { currentCallback ->
+                    handleStaffChatOrderBatchAction(
+                        chatId, messageId, currentCallback, user, data, expectedStatus, nextStatus, true,
+                    )
+                }
+            ) {
+                return
+            }
         }
         val result =
             try {
@@ -23319,6 +23411,7 @@ class TelegramBotRouter internal constructor(
             showVenueStaffOrdersRootByVenueId(chatId, userId, venueId)
             return
         }
+        operationalLoyaltyText(detail, role != VenueBotRole.STAFF)?.let { enqueueMessage(chatId, it) }
         if (detail.status == OrderWorkflowStatus.CLOSED) {
             enqueueMessage(chatId, "Заказ уже закрыт.")
             showVenueStaffOrdersRootByVenueId(chatId, userId, venueId)
@@ -23939,6 +24032,7 @@ class TelegramBotRouter internal constructor(
             showVenueStaffOrdersRootByVenueId(chatId, userId, venueId)
             return
         }
+        operationalLoyaltyText(detail, role != VenueBotRole.STAFF)?.let { enqueueMessage(chatId, it) }
         if (detail.status == OrderWorkflowStatus.CLOSED) {
             enqueueMessage(chatId, "Заказ уже закрыт.")
             showVenueStaffOrdersRootByVenueId(chatId, userId, venueId)
@@ -24073,10 +24167,119 @@ class TelegramBotRouter internal constructor(
                 }
             }
 
+    private fun operationalLoyaltyText(
+        detail: com.hookah.platform.backend.miniapp.venue.orders.OrderDetail,
+        manager: Boolean,
+    ): String? {
+        if (detail.loyaltyRewards.isEmpty()) return null
+        return buildString {
+            detail.loyaltyRewards.take(6).forEach { r ->
+                val state =
+                    when {
+                        r.origin == "LEGACY" ->
+                            "Историческое состояние: фактическая выдача " +
+                                "новой политикой не подтверждалась."
+                        r.status == "RESERVED" -> "Награда зарезервирована. Бесплатный кальян ещё не выдан."
+                        r.status == "APPLIED" -> "Награда использована. Выдача подтверждена."
+                        r.venueFunded -> "Награда отменена до выдачи. Повторно использовать её нельзя."
+                        else -> "Резерв отменён. Заработанная награда возвращена для нового заказа."
+                    }
+                append(state).append("\n")
+                if (r.venueFunded && r.status != "CANCELED") {
+                    append(
+                        "Бонус предоставляется за счёт заведения. " +
+                            "Сумма счёта гостя не меняется.\n",
+                    )
+                }
+            }
+            append("Бесплатная единица не участвует в новом накоплении.\n")
+            append(
+                if (manager) {
+                    "Начисление можно исправить по конкретной " +
+                        "единице в деталях заказа Venue Mini App: с " +
+                        "причиной, подтверждением и сохранением " +
+                        "закрытого счёта. Расход бонуса возникает " +
+                        "только после фактической выдачи."
+                } else {
+                    "Обнаружена ошибка в начислении? Передайте " +
+                        "заказ управляющему. Изменить бонус " +
+                        "самостоятельно нельзя."
+                },
+            )
+        }
+    }
+
+    private suspend fun askLoyaltyDeliveryConfirmation(
+        chat: Long,
+        actor: Long,
+        detail: com.hookah.platform.backend.miniapp.venue.orders.OrderDetail,
+        action: suspend (String) -> Unit,
+    ): Boolean {
+        if (detail.loyaltyRewards.none { it.origin == "PAYMENT_POLICY" && it.status == "RESERVED" }) return false
+        val now = Instant.now()
+        loyaltyDeliveryConfirmations.entries.removeIf { it.value.expiresAt.isBefore(now) }
+        if (loyaltyDeliveryConfirmations.size >= 1000) {
+            enqueueMessage(chat, "Подтверждение временно недоступно. Откройте детали заказа в Venue Mini App.")
+            return true
+        }
+        val token = UUID.randomUUID().toString()
+        loyaltyDeliveryConfirmations[token] = LoyaltyDeliveryConfirmation(chat, actor, now.plusSeconds(600), action)
+        enqueueMessage(
+            chat,
+            "Подтвердить фактическую выдачу выбранных " +
+                "позиций? Награда зарезервирована и ещё не " +
+                "выдана. После подтверждения она станет " +
+                "использованной; обычная отмена её не вернёт. " +
+                "Если бонус предоставляется за счёт " +
+                "заведения, будет учтён расход без изменения " +
+                "счёта гостя.",
+            InlineKeyboardMarkup(
+                listOf(
+                    listOf(
+                        InlineKeyboardButton(
+                            text = "Подтвердить фактическую выдачу",
+                            callbackData = "loyalty_issue_ok:$token",
+                        ),
+                    ),
+                    listOf(InlineKeyboardButton(text = "Не подтверждать", callbackData = "loyalty_issue_no:$token")),
+                ),
+            ),
+        )
+        return true
+    }
+
+    private suspend fun handleLoyaltyDeliveryConfirmation(
+        chat: Long,
+        actor: Long,
+        callback: String,
+        data: String,
+    ) {
+        val token = data.substringAfter(':')
+        val pending = loyaltyDeliveryConfirmations[token]
+        if (pending == null || pending.chat != chat || pending.actor != actor ||
+            pending.expiresAt.isBefore(Instant.now())
+        ) {
+            enqueueMessage(
+                chat,
+                "Подтверждение недоступно или устарело. " +
+                    "Откройте свой заказ повторно; выдача не " +
+                    "изменена.",
+            )
+            return
+        }
+        if (!loyaltyDeliveryConfirmations.remove(token, pending)) return
+        if (data.startsWith("loyalty_issue_ok:")) {
+            pending.action(callback)
+        } else {
+            enqueueMessage(chat, "Выдача не подтверждена. Резерв сохранён.")
+        }
+    }
+
     private suspend fun updateVenueStaffOrderStatus(
         chatId: Long,
         userId: Long,
         data: String,
+        loyaltyConfirmed: Boolean = false,
     ) {
         val parsed = parseStaffVenueOrderStatusData(data)
         if (parsed == null) {
@@ -24113,6 +24316,13 @@ class TelegramBotRouter internal constructor(
         if (detailBeforeUpdate == null) {
             enqueueMessage(chatId, "Заказ не найден.")
             showVenueStaffOrdersRootByVenueId(chatId, userId, venueId)
+            return
+        }
+        if (!loyaltyConfirmed && nextStatus == OrderWorkflowStatus.DELIVERED &&
+            askLoyaltyDeliveryConfirmation(chatId, userId, detailBeforeUpdate) { _ ->
+                updateVenueStaffOrderStatus(chatId, userId, data, true)
+            }
+        ) {
             return
         }
         val updated =
@@ -24230,6 +24440,7 @@ class TelegramBotRouter internal constructor(
         chatId: Long,
         userId: Long,
         data: String,
+        loyaltyConfirmed: Boolean = false,
     ) {
         val parsed = parseStaffVenueOrderData(data, "staff_venue_orders_deliver_all_accepted:")
         if (parsed == null) {
@@ -24260,6 +24471,13 @@ class TelegramBotRouter internal constructor(
         if (acceptedBatches.size <= 1) {
             enqueueMessage(chatId, "Нет нескольких принятых позиций для общей доставки.")
             showVenueStaffOrderDetailsByIds(chatId, userId, venueId, orderId)
+            return
+        }
+        if (!loyaltyConfirmed &&
+            askLoyaltyDeliveryConfirmation(chatId, userId, detailBeforeUpdate) { _ ->
+                deliverAllAcceptedVenueStaffOrderBatches(chatId, userId, data, true)
+            }
+        ) {
             return
         }
         val updated =
@@ -28941,6 +29159,7 @@ class TelegramBotRouter internal constructor(
         if (progress.progressCount <= 0 && progress.rewardsAvailable <= 0) {
             return null
         }
+        if (progress.status != "ACTIVE") return "🎁 Лояльность временно недоступна. Накопления сохранены."
         val baseText =
             if (progress.rewardsAvailable > 0) {
                 if (progress.rewardsAvailable == 1) {
@@ -28970,7 +29189,7 @@ class TelegramBotRouter internal constructor(
             botDraftCartScopes[key]
                 ?: throw InvalidInputException("Cart scope is unavailable")
         val submitComment = buildBotDraftCartSubmitComment(items, botDraftCartComments[key])
-        val loyaltyPreview = buildBotCartLoyaltyRedemptionPreview(venueId, userId, items)
+        val loyaltyPreview = buildBotCartLoyaltyRedemptionPreview(venueId, userId, items, cartScope.tableSessionId)
         val orderItems =
             items.map { item ->
                 OrderBatchItemInput(
@@ -29038,11 +29257,13 @@ class TelegramBotRouter internal constructor(
         venueId: Long,
         userId: Long,
         items: List<BotDraftCartItem>,
+        tableSessionId: Long,
     ): LoyaltyRedemptionPreview? =
         try {
             loyaltyRepository.previewRedemptionForCart(
                 venueId = venueId,
                 userId = userId,
+                tableSessionId = tableSessionId,
                 items =
                     items.map {
                         LoyaltyCartItem(

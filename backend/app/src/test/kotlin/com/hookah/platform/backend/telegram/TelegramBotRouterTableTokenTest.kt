@@ -181,6 +181,7 @@ import com.hookah.platform.backend.telegram.db.GuestProfile
 import com.hookah.platform.backend.telegram.db.GuestPublicReviewCtaState
 import com.hookah.platform.backend.telegram.db.IdempotencyRepository
 import com.hookah.platform.backend.telegram.db.LoyaltyCartItem
+import com.hookah.platform.backend.telegram.db.LoyaltyCycleSummary
 import com.hookah.platform.backend.telegram.db.LoyaltyProgram
 import com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus
 import com.hookah.platform.backend.telegram.db.LoyaltyProgramTarget
@@ -188,6 +189,7 @@ import com.hookah.platform.backend.telegram.db.LoyaltyProgramTargetType
 import com.hookah.platform.backend.telegram.db.LoyaltyProgramType
 import com.hookah.platform.backend.telegram.db.LoyaltyRedemptionPreview
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
+import com.hookah.platform.backend.telegram.db.LoyaltyRewardCondition
 import com.hookah.platform.backend.telegram.db.OrderBatchDetails
 import com.hookah.platform.backend.telegram.db.OrderBatchItemDetails
 import com.hookah.platform.backend.telegram.db.OrderItemSelectedOptionDetails
@@ -859,7 +861,7 @@ class TelegramBotRouterTableTokenTest {
         coEvery { loyaltyRepository.getActiveProgram(any()) } returns null
         coEvery { loyaltyRepository.getGuestProgress(any(), any()) } returns null
         coEvery { loyaltyRepository.listGuestProgress(any()) } returns emptyList()
-        coEvery { loyaltyRepository.previewRedemptionForCart(any(), any(), any()) } returns null
+        coEvery { loyaltyRepository.previewRedemptionForCart(any(), any(), any(), any()) } returns null
         coEvery { loyaltyRepository.createOrUpdateDraftProgram(any(), any(), any()) } answers {
             testLoyaltyProgram(
                 id = 1L,
@@ -1582,6 +1584,44 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `review P2 guest bot shows applied only history and makes cancellation conditional`() =
+        runBlocking {
+            coEvery { loyaltyRepository.listGuestProgress(200L) } returns
+                listOf(
+                    GuestLoyaltyProgress(
+                        programId = 301L, venueId = 10L, venueName = "Mix", userId = 200L, nthValue = 3,
+                        progressCount = 0, rewardsAvailable = 0, rewardsReserved = 0, rewardsApplied = 1,
+                        updatedAt = Instant.parse("2026-11-11T10:00:00Z"),
+                    ),
+                )
+            router.process(
+                TelegramUpdate(
+                    updateId = 319001L,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "used-only-review",
+                            from = User(id = 200L),
+                            message = Message(messageId = 301L, chat = Chat(id = 100, type = "private")),
+                            data = "guest_loyalty",
+                        ),
+                ),
+            )
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    match {
+                        it.contains("Mix") && it.contains("Сейчас доступных наград нет.") &&
+                            it.contains("Подтверждённо выдано: 1.") &&
+                            it.contains("повторное использование зависит от условий программы") &&
+                            !it.contains("выдачи возвращает") && !it.contains("VENUE_COMPENSATION") &&
+                            !it.contains("actorUserId") && !it.contains("loyaltyHistory")
+                    },
+                    any(),
+                )
+            }
+        }
+
+    @Test
     fun `guest can open loyalty progress from profile`() =
         runBlocking {
             coEvery { loyaltyRepository.listGuestProgress(200L) } returns
@@ -1595,6 +1635,12 @@ class TelegramBotRouterTableTokenTest {
                         progressCount = 1,
                         rewardsAvailable = 0,
                         rewardsReserved = 0,
+                        cycles =
+                            listOf(
+                                LoyaltyCycleSummary(6, 1, listOf("Кальян"), "LEGACY_CUTOVER"),
+                                LoyaltyCycleSummary(3, 1, listOf("Кальян"), "PAYMENT_POLICY"),
+                            ),
+                        legacyUnresolvedProgress = 6,
                         updatedAt = Instant.parse("2026-05-20T10:00:00Z"),
                     ),
                 )
@@ -1618,8 +1664,11 @@ class TelegramBotRouterTableTokenTest {
                     match {
                         it.contains("🎁 Лояльность") &&
                             it.contains("Mix") &&
-                            it.contains("Вы накопили 1 из 5 оплаченных кальянов.") &&
+                            it.contains("Вы накопили 1 из 5 подтверждённо оплаченных кальянов.") &&
+                            it.contains("частичная оплата не учитывается.") &&
                             it.contains("До бесплатного кальяна осталось: 4.") &&
+                            it.contains("Другой сохранённый цикл: 1 из 2.") &&
+                            it.contains("Исторический прогресс для проверки заведением: 6.") &&
                             !it.contains("следующий этап")
                     },
                     match { markup ->
@@ -1646,7 +1695,23 @@ class TelegramBotRouterTableTokenTest {
                         rewardsReserved = 0,
                         updatedAt = Instant.parse("2026-05-20T10:00:00Z"),
                     ),
+                    GuestLoyaltyProgress(
+                        programId = 302L,
+                        venueId = 11L,
+                        venueName = "Unicode",
+                        userId = 200L,
+                        nthValue = 6,
+                        progressCount = 0,
+                        rewardsAvailable = 1,
+                        rewardsReserved = 0,
+                        rewardConditions =
+                            listOf(
+                                LoyaltyRewardCondition(6, 1, listOf("A".repeat(79) + "💨"), "PAYMENT_POLICY"),
+                            ),
+                        updatedAt = Instant.parse("2026-05-20T10:00:00Z"),
+                    ),
                 )
+            coEvery { loyaltyRepository.listRewardTargets(11L, 302L) } returns emptyList()
             coEvery { loyaltyRepository.listRewardTargets(10L, 301L) } returns
                 listOf(
                     LoyaltyProgramTarget(
@@ -1677,7 +1742,10 @@ class TelegramBotRouterTableTokenTest {
                     match {
                         it.contains("Mix") &&
                             it.contains("У вас есть бесплатный кальян.") &&
+                            it.contains("Бесплатная единица не участвует в новом накоплении.") &&
                             it.contains("Можно выбрать любой кальян из меню.") &&
+                            it.contains("Условия награды: каждый 6-й · " + "A".repeat(79) + "\n") &&
+                            !it.contains('\uD83D') &&
                             !it.contains("Покажите этот экран персоналу") &&
                             !it.contains("следующий этап")
                     },
@@ -22000,8 +22068,9 @@ class TelegramBotRouterTableTokenTest {
                     100,
                     match {
                         it.contains("🎁 Лояльность") &&
-                            it.contains("Гость копит оплаченные кальяны") &&
-                            it.contains("гость оплачивает 5 кальянов, а 6-й получает бесплатно") &&
+                            it.contains("Гость копит выданные и подтверждённо оплаченные кальяны") &&
+                            it.contains("Требуются закрытие заказа и полная оплата его учётной продажи.") &&
+                            it.contains("после оплаты 5 подходящих кальянов гость получает бесплатный кальян") &&
                             it.contains("Программа пока не настроена")
                     },
                     match { markup ->
@@ -22062,7 +22131,10 @@ class TelegramBotRouterTableTokenTest {
                             it.contains("каждый 5-й кальян") &&
                             it.contains("Оплаченных до бонуса: 4") &&
                             it.contains("Статус: Черновик") &&
-                            it.contains("Начисление происходит после закрытия счёта")
+                            it.contains(
+                                "Начисление происходит после выдачи, закрытия заказа " +
+                                    "и полной подтверждённой оплаты",
+                            )
                     },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
@@ -29994,7 +30066,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                     pricingFingerprint = "test-loyalty-redemption",
                 )
-            coEvery { loyaltyRepository.previewRedemptionForCart(10L, 200L, any()) } answers {
+            coEvery { loyaltyRepository.previewRedemptionForCart(10L, 200L, any(), any()) } answers {
                 val cartItems = thirdArg<List<LoyaltyCartItem>>()
                 val selected = cartItems.single()
                 LoyaltyRedemptionPreview(
@@ -36455,6 +36527,148 @@ class TelegramBotRouterTableTokenTest {
                     null,
                 )
             }
+        }
+
+    @Test
+    fun `loyalty issue needs meaningful confirmation bound to actor and cannot run twice`() =
+        runBlocking {
+            val detail =
+                staffChatOrderDetail(57L, OrderWorkflowStatus.ACCEPTED, OrderWorkflowStatus.ACCEPTED).copy(
+                    loyaltyRewards =
+                        listOf(
+                            com.hookah.platform.backend.telegram.db.OrderLoyaltyReward(
+                                71L,
+                                500L,
+                                "RESERVED",
+                                "PAYMENT_POLICY",
+                                false,
+                                true,
+                            ),
+                        ),
+                )
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns detail
+            coEvery {
+                venueAccessRepository.findVenueMembership(501L, 10L)
+            } returns VenueAccessRepository.VenueMembership(10L, "STAFF")
+            coEvery {
+                venueOrdersRepository.updateOrderStatus(10L, 19L, any(), any())
+            } returns OrderStatusUpdateResult(19L, OrderWorkflowStatus.DELIVERED, Instant.now(), true)
+            coEvery { venueRepository.findVenueById(10L) } returns VenueShort(10L, "Mix", -777L)
+            val buttons = mutableListOf<InlineKeyboardMarkup>()
+            val texts = mutableListOf<String>()
+            coEvery { outboxEnqueuer.enqueueSendMessage(any(), any(), any(), any(), any()) } answers {
+                texts += invocation.args[1] as String
+                (invocation.args[2] as? InlineKeyboardMarkup)?.let { buttons += it }
+                TelegramOutboxEnqueueOutcome.ENQUEUED
+            }
+
+            suspend fun callback(
+                id: Long,
+                actor: Long,
+                data: String,
+            ) {
+                router.process(
+                    TelegramUpdate(
+                        updateId = id,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "loyalty-$id",
+                                from = User(id = actor),
+                                message = Message(messageId = 92L, chat = Chat(id = 501L, type = "private")),
+                                data = data,
+                            ),
+                    ),
+                )
+            }
+            callback(309001L, 501L, "staff_venue_orders_status:10:19:delivered")
+            coVerify(exactly = 0) { venueOrdersRepository.updateOrderStatus(any(), any(), any(), any()) }
+            assertTrue(
+                texts.any { it.contains("обычная отмена её не вернёт") && it.contains("без изменения счёта гостя") },
+            )
+            val token =
+                buttons.flatMap {
+                    it.inlineKeyboard
+                }.flatten().mapNotNull { it.callbackData }.single { it.startsWith("loyalty_issue_ok:") }
+            assertTrue(token.toByteArray().size <= 64)
+            callback(309002L, 999L, token)
+            coVerify(exactly = 0) { venueOrdersRepository.updateOrderStatus(any(), any(), any(), any()) }
+            callback(309003L, 501L, token)
+            callback(309004L, 501L, token)
+            coVerify(exactly = 1) {
+                venueOrdersRepository.updateOrderStatus(
+                    10L,
+                    19L,
+                    OrderWorkflowStatus.DELIVERED,
+                    match {
+                        it.role == VenueRole.STAFF && it.userId == 501L
+                    },
+                )
+            }
+            assertTrue(texts.none { it.contains("paid_unit_id") || it.contains("correctionReason") })
+        }
+
+    @Test
+    fun `loyalty confirmation rechecks revoked role and forged financial callbacks cannot correct`() =
+        runBlocking {
+            val detail =
+                staffChatOrderDetail(57L, OrderWorkflowStatus.ACCEPTED, OrderWorkflowStatus.ACCEPTED).copy(
+                    loyaltyRewards =
+                        listOf(
+                            com.hookah.platform.backend.telegram.db.OrderLoyaltyReward(
+                                71L,
+                                500L,
+                                "RESERVED",
+                                "PAYMENT_POLICY",
+                                false,
+                                true,
+                            ),
+                        ),
+                )
+            coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns detail
+            coEvery {
+                venueAccessRepository.findVenueMembership(501L, 10L)
+            } returns VenueAccessRepository.VenueMembership(10L, "STAFF")
+            val buttons = mutableListOf<InlineKeyboardMarkup>()
+            coEvery { outboxEnqueuer.enqueueSendMessage(any(), any(), any(), any(), any()) } answers {
+                (invocation.args[2] as? InlineKeyboardMarkup)?.let { buttons += it }
+                TelegramOutboxEnqueueOutcome.ENQUEUED
+            }
+
+            suspend fun callback(
+                id: Long,
+                data: String,
+            ) {
+                router.process(
+                    TelegramUpdate(
+                        updateId = id,
+                        callbackQuery =
+                            CallbackQuery(
+                                id = "loyalty-$id",
+                                from = User(id = 501L),
+                                message = Message(messageId = 92L, chat = Chat(id = 501L, type = "private")),
+                                data = data,
+                            ),
+                    ),
+                )
+            }
+            callback(309011L, "staff_venue_orders_status:10:19:delivered")
+            val token =
+                buttons.flatMap {
+                    it.inlineKeyboard
+                }.flatten().mapNotNull { it.callbackData }.single { it.startsWith("loyalty_issue_ok:") }
+            coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns null
+            callback(309012L, token)
+            callback(309013L, "loyalty_issue_ok:invented-token")
+            coEvery {
+                venueAccessRepository.findVenueMembership(501L, 10L)
+            } returns VenueAccessRepository.VenueMembership(10L, "STAFF")
+            callback(309014L, "loyalty_unit_correct:10:19:1")
+            callback(309015L, "loyalty_compensation_cancel:10:19:71")
+            coVerify(exactly = 0) { venueOrdersRepository.updateOrderStatus(any(), any(), any(), any()) }
+            coVerify(exactly = 0) { venueOrdersRepository.correctLoyaltyUnit(any(), any(), any(), any(), any(), any()) }
+            coVerify(
+                exactly = 0,
+            ) { venueOrdersRepository.cancelLoyaltyCompensation(any(), any(), any(), any(), any(), any()) }
         }
 
     @Test

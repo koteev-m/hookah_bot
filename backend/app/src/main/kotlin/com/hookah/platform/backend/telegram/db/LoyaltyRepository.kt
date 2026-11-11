@@ -1,9 +1,14 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
+import com.hookah.platform.backend.miniapp.venue.TransactionalAuditLogWriter
+import com.hookah.platform.backend.miniapp.venue.VenueRoleMapping
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingSale
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
@@ -84,6 +89,13 @@ data class GuestLoyaltyProgress(
     val rewardsAvailable: Int,
     val rewardsReserved: Int,
     val updatedAt: Instant?,
+    val status: String = "ACTIVE",
+    val cycles: List<LoyaltyCycleSummary> = emptyList(),
+    val rewardConditions: List<LoyaltyRewardCondition> = emptyList(),
+    val rewardsApplied: Int = 0,
+    val legacyProgress: Int = 0,
+    val legacyAvailable: Int = 0,
+    val legacyUnresolvedProgress: Int = 0,
 )
 
 data class LoyaltyProgressSummary(
@@ -130,7 +142,15 @@ data class LoyaltyRedemptionResult(
     val discount: CreatedOrderPromotionDiscount,
 )
 
-class LoyaltyRepository(private val dataSource: DataSource?) {
+class LoyaltyRepository(
+    private val dataSource: DataSource?,
+    audit: TransactionalAuditLogWriter =
+        AuditLogRepository(
+            dataSource,
+        ),
+) {
+    private val paid = LoyaltyPaidLifecycle(audit)
+
     suspend fun createProgram(
         venueId: Long,
         nthValue: Int,
@@ -143,6 +163,7 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        lockVenue(connection, venueId)
                         val id =
                             connection.prepareStatement(
                                 """
@@ -203,6 +224,7 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        lockVenue(connection, venueId)
                         val existing = selectFirstProgramForVenue(connection, venueId)
                         val programId =
                             if (existing == null) {
@@ -413,6 +435,12 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        lockVenue(connection, venueId)
+                        val existing = selectProgram(connection, venueId, programId)
+                        if (existing == null || existing.status == status) {
+                            connection.commit()
+                            return@use existing
+                        }
                         if (status == LoyaltyProgramStatus.ACTIVE) {
                             connection.prepareStatement(
                                 """
@@ -475,6 +503,7 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                             COALESCE(v.name, 'Заведение #' || lp.venue_id) AS venue_name,
                             ? AS user_id,
                             lp.nth_value,
+                            lp.status AS program_status,
                             COALESCE(glp.progress_count, 0) AS progress_count,
                             COALESCE(glp.rewards_available, 0) AS rewards_available,
                             COALESCE(glp.rewards_reserved, 0) AS rewards_reserved,
@@ -485,17 +514,23 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                           ON glp.program_id = lp.id
                          AND glp.user_id = ?
                         WHERE lp.venue_id = ?
-                          AND lp.status = ?
-                        ORDER BY lp.id DESC
+                          AND lp.status IN ('ACTIVE', 'PAUSED', 'ARCHIVED')
+                        ORDER BY CASE WHEN lp.status = 'ACTIVE' THEN 0 ELSE 1 END, lp.id DESC
                         LIMIT 1
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, userId)
                         statement.setLong(2, userId)
                         statement.setLong(3, venueId)
-                        statement.setString(4, LoyaltyProgramStatus.ACTIVE.dbValue)
                         statement.executeQuery().use { rs ->
-                            if (rs.next()) rs.toGuestProgress() else null
+                            if (rs.next()) {
+                                enrichGuestProgress(
+                                    connection,
+                                    rs.toGuestProgress().copy(status = rs.getString("program_status")),
+                                )
+                            } else {
+                                null
+                            }
                         }
                     }
                 }
@@ -518,6 +553,7 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                             COALESCE(v.name, 'Заведение #' || lp.venue_id) AS venue_name,
                             ? AS user_id,
                             lp.nth_value,
+                            lp.status AS program_status,
                             COALESCE(glp.progress_count, 0) AS progress_count,
                             COALESCE(glp.rewards_available, 0) AS rewards_available,
                             COALESCE(glp.rewards_reserved, 0) AS rewards_reserved,
@@ -527,24 +563,56 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                           ON glp.program_id = lp.id
                          AND glp.user_id = ?
                         LEFT JOIN venues v ON v.id = lp.venue_id
-                        WHERE lp.status = ?
-                          AND (glp.progress_count > 0 OR glp.rewards_available > 0 OR glp.rewards_reserved > 0)
+                        WHERE lp.status IN ('ACTIVE', 'PAUSED', 'ARCHIVED')
+                          AND (glp.progress_count > 0 OR glp.rewards_available > 0 OR glp.rewards_reserved > 0
+                               OR EXISTS (
+                                   SELECT 1 FROM loyalty_redemptions lr
+                                   WHERE lr.program_id = lp.id AND lr.venue_id = lp.venue_id
+                                     AND lr.user_id = glp.user_id AND lr.origin = 'PAYMENT_POLICY'
+                                     AND lr.status = 'APPLIED'
+                               ))
                         ORDER BY glp.updated_at DESC, lp.id DESC
                         LIMIT 20
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, userId)
                         statement.setLong(2, userId)
-                        statement.setString(3, LoyaltyProgramStatus.ACTIVE.dbValue)
                         statement.executeQuery().use { rs ->
                             buildList {
-                                while (rs.next()) add(rs.toGuestProgress())
+                                while (rs.next()) add(
+                                    enrichGuestProgress(
+                                        connection,
+                                        rs.toGuestProgress().copy(status = rs.getString("program_status")),
+                                    ),
+                                )
                             }
                         }
                     }
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun rewardUsedInSession(
+        venueId: Long,
+        programId: Long,
+        userId: Long,
+        sessionId: Long,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { c ->
+                val ownsProgram =
+                    c.lq(
+                        "SELECT id FROM loyalty_programs WHERE id = ? AND venue_id = ?",
+                        programId,
+                        venueId,
+                    ) {
+                        it.getLong(1)
+                    }.isNotEmpty()
+                ownsProgram && paid.sessionUsed(c, programId, userId, sessionId)
             }
         }
     }
@@ -624,6 +692,7 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
         venueId: Long,
         userId: Long,
         items: List<LoyaltyCartItem>,
+        tableSessionId: Long? = null,
     ): LoyaltyRedemptionPreview? {
         if (items.isEmpty()) return null
         val ds = dataSource ?: throw DatabaseUnavailableException()
@@ -634,12 +703,24 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                     val progress = selectProgress(connection, program, userId, forUpdate = false) ?: return@use null
                     if (progress.rewardsAvailable <= 0) return@use null
                     val itemTypes = loadAvailableMenuItemTypes(connection, venueId, items.map { it.menuItemId }.toSet())
-                    val targets = selectTargets(connection, venueId, program.id, LOYALTY_REWARD_TARGETS_TABLE)
+                    if (tableSessionId != null &&
+                        paid.sessionUsed(connection, program.id, userId, tableSessionId)
+                    ) {
+                        return@use null
+                    }
                     items
                         .filter { it.qty > 0 && it.priceMinor > 0L }
                         .mapNotNull { item ->
                             val effectiveType = itemTypes[item.menuItemId] ?: return@mapNotNull null
-                            item.takeIf { matchesLoyaltyTarget(targets, item.menuItemId, effectiveType) }
+                            item.takeIf {
+                                paid.reward(
+                                    connection,
+                                    program.id,
+                                    userId,
+                                    item.menuItemId,
+                                    effectiveType.dbValue,
+                                ) != null
+                            }
                         }
                         .minWithOrNull(compareBy<LoyaltyCartItem> { it.priceMinor }.thenBy { it.menuItemId })
                         ?.let { selected ->
@@ -658,53 +739,122 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
         }
     }
 
+    // Retained for legacy callers. Operational close is not a payment authority.
     fun accrueForClosedOrder(
         connection: Connection,
         orderId: Long,
     ): LoyaltyAccrualResult {
-        val program =
-            selectActiveProgramForClosedOrder(connection, orderId)
-                ?: return LoyaltyAccrualResult(orderId = orderId, itemsCounted = 0, progressAdded = 0, rewardsAdded = 0)
-        val rows = loadEligibleEarnRows(connection, orderId, program.id)
-        val paidRequired = paidRequiredForReward(program.nthValue)
-        var countedItems = 0
-        var progressAdded = 0
-        var rewardsAdded = 0
-        rows.forEach { row ->
-            val dedupeKey = "loyalty:earn:program:${program.id}:item:${row.orderBatchItemId}"
-            if (ledgerExists(connection, dedupeKey)) {
-                return@forEach
-            }
-            val progress = lockOrCreateProgress(connection, program, row.userId)
-            val nextTotal = progress.progressCount + row.qty
-            val earnedRewards = nextTotal / paidRequired
-            val nextProgress = nextTotal % paidRequired
-            insertLedger(
-                connection = connection,
-                program = program,
-                row = row,
-                deltaProgress = row.qty,
-                deltaRewards = earnedRewards,
-                dedupeKey = dedupeKey,
-            )
-            updateProgress(
-                connection = connection,
-                program = program,
-                userId = row.userId,
-                progressCount = nextProgress,
-                rewardsDelta = earnedRewards,
-            )
-            countedItems += 1
-            progressAdded += row.qty
-            rewardsAdded += earnedRewards
-        }
-        return LoyaltyAccrualResult(
-            orderId = orderId,
-            itemsCounted = countedItems,
-            progressAdded = progressAdded,
-            rewardsAdded = rewardsAdded,
-        )
+        check(!connection.autoCommit) { "Loyalty accrual requires a transaction" }
+        return LoyaltyAccrualResult(orderId, 0, 0, 0)
     }
+
+    fun authorizeOperator(
+        connection: Connection,
+        venueId: Long,
+        actor: Long,
+        expectedRole: String,
+    ) {
+        lockVenue(connection, venueId)
+        val role =
+            connection.lq(
+                "SELECT role FROM venue_members WHERE venue_id = ? AND user_id = ? FOR UPDATE",
+                venueId,
+                actor,
+            ) {
+                VenueRoleMapping.fromDb(it.getString(1))?.name
+            }.singleOrNull()
+        if (role !in setOf("OWNER", "MANAGER", "STAFF") ||
+            role != expectedRole
+        ) {
+            throw com.hookah.platform.backend.api.ForbiddenException()
+        }
+    }
+
+    fun reconcilePaidSale(
+        connection: Connection,
+        venueId: Long,
+        sale: AccountingSale,
+        fact: String,
+        actor: Long,
+    ): LoyaltyAccrualResult {
+        lockVenue(connection, venueId)
+        val stored =
+            connection.lq(
+                "SELECT s.snapshot_json FROM " +
+                    "venue_accounting_sales s JOIN " +
+                    "venue_accounting_shifts sh ON sh.id = " +
+                    "s.shift_id WHERE s.id = ? AND sh.venue_id = ?",
+                sale.id,
+                venueId,
+            ) {
+                Json.decodeFromString<AccountingSale>(it.getString(1))
+            }.singleOrNull()
+        if (stored != sale) throw com.hookah.platform.backend.api.ForbiddenException()
+        return paid.onSale(connection, venueId, sale, fact, actor)
+    }
+
+    fun confirmBatchDelivery(
+        connection: Connection,
+        venueId: Long,
+        orderId: Long,
+        batchIds: List<Long>,
+        actor: Long,
+    ) = paid.delivered(connection, venueId, orderId, batchIds, actor)
+
+    fun reconcileOrder(
+        connection: Connection,
+        venueId: Long,
+        orderId: Long,
+        actor: Long,
+    ) = paid.onOrderChanged(connection, venueId, orderId, actor)
+
+    fun confirmRewardDelivery(
+        connection: Connection,
+        venueId: Long,
+        orderId: Long,
+        redemptionId: Long,
+        actor: Long,
+        requestId: String,
+    ) = paid.deliveryOperation(
+        connection,
+        venueId,
+        orderId,
+        redemptionId,
+        actor,
+        requestId,
+        "CONFIRM",
+        "Подтверждена фактическая выдача наградной единицы",
+    )
+
+    fun correctRewardDelivery(
+        connection: Connection,
+        venueId: Long,
+        orderId: Long,
+        redemptionId: Long,
+        actor: Long,
+        requestId: String,
+        reason: String,
+    ) = paid.deliveryOperation(connection, venueId, orderId, redemptionId, actor, requestId, "CORRECT", reason)
+
+    fun cancelCompensatedReward(
+        connection: Connection,
+        venueId: Long,
+        orderId: Long,
+        redemptionId: Long,
+        actor: Long,
+        requestId: String,
+        reason: String,
+    ): Boolean = paid.cancelCompensation(connection, venueId, orderId, redemptionId, actor, requestId, reason)
+
+    fun correctPaidUnit(
+        connection: Connection,
+        venueId: Long,
+        orderId: Long,
+        unitId: Long,
+        actor: Long,
+        requestId: String,
+        reason: String,
+    ): Boolean = paid.correctUnit(connection, venueId, orderId, unitId, actor, requestId, reason)
 
     fun applyRedemptionForBatch(
         connection: Connection,
@@ -714,20 +864,36 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
         userId: Long,
         checkoutItems: List<LoyaltyCheckoutItem>,
     ): LoyaltyRedemptionResult? {
+        check(!connection.autoCommit) { "Loyalty redemption requires a transaction" }
         if (checkoutItems.isEmpty()) return null
+        lockVenue(connection, venueId)
         val program = selectActiveProgram(connection, venueId) ?: return null
-        if (redemptionExistsForOrder(connection, program.id, userId, orderId)) return null
+        val session =
+            connection.lq("SELECT table_session_id FROM orders WHERE id = ? AND venue_id = ?", orderId, venueId) {
+                it.getObject(1)?.let { _ -> it.getLong(1) }
+            }.singleOrNull() ?: return null
+        if (paid.sessionUsed(connection, program.id, userId, session)) return null
         val progress = selectProgress(connection, program, userId, forUpdate = true) ?: return null
         if (progress.rewardsAvailable <= 0) return null
-        val targets = selectTargets(connection, venueId, program.id, LOYALTY_REWARD_TARGETS_TABLE)
         val selected =
             checkoutItems
                 .filter { it.qty > 0 && it.priceMinor > 0L }
-                .filter { item -> matchesLoyaltyTarget(targets, item.menuItemId, item.effectiveType) }
+                .filter {
+                        item ->
+                    paid.reward(connection, program.id, userId, item.menuItemId, item.effectiveType?.dbValue) != null
+                }
                 .minWithOrNull(compareBy<LoyaltyCheckoutItem> { it.priceMinor }.thenBy { it.orderBatchItemId })
                 ?: return null
         if (promotionAdjustmentExists(connection, selected.orderBatchItemId)) return null
-        val dedupeKey = "loyalty:redeem:program:${program.id}:order:$orderId"
+        val dedupeKey = "loyalty:reserve:batch:$batchId:user:$userId"
+        val reward =
+            paid.reward(
+                connection,
+                program.id,
+                userId,
+                selected.menuItemId,
+                selected.effectiveType?.dbValue,
+            ) ?: return null
         if (ledgerExists(connection, dedupeKey) || redemptionExistsByDedupeKey(connection, dedupeKey)) return null
 
         val ledgerRule = ensureLoyaltyLedgerRule(connection, program)
@@ -749,26 +915,9 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
             applicationId = applicationId,
             item = selected,
         )
-        insertLoyaltyRedemption(
-            connection = connection,
-            program = program,
-            userId = userId,
-            orderId = orderId,
-            batchId = batchId,
-            orderBatchItemId = selected.orderBatchItemId,
-            applicationId = applicationId,
-            discountMinor = selected.priceMinor,
-            dedupeKey = dedupeKey,
-        )
-        decrementAvailableReward(connection, program, userId)
-        insertRedemptionLedger(
-            connection = connection,
-            program = program,
-            userId = userId,
-            orderId = orderId,
-            batchId = batchId,
-            orderBatchItemId = selected.orderBatchItemId,
-            dedupeKey = dedupeKey,
+        paid.reserve(
+            connection, program.id, venueId, userId, orderId, batchId, selected.orderBatchItemId,
+            applicationId, selected.priceMinor, dedupeKey, reward, session,
         )
         return LoyaltyRedemptionResult(
             redeemedOrderBatchItemId = selected.orderBatchItemId,
@@ -946,6 +1095,7 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        lockVenue(connection, venueId)
                         val program = selectProgram(connection, venueId, programId)
                         if (program == null) {
                             connection.rollback()
@@ -991,6 +1141,7 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        lockVenue(connection, venueId)
                         val program = selectProgram(connection, venueId, programId)
                         if (program == null) {
                             connection.rollback()
@@ -1139,199 +1290,14 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
             statement.executeQuery().use { rs -> if (rs.next()) rs.toProgram() else null }
         }
 
-    private fun selectActiveProgramForClosedOrder(
+    private fun lockVenue(
         connection: Connection,
-        orderId: Long,
-    ): LoyaltyProgram? =
-        connection.prepareStatement(
-            """
-            SELECT ${programColumns()}
-            FROM orders o
-            JOIN loyalty_programs lp ON lp.venue_id = o.venue_id
-            LEFT JOIN venues v ON v.id = lp.venue_id
-            WHERE o.id = ?
-              AND o.status = 'CLOSED'
-              AND lp.status = ?
-              AND lp.program_type = ?
-            ORDER BY lp.id DESC
-            LIMIT 1
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, orderId)
-            statement.setString(2, LoyaltyProgramStatus.ACTIVE.dbValue)
-            statement.setString(3, LoyaltyProgramType.NTH_HOOKAH_FREE.dbValue)
-            statement.executeQuery().use { rs -> if (rs.next()) rs.toProgram() else null }
-        }
-
-    private fun loadEligibleEarnRows(
-        connection: Connection,
-        orderId: Long,
-        programId: Long,
-    ): List<EarnRow> =
-        connection.prepareStatement(
-            """
-            WITH item_promos AS (
-                SELECT order_batch_item_id, SUM(discount_minor) AS promo_discount_minor
-                FROM order_batch_item_promotion_adjustments
-                GROUP BY order_batch_item_id
-            ),
-            candidates AS (
-                SELECT
-                    o.id AS order_id,
-                    o.venue_id,
-                    ob.id AS batch_id,
-                    obi.id AS order_batch_item_id,
-                    obi.qty,
-                    COALESCE(
-                        gbi.user_id,
-                        CASE
-                            WHEN ob.author_user_id IS NOT NULL
-                             AND NOT EXISTS (
-                                 SELECT 1
-                                 FROM venue_members vm_author
-                                 WHERE vm_author.venue_id = o.venue_id
-                                   AND vm_author.user_id = ob.author_user_id
-                             )
-                            THEN ob.author_user_id
-                            ELSE NULL
-                        END,
-                        CASE
-                            WHEN t.type = 'PERSONAL' THEN t.owner_user_id
-                            ELSE NULL
-                        END
-                    ) AS user_id,
-                    GREATEST(
-                        COALESCE(mi.price_minor, 0) * obi.qty
-                        - CASE
-                            WHEN obi.discount_percent BETWEEN 1 AND 100
-                            THEN COALESCE(mi.price_minor, 0) * obi.qty * obi.discount_percent / 100
-                            ELSE 0
-                          END
-                        - COALESCE(item_promos.promo_discount_minor, 0),
-                        0
-                    ) AS payable_minor
-                FROM orders o
-                JOIN order_batches ob ON ob.order_id = o.id
-                JOIN order_batch_items obi ON obi.order_batch_id = ob.id
-                JOIN menu_items mi ON mi.id = obi.menu_item_id
-                LEFT JOIN menu_categories mc ON mc.id = mi.category_id
-                LEFT JOIN guest_batch_idempotency gbi
-                  ON gbi.batch_id = ob.id
-                 AND gbi.order_id = o.id
-                LEFT JOIN tab t ON t.id = ob.tab_id
-                LEFT JOIN order_promotion_reward_items opri ON opri.reward_order_batch_item_id = obi.id
-                LEFT JOIN loyalty_redemptions lr
-                  ON lr.order_batch_item_id = obi.id
-                 AND lr.status IN ('RESERVED', 'APPLIED')
-                LEFT JOIN item_promos ON item_promos.order_batch_item_id = obi.id
-                WHERE o.id = ?
-                  AND o.status = 'CLOSED'
-                  AND ob.status NOT IN ('REJECTED', 'CANCELED', 'CANCELLED')
-                  AND ob.rejected_reason_code IS NULL
-                  AND ob.rejected_reason_text IS NULL
-                  AND obi.is_excluded = FALSE
-                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
-                  AND opri.id IS NULL
-                  AND lr.id IS NULL
-                  AND COALESCE(mi.item_type, mc.category_type, 'OTHER') = 'HOOKAH'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM loyalty_program_earn_targets lpet
-                      WHERE lpet.program_id = ?
-                        AND (
-                            (
-                                lpet.target_type = 'CATEGORY_TYPE'
-                                AND lpet.semantic_type = COALESCE(mi.item_type, mc.category_type, 'OTHER')
-                            )
-                            OR
-                            (
-                                lpet.target_type = 'MENU_ITEM'
-                                AND lpet.menu_item_id = mi.id
-                            )
-                        )
-                  )
-            )
-            SELECT order_id, venue_id, batch_id, order_batch_item_id, user_id, qty
-            FROM candidates c
-            WHERE c.user_id IS NOT NULL
-              AND c.payable_minor > 0
-              AND EXISTS (
-                  SELECT 1
-                  FROM users u
-                  WHERE u.telegram_user_id = c.user_id
-              )
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM venue_members vm
-                  WHERE vm.venue_id = c.venue_id
-                    AND vm.user_id = c.user_id
-              )
-            ORDER BY c.order_batch_item_id
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, orderId)
-            statement.setLong(2, programId)
-            statement.executeQuery().use { rs ->
-                buildList {
-                    while (rs.next()) {
-                        add(
-                            EarnRow(
-                                orderId = rs.getLong("order_id"),
-                                venueId = rs.getLong("venue_id"),
-                                batchId = rs.getLong("batch_id"),
-                                orderBatchItemId = rs.getLong("order_batch_item_id"),
-                                userId = rs.getLong("user_id"),
-                                qty = rs.getInt("qty"),
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-
-    private fun lockOrCreateProgress(
-        connection: Connection,
-        program: LoyaltyProgram,
-        userId: Long,
-    ): ProgressRow {
-        connection.prepareStatement(
-            """
-            INSERT INTO guest_loyalty_progress (
-                program_id, venue_id, user_id, progress_count, rewards_available, rewards_reserved
-            )
-            SELECT ?, ?, ?, 0, 0, 0
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM guest_loyalty_progress
-                WHERE program_id = ? AND user_id = ?
-            )
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, program.id)
-            statement.setLong(2, program.venueId)
-            statement.setLong(3, userId)
-            statement.setLong(4, program.id)
-            statement.setLong(5, userId)
-            statement.executeUpdate()
-        }
-        return connection.prepareStatement(
-            """
-            SELECT progress_count, rewards_available, rewards_reserved
-            FROM guest_loyalty_progress
-            WHERE program_id = ? AND user_id = ?
-            FOR UPDATE
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, program.id)
-            statement.setLong(2, userId)
-            statement.executeQuery().use { rs ->
-                if (!rs.next()) throw SQLException("Missing loyalty progress row")
-                ProgressRow(
-                    progressCount = rs.getInt("progress_count"),
-                    rewardsAvailable = rs.getInt("rewards_available"),
-                    rewardsReserved = rs.getInt("rewards_reserved"),
-                )
-            }
+        venueId: Long,
+    ) {
+        val lock = if (connection.metaData.databaseProductName == "PostgreSQL") "FOR NO KEY UPDATE" else "FOR UPDATE"
+        connection.prepareStatement("SELECT id FROM venues WHERE id = ? $lock").use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rs -> if (!rs.next()) throw SQLException("Loyalty venue not found") }
         }
     }
 
@@ -1366,28 +1332,6 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun redemptionExistsForOrder(
-        connection: Connection,
-        programId: Long,
-        userId: Long,
-        orderId: Long,
-    ): Boolean =
-        connection.prepareStatement(
-            """
-            SELECT 1
-            FROM loyalty_redemptions
-            WHERE program_id = ?
-              AND user_id = ?
-              AND order_id = ?
-              AND status IN ('RESERVED', 'APPLIED')
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, programId)
-            statement.setLong(2, userId)
-            statement.setLong(3, orderId)
-            statement.executeQuery().use { rs -> rs.next() }
-        }
-
     private fun redemptionExistsByDedupeKey(
         connection: Connection,
         dedupeKey: String,
@@ -1416,106 +1360,6 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
             statement.setString(1, dedupeKey)
             statement.executeQuery().use { rs -> rs.next() }
         }
-
-    private fun insertLedger(
-        connection: Connection,
-        program: LoyaltyProgram,
-        row: EarnRow,
-        deltaProgress: Int,
-        deltaRewards: Int,
-        dedupeKey: String,
-    ) {
-        connection.prepareStatement(
-            """
-            INSERT INTO guest_loyalty_ledger (
-                program_id,
-                venue_id,
-                user_id,
-                event_type,
-                delta_progress,
-                delta_rewards,
-                order_id,
-                batch_id,
-                order_batch_item_id,
-                dedupe_key
-            )
-            VALUES (?, ?, ?, 'EARN', ?, ?, ?, ?, ?, ?)
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, program.id)
-            statement.setLong(2, program.venueId)
-            statement.setLong(3, row.userId)
-            statement.setInt(4, deltaProgress)
-            statement.setInt(5, deltaRewards)
-            statement.setLong(6, row.orderId)
-            statement.setLong(7, row.batchId)
-            statement.setLong(8, row.orderBatchItemId)
-            statement.setString(9, dedupeKey)
-            statement.executeUpdate()
-        }
-    }
-
-    private fun insertRedemptionLedger(
-        connection: Connection,
-        program: LoyaltyProgram,
-        userId: Long,
-        orderId: Long,
-        batchId: Long,
-        orderBatchItemId: Long,
-        dedupeKey: String,
-    ) {
-        connection.prepareStatement(
-            """
-            INSERT INTO guest_loyalty_ledger (
-                program_id,
-                venue_id,
-                user_id,
-                event_type,
-                delta_progress,
-                delta_rewards,
-                order_id,
-                batch_id,
-                order_batch_item_id,
-                dedupe_key
-            )
-            VALUES (?, ?, ?, 'ADJUST', 0, -1, ?, ?, ?, ?)
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, program.id)
-            statement.setLong(2, program.venueId)
-            statement.setLong(3, userId)
-            statement.setLong(4, orderId)
-            statement.setLong(5, batchId)
-            statement.setLong(6, orderBatchItemId)
-            statement.setString(7, dedupeKey)
-            statement.executeUpdate()
-        }
-    }
-
-    private fun decrementAvailableReward(
-        connection: Connection,
-        program: LoyaltyProgram,
-        userId: Long,
-    ) {
-        val updated =
-            connection.prepareStatement(
-                """
-                UPDATE guest_loyalty_progress
-                SET rewards_available = rewards_available - 1,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE program_id = ?
-                  AND user_id = ?
-                  AND rewards_available > 0
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setLong(1, program.id)
-                statement.setLong(2, userId)
-                statement.executeUpdate()
-            }
-        if (updated == 0) {
-            throw SQLException("No loyalty reward available for redemption")
-        }
-    }
 
     private fun ensureLoyaltyLedgerRule(
         connection: Connection,
@@ -1692,69 +1536,107 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun insertLoyaltyRedemption(
-        connection: Connection,
-        program: LoyaltyProgram,
-        userId: Long,
-        orderId: Long,
-        batchId: Long,
-        orderBatchItemId: Long,
-        applicationId: Long,
-        discountMinor: Long,
-        dedupeKey: String,
-    ) {
-        connection.prepareStatement(
-            """
-            INSERT INTO loyalty_redemptions (
-                program_id,
-                venue_id,
-                user_id,
-                order_id,
-                batch_id,
-                order_batch_item_id,
-                order_promotion_application_id,
-                status,
-                discount_minor,
-                dedupe_key
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'APPLIED', ?, ?)
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, program.id)
-            statement.setLong(2, program.venueId)
-            statement.setLong(3, userId)
-            statement.setLong(4, orderId)
-            statement.setLong(5, batchId)
-            statement.setLong(6, orderBatchItemId)
-            statement.setLong(7, applicationId)
-            statement.setLong(8, discountMinor)
-            statement.setString(9, dedupeKey)
-            statement.executeUpdate()
+    private fun enrichGuestProgress(
+        c: Connection,
+        progress: GuestLoyaltyProgress,
+    ): GuestLoyaltyProgress {
+        fun names(
+            t: LoyaltyPaidLifecycle.Terms,
+            kind: String,
+        ) = t.targets.filter { it.kind == kind }.map {
+            if (it.type == "CATEGORY_TYPE") "Кальяны из меню" else it.name ?: "Позиция #${it.item}"
         }
-    }
-
-    private fun updateProgress(
-        connection: Connection,
-        program: LoyaltyProgram,
-        userId: Long,
-        progressCount: Int,
-        rewardsDelta: Int,
-    ) {
-        connection.prepareStatement(
-            """
-            UPDATE guest_loyalty_progress
-            SET progress_count = ?,
-                rewards_available = rewards_available + ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE program_id = ? AND user_id = ?
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setInt(1, progressCount)
-            statement.setInt(2, rewardsDelta)
-            statement.setLong(3, program.id)
-            statement.setLong(4, userId)
-            statement.executeUpdate()
-        }
+        val cycles =
+            c.lq(
+                "SELECT id, terms_id, legacy_units FROM loyalty_accumulation_cycles " +
+                    "WHERE program_id = ? AND user_id = ? AND state = 'OPEN' ORDER BY " +
+                    "created_at, id",
+                progress.programId,
+                progress.userId,
+            ) { r ->
+                val t = paid.terms(c, r.getString(2))
+                val qty =
+                    r.getInt(3) +
+                        c.lq(
+                            "SELECT COUNT(*) FROM loyalty_paid_units WHERE cycle_id = ? AND active " +
+                                "= TRUE",
+                            r.getString(1),
+                        ) { it.getInt(1) }.single()
+                val origin =
+                    c.lq(
+                        "SELECT origin FROM loyalty_terms_versions WHERE id = ?",
+                        t.id,
+                    ) { it.getString(1) }.single()
+                LoyaltyCycleSummary(t.nth, qty, names(t, "EARN"), origin, names(t, "REWARD"))
+            }
+        val versions =
+            c.lq(
+                "SELECT terms_id, COUNT(*) AS qty FROM loyalty_accumulation_cycles " +
+                    "WHERE program_id = ? AND user_id = ? AND state = 'AVAILABLE' GROUP BY " +
+                    "terms_id",
+                progress.programId, progress.userId,
+            ) { it.getString(1) to it.getInt(2) } +
+                c.lq(
+                    "SELECT terms_id, rewards_remaining FROM loyalty_legacy_balances WHERE " +
+                        "program_id = ? AND user_id = ? AND rewards_remaining > 0",
+                    progress.programId, progress.userId,
+                ) { it.getString(1) to it.getInt(2) }
+        val conditions =
+            versions.map { (id, qty) ->
+                val t = paid.terms(c, id)
+                LoyaltyRewardCondition(
+                    t.nth,
+                    qty,
+                    names(
+                        t,
+                        "REWARD",
+                    ),
+                    c.lq("SELECT origin FROM loyalty_terms_versions WHERE id = ?", id) {
+                        it.getString(1)
+                    }.single(),
+                )
+            }
+        val legacy =
+            c.lq(
+                "SELECT progress_initial, rewards_remaining FROM " +
+                    "loyalty_legacy_balances WHERE program_id = ? AND user_id = ?",
+                progress.programId,
+                progress.userId,
+            ) { it.getInt(1) to it.getInt(2) }.singleOrNull()
+        val heldLegacy =
+            c.lq(
+                "SELECT b.progress_initial, t.nth_value FROM " +
+                    "loyalty_legacy_balances b JOIN " +
+                    "loyalty_terms_versions t ON t.id=b.terms_id " +
+                    "WHERE b.program_id=? AND b.user_id=?",
+                progress.programId, progress.userId,
+            ) {
+                if (it.getInt(1) >= it.getInt(2) - 1) it.getInt(1) else 0
+            }.singleOrNull() ?: 0
+        val remainingLegacy =
+            c.lq(
+                "SELECT COALESCE(SUM(legacy_units),0) FROM " +
+                    "loyalty_accumulation_cycles WHERE program_id " +
+                    "= ? AND user_id = ? AND state = 'OPEN'",
+                progress.programId,
+                progress.userId,
+            ) { it.getInt(1) }.single()
+        return progress.copy(
+            progressCount = cycles.firstOrNull()?.progressCount ?: if (heldLegacy > 0) 0 else progress.progressCount,
+            legacyUnresolvedProgress = heldLegacy,
+            nthValue = cycles.firstOrNull()?.nthValue ?: progress.nthValue,
+            cycles = cycles,
+            rewardConditions = conditions,
+            rewardsApplied =
+                c.lq(
+                    "SELECT COUNT(*) FROM loyalty_redemptions WHERE program_id = ? AND " +
+                        "user_id = ? AND origin = 'PAYMENT_POLICY' AND status = 'APPLIED'",
+                    progress.programId,
+                    progress.userId,
+                ) { it.getInt(1) }.single(),
+            legacyProgress = heldLegacy + remainingLegacy,
+            legacyAvailable = legacy?.second ?: 0,
+        )
     }
 
     private fun programColumns(): String =
@@ -1822,15 +1704,6 @@ class LoyaltyRepository(private val dataSource: DataSource?) {
     }
 
     private fun paidRequiredForReward(nthValue: Int): Int = (nthValue - 1).coerceAtLeast(1)
-
-    private data class EarnRow(
-        val orderId: Long,
-        val venueId: Long,
-        val batchId: Long,
-        val orderBatchItemId: Long,
-        val userId: Long,
-        val qty: Int,
-    )
 
     private data class ProgressRow(
         val progressCount: Int,
