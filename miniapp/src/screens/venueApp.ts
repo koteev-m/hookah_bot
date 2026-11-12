@@ -1111,7 +1111,13 @@ export function mountVenueApp(options: VenueAppOptions) {
       case 'accounting':
         return renderVenueAccountingScreen({ root: screenRoot, backendUrl, isDebug, venueId, access, userId: currentUserId })
       case 'stats':
-        return renderVenueStatsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
+        return renderVenueStatsScreen({ root: screenRoot, backendUrl, isDebug, venueId, access,
+          onAccessLost: reason => {
+            if (reason === 'denied' && currentUserId) revokedContexts.add(accessContextKey(currentUserId, access))
+            invalidateVenueContext()
+            void loadAccess()
+          }
+        })
       case 'feedback':
         return renderVenueFeedbackScreen({ root: screenRoot, backendUrl, isDebug, venueId, access })
       case 'settings':

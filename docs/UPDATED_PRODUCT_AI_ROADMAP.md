@@ -1,5 +1,42 @@
 # Product + Telegram AI Bots Roadmap
 
+## Analytics & Statistics — stages 1–4 local candidate
+
+`HT-ANALYTICS-KPI-READMODELS-IMPLEMENT-01`: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**,
+including `HT-ANALYTICS-KPI-REVIEW-FIX-01` (owner-supplied review, no open findings).
+Stage 1 remains **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**. Stage 2 supplies shared
+versioned KPI contracts and read-only Venue/Platform aggregates/API; formulas and limitations
+are canonical in `ANALYTICS_EVENTS.md`.
+Stage 3 `HT-ANALYTICS-VENUE-STATS-UI-IMPLEMENT-01` / `VENUE-STATS-ADVANCED-001`, including
+`HT-ANALYTICS-VENUE-MONEY-FORMAT-FIX-01`: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**
+(owner-confirmed targeted review, no findings). Existing Venue v1, ISO money and financial contracts preserved.
+Stage 4 `HT-ANALYTICS-PLATFORM-DASHBOARD-IMPLEMENT-01` / `ANALYTICS-PLATFORM-DASHBOARD-001`:
+**LOCAL IMPLEMENTED / REVIEW PENDING**. Existing Platform analytics entry uses the read-only UTC v1 API,
+five grouped domains, scoped period/section controls, exact money, truthful partial/unavailable states,
+accessible explanations and existing safe drill-down. No new backend KPI/store/writer/migration.
+Overall block: **LOCAL / FINAL INTEGRATION REVIEW PENDING**. All four stages remain unpublished.
+Stage-4 independent review then overall integration review must pass before separately authorized publication.
+No hosted CI/staging/device readiness claim. The original three backlog IDs remain; broad feedback,
+subscription/event coverage remains open. Do not declare ANALYTICS-EVENT-COVERAGE-001 fully closed.
+
+
+## Analytics & Statistics — approved bounded stage 1
+
+`HT-ANALYTICS-FOUNDATION-IMPLEMENT-01`: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**.
+D1–D4 are **APPROVED**; the exact definitions and historical completeness rules are in
+`ANALYTICS_EVENTS.md`. The single product block retains the original IDs
+`ANALYTICS-EVENT-COVERAGE-001`, `VENUE-STATS-ADVANCED-001`, `ANALYTICS-PLATFORM-DASHBOARD-001`.
+Sequence: (1) domain transition facts + minimal compatible events, (2) shared KPI/read models,
+(3) Venue Stats Advanced UI, (4) Platform Analytics UI. These are stages, not four new projects.
+
+Stage 1 adds confirmed batch transition facts and staff-call timing/provenance, PG V138/H2 V139,
+legacy unknown markers, transactional version 2 batch events and unchanged physical names.
+No KPI endpoint/dashboard, new accounting/audit system, AI report, MRR, real refund, unique
+visitor metric or funnel is included. Broad feedback/subscription/event coverage remains open;
+`ANALYTICS-EVENT-COVERAGE-001` is not closed by this bounded baseline. Existing accounting,
+checkout, promotions, loyalty, historical bills and reports remain regression obligations.
+
+
 Дата обновления: 2026-11-09 (HT-MENU-DESCRIPTIONS-FEATURED-01-R1; local menu and Dashboard/Alerts release evidence).
 
 Current evidence boundary: [Section 13.0](#130-current-evidence-boundary--2026-11-09) supersedes
@@ -2307,7 +2344,7 @@ acceptance remainders below retain their original scope.
 | `BOOKING-DISPLAY-LABEL-001`, `BOOKING-INBOX-DISCOVERABILITY-001`, `BOOKING-UNREAD-NOTIFICATION-001`, `BOOKING-THREAD-UNIQUENESS-001`, `QA-BOOKING-ISOLATION-001` | All five are in main, not uncommitted candidates. `BookingDisplayLabel`, `SupportThreadRepository`, booking route/PG/label-browser tests and V124–V126 exist. The subordinate fix ledger below is historical local review evidence, not another backlog. | Present in reported V132 image; V124–V126 are not pending staging schema. Historical review/cutover and exact live two-account/unread/linked-group acceptance are not fully reconciled by this task. Preserve their gates; do not infer a PASS or repeat an old cutover from a dated NEXT. |
 | `GROWTH-GIFT-RELEASE-001`, `REPEAT-MANUAL-001` | Gift parity and transient Repeat code/tests are in main. `VenuePromotionRoutes`, `OrdersRepository`, Guest repeat-plan and browser coverage exist. | Present in reported image, but complete feature-specific live acceptance remains unproved. Repeat still requires the existing two-venue/two-user/real-QR/menu-change scenario. Gift needs its application/bill/history evidence; “before commit” is obsolete. |
 | `GROWTH-LOYALTY-PRODUCTIZE-001` | Existing main foundation retained; HT-GROWTH-LOYALTY-PRODUCTIZE-001/002/003 locally implement approved paid-cycle, reserve/issue and exact-unit compensation with role-aware guidance. | LOCAL IMPLEMENTED / REVIEW PENDING; hosted CI/staging/device acceptance is separate. Owner decisions close the former closed/multi-unit reserved-quote gap; see GROWTH_RETENTION.md. |
-| `ANALYTICS-EVENT-COVERAGE-001`, `ANALYTICS-PLATFORM-DASHBOARD-001` | Six literal event names observed: `table_session_started`, `batch_created`, `batch_status_changed`, `subscription_status_changed`, `feedback_submitted`, `promotion_applied`. Venue fixed-period stats and accounting reports exist; Platform analytics remains an explanatory section, not a KPI dashboard. | Code present; emitted runtime samples/normalization and broad booking/support/menu/notification/growth coverage remain unproved. Spec names such as `order_batch_created` are targets, not proof of current emission. |
+| `ANALYTICS-EVENT-COVERAGE-001`, `ANALYTICS-PLATFORM-DASHBOARD-001` | Six literal event names observed: `table_session_started`, `batch_created`, `batch_status_changed`, `subscription_status_changed`, `feedback_submitted`, `promotion_applied`. Venue fixed-period stats and accounting reports exist; Platform v1 analytics now has a local five-domain dashboard; stage 4 and overall reviews remain pending. | Code present; emitted runtime samples/normalization and broad booking/support/menu/notification/growth coverage remain unproved. Spec names such as `order_batch_created` are targets, not proof of current emission. |
 
 All other master rows retain their narrower open/decision/deferred scope; existing foundation
 tests do not establish completion of the requested extension. In particular, do not reopen released
@@ -2404,7 +2441,7 @@ real Telegram/staff-chat smoke, `D` = explicit product decision. The final colum
 | `VENUE-SETTINGS-PARITY-001` — backend-backed settings parity | `OPEN_CONFIRMED` | MRWI; Venue, Telegram | Team/schedule, public card, hours/exceptions, booking hold and shift extension work; timezone and notification toggles exist in DB/Bot but lack complete Venue Mini App management. | Venue self-service / Bot-only configuration drift. | Notification policy. | M / NO; settings repo/API/UI/Bot regression; F+E2E+A+S; next settings epic; P1 operations. |
 | `VENUE-OWNER-PUBLISH-UX-001` — clear Venue Mini App path to publication | `IN_MAIN / ACCEPTANCE_OPEN` | MRWI; Product Spec, Platform, Venue | Settings → Venue Card exposes readiness and confirmed exact-venue Owner publication through the same server operation as Owner Bot. Manager reads readiness; Guest Preview stays read-only. PR #242 is merged and code is in reported staging; published/mobile acceptance is not proved. | Venue Owner onboarding / route from draft to Guest visibility. | Bounded staging/mobile product acceptance. Platform lifecycle authority, subscription and catalog visibility remain independent. | Existing implementation and F+E2E/PG tests; no new migration; product smoke pending. |
 | `VENUE-PUBLISH-WORKFLOW-001` — versioned settings publish/rollback | `DEFERRED_AFTER_MVP` | MRWI; Venue, Platform | Saved settings and guarded private/published preview work. Deliberate versioned publishing, history and rollback do not. | Venue safety / accidental public changes. | Lifecycle/product ownership decision. | L/XL / YES/POSSIBLE; settings DB/API/UI; D+PG+F+A+S; at multi-editor demand; P3. |
-| `VENUE-STATS-ADVANCED-001` — custom operational statistics | `DEFERRED_AFTER_MVP` | MRWI; Venue, Analytics | Today/7d/30d orders, revenue, average bill, discounts, cancellations and top items work. Add custom periods, booking/call metrics and only reliable AI summaries. | Venue decisions / incomplete operational picture. | Analytics event baseline. | L / POSSIBLE; stats queries/UI/AI; F+A+S; when fixed periods are insufficient; P2/P3. |
+| `VENUE-STATS-ADVANCED-001` — custom operational statistics | `LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS` | `HT-ANALYTICS-VENUE-STATS-UI-IMPLEMENT-01`; Venue, Analytics | Existing Venue statistics use reviewed stage-2 v1 API: calendar periods, order/batch distinctions, frozen closed-shift finances by currency, bookings, physical seatings, calls, honest coverage and Russian explanations. No AI summaries. | Own-venue OWNER/MANAGER decisions without invented history or financial settlement. | Stages 1–3 independent review PASS; stage 4 and final integration review precede publication. | Local frontend/HTTP/Chromium/CI evidence only; no hosted CI, staging or device readiness; original backlog ID retained. |
 | `STAFF-CALL-OPS-POLISH-001` — complete call actors/timing/replies | `OPEN_CONFIRMED` | MRWI; Venue, Telegram | NEW/ACK/DONE, guest CANCELLED and bounded audit are closed. Add permitted manual cancel, quick replies and `acked_by/done_by` timestamps/history. | Guest service / weak accountability and response-time truth. | Cancel/reply policy. | M / YES; calls schema/API/UI/staff-chat; PG+F+A+RT; before SLA metrics; P2. |
 | `STAFF-SCHEDULE-ADVANCED-001` — availability, swaps and recurring shifts | `DEFERRED_AFTER_MVP` | MRWI; Staff, Venue | Phase 1, restore, bulk assignment and optional module are closed. Availability, swaps, recurring templates, reminders, attendance and richer planning remain. | Staff planning / manual coordination. | Staff communication policy. | XL / YES likely; schedule DB/API/UI/Telegram; D+PG+F+A+S; proven scheduling demand; P3. |
 | `STAFF-COMMS-POLICY-001` — choose staff notification topology | `BLOCKED_PRODUCT_DECISION` | MRWI; Staff, Telegram, Venue | Staff-chat radar works. Decide personal bot confirmations, swap/signup messages and one forum topic versus another group, including consent and privacy. | Staff reliability / noisy or missed alerts. | Explicit topology/consent decision. | L / UNKNOWN; notifications/Telegram/settings; D; before schedule automation; P2. |
@@ -2439,7 +2476,7 @@ real Telegram/staff-chat smoke, `D` = explicit product decision. The final colum
 | `SUPPORT-AUTOMATION-001` — SLA, aging and escalation | `OPEN_CONFIRMED` | MRWI; Platform, Communication | SUPPORT_TICKET list/reply/status/reopen and scope assignment work. Add SLA clocks, queue aging, worker/alerts, auto-escalation and operator assignment. | Guest/Venue support / missed tickets. | Notification reliability and ownership model. | L / YES; support DB/workers/UI/notifications; PG+F+A+S; before manual queue overload; P2. |
 | `SUPPORT-ADVANCED-001` — diagnostics, attachments, macros and CSAT | `BLOCKED_PREREQUISITE` | MRWI; Platform, Analytics, Media | Structured threads/context work. Privacy-safe diagnostic bundles, attachments/retention, macros and truthful CSAT/TTFR/TTR metrics require storage, redaction, SLA and event semantics. | Faster support / PII, storage and misleading-metric risk. | Media storage, analytics, SLA semantics. | L/XL / YES; support/storage/events/UI; privacy F+A+S; repeated support demand; P3 blocked. |
 | `ANALYTICS-EVENT-COVERAGE-001` — canonical server event baseline | `OPEN_CONFIRMED` | MRWI; Analytics, Product Spec, all domain docs | Event store and six observed names work, including `promotion_applied`; names/envelope/idempotency/retention and booking/support/staff/menu/notification/onboarding/favorites/repeat/provider coverage remain partial. | All roles / unreliable KPIs and automation. | Domain-owned server facts. | L / YES; event schema/emitters/tests/docs; PG+F+A+S sample; before dashboards/campaigns/funnel; P1. |
-| `ANALYTICS-PLATFORM-DASHBOARD-001` — reconciled Platform KPIs | `BLOCKED_PREREQUISITE` | MRWI; Analytics, Platform | Operational facts exist and UI intentionally avoids fake numbers. Add agreed aggregates, filters and drill-down only after event normalization. | Platform decisions / false confidence. | `ANALYTICS-EVENT-COVERAGE-001`. | L / POSSIBLE; query/API/Platform UI; fixtures+privacy F+A+S; immediately after event baseline; P1/P2 blocked. |
+| `ANALYTICS-PLATFORM-DASHBOARD-001` — reconciled Platform KPIs | `LOCAL IMPLEMENTED / REVIEW PENDING` | HT-ANALYTICS-PLATFORM-DASHBOARD-IMPLEMENT-01; Analytics, Platform | Existing Platform entry reads reviewed v1 aggregates: UTC periods, lifecycle/activity, subscriptions/courtesy, invoice currencies/warnings, onboarding/chat links, support human TTFR and honest coverage. | Reliable Platform decisions; no fictional series or settlement. | Stages 1–3 independent review PASS; stage 4 review and final integration review pending. | Local Ktor/H2/HTTP/frontend/Chromium/CI evidence only; unpublished; no hosted/staging/device acceptance. |
 | `PLATFORM-AUDIT-VIEWER-001` — privacy-filtered audit explorer | `OPEN_CONFIRMED` | MRWI; Security, Platform, Analytics | Safe audit rows exist for many bounded actions; no general Platform viewer/filter/export policy exists. Add scoped view, payload allowlists and direct denials; do not conflate with missing write audits. | Platform accountability / costly incident review. | Stable audit contracts. | L / POSSIBLE; audit queries/API/UI; F+A+S; after/alongside critical writer audits; P2. |
 
 ### 13.7 Menu, content and media

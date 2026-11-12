@@ -1,5 +1,32 @@
 # Order / Session / Tab Core Model
 
+## Analytics stage 2 consumers
+
+Read-only KPI consumers use stage-1 domain first times and transition facts. Created orders and
+created batches are separate units; distinct accepted/delivered/rejected batches use occurrence
+windows. Creation-cohort acceptance/delivery rates share the same batch denominator. Rejection
+does not erase acceptance; CLOSED is not delivery/payment. Legacy first-ever acceptance remains
+unknown. Top item names use immutable snapshots and disclose current exclusion-state semantics.
+No writer/workflow/checkout change. Versioned API/formulas: `ANALYTICS_EVENTS.md`.
+
+
+## Confirmed transition facts — analytics foundation
+
+`HT-ANALYTICS-FOUNDATION-IMPLEMENT-01`: LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS.
+D1 is APPROVED: first accepted order is the first acceptance of any batch; append batches do not
+reset it. D4 is APPROVED: distinct registered `table_session_id` is a physical seating, including
+offline; MOVE is not a new seating. Guest History/unique persons are outside this counter.
+
+`VenueOrdersRepository` writes actual batch from/to facts, first confirmed times and compatible
+analytics in the state transaction. Single updates affect only that batch. Bulk and whole-order
+updates record each changed batch; rejecting/closing never fabricates delivery or payment.
+No-op/replay emits no fact. Domain transition sequences preserve real repeated transitions;
+the operational workflow, checkout, accounting, loyalty and receipt rules remain unchanged.
+PG V138/H2 V139 leave old history unknown. Incomplete legacy objects retain that marker after
+new known transitions. See `ANALYTICS_EVENTS.md` for the approved definitions, version 2 payload,
+legacy workflow-field compatibility and honest first-observation interpretation.
+
+
 Loyalty boundary (`HT-GROWTH-LOYALTY-PRODUCTIZE-002/003`): CLOSED alone never earns.
 Only fully settled, undisputed digital sales qualify fulfilled, attributed snapshot-priced units.
 Checkout reserves; explicit confirmed delivery applies. One active reward slot belongs to

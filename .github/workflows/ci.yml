@@ -95,15 +95,39 @@ jobs:
         uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
         with:
           cache-key-prefix: ${{ runner.os }}-gradle-${{ hashFiles('gradle.properties', 'gradle/libs.versions.toml', 'settings.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Verify analytics billing CI contract
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_analytics_billing_ci.py
       - name: Verify Docker availability (required for Testcontainers)
         run: docker info
+      - name: Prepare fresh analytics billing evidence
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          identity = {key: os.environ[key] for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA")}
+          if not all(identity.values()):
+              raise SystemExit("missing billing CI run identity")
+          marker = Path("backend/app/build/analytics-billing-ci-run.json")
+          marker.parent.mkdir(parents=True, exist_ok=True)
+          marker.write_text(json.dumps({**identity, "startedAt": datetime.now(timezone.utc).isoformat()}))
+          PY
       - name: Run guest venue platform route and security tests
         env:
           TZ: UTC
         run: |
           echo "CI timezone contract: $TZ"
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
-            ./gradlew --no-daemon --max-workers=1 :backend:app:test \
+            ./gradlew --no-daemon --no-build-cache --max-workers=1 :backend:app:test --rerun \
+            --tests "com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test" \
+            --tests "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest" \
+            --tests "com.hookah.platform.backend.analytics.KpiReadModelsH2Test" \
+            --tests "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest" \
+            --tests "com.hookah.platform.backend.analytics.KpiRoutesTest" \
+            --tests "com.hookah.platform.backend.analytics.VenueStatsUiContractTest" \
+            --tests "com.hookah.platform.backend.analytics.PlatformAnalyticsUiContractTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenH2Test" \
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenPostgresTest" \
@@ -196,11 +220,34 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python3 - <<'PY'
+          import json
+          import math
+          import os
+          from datetime import datetime, timezone
           from pathlib import Path
           from xml.etree import ElementTree
 
+          marker = json.loads(Path("backend/app/build/analytics-billing-ci-run.json").read_text())
+          for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA"):
+              if not os.environ.get(key) or marker.get(key) != os.environ[key]:
+                  raise SystemExit(f"billing CI run identity mismatch: {key}")
+          started = datetime.fromisoformat(marker["startedAt"])
+          now = datetime.now(timezone.utc)
+          if started.utcoffset() != timezone.utc.utcoffset(started) or started > now:
+              raise SystemExit("invalid billing CI start time")
+          billing_classes = {
+              "com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test",
+              "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest",
+          }
           report_dir = Path("backend/app/build/test-results/test")
           expected_classes = [
+              "com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test",
+              "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest",
+              "com.hookah.platform.backend.analytics.KpiReadModelsH2Test",
+              "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest",
+              "com.hookah.platform.backend.analytics.KpiRoutesTest",
+              "com.hookah.platform.backend.analytics.VenueStatsUiContractTest",
+              "com.hookah.platform.backend.analytics.PlatformAnalyticsUiContractTest",
               "com.hookah.platform.backend.miniapp.guest.GuestVenueRoutesTest",
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenH2Test",
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenPostgresTest",
@@ -287,6 +334,13 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
+              "com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test": 5,
+              "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest": 6,
+              "com.hookah.platform.backend.analytics.KpiReadModelsH2Test": 16,
+              "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest": 18,
+              "com.hookah.platform.backend.analytics.KpiRoutesTest": 1,
+              "com.hookah.platform.backend.analytics.VenueStatsUiContractTest": 2,
+              "com.hookah.platform.backend.analytics.PlatformAnalyticsUiContractTest": 1,
               "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardRoutesTest": 2,
               "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardPostgresTest": 1,
               "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardCapacityPostgresTest": 1,
@@ -359,6 +413,9 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           required_test_names = {
+              "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest": {
+                  "dense PostgreSQL snapshot preserves results without a payment scan per invoice",
+              },
               "com.hookah.platform.backend.support.SupportTicketRoutesTest": {
                   "allowed generic guest notifications persist replies with queued true",
                   "denied generic guest notifications persist replies with queued false",
@@ -436,6 +493,37 @@ jobs:
               for key, value in counts.items():
                   totals[key] += value
               minimum_tests = required_minimums.get(class_name, 1)
+              if class_name in billing_classes:
+                  cases = suite.findall("testcase")
+                  if suite.tag != "testsuite" or suite.attrib.get("name") != class_name:
+                      problems.append(f"billing suite identity mismatch: {class_name}")
+                  if not {"tests", "skipped", "failures", "errors", "time", "timestamp"} <= suite.attrib.keys():
+                      problems.append(f"incomplete billing suite metadata: {class_name}")
+                  if len(cases) != counts["tests"] or len(cases) < minimum_tests:
+                      problems.append(f"incomplete executed billing cases: {class_name} actual={len(cases)}")
+                  if len(cases) != len(list(suite.iter("testcase"))):
+                      problems.append(f"nested billing cases: {class_name}")
+                  names = [(case.attrib.get("name") or "").removesuffix("()") for case in cases]
+                  if not all(names) or len(names) != len(set(names)):
+                      problems.append(f"missing or duplicate billing case names: {class_name}")
+                  for case in cases:
+                      if case.attrib.get("classname") != class_name:
+                          problems.append(f"billing testcase identity mismatch: {class_name}")
+                      if any(case.find(f".//{status}") is not None for status in ("skipped", "failure", "error")):
+                          problems.append(f"non-passing billing testcase: {class_name} {case.attrib.get('name')}")
+                      if case.attrib.get("status", "run") not in ("run", "passed"):
+                          problems.append(f"unexecuted billing testcase: {class_name}")
+                  try:
+                      durations = [float(node.attrib["time"]) for node in [suite, *cases]]
+                      timestamp = datetime.fromisoformat(suite.attrib["timestamp"])
+                      if not all(math.isfinite(value) and value >= 0 for value in durations):
+                          raise ValueError("invalid duration")
+                      if timestamp.utcoffset() != timezone.utc.utcoffset(timestamp) or not started <= timestamp <= now:
+                          raise ValueError("stale or future suite timestamp")
+                      if report.stat().st_mtime < started.timestamp():
+                          raise ValueError("stale XML file")
+                  except (KeyError, TypeError, ValueError) as error:
+                      problems.append(f"invalid or stale billing evidence: {class_name}: {error}")
               if counts["tests"] < minimum_tests:
                   problems.append(
                       f"incomplete suite: {class_name} "
@@ -1054,6 +1142,8 @@ jobs:
         run: |
           JAVA_TOOL_OPTIONS=-Dapi.version=1.44 _JAVA_OPTIONS=-Xmx4g \
             ./gradlew --no-daemon --max-workers=1 :backend:app:test \
+            --tests "com.hookah.platform.backend.analytics.AnalyticsFoundationH2Test" \
+            --tests "com.hookah.platform.backend.analytics.AnalyticsFoundationPostgresTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramDialogStateMigrationTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.TableSessionsMigrationV28PostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.AuditLogTargetMigrationH2Test" \
@@ -1078,6 +1168,16 @@ jobs:
 
           report_dir = Path("backend/app/build/test-results/test")
           required_suites = [
+              (
+                  "H2 analytics foundation migration and rollback",
+                  report_dir / "TEST-com.hookah.platform.backend.analytics.AnalyticsFoundationH2Test.xml",
+                  6,
+              ),
+              (
+                  "PostgreSQL analytics foundation migration concurrency and rollback",
+                  report_dir / "TEST-com.hookah.platform.backend.analytics.AnalyticsFoundationPostgresTest.xml",
+                  9,
+              ),
               (
                   "H2 Telegram dialog-state migration",
                   report_dir / (
@@ -1808,6 +1908,98 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ('platform-analytics.spec.ts', 'platform analytics real Ktor H2 JSON passes the adapter and screen without write operations'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics samples real HTTP counts keep unknown without a default sample size'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics samples COUNT defaults stay absent across zero null period reload and reentry'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics samples measured WAAV age and TTFR preserve real positive zero and unknown counts'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics existing owner navigation opens the real dashboard and returns to venues'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics denies OWNER before loading aggregates'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics denies MANAGER before loading aggregates'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics denies STAFF before loading aggregates'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics denies GUEST before loading aggregates'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics overview is compact and all five thematic sections use real metrics'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics presets use server UTC dates and keep rolling WAAV independent'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics custom dates use exclusive UTC end even on a venue DST day'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics invalid ranges clear results and never query the API'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics section filter requests only supported aggregates and does not infer chat links'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics lifecycle availability and legacy activity remain distinct'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics subscriptions distinguish missing rows paid period and courtesy selector'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics paid invoices manual confirmations warnings and currencies do not become settlement'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics support excludes SYSTEM GUEST booking and venue conversations from human TTFR'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics active support queue exposes measured age separately from resolution'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics partial human reply samples remain partial instead of an overall average'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics complete zero and unavailable mean are distinct in an empty platform'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics 400 error clears data and offers a safe retry'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics 500 error clears data and offers a safe retry'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics 401 revocation erases data and blocks stale permission reuse'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics 403 revocation erases data and blocks stale permission reuse'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics ignored-abort stale period response cannot replace the latest result'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics account switch clears before paint and cannot restore an old response'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics logout erases loaded values without waiting for another API call'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics reload return and Telegram reactivation read fresh data'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics slow request timeout remains recoverable and late success stays hidden'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics missing KPI and unknown capability do not become fake zeros'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics rejects null response without leaking previous data'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics rejects foreign response without leaking previous data'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics rejects wrongTimezone response without leaking previous data'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics rejects wrongPeriod response without leaking previous data'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics rejects wrongVersion response without leaking previous data'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics rejects malformedMetric response without leaking previous data'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics adapter rejects unsupported filters before issuing a request'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics 360px dark is accessible and preserves exact large currency amounts'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics 1440px light is accessible and preserves exact large currency amounts'): 1,
+              ('platform-analytics.spec.ts', 'platform analytics DOM excludes confidential data and drilldown uses existing screens without filters'): 1,
+              ('venue-money-format.spec.ts', 'money ISO IQD preserves the numeric value of 12345 minor units'): 1,
+              ('venue-money-format.spec.ts', 'money ISO MGA preserves the numeric value of 12345 minor units'): 1,
+              ('venue-money-format.spec.ts', 'money ISO RUB preserves the numeric value of 12345 minor units'): 1,
+              ('venue-money-format.spec.ts', 'money ISO EUR preserves the numeric value of 12345 minor units'): 1,
+              ('venue-money-format.spec.ts', 'money ISO USD preserves the numeric value of 12345 minor units'): 1,
+              ('venue-money-format.spec.ts', 'money ISO JPY preserves the numeric value of 12345 minor units'): 1,
+              ('venue-money-format.spec.ts', 'money ISO KRW preserves the numeric value of 12345 minor units'): 1,
+              ('venue-money-format.spec.ts', 'money ISO KWD preserves the numeric value of 12345 minor units'): 1,
+              ('venue-money-format.spec.ts', 'money ISO BHD preserves the numeric value of 12345 minor units'): 1,
+              ('venue-money-format.spec.ts', 'money ISO CLF preserves the numeric value of 12345 minor units'): 1,
+              ('venue-money-format.spec.ts', 'money ISO zero one negative and Long boundaries remain exact for every supported exponent'): 1,
+              ('venue-money-format.spec.ts', 'money ISO unknown invalid and nonapplicable currency or amount never guesses a scale'): 1,
+              ('venue-money-format.spec.ts', 'money ISO scale ignores Intl defaults and resolved options in ru-RU'): 1,
+              ('venue-money-format.spec.ts', 'money ISO scale ignores Intl defaults and resolved options in en-US'): 1,
+              ('venue-money-format.spec.ts', 'money ISO scale ignores Intl defaults and resolved options in de-DE'): 1,
+              ('venue-money-format.spec.ts', 'money ISO checked-in exponents exactly match the pinned SIX source including NA entries'): 1,
+              ('venue-stats.spec.ts', 'stats money real Ktor H2 IQD response passes adapter and renders ISO minor units'): 1,
+              ('venue-stats.spec.ts', 'stats money real Ktor H2 MGA response passes adapter and renders ISO minor units'): 1,
+              ('venue-stats.spec.ts', 'stats money mixed ISO currencies and Long maximum fit 1440px light'): 1,
+              ('venue-stats.spec.ts', 'stats money mixed ISO currencies and Long maximum fit 360px dark'): 1,
+              ("venue-stats.spec.ts", 'stats calendar arithmetic validates actual dates and 370-day inclusive ceiling without 24-hour venue arithmetic'): 1,
+              ("venue-stats.spec.ts", 'stats money retains exact integer minor units beyond Number precision and ISO fraction digits'): 1,
+              ("venue-stats.spec.ts", 'stats real HTTP capture renders orders batches financial shifts bookings visits and operator versus automatic calls'): 1,
+              ("venue-stats.spec.ts", 'stats presets include venue today and send 7 or 30 calendar dates in its timezone'): 1,
+              ("venue-stats.spec.ts", 'stats custom 2026-03-29 preserves the 23-hour Berlin day'): 1,
+              ("venue-stats.spec.ts", 'stats custom 2026-10-25 preserves the 25-hour Berlin day'): 1,
+              ("venue-stats.spec.ts", 'stats invalid custom dates do not issue API queries and clear old results'): 1,
+              ("venue-stats.spec.ts", 'stats closed frozen finances retain exact currencies and never combine the provisional open shift'): 1,
+              ("venue-stats.spec.ts", 'stats complete empty counters differ from unavailable attendance and mean without inventing currency totals'): 1,
+              ("venue-stats.spec.ts", 'stats partial history exposes observed subset samples and unknown without displaying raw technical codes'): 1,
+              ("venue-stats.spec.ts", 'stats API error clears previously visible money and supports a safe retry'): 1,
+              ("venue-stats.spec.ts", 'stats slow response shows progress and timeout permits retry without stale numbers'): 1,
+              ("venue-stats.spec.ts", 'stats delayed old period cannot overwrite a newer result even if cancellation is ignored'): 1,
+              ("venue-stats.spec.ts", 'stats venue switch disposes old request and never renders foreign financial data'): 1,
+              ("venue-stats.spec.ts", 'stats account switch immediately clears sensitive state and rejects a late result'): 1,
+              ("venue-stats.spec.ts", 'stats access loss 401 clears data and disables historical controls'): 1,
+              ("venue-stats.spec.ts", 'stats access loss 403 clears data and disables historical controls'): 1,
+              ("venue-stats.spec.ts", 'stats OWNER can read management data without mutations'): 1,
+              ("venue-stats.spec.ts", 'stats MANAGER can read management data without mutations'): 1,
+              ("venue-stats.spec.ts", 'stats STAFF has no frontend grant and issues no analytics request'): 1,
+              ("venue-stats.spec.ts", 'stats GUEST has no frontend grant and issues no analytics request'): 1,
+              ("venue-stats.spec.ts", 'stats PLATFORM_OWNER has no frontend grant and issues no analytics request'): 1,
+              ("venue-stats.spec.ts", 'stats filters apply table only within an operational section and preserve finance scope'): 1,
+              ("venue-stats.spec.ts", 'stats missing table capability keeps unfiltered results and explains the unavailable filter'): 1,
+              ("venue-stats.spec.ts", 'stats unsupported contract and foreign response fail closed without displaying data'): 1,
+              ("venue-stats.spec.ts", 'stats unknown KPI capability stays unavailable and never becomes a fabricated zero'): 1,
+              ("venue-stats.spec.ts", 'stats keyboard opens explanations and applies custom dates using native controls'): 1,
+              ("venue-stats.spec.ts", 'stats shell retains navigation venue switch reload and closes revoked membership'): 1,
+              ("venue-stats.spec.ts", 'stats Telegram deactivate hides private data and activated reloads a current snapshot'): 1,
+              ("venue-stats.spec.ts", 'stats 1440px light layout is readable without horizontal overflow'): 1,
+              ("venue-stats.spec.ts", 'stats 360px dark layout is readable without horizontal overflow'): 1,
               ("guest-smoke.spec.ts", 'loyalty venue delivery correction preserves draft and operation id after lost response'): 1,
               ("guest-smoke.spec.ts", 'loyalty staff can confirm fulfillment but cannot administer correction'): 1,
               ("guest-smoke.spec.ts", 'loyalty guest sees frozen cycles legacy origin and paused reward restrictions after reload'): 1,

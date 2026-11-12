@@ -1,5 +1,55 @@
 # Platform Cockpit Model
 
+## Platform Analytics read models — stage 2
+
+`GET /api/platform/analytics/v1` is **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**, Platform Owner only.
+It provides SQL aggregates for lifecycle, availability, WAAV, subscriptions/paid-through/courtesy,
+invoice states/currencies/reconciliation warnings, onboarding, staff-chat bindings and support.
+Selected UTC dates apply only to period metrics; state metrics are labeled snapshots at one asOf.
+No write-capable subscription getter or capped HTTP list supplies these totals. Missing history
+is partial/unavailable, never invented zero. Paid invoice/manual confirmation is not bank
+settlement; courtesy is not payment. Support uses only SUPPORT_TICKET and human reply timestamps.
+No automatic access to a venue's accounting. No chat IDs, message content or provider secrets.
+Exact contract/formulas: `ANALYTICS_EVENTS.md`.
+
+## Platform Analytics UI — stage 4
+
+`HT-ANALYTICS-PLATFORM-DASHBOARD-IMPLEMENT-01` / `ANALYTICS-PLATFORM-DASHBOARD-001`:
+**LOCAL IMPLEMENTED / REVIEW PENDING**. Stages 1–3 have owner-confirmed independent review PASS;
+the complete block is **LOCAL / FINAL INTEGRATION REVIEW PENDING**, unpublished.
+
+Existing «Аналитика» navigation opens «Аналитика платформы». Four overview cards highlight total
+venues, active venues over 168 hours, overdue invoices and active support tickets. Five expandable
+sections keep detailed metrics/distributions readable on a phone. Today/7d/30d/custom periods are UTC;
+custom end is inclusive in the form and exclusive in GET. Only the API section filter is supported.
+Server asOf, period and separate rolling activity bounds are visible; snapshots never masquerade as series.
+
+Lifecycle and actual guest availability are separate. Missing subscriptions/legacy transitions are
+explicit. Paid-through, server-selected effective paid-through and courtesy are distinct, without
+frontend extension logic. Invoice amounts use exact ISO/BigInt formatting by currency; paid status,
+manual confirmation and reconciliation warnings are not bank settlement. Overdue invoices overlap open.
+Onboarding counts applications and confirmed links, not paying customers; staff-chat links do not prove
+delivery. Support uses only tickets, human TTFR, unknown replies and oldest active age. Availability
+reason distribution, support status distribution and resolution metrics are unavailable in v1 and are
+not reconstructed from lists or updated_at. No fake growth charts, MRR, profit, refunds or AI reports.
+
+Platform sample captions are explicit presentation metadata in the existing card definitions:
+WAAV uses the confirmed venue count, oldest active ticket age uses the active queue size, and TTFR
+uses the measurable human-reply count. Their real zero samples remain visible. Default `samples=0`
+for guest availability and both paid-through COUNTs is not a defined sample size: show the observed
+count, unknown cases and coverage warning without a sample caption. Other ordinary counts show their
+count without duplicating it as sample metadata. This does not derive samples from value or alter v1.
+`HT-ANALYTICS-PLATFORM-SAMPLES-FIX-01` remains local / review pending; no overall acceptance is implied.
+
+`Как считается` works by tap and keyboard. Partial observed samples and unknown counts are labelled;
+null is never zero. Slow loading/timeout/retry, invalid periods and incompatible responses have safe
+Russian copy. Sequence guards, abort, context checks before paint and lifecycle cleanup clear previous
+values on period/context change, logout, backgrounding or 401/403. Return/reload reads fresh values.
+Links open existing venue list/billing, applications or Support Center without pretending to retain
+analytics filters. No new management actions, raw identifiers, message content or provider details.
+See `TESTING_QA_SMOKE_STRATEGY.md` for real Ktor/H2 → HTTP → adapter → screen evidence and limitations.
+
+
 Дата актуализации: 2026-10-14.
 
 Статус: **current product reference** for Platform Mode. Platform guest QR and the bounded
@@ -23,7 +73,7 @@ Ordinary venue operations such as orders, staff calls, booking queues, menu/stop
 | Billing / subscriptions / invoices | Manual/fake billing cockpit, subscription overview, invoice ensure, manual mark-paid, next-period invoice and courtesy days are staging-smoked. | GET overviews are read-only; money/state mutations require explicit POST actions and audit. |
 | Support Center | Support Tickets MVP is smoke-passed for `SUPPORT_TICKET`, including platform-only and venue-transferred tickets. | Platform sees support tickets, not ordinary `VENUE_CHAT`. |
 | Controlled Guest QR test | Exact Platform Owner can explicitly confirm one guarded Telegram table QR; activation and every later table-bound mutation use transaction-bound final authorization, and visit exit does not depend on current Guest availability. | Five-minute opaque process-local pending in single-instance long-polling Phase 1, shared exit/mutation chat-context lock, public Guest guards and fail-closed audit-before-apply grant no Venue authority or persistent impersonation. A callback missing on another instance fails closed. |
-| Analytics / audit | Audit rows exist for several critical operations; broad Platform analytics dashboards are future work. | `docs/ANALYTICS_EVENTS.md` is the source for event names/KPIs; Platform cockpit should show reliable operational metrics only after event semantics are stable. |
+| Analytics / audit | Audit rows exist for critical operations; the bounded Platform analytics v1 dashboard is locally implemented, review pending. | `docs/ANALYTICS_EVENTS.md` is the source for event names/KPIs; Platform cockpit should show reliable operational metrics only after event semantics are stable. |
 | Growth / placements | Guest growth/retention is specified in `docs/GROWTH_RETENTION.md`; paid placement and promotion boosting are future. | No paid placement in the MVP; if implemented later, promoted content must be labeled and backed by billing, moderation and analytics. |
 | Risk / health | Billing state, venue availability and support queue status are partially visible. | Future cockpit should highlight blocked venues, overdue invoices, support queues and integration health without exposing secrets. |
 
@@ -347,7 +397,7 @@ Use this as the Platform-specific part of release smoke:
   moderation/bulk actions and risk/health automation remain separate work in the master inventory.
 - Placements cockpit is future/partial.
 - Paid placement/promotion boosting is future and must follow `docs/GROWTH_RETENTION.md`: visible ad labels, moderation, billing and analytics are required before launch.
-- Platform analytics dashboard is future.
+- Bounded Platform analytics v1 dashboard is LOCAL IMPLEMENTED / REVIEW PENDING; final integration review and separate release acceptance remain pending. Broader analytics stays future.
 - Event/audit explorer is future/partial and must follow `docs/ANALYTICS_EVENTS.md` payload safety rules.
 - Real acquiring provider / Telegram Stars / recurring payments are future.
 - Advanced support automation, diagnostics, macros, attachments, CSAT and support analytics are future.

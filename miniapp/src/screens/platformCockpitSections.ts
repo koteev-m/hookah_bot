@@ -1,6 +1,6 @@
 import { append, el, on } from '../shared/ui/dom'
 
-export type PlatformCockpitSection = 'onboarding' | 'placements' | 'support' | 'analytics'
+export type PlatformCockpitSection = 'onboarding' | 'placements' | 'support'
 
 export type PlatformCockpitSectionOptions = {
   root: HTMLDivElement | null
@@ -43,16 +43,6 @@ const sectionCopy: Record<PlatformCockpitSection, SectionCopy> = {
       'В Mini App нет номеров тикетов, статусов или очереди обращений.',
       'По обращениям заведений используйте действующий Telegram flow.',
       'Деньги, доступы и роли не меняются из этой секции.'
-    ]
-  },
-  analytics: {
-    title: 'Аналитика',
-    lead:
-      'Платформенная аналитика в Mini App появится отдельным блоком. Сейчас здесь не показываются тестовые или приблизительные числа.',
-    points: [
-      'Для операционных данных используйте карточки заведений и существующие bot reports.',
-      'Launch baseline не должен содержать fake analytics.',
-      'Расширенный dashboard вынесен в следующий product block.'
     ]
   }
 }

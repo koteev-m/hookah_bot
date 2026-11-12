@@ -295,6 +295,31 @@ class GuestOrderRoutesTest {
             assertEquals(1, countRows(jdbcUrl, "order_batch_items"))
             assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
             assertEquals(1, countAnalyticsEvents(jdbcUrl, "batch_created", venueId))
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { c ->
+                c.createStatement().use { statement ->
+                    statement.executeQuery(
+                        "SELECT payload_json FROM analytics_events WHERE event_type = 'batch_created'",
+                    )
+                        .use { rs ->
+                            assertTrue(rs.next())
+                            val event = json.parseToJsonElement(rs.getString(1)).jsonObject
+                            assertEquals("2", event.getValue("contractVersion").jsonPrimitive.content)
+                            assertEquals("MINIAPP", event.getValue("channel").jsonPrimitive.content)
+                            assertEquals(
+                                "order_batch_created",
+                                event.getValue("canonicalEventType").jsonPrimitive.content,
+                            )
+                            assertNotNull(event["occurredAt"])
+                            assertFalse(rs.next())
+                        }
+                    statement.executeQuery("SELECT status_history_complete, first_accepted_at FROM order_batches")
+                        .use { rs ->
+                            assertTrue(rs.next())
+                            assertTrue(rs.getBoolean(1))
+                            assertEquals(null, rs.getTimestamp(2))
+                        }
+                }
+            }
         }
 
     @Test

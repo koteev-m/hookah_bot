@@ -1,0 +1,52 @@
+.venue-stats { display: grid; gap: 1rem; min-width: 0; }
+.venue-stats p { margin: .45rem 0; }
+.venue-stats .stats-header { display: grid; gap: .55rem; }
+.venue-stats .stats-header h2 { font-size: 1.65rem; margin: 0; }
+.stats-eyebrow { color: var(--app-muted); font-size: .8rem; letter-spacing: .04em; }
+.stats-venue-name { font-weight: 600; font-size: 1.15rem; }
+.stats-controls { display: grid; gap: 1rem; margin-top: .5rem; }
+.stats-filter-row, .stats-custom-period { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; }
+.stats-filter-row label, .stats-custom-period label { display: grid; gap: .35rem; min-width: 0; flex: 1 1 190px; font-size: .9rem; }
+.stats-filter-row select, .stats-custom-period input { width: 100%; }
+.stats-custom-period > p { flex-basis: 100%; }
+.stats-validation { color: var(--app-danger); }
+.stats-metadata { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; padding-top: .75rem; border-top: 1px solid var(--app-border); font-size: .9rem; color: var(--app-muted); }
+.stats-metadata:empty, .stats-load-status:empty { display: none; }
+.stats-coverage { border-left: 3px solid var(--app-accent); background: var(--app-soft); padding: .85rem 1rem; border-radius: .5rem; }
+.stats-coverage[data-coverage="partial"] { border-color: var(--app-warning); }
+.stats-sections { display: grid; gap: 1.25rem; }
+.stats-section { min-width: 0; scroll-margin-top: 1rem; }
+.stats-section > h2 { margin: 0; }
+.stats-intro { max-width: 85ch; }
+.stats-group, .stats-distribution, .stats-currency { margin-top: 1.4rem; }
+.stats-group > h3, .stats-distribution > h3 { margin-bottom: .4rem; }
+.venue-stats .venue-stats-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 235px), 1fr)); margin-top: .75rem; }
+.venue-stats .venue-stats-metric { justify-content: flex-start; gap: .5rem; padding: 1rem; min-width: 0; }
+.venue-stats .venue-stats-metric h4 { font-size: .95rem; font-weight: 500; color: var(--app-muted); margin: 0; }
+.venue-stats .stats-value { font-size: clamp(1.15rem, 2.1vw, 1.65rem); line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.venue-stats .stats-value[data-long="true"] { font-size: 1rem; }
+.stats-currency .venue-stats-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+.stats-currency-unit { display: inline-block; white-space: nowrap; }
+.venue-stats .venue-stats-metric[data-coverage="partial"] { border-color: var(--app-warning); }
+.stats-note, .stats-explanation p { color: var(--app-muted); font-size: .875rem; }
+.stats-observed { font-weight: 600; font-variant-numeric: tabular-nums; }
+.stats-explanation { margin-top: auto; font-size: .875rem; }
+.stats-explanation summary, .stats-payment-details > summary { min-height: 44px; display: list-item; padding: .7rem 0; cursor: pointer; color: var(--app-accent); }
+.stats-warning, .stats-notice { background: var(--app-soft); padding: .75rem; border-radius: .5rem; }
+.stats-warning { border-left: 3px solid var(--app-warning); }
+.stats-provisional { margin-top: 1.5rem; padding-top: 1rem; border-top: 2px dashed var(--app-border); }
+.stats-distribution ul { padding: 0; list-style: none; display: grid; gap: .75rem; }
+.stats-distribution li { min-width: 0; }
+.stats-distribution-label { display: flex; justify-content: space-between; gap: .75rem; margin-bottom: .35rem; }
+.stats-distribution-label span { overflow-wrap: anywhere; }
+.stats-bar-track { height: .35rem; border-radius: 1rem; background: var(--app-soft); overflow: hidden; }
+.stats-bar { height: 100%; background: var(--app-accent); border-radius: 1rem; }
+.stats-skeleton { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: .75rem; }
+.stats-skeleton > div { height: 110px; border-radius: .75rem; background: var(--app-soft); border: 1px solid var(--app-border); }
+.venue-stats [hidden] { display: none !important; }
+@media (max-width: 480px) {
+  .venue-stats-periods { display: grid; grid-template-columns: 1fr 1fr; }
+  .venue-stats-periods button { min-width: 0; }
+  .stats-metadata { display: block; }
+  .stats-filter-row > button, .stats-custom-period > button { width: 100%; }
+}

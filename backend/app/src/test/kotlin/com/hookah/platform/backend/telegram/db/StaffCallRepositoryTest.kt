@@ -86,6 +86,18 @@ class StaffCallRepositoryTest {
                 )
 
             assertEquals(GUEST_USER_ID, fetchStaffCallCreatedByUserId(jdbcUrl, created.id))
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { c ->
+                c.createStatement().executeQuery(
+                    "SELECT status_history_complete, acknowledged_at, completed_at FROM staff_calls " +
+                        "WHERE id = ${created.id}",
+                ).use { rs ->
+                    assertTrue(rs.next())
+                    assertTrue(rs.getBoolean(1))
+                    assertEquals(null, rs.getTimestamp(2))
+                    assertEquals(null, rs.getTimestamp(3))
+                }
+            }
+
             val calls = repository.listActiveByVenue(fixture.venueId, limit = 20)
             val createdCall = calls.single { it.id == created.id }
             assertEquals("Максим", createdCall.guestDisplayName)

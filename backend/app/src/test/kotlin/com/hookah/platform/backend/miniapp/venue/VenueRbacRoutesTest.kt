@@ -1381,6 +1381,52 @@ class VenueRbacRoutesTest {
             val listAfterDonePayload =
                 json.decodeFromString(VenueStaffCallsResponse.serializer(), listAfterDoneResponse.bodyAsText())
             assertEquals(emptyList(), listAfterDonePayload.items.map { it.id })
+            val timing =
+                DriverManager.getConnection(jdbcUrl, "sa", "").use { c ->
+                    c.createStatement().executeQuery(
+                        "SELECT acknowledged_at, completed_at, acknowledged_channel, " +
+                            "completion_kind, completion_channel " +
+                            "FROM staff_calls WHERE id = $staffCallId",
+                    ).use { rs ->
+                        assertTrue(rs.next())
+                        val ack = rs.getTimestamp(1).toInstant()
+                        val done = rs.getTimestamp(2).toInstant()
+                        assertTrue(!done.isBefore(ack))
+                        assertEquals("MINIAPP", rs.getString(3))
+                        assertEquals("OPERATOR", rs.getString(4))
+                        assertEquals("MINIAPP", rs.getString(5))
+                        ack to done
+                    }
+                }
+            client.post("/api/venue/$venueId/staff-calls/$staffCallId/done") {
+                headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            }
+            val pending = seedStaffCall(jdbcUrl, venueId, status = "NEW", tableNumber = 15)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { c ->
+                c.createStatement().executeUpdate(
+                    "DELETE FROM venue_members WHERE venue_id = $venueId AND user_id = $TELEGRAM_USER_ID",
+                )
+                c.createStatement().executeQuery(
+                    "SELECT acknowledged_at, completed_at FROM staff_calls WHERE id = $staffCallId",
+                ).use { rs ->
+                    assertTrue(rs.next())
+                    assertEquals(timing.first, rs.getTimestamp(1).toInstant())
+                    assertEquals(timing.second, rs.getTimestamp(2).toInstant())
+                }
+            }
+            val revoked =
+                client.post("/api/venue/$venueId/staff-calls/$pending/ack?channel=TELEGRAM") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.Forbidden, revoked.status)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { c ->
+                c.createStatement().executeQuery("SELECT status, acknowledged_at FROM staff_calls WHERE id = $pending")
+                    .use { rs ->
+                        assertTrue(rs.next())
+                        assertEquals("NEW", rs.getString(1))
+                        assertNull(rs.getTimestamp(2))
+                    }
+            }
         }
 
     @Test

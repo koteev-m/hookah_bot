@@ -11,6 +11,8 @@ import com.hookah.platform.backend.ai.PromotionDiagnosticsTool
 import com.hookah.platform.backend.ai.VenueSummaryTool
 import com.hookah.platform.backend.ai.createAiAssistantClient
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
+import com.hookah.platform.backend.analytics.KpiRepository
+import com.hookah.platform.backend.analytics.kpiRoutes
 import com.hookah.platform.backend.api.ApiError
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.api.ApiErrorEnvelope
@@ -1646,6 +1648,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     auditLogRepository = auditLogRepository,
                 )
                 accountingRoutes(AccountingRepository(dataSource))
+                kpiRoutes(KpiRepository(dataSource), platformConfig)
                 venueStatsRoutes(
                     venueAccessRepository = venueAccessRepository,
                     venueStatsRepository = venueStatsRepository,

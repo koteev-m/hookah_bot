@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.venue
 
+import com.hookah.platform.backend.analytics.AnalyticsChannel
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
@@ -129,12 +130,14 @@ private suspend fun io.ktor.server.application.ApplicationCall.updateStaffCall(
         when (action) {
             StaffCallAction.ACK ->
                 staffCallRepository.ackStaffCall(
+                    channel = AnalyticsChannel.MINIAPP,
                     venueId = venueId,
                     staffCallId = staffCallId,
                     actorUserId = actorUserId,
                 )
             StaffCallAction.DONE ->
                 staffCallRepository.doneStaffCall(
+                    channel = AnalyticsChannel.MINIAPP,
                     venueId = venueId,
                     staffCallId = staffCallId,
                     actorUserId = actorUserId,

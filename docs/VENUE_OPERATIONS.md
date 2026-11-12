@@ -1,5 +1,87 @@
 # Venue Mode Operations Model
 
+## Venue Stats read models — stage 2
+
+`GET /api/venue/{venueId}/stats/v1` is a local OWNER/MANAGER-only read-only API.
+Required calendar `from/to` dates use the venue timezone and exclusive `to`; one server asOf,
+coverage, explicit null/observed values and per-currency frozen closed-shift totals are returned.
+Open shift remains separately provisional. Operational section/table filters are scoped and
+validated; finance cannot be filtered by table. Staff has no new statistics privilege.
+Definitions, sample counts and legacy limitations: `ANALYTICS_EVENTS.md`, stage 2.
+Old today/7d/30d API is preserved. Stage 2 is **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**.
+
+## Venue Stats Advanced UI — stage 3
+
+`HT-ANALYTICS-VENUE-STATS-UI-IMPLEMENT-01` / `VENUE-STATS-ADVANCED-001`:
+**LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**, including the ISO money fix (owner-confirmed targeted review).
+Unpublished; existing «Статистика» entry remains OWNER/MANAGER-only. Stage 4 Platform UI is
+**LOCAL IMPLEMENTED / REVIEW PENDING**; the overall block is **LOCAL / FINAL INTEGRATION REVIEW PENDING**.
+
+- Header shows venue, inclusive calendar dates, server timezone and snapshot update time.
+  «Сегодня», «Последние 7 дней», «Последние 30 дней» include today in that timezone.
+  Custom start/end use native date controls; both dates are included. The end becomes the next
+  calendar date for exclusive API `to`, with a 1–370 calendar-day bound. DST is resolved by the
+  backend, never by adding 24 hours per venue day. Invalid ranges clear old results and explain
+  the correction without querying aggregates.
+- «Показатели» selects all or a single section. «Текущий стол» exists only for orders,
+  bookings, seatings or calls; uses existing venue tables and current association after MOVE.
+  Switching sections resets it. Finance/all never receive a table filter. Missing table-list
+  capability leaves an explained unfiltered read. No channel or global payment-method filter.
+- Orders and parts are separate counts. Creation, actual transition dates and outcomes for the
+  created cohort have separate headings. Rates share the backend denominator; durations say
+  «Среднее», not median. Top 20 delivered immutable item names show quantities/coverage.
+- «Финансовые итоги закрытых смен» displays frozen closed reports by currency; accrued,
+  operator-confirmed, discounts, gifts, recorded unpaid, average accrued sale and sales count.
+  Exact decimal strings are formatted via BigInt with ISO minor digits. Available recorded
+  CASH/CARD/TRANSFER amounts are expandable details, not a filter applied to unrelated KPIs.
+  «Текущая смена — предварительные данные» is separated and not limited to chosen dates.
+  Always visible: «Показатели закрытых смен относятся к датам их закрытия. Подтверждённые
+  оплаты внесены сотрудником и не означают банковскую сверку». Voiding a payment is not a
+  real refund; frozen unpaid is not current client debt.
+- Created bookings and scheduled visits are separate cohorts with current status distributions.
+  Attendance = SEATED/(SEATED+NO_SHOW); unresolved/future/canceled/expired are explicit. No
+  outcomes means «Недостаточно данных», not 0%. CHANGED never implies seating. «Посадки» counts
+  registered physical sessions including offline/WALK_IN; MOVE does not add a session, and the
+  count is not unique people or Guest History.
+- Calls separate creation, operator ACK/completion, automatic completion, cancellation and mean
+  first response with sample/unknown counts. Visible explanation: automatic order-close completion
+  is not confirmed service by an employee. No personal staff metrics or rankings.
+
+Each non-obvious metric has native keyboard/tap-accessible «Как считается». Partial coverage
+and financial/booking limitations remain visible without opening it. Complete empty counts say
+«За выбранный период событий нет»; partial history shows «Частичные данные», observed subset
+and unknown count; unavailable/null stays «Недостаточно данных». Safe Russian messages translate
+server limitations without displaying internal codes, raw errors, contacts or identifiers.
+
+Loading clears previous results, shows skeletons, gives a slow-request notice and a retry after
+30 seconds. Sequence/context guards plus AbortController discard stale period/venue responses.
+Account changes, permission denial, disposal and backgrounding clear sensitive content. Returning
+or reopening obtains a fresh snapshot; no persistent analytics cache. The existing shell refreshes
+membership after denial. Server RBAC remains authoritative; no Platform Owner accounting bypass.
+Dark/light palettes and responsive 360 px layout use existing application theme tokens.
+
+
+## Analytics foundation scope — approved definitions
+
+`HT-ANALYTICS-FOUNDATION-IMPLEMENT-01`: LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS.
+D1–D4 are **APPROVED** in `ANALYTICS_EVENTS.md`: first batch acceptance defines first accepted
+order; WAAV uses actual ACCEPTED/DELIVERED transitions in 168 hours; finances use frozen reports
+of shifts closed in period; scheduled arrival share is SEATED/(SEATED+NO_SHOW); seating counts
+distinct registered physical sessions, including offline and excluding repeat MOVE.
+
+`staff_calls` now persists `acknowledged_at`/`acknowledged_channel`, `completed_at`/
+`completion_kind`/`completion_channel`, `cancelled_at`/`cancellation_kind` in the same transaction
+as an applied transition. OPERATOR completion differs from ORDER_CLOSED automatic resolution.
+Auto BILL DONE from NEW has no ACK; other active calls auto-cancel, never count as service.
+ACK→DONE retains ACK; repeats do not change time. Legacy ACK→DONE can have unknown ACK time.
+Manual NEW→DONE is still not an allowed workflow edge. Existing best-effort audit is independent,
+and is not timing evidence. No new manual cancellation, employee ranking or call history log.
+
+No screen or public DTO changes in this stage. Custom period/read models, Venue UI and Platform
+UI follow separately within the same Analytics & Statistics block. No AI reports are in MVP.
+Legacy unknown/null must be displayed as unavailable, not zero; see the analytics coverage contract.
+
+
 Loyalty (`HT-GROWTH-LOYALTY-PRODUCTIZE-002/003`): fully settled receipts of a particular
 CLOSED digital sale and explicit fulfillment qualify earning; operational close alone does not.
 Existing «Доставлено» or individual reward confirmation records actual issue. Before confirming,
@@ -173,7 +255,7 @@ Canonical dependencies:
 | Staff-chat | Linked group diagnostics and operational notifications. | Link/test/unlink, live order activity-card behavior and state-aware booking shortcuts are smoke-closed. | Personal staff notifications and unified event policy remain future. |
 | Feedback | Internal post-visit feedback from completed Guest History. | DONE / MVP / staging-smoke-passed: Owner/Manager read own-venue aggregate/list and can manually open exact `VENUE_CHAT` follow-up for ratings `1..3`; Staff denied. | Platform feedback analytics dashboard and automated prompts remain future. |
 | Settings / card preview | Venue profile, schedule, booking hold, extension, staff-chat and read-only public-card preview. | Booking hold, shift extension, public profile/card, schedule/date exceptions and Owner-only public review link are smoke-closed. One `Предпросмотр для гостя` entry uses one backend-selected `PUBLISHED_PUBLIC` / own-venue `PRIVATE_DRAFT` endpoint and is **DONE / MVP / STAGING-SMOKE-PASSED**. Unsaved public-card, weekly-schedule and date-exception changes block preview without auto-save. | Direct information-media management is deployed with bounded PDF staging acceptance below. Draft publication is implemented locally under the venue card; versioned snapshots remain future. Archived/deleted/missing venues continue to fail closed for Guest Preview. |
-| Stats | Role-specific operational summaries. | Venue Mini App read-only stats passed staging smoke for Owner/Manager. | Custom ranges, arbitrary stats, AI summaries and advanced analytics remain future. |
+| Stats | Own-venue OWNER/MANAGER analytics; Staff operational counters remain separate. | Legacy fixed-period screen has historical staging smoke. Advanced v1 screen: LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS, unpublished; see stage 3 above. | Overall review after Platform UI; no AI summaries or invented metrics. |
 
 ## Dashboard
 
@@ -1087,30 +1169,16 @@ Staging deployment and real Telegram/WebView acceptance remain separate authoriz
 
 ## Stats
 
-Target Owner stats:
-- orders today/7d/30d;
-- accepted/delivered batches;
-- estimated revenue only if bill data is reliable;
-- top items;
-- average accept/deliver time;
-- staff calls;
-- booking response;
-- support summary.
+OWNER/MANAGER use the same own-venue v1 management statistics: orders and parts, actual
+acceptance/delivery, immutable delivered item quantities, frozen closed-shift finances,
+created/scheduled bookings, physical seatings and operator/automatic calls. The stage-3 UX
+contract above defines periods, filters, explanations, coverage, loading and context loss.
+Operational queue/backlog counters remain in their existing screens; no support summary,
+employee ranking, AI report or unreliable estimated revenue is added here.
 
-Target Manager stats:
-- shift queue;
-- backlog;
-- SLA timers where implemented;
-- active staff calls;
-- bookings waiting response.
-
-Staff:
-- no business analytics by default;
-- operational queue/counters only.
-
-Current vs target:
-- Venue Mini App read-only stats passed staging smoke for Owner/Manager.
-- Custom ranges, arbitrary period stats, AI summaries and advanced analytics remain future.
+STAFF has no business analytics by default; only existing authorized operational queues/counters.
+The legacy fixed-period implementation has historical staging smoke. Advanced custom-period v1
+UI is LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS and has no hosted/staging/device acceptance yet.
 
 ## Surface Parity Matrix
 
@@ -1128,7 +1196,7 @@ Current vs target:
 | Staff schedule | No Phase 1 flow. | `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`: Owner/Manager use bulk `График смен` plus explicit canceled restore; Staff uses read-only `Мои смены`. | No Phase 1 event/button. | Venue Mini App only; keep atomicity, conflict/CAS, effective-hours, bounded own-venue management/read and Today/Guest compatibility in regression. | Regression |
 | Staff-chat link/test | Bot link command exists. | M6 link/test/unlink smoke-closed. | Target group. | Personal notifications future. | Regression |
 | Settings / card preview | Bot and Mini App share the public review URL source; Bot remains richer in info-section/media authoring. | Backend-backed slices include Owner-only `Ссылка для отзывов` and one read-only `Предпросмотр для гостя` screen with server-selected `PUBLISHED_PUBLIC` / `PRIVATE_DRAFT`; preview is **DONE / MVP / STAGING-SMOKE-PASSED**. | No. | Keep exact Guest parity, saved-private allowlist, dirty-state guard, RBAC/privacy/media scope and lifecycle/stale-state boundaries in regression; direct information-media upload is a separate local staging slice, with live acceptance still open. | Regression/P2 |
-| Stats | Bot stats exist. | Read-only stats smoke-closed. | No. | Custom ranges/advanced analytics future. | P2 |
+| Stats | Existing Bot stats unchanged. | Advanced v1 OWNER/MANAGER statistics: LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS; legacy smoke evidence remains separate. | No. | Finish Platform UI and overall independent review before separate publication. | P2 |
 
 ## Current Known Gaps
 

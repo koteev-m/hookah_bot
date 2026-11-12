@@ -755,6 +755,19 @@ class VenueOrderRoutesTest {
             assertEquals("new", entry.fromStatus)
             assertEquals("accepted", entry.toStatus)
             assertEquals(1, countAnalyticsEvents(jdbcUrl, "batch_status_changed", venueId))
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { c ->
+                c.createStatement().executeQuery(
+                    "SELECT from_status, to_status, occurred_at, channel FROM order_batch_status_facts " +
+                        "WHERE batch_id = $batchId",
+                ).use { rs ->
+                    assertTrue(rs.next())
+                    assertEquals("NEW", rs.getString(1))
+                    assertEquals("ACCEPTED", rs.getString(2))
+                    assertNotNull(rs.getTimestamp(3))
+                    assertEquals("MINIAPP", rs.getString(4))
+                    assertFalse(rs.next())
+                }
+            }
         }
 
     @Test

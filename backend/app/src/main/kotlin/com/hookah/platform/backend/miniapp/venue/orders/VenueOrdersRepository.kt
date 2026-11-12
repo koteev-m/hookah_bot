@@ -1,8 +1,7 @@
 package com.hookah.platform.backend.miniapp.venue.orders
 
-import com.hookah.platform.backend.analytics.AnalyticsEventRecord
+import com.hookah.platform.backend.analytics.AnalyticsChannel
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
-import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
@@ -26,10 +25,12 @@ import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Timestamp
+import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 import javax.sql.DataSource
 
@@ -217,6 +218,7 @@ data class OrderAuditEntry(
 data class OrderActionActor(
     val userId: Long,
     val role: VenueRole,
+    val channel: AnalyticsChannel = AnalyticsChannel.UNKNOWN,
 )
 
 data class OrderStatusUpdateResult(
@@ -249,6 +251,8 @@ class VenueOrdersRepository(
     private val visitRepository: VisitRepository? = null,
     private val visitFeedbackRepository: VisitFeedbackRepository? = null,
     private val loyaltyRepository: LoyaltyRepository? = null,
+    private val clock: Clock = Clock.systemUTC(),
+    private val transitionCheckpoint: (String, Connection) -> Unit = { _, _ -> },
 ) {
     private val logger = LoggerFactory.getLogger(VenueOrdersRepository::class.java)
 
@@ -1089,6 +1093,9 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        transitionCheckpoint("BEFORE_LOCK", connection)
+                        lockTransitionVenue(connection, venueId)
+                        transitionCheckpoint("LOCKED", connection)
                         loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         // Hall and accounting writers take venue before context/order locks. Closing an
                         // order also inserts visits (session FKs), so it must enter that hierarchy first.
@@ -1129,8 +1136,9 @@ class VenueOrdersRepository(
                                 applied = false,
                             )
                         }
-                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val now = clock.instant().truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC)
                         var changedBatchId: Long? = null
+                        var previousBatchStatus: OrderBatchStatus? = null
                         if (nextStatus == OrderWorkflowStatus.CLOSED) {
                             updateOrderStatusOnly(connection, orderId)
                             visitRepository?.recordOrderClosedVisits(connection, orderId, now.toInstant())
@@ -1149,6 +1157,7 @@ class VenueOrdersRepository(
                                             applied = false,
                                         )
                                     }
+                            previousBatchStatus = readBatchStatus(connection, latestBatchId)
                             val updated = updateLatestBatchStatus(connection, latestBatchId, batchStatus.dbValue, now)
                             if (updated != 1) {
                                 runCatching { connection.rollback() }
@@ -1173,37 +1182,18 @@ class VenueOrdersRepository(
                             reasonText = null,
                         )
                         if (changedBatchId != null) {
-                            analyticsEventRepository?.append(
-                                connection = connection,
-                                event =
-                                    AnalyticsEventRecord(
-                                        eventType = "batch_status_changed",
-                                        payload =
-                                            analyticsCorrelationPayload(
-                                                venueId = venueId,
-                                                orderId = orderId,
-                                                batchId = changedBatchId,
-                                                extra =
-                                                    mapOf(
-                                                        "fromStatus" to current.toApi(),
-                                                        "toStatus" to nextStatus.toApi(),
-                                                    ),
-                                            ),
-                                        venueId = venueId,
-                                        orderId = orderId,
-                                        batchId = changedBatchId,
-                                        idempotencyKey =
-                                            buildString {
-                                                append("batch_status_changed:")
-                                                append(venueId)
-                                                append(':')
-                                                append(orderId)
-                                                append(':')
-                                                append(changedBatchId)
-                                                append(':')
-                                                append(nextStatus.toApi())
-                                            },
-                                    ),
+                            recordOrderBatchTransition(
+                                connection,
+                                analyticsEventRepository,
+                                venueId,
+                                orderId,
+                                changedBatchId,
+                                checkNotNull(previousBatchStatus),
+                                checkNotNull(OrderBatchStatus.fromWorkflow(nextStatus)),
+                                now,
+                                actor,
+                                current,
+                                nextStatus,
                             )
                         }
                         if (nextStatus == OrderWorkflowStatus.DELIVERED && changedBatchId != null) {
@@ -1216,6 +1206,7 @@ class VenueOrdersRepository(
                             )
                         }
                         loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
+                        transitionCheckpoint("BEFORE_COMMIT", connection)
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -1252,6 +1243,9 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        transitionCheckpoint("BEFORE_LOCK", connection)
+                        lockTransitionVenue(connection, venueId)
+                        transitionCheckpoint("LOCKED", connection)
                         loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val batchRow =
                             selectBatchForUpdate(connection, venueId, batchId) ?: run {
@@ -1261,7 +1255,7 @@ class VenueOrdersRepository(
                         val currentWorkflow = batchRow.status.toWorkflow()
                         if (
                             !batchRow.orderStatus.equals("ACTIVE", ignoreCase = true) ||
-                            batchRow.status != expectedCurrentStatus
+                            batchRow.status != expectedCurrentStatus || batchRow.status == nextStatus
                         ) {
                             runCatching { connection.rollback() }
                             return@use BatchStatusUpdateResult(
@@ -1272,7 +1266,7 @@ class VenueOrdersRepository(
                                 applied = false,
                             )
                         }
-                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val now = clock.instant().truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC)
                         val updated =
                             connection.prepareStatement(
                                 """
@@ -1309,29 +1303,18 @@ class VenueOrdersRepository(
                             reasonCode = null,
                             reasonText = null,
                         )
-                        analyticsEventRepository?.append(
-                            connection = connection,
-                            event =
-                                AnalyticsEventRecord(
-                                    eventType = "batch_status_changed",
-                                    payload =
-                                        analyticsCorrelationPayload(
-                                            venueId = venueId,
-                                            orderId = batchRow.orderId,
-                                            batchId = batchId,
-                                            extra =
-                                                mapOf(
-                                                    "fromStatus" to currentWorkflow.toApi(),
-                                                    "toStatus" to nextStatus.toWorkflow().toApi(),
-                                                ),
-                                        ),
-                                    venueId = venueId,
-                                    orderId = batchRow.orderId,
-                                    batchId = batchId,
-                                    idempotencyKey =
-                                        "batch_status_changed:$venueId:${batchRow.orderId}:$batchId:" +
-                                            nextStatus.toWorkflow().toApi(),
-                                ),
+                        recordOrderBatchTransition(
+                            connection,
+                            analyticsEventRepository,
+                            venueId,
+                            batchRow.orderId,
+                            batchId,
+                            batchRow.status,
+                            nextStatus,
+                            now,
+                            actor,
+                            currentWorkflow,
+                            nextStatus.toWorkflow(),
                         )
                         if (nextStatus == OrderBatchStatus.DELIVERED) {
                             loyaltyRepository?.confirmBatchDelivery(
@@ -1343,6 +1326,7 @@ class VenueOrdersRepository(
                             )
                         }
                         loyaltyRepository?.reconcileOrder(connection, venueId, batchRow.orderId, actor.userId)
+                        transitionCheckpoint("BEFORE_COMMIT", connection)
                         connection.commit()
                         BatchStatusUpdateResult(
                             orderId = batchRow.orderId,
@@ -1378,6 +1362,9 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        transitionCheckpoint("BEFORE_LOCK", connection)
+                        lockTransitionVenue(connection, venueId)
+                        transitionCheckpoint("LOCKED", connection)
                         loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
@@ -1407,7 +1394,7 @@ class VenueOrdersRepository(
                                 applied = false,
                             )
                         }
-                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val now = clock.instant().truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC)
                         val updated =
                             updateNewBatchesStatus(
                                 connection = connection,
@@ -1438,30 +1425,22 @@ class VenueOrdersRepository(
                             reasonText = null,
                         )
                         newBatchIds.forEach { batchId ->
-                            analyticsEventRepository?.append(
-                                connection = connection,
-                                event =
-                                    AnalyticsEventRecord(
-                                        eventType = "batch_status_changed",
-                                        payload =
-                                            analyticsCorrelationPayload(
-                                                venueId = venueId,
-                                                orderId = orderId,
-                                                batchId = batchId,
-                                                extra =
-                                                    mapOf(
-                                                        "fromStatus" to OrderWorkflowStatus.NEW.toApi(),
-                                                        "toStatus" to OrderWorkflowStatus.ACCEPTED.toApi(),
-                                                    ),
-                                            ),
-                                        venueId = venueId,
-                                        orderId = orderId,
-                                        batchId = batchId,
-                                        idempotencyKey = "batch_status_changed:$venueId:$orderId:$batchId:accepted",
-                                    ),
+                            recordOrderBatchTransition(
+                                connection,
+                                analyticsEventRepository,
+                                venueId,
+                                orderId,
+                                batchId,
+                                OrderBatchStatus.NEW,
+                                OrderBatchStatus.ACCEPTED,
+                                now,
+                                actor,
+                                OrderWorkflowStatus.NEW,
+                                OrderWorkflowStatus.ACCEPTED,
                             )
                         }
                         loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
+                        transitionCheckpoint("BEFORE_COMMIT", connection)
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -1496,6 +1475,9 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        transitionCheckpoint("BEFORE_LOCK", connection)
+                        lockTransitionVenue(connection, venueId)
+                        transitionCheckpoint("LOCKED", connection)
                         loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
@@ -1525,7 +1507,7 @@ class VenueOrdersRepository(
                                 applied = false,
                             )
                         }
-                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val now = clock.instant().truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC)
                         val updated =
                             updateAcceptedBatchesStatus(
                                 connection = connection,
@@ -1556,27 +1538,18 @@ class VenueOrdersRepository(
                             reasonText = null,
                         )
                         acceptedBatchIds.forEach { batchId ->
-                            analyticsEventRepository?.append(
-                                connection = connection,
-                                event =
-                                    AnalyticsEventRecord(
-                                        eventType = "batch_status_changed",
-                                        payload =
-                                            analyticsCorrelationPayload(
-                                                venueId = venueId,
-                                                orderId = orderId,
-                                                batchId = batchId,
-                                                extra =
-                                                    mapOf(
-                                                        "fromStatus" to OrderWorkflowStatus.ACCEPTED.toApi(),
-                                                        "toStatus" to OrderWorkflowStatus.DELIVERED.toApi(),
-                                                    ),
-                                            ),
-                                        venueId = venueId,
-                                        orderId = orderId,
-                                        batchId = batchId,
-                                        idempotencyKey = "batch_status_changed:$venueId:$orderId:$batchId:delivered",
-                                    ),
+                            recordOrderBatchTransition(
+                                connection,
+                                analyticsEventRepository,
+                                venueId,
+                                orderId,
+                                batchId,
+                                OrderBatchStatus.ACCEPTED,
+                                OrderBatchStatus.DELIVERED,
+                                now,
+                                actor,
+                                OrderWorkflowStatus.ACCEPTED,
+                                OrderWorkflowStatus.DELIVERED,
                             )
                         }
                         loyaltyRepository?.confirmBatchDelivery(
@@ -1587,6 +1560,7 @@ class VenueOrdersRepository(
                             actor.userId,
                         )
                         loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
+                        transitionCheckpoint("BEFORE_COMMIT", connection)
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -1623,6 +1597,9 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        transitionCheckpoint("BEFORE_LOCK", connection)
+                        lockTransitionVenue(connection, venueId)
+                        transitionCheckpoint("LOCKED", connection)
                         loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
@@ -1639,7 +1616,7 @@ class VenueOrdersRepository(
                                 applied = false,
                             )
                         }
-                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val now = clock.instant().truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC)
                         val latestBatchId =
                             currentWorkflowBatchId(orderRow.batches) ?: orderRow.batches.firstOrNull()?.batchId
                                 ?: run {
@@ -1651,6 +1628,7 @@ class VenueOrdersRepository(
                                         applied = false,
                                     )
                                 }
+                        val previousBatchStatus = readBatchStatus(connection, latestBatchId)
                         val updated = updateLatestBatchRejected(connection, latestBatchId, reasonCode, reasonText, now)
                         if (updated != 1) {
                             runCatching { connection.rollback() }
@@ -1672,30 +1650,21 @@ class VenueOrdersRepository(
                             reasonCode = reasonCode,
                             reasonText = reasonText,
                         )
-                        analyticsEventRepository?.append(
-                            connection = connection,
-                            event =
-                                AnalyticsEventRecord(
-                                    eventType = "batch_status_changed",
-                                    payload =
-                                        analyticsCorrelationPayload(
-                                            venueId = venueId,
-                                            orderId = orderId,
-                                            batchId = latestBatchId,
-                                            extra =
-                                                mapOf(
-                                                    "fromStatus" to current.toApi(),
-                                                    "toStatus" to OrderWorkflowStatus.CLOSED.toApi(),
-                                                    "reasonCode" to reasonCode,
-                                                ),
-                                        ),
-                                    venueId = venueId,
-                                    orderId = orderId,
-                                    batchId = latestBatchId,
-                                    idempotencyKey = "batch_status_changed:$venueId:$orderId:$latestBatchId:closed",
-                                ),
+                        recordOrderBatchTransition(
+                            connection,
+                            analyticsEventRepository,
+                            venueId,
+                            orderId,
+                            latestBatchId,
+                            previousBatchStatus,
+                            OrderBatchStatus.REJECTED,
+                            now,
+                            actor,
+                            current,
+                            OrderWorkflowStatus.CLOSED,
                         )
                         loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
+                        transitionCheckpoint("BEFORE_COMMIT", connection)
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -1732,6 +1701,9 @@ class VenueOrdersRepository(
                 ds.connection.use { connection ->
                     try {
                         connection.autoCommit = false
+                        transitionCheckpoint("BEFORE_LOCK", connection)
+                        lockTransitionVenue(connection, venueId)
+                        transitionCheckpoint("LOCKED", connection)
                         loyaltyRepository?.authorizeOperator(connection, venueId, actor.userId, actor.role.name)
                         val orderRow =
                             selectOrderForUpdate(connection, orderId, venueId) ?: run {
@@ -1748,7 +1720,7 @@ class VenueOrdersRepository(
                                 applied = false,
                             )
                         }
-                        val now = OffsetDateTime.now(ZoneOffset.UTC)
+                        val now = clock.instant().truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC)
                         val latestBatchId =
                             currentWorkflowBatchId(orderRow.batches)
                                 ?: run {
@@ -1760,6 +1732,7 @@ class VenueOrdersRepository(
                                         applied = false,
                                     )
                                 }
+                        val previousBatchStatus = readBatchStatus(connection, latestBatchId)
                         val updated = updateLatestBatchRejected(connection, latestBatchId, reasonCode, reasonText, now)
                         if (updated != 1) {
                             runCatching { connection.rollback() }
@@ -1783,30 +1756,21 @@ class VenueOrdersRepository(
                             reasonCode = reasonCode,
                             reasonText = reasonText,
                         )
-                        analyticsEventRepository?.append(
-                            connection = connection,
-                            event =
-                                AnalyticsEventRecord(
-                                    eventType = "batch_status_changed",
-                                    payload =
-                                        analyticsCorrelationPayload(
-                                            venueId = venueId,
-                                            orderId = orderId,
-                                            batchId = latestBatchId,
-                                            extra =
-                                                mapOf(
-                                                    "fromStatus" to current.toApi(),
-                                                    "toStatus" to resultingStatus.toApi(),
-                                                    "reasonCode" to reasonCode,
-                                                ),
-                                        ),
-                                    venueId = venueId,
-                                    orderId = orderId,
-                                    batchId = latestBatchId,
-                                    idempotencyKey = "batch_status_changed:$venueId:$orderId:$latestBatchId:rejected",
-                                ),
+                        recordOrderBatchTransition(
+                            connection,
+                            analyticsEventRepository,
+                            venueId,
+                            orderId,
+                            latestBatchId,
+                            previousBatchStatus,
+                            OrderBatchStatus.REJECTED,
+                            now,
+                            actor,
+                            current,
+                            resultingStatus,
                         )
                         loyaltyRepository?.reconcileOrder(connection, venueId, orderId, actor.userId)
+                        transitionCheckpoint("BEFORE_COMMIT", connection)
                         connection.commit()
                         OrderStatusUpdateResult(
                             orderId = orderId,
@@ -3150,6 +3114,29 @@ class VenueOrdersRepository(
         val status: OrderBatchStatus,
         val updatedAt: Instant,
     )
+
+    private fun lockTransitionVenue(
+        connection: Connection,
+        venueId: Long,
+    ) {
+        val lock = if (connection.metaData.databaseProductName == "PostgreSQL") "FOR NO KEY UPDATE" else "FOR UPDATE"
+        connection.prepareStatement("SELECT id FROM venues WHERE id = ? $lock").use {
+            it.setLong(1, venueId)
+            it.executeQuery().use { rs -> rs.next() }
+        }
+    }
+
+    private fun readBatchStatus(
+        connection: Connection,
+        batchId: Long,
+    ): OrderBatchStatus =
+        connection.prepareStatement("SELECT status FROM order_batches WHERE id = ?").use {
+            it.setLong(1, batchId)
+            it.executeQuery().use { rs ->
+                check(rs.next())
+                checkNotNull(OrderBatchStatus.fromDb(rs.getString(1)))
+            }
+        }
 
     private fun selectBatchForUpdate(
         connection: Connection,

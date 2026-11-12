@@ -1,0 +1,15 @@
+.platform-analytics .venue-stats-metric h3 { font-size: .95rem; font-weight: 500; color: var(--app-muted); margin: 0; }
+.platform-analytics .stats-basis { font-size: .75rem; color: var(--app-muted); margin: 0; }
+.platform-analytics-section > summary { cursor: pointer; padding: .3rem 0; min-height: 44px; }
+.platform-analytics-section > summary h2 { display: inline; font-size: 1.25rem; }
+.platform-analytics-section > button { margin-top: 1rem; }
+.platform-analytics .stats-currency { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 245px), 1fr)); gap: .75rem; }
+.platform-analytics .stats-currency > h3, .platform-analytics .stats-currency > p { grid-column: 1 / -1; }
+.platform-analytics .stats-payment-details { margin-top: 1.25rem; }
+.platform-analytics-overview > h2 { margin: 0; }
+.platform-analytics :is(button, select, input, summary):focus-visible { outline: 2px solid var(--app-accent); outline-offset: 3px; }
+
+.platform-shell .venue-content:has(.platform-analytics) { max-width: 1200px; }
+.platform-analytics .analytics-window { flex-basis: 100%; }
+.platform-analytics .analytics-window summary { cursor: pointer; min-height: 44px; padding: .7rem 0; }
+.platform-analytics .stats-header { gap: .3rem; }

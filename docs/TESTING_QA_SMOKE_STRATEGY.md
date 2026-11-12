@@ -1,5 +1,194 @@
 # Testing / QA Smoke Strategy
 
+## Final Analytics billing CI coverage — HT-ANALYTICS-FINAL-CI-COVERAGE-FIX-01
+
+Stages 1–4 are locally implemented and independently checked (owner-supplied final review).
+Analytics & Statistics: **FINAL REVIEW FINDING FIXED / TARGETED REVIEW PENDING**.
+Hosted CI: **NOT RUN FOR ANALYTICS CANDIDATE**. Staging/device acceptance: **OPEN**.
+
+The existing `backend-release-critical-routes` job (PR to main and push to main) must select:
+- `com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test`: at least **5 executed tests**;
+- `com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest`: at least **6 executed tests**,
+  including exactly one `dense PostgreSQL snapshot preserves results without a payment scan per invoice`.
+
+Docker availability is mandatory; the PostgreSQL suite uses the existing PostgreSQL 17 Testcontainers
+fixture, with no H2 fallback. Dense coverage retains 12,012 invoices / 10,010 payments, old/new aggregate
+and full DTO equality, read-only fingerprints and plan assertions against per-invoice full payment scans.
+No new absolute runner timing threshold or weakened regression is introduced.
+
+The route/security inventory checks both exact suite and testcase class identities, actual unique
+executed testcase counts against summary/minimums, the dense testcase name, and zero failures/errors/skips
+at both suite and testcase level. Missing, malformed, truncated, duplicate or unexecuted evidence fails.
+Before Gradle, a UTC marker binds evidence to GitHub run ID, attempt and SHA. XML timestamps and file
+mtime must belong to this invocation; missing/wrong markers and stale/cached XML fail closed.
+`test --rerun` and `--no-build-cache` force fresh execution; existing selectors/minimums remain intact.
+
+Run `PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_analytics_billing_ci.py` in CI and locally.
+It exercises the actual workflow parser in isolated synthetic JUnit directories. For native-copy
+negative controls, set `BILLING_CI_TEST_REPORTS` to a complete verified report set with fresh billing XML
+and `BILLING_CI_TEST_MARKER` to its matching run marker. No original report is edited. Cases cover absent
+H2/PG/both, minima 5/6, absent dense, skips/failures/errors, wrong classes, stale timestamps/mtime/run identity,
+malformed metadata and previous mandatory gates. All seven CI result gates still apply.
+Full backend/Chromium evidence may be reused for this CI-only fix after source/hash verification;
+both billing suites must run fresh through the exact CI selectors. Local checks do not prove hosted CI.
+
+**ONBOARDING-H2-001** remains separate: legacy packaged H2 onboarding needs forward-only repair.
+No onboarding migration/helper is changed here, no packaged upgrade PASS is inferred, and the existing
+PostgreSQL staging is not blocked by this separate limitation per the final integration review.
+
+
+## Platform Analytics samples correction — targeted regression
+
+`HT-ANALYTICS-PLATFORM-SAMPLES-FIX-01`: stage 4 stays **LOCAL IMPLEMENTED / REVIEW PENDING**.
+The `platform analytics samples real HTTP` Chromium case runs via the existing live Ktor/H2 handoff
+below: check guest availability and both paid-through cards on unchanged JSON. Their default samples
+must not appear as a sample size; observed count, unknown and partial warning remain visible.
+Also run COUNT zero/null, period/reload/re-entry, measured WAAV/active-age/TTFR positive and zero samples,
+unknown basis, all existing account/revoke/mobile/theme/navigation tests, and the full Chromium suite.
+Keep before/after live evidence and verify source hashes before reusing prior full backend results.
+**ONBOARDING-H2-001 remains separate:** the fixture helper does not prove packaged H2 upgrade acceptance.
+
+## Platform Analytics UI — stage 4 local regression contract
+
+`HT-ANALYTICS-PLATFORM-DASHBOARD-IMPLEMENT-01`: **LOCAL IMPLEMENTED / REVIEW PENDING**.
+Stages 1–3: **INDEPENDENT REVIEW PASS** per owner-supplied review. Overall block:
+**LOCAL / FINAL INTEGRATION REVIEW PENDING**. Nothing is published or accepted on hosted/staging/device.
+
+Run `PlatformAnalyticsUiContractTest`, `KpiRoutesTest`, `VenueStatsUiContractTest`, compile/ktlint,
+TypeScript/Vite, targeted Platform + Venue browser/navigation tests, then the full Chromium suite
+on final frontend hashes. Keep all earlier mandatory inventories and add exact new test names.
+Run current local CI result parsers with provenance-checked backend XML and fresh browser JSON;
+portable staging/runtime/release contract tests and `git diff --check` remain required.
+
+The new HTTP test starts real Netty/Ktor on loopback and an isolated H2 database. It uses the existing
+`migrateH2OnboardingFixture` workaround for the documented unnamed V36 status check; it does not claim
+that unmodified packaged H2 onboarding migrations are repaired. Capture empty/populated/legacy-partial/
+active-support responses and compare all DTO fields; normalize asOf, and validate volatile oldest-active
+age against actual response asOf rather than a golden clock. Assert whole-domain fingerprints unchanged
+by GET, OWNER/MANAGER/STAFF/Guest denial, invalid filters and no implicit Venue accounting grant.
+
+For direct browser → live HTTP evidence, set `PLATFORM_ANALYTICS_LIVE_DIR` to an isolated ignored temp
+directory for the new backend test. After its `ready.json` is created, run `platform-analytics.spec.ts`
+with the same variable and `--grep 'real Ktor H2 JSON'`. The test forwards the actual request to Ktor
+and returns its untouched HTTP JSON to the real adapter/screen; `done` releases the backend test, which
+asserts no DB writes. The synthetic session expires with this test environment; ready.json is deleted.
+This loopback run is separate from capture-based mocks used for deterministic error/race cases.
+
+Browser cases cover the five groups, UTC/custom/presets, independent WAAV window, lifecycle versus
+availability, missing/unknown subscriptions, paid-through/courtesy, invoice warnings and mixed currencies,
+human TTFR/active age, null/partial/zero, unsupported capabilities/filters, 400/401/403/500, slow/timeout/retry,
+ignored-abort races, account switch/logout/re-entry/backgrounding, real shell navigation, keyboard/focus,
+360 dark/1440 light and private-data exclusion. Keep screenshots and inspect layout. Extremely large
+money uses decimal-string boundary values in the existing DTO; real invoice fixtures retain INT storage
+and demonstrate aggregates beyond INT, without rewriting accounting or inventing another money schema.
+
+Product backend/KPI/SQL/migrations and previous Venue Stats/ISO formatter stay hash-identical.
+The prior full backend may be reused only after verifying frozen source/build/test/fixture and XML hashes;
+fresh HTTP tests are reported separately. No full fresh backend claim from combined XML inventories.
+Evidence/report/accumulated manifest: `backend/build/HT-ANALYTICS-PLATFORM-DASHBOARD-IMPLEMENT-01-REPORT.md`.
+
+## Venue Stats Advanced UI — stage 3 local regression contract
+
+`HT-ANALYTICS-VENUE-STATS-UI-IMPLEMENT-01`: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**,
+including the ISO money correction (owner-confirmed targeted review, no findings).
+Stages 1 and 2 are **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS** per owner-supplied review;
+stage 4 Platform UI is **LOCAL IMPLEMENTED / REVIEW PENDING**. All remain unpublished.
+
+Run `VenueStatsUiContractTest` and `KpiRoutesTest` for the real versioned GET, legacy `/stats`
+compatibility and server RBAC. The former compares browser fixtures with serialized Ktor responses
+for empty/complete/partial data, exact large currencies, a Berlin DST period, multiple batches,
+WALK_IN/MOVE, frozen/open reports and operator/automatic calls. Only the fixture's volatile asOf
+is normalized; values/defaults/coverage come from the server. Product backend/SQL/writers remain
+unchanged. Earlier full backend evidence may be reused only after checking its frozen source,
+build/dependency inputs and XML hashes; fresh targeted contracts are reported separately, never
+as a new full backend invocation.
+
+Run TypeScript/Vite, targeted `venue-stats.spec.ts` and existing statistics navigation smoke,
+then the **complete Chromium suite on the final frontend candidate**. Cover calendar presets,
+custom inclusive dates/exclusive GET, 23/25-hour DST days, range errors, four metric groups,
+BigInt currency formatting, mean vs ratio/null, complete zero, partial observed values, unknown
+capability, safe error/retry/timeout, ignored-abort stale responses, venue/account switch,
+revoked grants, shell reopen/reload, keyboard explanations, 360 px and real dark/light themes.
+Capture desktop/mobile screenshots and inspect them; no device/Telegram smoke is implied.
+Execute current mandatory local CI result parsers with provenance-bound native backend XML and
+fresh full browser JSON. Preserve negative migration/V126 gates and user files; run diff sanity.
+Commands, screenshots, source/reused-evidence hashes and accumulated stage1+2+3 manifest live in
+`backend/build/HT-ANALYTICS-VENUE-STATS-UI-IMPLEMENT-01-REPORT.md`. Hosted CI/staging/device
+acceptance is outside this local task and requires separate authorization.
+
+For `HT-ANALYTICS-VENUE-MONEY-FORMAT-FIX-01`, reproduce IQD/MGA through the real Ktor/H2
+money capture before changing the formatter. `VenueStatsUiContractTest` additionally compares
+`venue-stats-money-http.json` (unscaled integer strings, mixed currencies, Long maximum).
+`venue-money-format.spec.ts` covers the pinned SIX projection/hash, 0/2/3/4 exponents, zero,
+one minor unit, negatives, Long limits, unknown/N.A. currency and varying Intl defaults/locales.
+`venue-stats.spec.ts` feeds that exact response through the real adapter/screen, verifies IQD/MGA,
+mixed currency cards and Long maximum at 360 px dark and desktop light. Run formatter tests first,
+then fresh HTTP/browser contracts, the full current Chromium suite, build and existing CI parsers.
+No product backend changes: reuse earlier full backend evidence only with verified source/test/
+fixture hashes; fresh added HTTP tests remain separately reported. The correction subsequently passed targeted review (owner-supplied result); stage 3 is
+LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS. No publication is implied.
+
+## Analytics stage 2 — local regression contract
+
+`HT-ANALYTICS-KPI-READMODELS-IMPLEMENT-01`: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**.
+Run KpiReadModelsH2Test, KpiReadModelsPostgresTest and KpiRoutesTest first, then a **fresh full
+backend invocation on the final stage-2 candidate**, compile/ktlint, existing migration/HTTP/Bot
+and portable CI contracts. Do not substitute old XML or a merged targeted report for that full run.
+New tests cover domain aggregates, repeated/late/legacy transitions, half-open boundaries/DST,
+read-only snapshots, financial currencies/frozen vs open, attendance, seating MOVE, operator vs
+automatic calls, invoice reconciliation, courtesy, human TTFR and API RBAC/old stats compatibility.
+PostgreSQL EXPLAIN ANALYZE plans use populated synthetic tables; their timings are local workload
+evidence, not a production capacity promise. No stage-2 migration or historical checksum change.
+Mini App production build and complete Chromium regression retain the existing shared API gates;
+no frontend implementation is added. Deferred manual/device/Telegram smoke is not performed.
+Final commands/native XML hashes/query plans and accumulated stage1+2 manifest:
+`backend/build/HT-ANALYTICS-KPI-READMODELS-IMPLEMENT-01-REPORT.md`.
+
+For `HT-ANALYTICS-KPI-REVIEW-FIX-01`, additionally run `PlatformBillingKpiH2Test` and
+`PlatformBillingKpiPostgresTest`: shared-baseline courtesy grants in both save orders, ties,
+sequential extensions, exclusive asOf, missing paid period, repeated read-only snapshots,
+payment identity/mismatch/status/currency/retry cases. The real PostgreSQL fixture retains
+12,012 invoices / 10,010 payments and captures old/new EXPLAIN ANALYZE BUFFERS, aggregate equality,
+full Platform snapshot equality and absence of per-invoice payment scans. `KpiRoutesTest`
+exercises both corrections through authenticated GET while retaining all denial/legacy checks.
+Run a fresh complete backend invocation after the final code, then the mandatory local result
+parsers. The prior 765-case Chromium evidence may be reused only with verified unchanged frontend
+inputs; it is not a fresh browser run. Fix evidence and the cumulative manifest are recorded in
+`backend/build/HT-ANALYTICS-KPI-REVIEW-FIX-01-REPORT.md`. Stage 2 subsequently passed independent
+review without open findings (owner-supplied result).
+
+
+## Analytics foundation — HT-ANALYTICS-FOUNDATION-IMPLEMENT-01
+
+**LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS.** D1–D4 are APPROVED in `ANALYTICS_EVENTS.md`.
+Permanent `AnalyticsFoundationH2Test`/`AnalyticsFoundationPostgresTest` cover legacy nonempty
+upgrade/validate/re-migrate, single/bulk/whole-order/reject, retained first times, actual reentry,
+compatible one-row canonical alias, operator and automatic calls, no-op and injected transaction
+rollback. PostgreSQL uses independent real connections and controlled locks for competing
+single/bulk/call writers and order completion; H2 is not concurrency evidence.
+
+Run affected Guest/Venue HTTP and Telegram writers, tenancy/revoked role regressions, checkout,
+accounting, loyalty, promotions and receipts, exact migration inventories (including runtime
+fixtures and V126 historical/negative controls), compile and ktlint. Use local full-test heap
+6 GiB and Docker API 1.44 when needed. Order/session/tab risk also requires Mini App build and
+Chromium regressions, even though public DTOs/UI are unchanged. Historical test reports are not
+fresh PASS. Hosted Linux fixture execution, staging and real Telegram/device smoke are separate
+release evidence; no delayed Menu/Dashboard/Loyalty device smoke is part of this local task.
+
+
+Fresh local evidence: `backend/build/HT-ANALYTICS-FOUNDATION-IMPLEMENT-01-REPORT.md`,
+`ht-analytics-foundation-manifest.json`, `ht-analytics-foundation-results.json` and
+`ht-analytics-foundation-evidence/latest-suite-provenance.json`.
+Full native run: 2729 tests, 8 failures in exact migration expectations/new call-field snapshot,
+zero errors/skips. After updating only those four test files, all five affected suites passed
+39/39. The unchanged production/SQL inputs and remaining native suites are reused with hashes;
+the latest per-suite evidence covers 2729 tests with zero failures/errors/skips. This is a full
+run plus targeted repeat, not a second all-green full Gradle invocation. All seven local workflow
+result gates pass against these unchanged native XML files; Chromium 765/765, no flaky/skips;
+compile/ktlint and Mini App build pass. Strict V126 lineage, 72 simple-staging, 24 portable runtime
+and 18 release-CI contract tests pass. Hosted Linux/SSH/cutover and staging/device acceptance
+remain unexecuted and require a separately authorized environment. No production readiness claim.
+
 ## Loyalty confirmation history — HT-GROWTH-LOYALTY-CONFIRM-HISTORY-FIX-01
 
 **LOCAL IMPLEMENTED / REVIEW PENDING**. The targeted-review-02 PostgreSQL/browser evidence found

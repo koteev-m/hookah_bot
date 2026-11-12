@@ -9,6 +9,7 @@ import com.hookah.platform.backend.ai.AiDraftTextCommand
 import com.hookah.platform.backend.ai.AiDraftTextType
 import com.hookah.platform.backend.ai.AiVenueSummaryCommand
 import com.hookah.platform.backend.ai.AiVenueSummaryType
+import com.hookah.platform.backend.analytics.AnalyticsChannel
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
@@ -2114,6 +2115,7 @@ class TelegramBotRouterTableTokenTest {
                     giftDecision = any(),
                     expectedPreviewFingerprint = any(),
                     giftDecisionCommand = any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
                 chatContextRepository.clear(any())
             }
@@ -16554,6 +16556,7 @@ class TelegramBotRouterTableTokenTest {
                     comment = any(),
                     items = any(),
                     venueZoneId = any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -16590,6 +16593,7 @@ class TelegramBotRouterTableTokenTest {
                     comment = any(),
                     items = any(),
                     venueZoneId = any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -29434,6 +29438,7 @@ class TelegramBotRouterTableTokenTest {
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it[0].itemId == 1000L && it[0].qty == 1 },
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } returns
                 CreatedOrderBatch(
@@ -29471,6 +29476,7 @@ class TelegramBotRouterTableTokenTest {
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it[0].itemId == 1000L && it[0].qty == 1 },
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
             coVerify {
@@ -30385,6 +30391,7 @@ class TelegramBotRouterTableTokenTest {
                     items = match { it.size == 1 && it[0].itemId == 1000L },
                     expectedPreviewFingerprint = "test-gift-choice-selected",
                     giftDecisionCommand = selectedDecision,
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
 
@@ -30569,6 +30576,7 @@ class TelegramBotRouterTableTokenTest {
                                 !it.decisionScopeToken.contains("30000") &&
                                 !it.decisionScopeToken.contains("40000")
                         },
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -30648,6 +30656,7 @@ class TelegramBotRouterTableTokenTest {
                     items = match { it.size == 1 && it.single().itemId == 1000L },
                     expectedPreviewFingerprint = "fixed-selected",
                     giftDecisionCommand = acceptDecision,
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
 
@@ -30709,6 +30718,7 @@ class TelegramBotRouterTableTokenTest {
                             it == acceptDecision &&
                                 !it.decisionScopeToken.contains("30000")
                         },
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -30784,6 +30794,7 @@ class TelegramBotRouterTableTokenTest {
                     items = match { it.size == 1 && it.single().itemId == 1000L },
                     expectedPreviewFingerprint = "fixed-skipped",
                     giftDecisionCommand = skipDecision,
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
 
@@ -30807,6 +30818,7 @@ class TelegramBotRouterTableTokenTest {
                     items = any(),
                     expectedPreviewFingerprint = "fixed-skipped",
                     giftDecisionCommand = skipDecision,
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
 
@@ -30832,6 +30844,7 @@ class TelegramBotRouterTableTokenTest {
                     items = match { it.size == 1 && it.single().itemId == 1000L },
                     expectedPreviewFingerprint = "fixed-skipped",
                     giftDecisionCommand = skipDecision,
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -30877,6 +30890,7 @@ class TelegramBotRouterTableTokenTest {
                     giftDecision = null,
                     expectedPreviewFingerprint = "gift-unavailable",
                     giftDecisionCommand = null,
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
 
@@ -30912,6 +30926,7 @@ class TelegramBotRouterTableTokenTest {
                     giftDecision = null,
                     expectedPreviewFingerprint = "gift-unavailable",
                     giftDecisionCommand = null,
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -31006,6 +31021,7 @@ class TelegramBotRouterTableTokenTest {
                     items = match { it.size == 1 && it.single().itemId == 1000L },
                     expectedPreviewFingerprint = "old-selected",
                     giftDecisionCommand = staleDecision,
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } throws GiftDecisionRequiredException(currentOffer)
 
@@ -31200,6 +31216,7 @@ class TelegramBotRouterTableTokenTest {
                     giftDecision = any(),
                     expectedPreviewFingerprint = any(),
                     giftDecisionCommand = any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -31263,6 +31280,7 @@ class TelegramBotRouterTableTokenTest {
                     tabId = 77L,
                     comment = null,
                     items = any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
             coVerify {
@@ -31673,6 +31691,7 @@ class TelegramBotRouterTableTokenTest {
                     any(),
                     any(),
                     any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -31761,6 +31780,7 @@ class TelegramBotRouterTableTokenTest {
                     comment = null,
                     items = match { it.size == 1 && it[0].itemId == 1000L && it[0].qty == 1 },
                     expectedPreviewFingerprint = "test-no-adjustments",
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } returns
                 CreatedOrderBatch(
@@ -31829,6 +31849,7 @@ class TelegramBotRouterTableTokenTest {
                     comment = null,
                     items = match { it.size == 1 && it[0].itemId == 1000L && it[0].qty == 1 },
                     expectedPreviewFingerprint = "test-no-adjustments",
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
             coVerify {
@@ -31977,6 +31998,7 @@ class TelegramBotRouterTableTokenTest {
                     any(),
                     any(),
                     any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -32111,6 +32133,7 @@ class TelegramBotRouterTableTokenTest {
                     any(),
                     any(),
                     any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -34104,7 +34127,7 @@ class TelegramBotRouterTableTokenTest {
                     batchId = 57L,
                     expectedCurrentStatus = OrderBatchStatus.NEW,
                     nextStatus = OrderBatchStatus.ACCEPTED,
-                    actor = any(),
+                    actor = match { it.channel == AnalyticsChannel.TELEGRAM && it.userId == 501L },
                 )
             } returns
                 BatchStatusUpdateResult(
@@ -34141,7 +34164,7 @@ class TelegramBotRouterTableTokenTest {
                     batchId = 57L,
                     expectedCurrentStatus = OrderBatchStatus.NEW,
                     nextStatus = OrderBatchStatus.ACCEPTED,
-                    actor = any(),
+                    actor = match { it.channel == AnalyticsChannel.TELEGRAM && it.userId == 501L },
                 )
             }
             coVerify {
@@ -34186,7 +34209,7 @@ class TelegramBotRouterTableTokenTest {
                     batchId = 57L,
                     expectedCurrentStatus = OrderBatchStatus.ACCEPTED,
                     nextStatus = OrderBatchStatus.DELIVERED,
-                    actor = any(),
+                    actor = match { it.channel == AnalyticsChannel.TELEGRAM && it.userId == 501L },
                 )
             } returns
                 BatchStatusUpdateResult(
@@ -34223,7 +34246,7 @@ class TelegramBotRouterTableTokenTest {
                     batchId = 57L,
                     expectedCurrentStatus = OrderBatchStatus.ACCEPTED,
                     nextStatus = OrderBatchStatus.DELIVERED,
-                    actor = any(),
+                    actor = match { it.channel == AnalyticsChannel.TELEGRAM && it.userId == 501L },
                 )
             }
             coVerify {
@@ -35543,7 +35566,7 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
             coEvery {
-                staffCallRepository.ackStaffCall(10L, 6L, 501L)
+                staffCallRepository.ackStaffCall(10L, 6L, 501L, AnalyticsChannel.TELEGRAM)
             } returns
                 StaffCallStatusUpdateResult(
                     staffCallId = 6L,
@@ -35555,7 +35578,7 @@ class TelegramBotRouterTableTokenTest {
                     guestDisplayName = "Максим",
                 )
             coEvery {
-                staffCallRepository.doneStaffCall(10L, 6L, 501L)
+                staffCallRepository.doneStaffCall(10L, 6L, 501L, AnalyticsChannel.TELEGRAM)
             } returns
                 StaffCallStatusUpdateResult(
                     staffCallId = 6L,
@@ -35671,7 +35694,7 @@ class TelegramBotRouterTableTokenTest {
             coEvery { venueAccessRepository.findVenueMembership(501L, 10L) } returns
                 VenueAccessRepository.VenueMembership(venueId = 10L, role = "STAFF")
             coEvery {
-                staffCallRepository.ackStaffCall(10L, 6L, 501L)
+                staffCallRepository.ackStaffCall(10L, 6L, 501L, AnalyticsChannel.TELEGRAM)
             } returns
                 StaffCallStatusUpdateResult(
                     staffCallId = 6L,
@@ -36197,6 +36220,7 @@ class TelegramBotRouterTableTokenTest {
                     comment = any(),
                     items = any(),
                     venueZoneId = any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -36243,6 +36267,7 @@ class TelegramBotRouterTableTokenTest {
                     comment = any(),
                     items = any(),
                     venueZoneId = any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
         }
@@ -36829,6 +36854,7 @@ class TelegramBotRouterTableTokenTest {
                     idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
                     items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
                     quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } returns CreatedOrderBatch(900L, 901L, false)
             router.process(
@@ -36850,6 +36876,7 @@ class TelegramBotRouterTableTokenTest {
                     idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
                     items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
                     quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
             coVerify { outboxEnqueuer.enqueueSendMessage(100L, "Запрос отправлен, ожидайте подтверждения.", null) }
@@ -36888,6 +36915,7 @@ class TelegramBotRouterTableTokenTest {
                     idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
                     items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
                     quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } returns null
             router.process(
@@ -36909,6 +36937,7 @@ class TelegramBotRouterTableTokenTest {
                     idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
                     items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
                     quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
             coVerify(exactly = 0) { dialogStateRepository.clear(100L) }
@@ -36964,6 +36993,7 @@ class TelegramBotRouterTableTokenTest {
                     idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
                     items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
                     quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } throws DatabaseUnavailableException()
             router.process(
@@ -36994,6 +37024,7 @@ class TelegramBotRouterTableTokenTest {
                     idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
                     items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
                     quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             } returns CreatedOrderBatch(900L, 901L, true)
             router.process(
@@ -37015,6 +37046,7 @@ class TelegramBotRouterTableTokenTest {
                     idempotencyKey = "bot-quick:stable-request", tabId = 1L, comment = "Принесите угли",
                     items = emptyList(), chatOrder = true, expectedTableToken = "TOKEN",
                     quickOrderRequest = QuickOrderRequest(100, "stable-request"),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                 )
             }
             coVerify(exactly = 0) { tableSessionRepository.resolveActiveSession(any(), any(), any(), any()) }
@@ -37297,6 +37329,7 @@ class TelegramBotRouterTableTokenTest {
                         comment = "Synthetic checkout", items = emptyList(),
                         chatOrder = true, expectedTableToken = "TOKEN",
                         quickOrderRequest = QuickOrderRequest(100, "connected-request"),
+                        analyticsChannel = AnalyticsChannel.TELEGRAM,
                     )
                 } returns null
                 sendQuickOrderCallback(appRouter, "connected-request", userId = 999)
@@ -37309,6 +37342,7 @@ class TelegramBotRouterTableTokenTest {
                         comment = "Synthetic checkout", items = emptyList(),
                         chatOrder = true, expectedTableToken = "TOKEN",
                         quickOrderRequest = QuickOrderRequest(100, "connected-request"),
+                        analyticsChannel = AnalyticsChannel.TELEGRAM,
                     )
                 }
                 assertTrue(checkoutCounts(ds).values.all { it == 0 })

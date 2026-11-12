@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.guest
 
+import com.hookah.platform.backend.analytics.AnalyticsChannel
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
@@ -489,6 +490,7 @@ fun Route.guestOrderRoutes(
                                 throw ForbiddenException("Tab access denied")
                             }
                             ordersRepository.createGuestOrderBatch(
+                                analyticsChannel = AnalyticsChannel.MINIAPP,
                                 connection = connection,
                                 tableId = table.tableId,
                                 venueId = table.venueId,
@@ -550,6 +552,7 @@ fun Route.guestOrderRoutes(
                                 throw ForbiddenException("Tab access denied")
                             }
                             ordersRepository.createGuestOrderBatch(
+                                analyticsChannel = AnalyticsChannel.MINIAPP,
                                 connection = connection,
                                 tableId = table.tableId,
                                 venueId = table.venueId,

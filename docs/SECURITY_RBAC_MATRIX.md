@@ -1,5 +1,51 @@
 # Security / RBAC Permission Matrix
 
+## Analytics stage 2 API access
+
+| API | Allowed | Explicitly denied |
+| --- | --- | --- |
+| `/api/venue/{venueId}/stats/v1` | Same-venue OWNER/MANAGER membership in the read snapshot | STAFF, Guest, foreign/revoked member; Platform Owner without venue grant |
+| `/api/platform/analytics/v1` | Configured Platform Owner identity | Venue roles/Guest without that identity |
+
+Membership, venue timezone and optional table ownership are read on the same read-only snapshot
+as metrics. No analytics grant expands operational accounting authority. Filters are allowlisted;
+unknown/repeated keys fail validation. Errors expose no foreign names/contacts; payloads exclude
+raw PII, support text, chat IDs and provider payload/secrets. Responses use no-store. GET never
+creates subscription rows/events or repairs legacy data. Tests: `KpiRoutesTest` and both
+`KpiReadModels*Test` suites; formulas/coverage are canonical in `ANALYTICS_EVENTS.md`.
+
+Stage 3 Venue Stats UI keeps the existing OWNER/MANAGER entry and server grants. Its v1 client
+checks definition version, venue/section/table context and period before rendering. Period changes,
+venue disposal, account change, backgrounding and 401/403 clear previous analytics. Late responses
+cannot restore data from the old context; permission loss refreshes membership in Venue shell.
+STAFF/Guest/Platform Owner without venue membership have no management entry/grant. No PII or raw
+backend errors are displayed. `VenueStatsUiContractTest` binds the browser fixture to real GET/RBAC;
+`venue-stats.spec.ts` and the existing navigation smoke exercise context loss and frontend denial.
+
+
+Stage 4 Platform Analytics uses the existing configured Platform Owner grant and `GET /api/platform/analytics/v1`.
+Venue roles and Guest are denied on the server. The client validates definition version, UTC period,
+section, null venue/table scope and aggregate-only shapes before rendering. No operational venue accounting
+is requested. Role denial, logout, account change, background/dispose clear visible metrics; ignored-abort
+late responses cannot restore them. The shell invalidates its grant after access loss. Account checks run
+before paint and before applying any response; new entry obtains fresh server authorization.
+Raw errors, PII, message contents, chat IDs and provider payloads are never displayed. Drill-down only
+navigates to existing authorized screens, without new actions or implied filter propagation.
+`PlatformAnalyticsUiContractTest` covers real loopback Ktor/H2 HTTP, all-role denials and whole-domain
+read-only fingerprints; `platform-analytics.spec.ts` covers adapter scope and context/race/privacy boundaries.
+
+## Analytics foundation trust boundary
+
+`HT-ANALYTICS-FOUNDATION-IMPLEMENT-01`: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**.
+Adds internal facts only; no new API, role grant or UI.
+D1–D4 definitions are APPROVED in `ANALYTICS_EVENTS.md`. Existing server RBAC and venue isolation
+continue to govern the originating mutation. Channel is a server entry-point enum, never guest
+input or a guess from batch source. Producer identifies server code, not user identity. New
+analytics metadata excludes comments/reasons, raw PII, Telegram/initData, tokens and payment data.
+Domain state/facts remain authoritative; analytics must never grant access or decide money/status.
+Staff keeps allowed operational counters only; shared reporting is a subsequent scoped stage.
+
+
 Nth Hookah (`HT-GROWTH-LOYALTY-PRODUCTIZE-002/003`): OWNER/MANAGER alone manage their
 program and correct an exact earning unit or erroneous issue, or cancel an unissued sponsored
 promise. These operations require current membership, own venue, required reason, durable request
