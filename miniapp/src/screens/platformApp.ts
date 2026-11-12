@@ -10,6 +10,8 @@ import { bindTelegramBackButton } from '../shared/telegramBackButton'
 import { append, el } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
+import { getTelegramContext } from '../shared/telegram'
+import { renderPlatformAnalyticsScreen } from './platformAnalytics'
 import { renderPlatformCockpitSectionScreen } from './platformCockpitSections'
 import {
   renderPlatformApplicationDetailScreen,
@@ -171,6 +173,7 @@ export function mountPlatformApp(options: PlatformAppOptions) {
   let accessAbort: AbortController | null = null
   let access: PlatformMeResponse | null = null
   let hasAccess = false
+  let accessActor = getTelegramContext().telegramUserId
 
   const setAccessState = (text: string) => {
     refs.accessState.textContent = text
@@ -211,10 +214,12 @@ export function mountPlatformApp(options: PlatformAppOptions) {
   const loadAccess = async () => {
     accessAbort?.abort()
     accessAbort = new AbortController()
+    const request = accessAbort
+    const actor = getTelegramContext().telegramUserId
     hideError()
     setAccessState('Проверяем доступ...')
     const result = await platformGetMe(backendUrl, deps, accessAbort.signal)
-    if (disposed) return
+    if (disposed || accessAbort !== request || actor !== getTelegramContext().telegramUserId) return
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       const normalized = normalizeErrorCode(result.error)
@@ -229,7 +234,8 @@ export function mountPlatformApp(options: PlatformAppOptions) {
       return
     }
     access = result.data
-    hasAccess = true
+    hasAccess = result.data.ok === true
+    accessActor = actor
     setAccessState('Управление кальянными')
   }
 
@@ -267,7 +273,7 @@ export function mountPlatformApp(options: PlatformAppOptions) {
   const unbindBackButton = bindTelegramBackButton(router)
 
   const renderRouteContent = (route: Route, focusVenueHeading = false) => {
-    if (!hasAccess) {
+    if (!hasAccess || accessActor !== getTelegramContext().telegramUserId) {
       renderNoAccess()
       return () => undefined
     }
@@ -324,8 +330,12 @@ export function mountPlatformApp(options: PlatformAppOptions) {
           onNavigate: navigate,
           userId: route.userId
         })
-      case 'placements':
       case 'analytics':
+        return renderPlatformAnalyticsScreen({
+          root: refs.content, backendUrl, isDebug, access, onNavigate: navigate,
+          onAccessLost: () => { hasAccess = false; access = null; setAccessState('Доступ к аналитике закрыт') }
+        })
+      case 'placements':
         return renderPlatformCockpitSectionScreen({
           root: refs.content,
           section: route.name,

@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.analytics.AnalyticsChannel
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.venue.seating.lockSeatingVenue
@@ -17,6 +18,8 @@ import java.sql.Timestamp
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
+import java.time.ZoneOffset
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 import javax.sql.DataSource
 
@@ -165,9 +168,9 @@ class StaffCallRepository(
                 val sql =
                     """
                     INSERT INTO staff_calls (
-                        venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status, order_id
+                        venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status, order_id, status_history_complete
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?)
+                    VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?, TRUE)
                     RETURNING id
                     """.trimIndent()
                 connection.prepareStatement(sql).use { statement ->
@@ -265,9 +268,9 @@ class StaffCallRepository(
         val sql =
             """
             INSERT INTO staff_calls (
-                venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status, order_id
+                venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status, order_id, status_history_complete
             )
-            VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?)$returningClause
+            VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?, TRUE)$returningClause
             """.trimIndent()
         val statement =
             if (isH2) {
@@ -646,7 +649,15 @@ class StaffCallRepository(
                                 runCatching { connection.rollback() }
                                 throw DatabaseUnavailableException()
                             }
+                            recordCallTiming(
+                                connection,
+                                completion.result.staffCallId,
+                                completion.result.status,
+                                "ORDER_CLOSED",
+                                AnalyticsChannel.UNKNOWN,
+                            )
                         }
+                        checkpoint("BEFORE_COMMIT", connection)
                         connection.commit()
                         activeCalls
                     } catch (e: SQLException) {
@@ -810,9 +821,9 @@ class StaffCallRepository(
             """
             INSERT INTO staff_calls (
                 venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status,
-                order_id, tab_id, payment_method
+                order_id, tab_id, payment_method, status_history_complete
             )
-            VALUES (?, ?, ?, ?, 'BILL', NULL, 'NEW', ?, ?, ?)
+            VALUES (?, ?, ?, ?, 'BILL', NULL, 'NEW', ?, ?, ?, TRUE)
             RETURNING id, created_at
             """.trimIndent()
         return connection.prepareStatement(sql).use { statement ->
@@ -853,9 +864,9 @@ class StaffCallRepository(
             """
             INSERT INTO staff_calls (
                 venue_id, table_id, table_session_id, created_by_user_id, reason, comment, status,
-                order_id, tab_id, payment_method
+                order_id, tab_id, payment_method, status_history_complete
             )
-            VALUES (?, ?, ?, ?, 'BILL', NULL, 'NEW', ?, ?, ?)
+            VALUES (?, ?, ?, ?, 'BILL', NULL, 'NEW', ?, ?, ?, TRUE)
             """.trimIndent()
         return connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { statement ->
             statement.setLong(1, venueId)
@@ -918,10 +929,39 @@ class StaffCallRepository(
         }
     }
 
+    private fun recordCallTiming(
+        connection: Connection,
+        callId: Long,
+        status: StaffCallStatus,
+        kind: String,
+        channel: AnalyticsChannel,
+    ) {
+        val now = clock.instant().truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC)
+        val assignments =
+            when (status) {
+                StaffCallStatus.ACK -> "acknowledged_at = ?, acknowledged_channel = ?"
+                StaffCallStatus.DONE -> "completed_at = ?, completion_kind = ?, completion_channel = ?"
+                StaffCallStatus.CANCELLED -> "cancelled_at = ?, cancellation_kind = ?"
+                StaffCallStatus.NEW -> error("Creation is not a handling transition")
+            }
+        connection.prepareStatement("UPDATE staff_calls SET $assignments WHERE id = ?").use {
+            it.setObject(1, now)
+            it.setString(2, if (status == StaffCallStatus.ACK) channel.name else kind)
+            if (status == StaffCallStatus.DONE) {
+                it.setString(3, channel.name)
+                it.setLong(4, callId)
+            } else {
+                it.setLong(3, callId)
+            }
+            check(it.executeUpdate() == 1)
+        }
+    }
+
     suspend fun ackStaffCall(
         venueId: Long,
         staffCallId: Long,
         actorUserId: Long,
+        channel: AnalyticsChannel = AnalyticsChannel.UNKNOWN,
     ): StaffCallStatusUpdateResult? =
         updateStaffCallStatus(
             venueId = venueId,
@@ -929,12 +969,14 @@ class StaffCallRepository(
             expectedCurrentStatus = StaffCallStatus.NEW,
             nextStatus = StaffCallStatus.ACK,
             actorUserId = actorUserId,
+            channel = channel,
         )
 
     suspend fun doneStaffCall(
         venueId: Long,
         staffCallId: Long,
         actorUserId: Long,
+        channel: AnalyticsChannel = AnalyticsChannel.UNKNOWN,
     ): StaffCallStatusUpdateResult? =
         updateStaffCallStatus(
             venueId = venueId,
@@ -942,6 +984,7 @@ class StaffCallRepository(
             expectedCurrentStatus = StaffCallStatus.ACK,
             nextStatus = StaffCallStatus.DONE,
             actorUserId = actorUserId,
+            channel = channel,
         )
 
     private suspend fun updateStaffCallStatus(
@@ -950,6 +993,7 @@ class StaffCallRepository(
         expectedCurrentStatus: StaffCallStatus,
         nextStatus: StaffCallStatus,
         actorUserId: Long,
+        channel: AnalyticsChannel = AnalyticsChannel.UNKNOWN,
     ): StaffCallStatusUpdateResult? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -1046,6 +1090,7 @@ class StaffCallRepository(
                             runCatching { connection.rollback() }
                             return@use current
                         }
+                        recordCallTiming(connection, staffCallId, nextStatus, "OPERATOR", channel)
                         checkpoint("BEFORE_COMMIT", connection)
                         connection.commit()
                         current.copy(status = nextStatus, applied = true)

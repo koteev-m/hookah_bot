@@ -1,0 +1,2313 @@
+{
+    "empty": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-12T12:00:00Z",
+        "period": {
+            "from": "2026-03-28T00:00:00Z",
+            "to": "2026-03-31T00:00:00Z",
+            "timezone": "UTC",
+            "interval": "[from,to)"
+        },
+        "venueId": null,
+        "section": "all",
+        "tableId": null,
+        "metrics": {
+            "venues.total": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.created": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "VENUE_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.guestAvailable": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AVAILABILITY_RESOLVER",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.staffChatLinked": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_CONFIRMED_LINK_NOT_DELIVERY",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.waav": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "ROLLING_168_HOURS_BATCH_TRANSITIONS",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "subscriptions.paidThroughCurrent": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_PERIOD_END_INCLUSIVE_DATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "subscriptions.effectivePaidThroughCurrent": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_PERIOD_END_INCLUSIVE_DATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "subscriptions.withCourtesy": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_COURTESY_NOT_PAYMENT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.open": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.open.currencyCoverage": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.overdue": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.overdue.currencyCoverage": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paid": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paid.currencyCoverage": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.manualConfirmed": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "INVOICE_PAID_AT_MATCHED_MANUAL_CONFIRMATION",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paidWithoutMatchingEvidence": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.inconsistentSuccessfulEvents": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.multipleMatchingSuccesses": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.bankSettlement": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MINOR_UNITS",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_BANK_SETTLEMENT_SOURCE"
+            },
+            "onboarding.total": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "onboarding.created": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "REQUEST_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "onboarding.linked": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_CONFIRMED_VENUE_LINK",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.total": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.active": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.oldestActiveAge": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "support.created": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "TICKET_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.ttfrUnknown": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "TICKET_CREATED_AT_NO_HUMAN_REPLY",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.ttfr": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "TICKET_CREATED_AT_FIRST_RECORDED_HUMAN_REPLY",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "support.resolutionTime": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_COMPLETE_RESOLUTION_HISTORY"
+            }
+        },
+        "breakdowns": {
+            "venues.lifecycle": [],
+            "subscriptions.states": [],
+            "subscriptions.paidThrough": [],
+            "subscriptions.effectivePaidThrough": [],
+            "invoices.states": [],
+            "onboarding.states": []
+        },
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {
+            "open": [],
+            "overdue": [],
+            "paid": []
+        },
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "PAID_INVOICE_NOT_BANK_SETTLEMENT",
+            "COURTESY_NOT_PAYMENT",
+            "CHAT_LINK_NOT_DELIVERY",
+            "WAAV_WINDOW_INDEPENDENT_OF_SELECTED_PERIOD"
+        ]
+    },
+    "complete": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-12T12:00:00Z",
+        "period": {
+            "from": "2026-03-28T00:00:00Z",
+            "to": "2026-03-31T00:00:00Z",
+            "timezone": "UTC",
+            "interval": "[from,to)"
+        },
+        "venueId": null,
+        "section": "all",
+        "tableId": null,
+        "metrics": {
+            "venues.total": {
+                "value": "8",
+                "observedValue": "8",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 8,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.created": {
+                "value": "8",
+                "observedValue": "8",
+                "unit": "COUNT",
+                "basis": "VENUE_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 8,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.guestAvailable": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AVAILABILITY_RESOLVER",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.staffChatLinked": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_CONFIRMED_LINK_NOT_DELIVERY",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.waav": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "ROLLING_168_HOURS_BATCH_TRANSITIONS",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "subscriptions.paidThroughCurrent": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_PERIOD_END_INCLUSIVE_DATE",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 7,
+                "reason": "NO_RECORDED_PAID_PERIOD"
+            },
+            "subscriptions.effectivePaidThroughCurrent": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_PERIOD_END_INCLUSIVE_DATE",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 7,
+                "reason": "NO_RECORDED_PAID_PERIOD"
+            },
+            "subscriptions.withCourtesy": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_COURTESY_NOT_PAYMENT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.open": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 6,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.open.currencyCoverage": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.overdue": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 6,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.overdue.currencyCoverage": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paid": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paid.currencyCoverage": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.manualConfirmed": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "INVOICE_PAID_AT_MATCHED_MANUAL_CONFIRMATION",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paidWithoutMatchingEvidence": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.inconsistentSuccessfulEvents": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.multipleMatchingSuccesses": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.bankSettlement": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MINOR_UNITS",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_BANK_SETTLEMENT_SOURCE"
+            },
+            "onboarding.total": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 4,
+                "unknown": 0,
+                "reason": null
+            },
+            "onboarding.created": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "REQUEST_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 4,
+                "unknown": 0,
+                "reason": null
+            },
+            "onboarding.linked": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_CONFIRMED_VENUE_LINK",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.total": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.active": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.oldestActiveAge": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "support.created": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "TICKET_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.ttfrUnknown": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "TICKET_CREATED_AT_NO_HUMAN_REPLY",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.ttfr": {
+                "value": "180000.000",
+                "observedValue": "180000.000",
+                "unit": "MILLISECONDS",
+                "basis": "TICKET_CREATED_AT_FIRST_RECORDED_HUMAN_REPLY",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.resolutionTime": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_COMPLETE_RESOLUTION_HISTORY"
+            }
+        },
+        "breakdowns": {
+            "venues.lifecycle": [
+                {
+                    "key": "ARCHIVED",
+                    "count": 1
+                },
+                {
+                    "key": "DELETED",
+                    "count": 1
+                },
+                {
+                    "key": "DRAFT",
+                    "count": 1
+                },
+                {
+                    "key": "HIDDEN",
+                    "count": 1
+                },
+                {
+                    "key": "PAUSED",
+                    "count": 1
+                },
+                {
+                    "key": "PUBLISHED",
+                    "count": 2
+                },
+                {
+                    "key": "SUSPENDED",
+                    "count": 1
+                }
+            ],
+            "subscriptions.states": [
+                {
+                    "key": "ACTIVE",
+                    "count": 2
+                },
+                {
+                    "key": "CANCELED",
+                    "count": 1
+                },
+                {
+                    "key": "MISSING",
+                    "count": 1
+                },
+                {
+                    "key": "PAST_DUE",
+                    "count": 1
+                },
+                {
+                    "key": "SUSPENDED",
+                    "count": 1
+                },
+                {
+                    "key": "SUSPENDED_BY_PLATFORM",
+                    "count": 1
+                },
+                {
+                    "key": "TRIAL",
+                    "count": 1
+                }
+            ],
+            "subscriptions.paidThrough": [
+                {
+                    "key": "2099-01-14",
+                    "count": 1
+                },
+                {
+                    "key": "UNKNOWN",
+                    "count": 7
+                }
+            ],
+            "subscriptions.effectivePaidThrough": [
+                {
+                    "key": "2099-03-01",
+                    "count": 1
+                },
+                {
+                    "key": "UNKNOWN",
+                    "count": 7
+                }
+            ],
+            "invoices.states": [
+                {
+                    "key": "OPEN",
+                    "count": 6
+                },
+                {
+                    "key": "PAID",
+                    "count": 2
+                }
+            ],
+            "onboarding.states": [
+                {
+                    "key": "APPROVED",
+                    "count": 1
+                },
+                {
+                    "key": "CANCELLED",
+                    "count": 1
+                },
+                {
+                    "key": "PENDING",
+                    "count": 1
+                },
+                {
+                    "key": "REJECTED",
+                    "count": 1
+                }
+            ]
+        },
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {
+            "open": [
+                {
+                    "currency": "CLF",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "JPY",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "KWD",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "MGA",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "USD",
+                    "metrics": {
+                        "amount": {
+                            "value": "4000000000",
+                            "observedValue": "4000000000",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 2,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                }
+            ],
+            "overdue": [
+                {
+                    "currency": "CLF",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "JPY",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "KWD",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "MGA",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "USD",
+                    "metrics": {
+                        "amount": {
+                            "value": "4000000000",
+                            "observedValue": "4000000000",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 2,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                }
+            ],
+            "paid": [
+                {
+                    "currency": "IQD",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "RUB",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                }
+            ]
+        },
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "PAID_INVOICE_NOT_BANK_SETTLEMENT",
+            "COURTESY_NOT_PAYMENT",
+            "CHAT_LINK_NOT_DELIVERY",
+            "WAAV_WINDOW_INDEPENDENT_OF_SELECTED_PERIOD"
+        ]
+    },
+    "partial": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-12T12:00:00Z",
+        "period": {
+            "from": "2026-03-28T00:00:00Z",
+            "to": "2026-03-31T00:00:00Z",
+            "timezone": "UTC",
+            "interval": "[from,to)"
+        },
+        "venueId": null,
+        "section": "all",
+        "tableId": null,
+        "metrics": {
+            "venues.total": {
+                "value": "8",
+                "observedValue": "8",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 8,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.created": {
+                "value": "8",
+                "observedValue": "8",
+                "unit": "COUNT",
+                "basis": "VENUE_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 8,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.guestAvailable": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AVAILABILITY_RESOLVER",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 1,
+                "reason": "SUBSCRIPTION_MISSING"
+            },
+            "venues.staffChatLinked": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_CONFIRMED_LINK_NOT_DELIVERY",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.waav": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "ROLLING_168_HOURS_BATCH_TRANSITIONS",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 1,
+                "unknown": 1,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "subscriptions.paidThroughCurrent": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_PERIOD_END_INCLUSIVE_DATE",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 7,
+                "reason": "NO_RECORDED_PAID_PERIOD"
+            },
+            "subscriptions.effectivePaidThroughCurrent": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_PERIOD_END_INCLUSIVE_DATE",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 7,
+                "reason": "NO_RECORDED_PAID_PERIOD"
+            },
+            "subscriptions.withCourtesy": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_COURTESY_NOT_PAYMENT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.open": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 6,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.open.currencyCoverage": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.overdue": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 6,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.overdue.currencyCoverage": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paid": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paid.currencyCoverage": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.manualConfirmed": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "INVOICE_PAID_AT_MATCHED_MANUAL_CONFIRMATION",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paidWithoutMatchingEvidence": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.inconsistentSuccessfulEvents": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.multipleMatchingSuccesses": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.bankSettlement": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MINOR_UNITS",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_BANK_SETTLEMENT_SOURCE"
+            },
+            "onboarding.total": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 4,
+                "unknown": 0,
+                "reason": null
+            },
+            "onboarding.created": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "REQUEST_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 4,
+                "unknown": 0,
+                "reason": null
+            },
+            "onboarding.linked": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_CONFIRMED_VENUE_LINK",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.total": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.active": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.oldestActiveAge": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "support.created": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "TICKET_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.ttfrUnknown": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "TICKET_CREATED_AT_NO_HUMAN_REPLY",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.ttfr": {
+                "value": null,
+                "observedValue": "180000.000",
+                "unit": "MILLISECONDS",
+                "basis": "TICKET_CREATED_AT_FIRST_RECORDED_HUMAN_REPLY",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 1,
+                "unknown": 1,
+                "reason": "NO_RECORDED_HUMAN_REPLY"
+            },
+            "support.resolutionTime": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_COMPLETE_RESOLUTION_HISTORY"
+            }
+        },
+        "breakdowns": {
+            "venues.lifecycle": [
+                {
+                    "key": "ARCHIVED",
+                    "count": 1
+                },
+                {
+                    "key": "DELETED",
+                    "count": 1
+                },
+                {
+                    "key": "DRAFT",
+                    "count": 1
+                },
+                {
+                    "key": "HIDDEN",
+                    "count": 1
+                },
+                {
+                    "key": "PAUSED",
+                    "count": 1
+                },
+                {
+                    "key": "PUBLISHED",
+                    "count": 2
+                },
+                {
+                    "key": "SUSPENDED",
+                    "count": 1
+                }
+            ],
+            "subscriptions.states": [
+                {
+                    "key": "ACTIVE",
+                    "count": 2
+                },
+                {
+                    "key": "CANCELED",
+                    "count": 1
+                },
+                {
+                    "key": "MISSING",
+                    "count": 2
+                },
+                {
+                    "key": "PAST_DUE",
+                    "count": 1
+                },
+                {
+                    "key": "SUSPENDED",
+                    "count": 1
+                },
+                {
+                    "key": "SUSPENDED_BY_PLATFORM",
+                    "count": 1
+                }
+            ],
+            "subscriptions.paidThrough": [
+                {
+                    "key": "2099-01-14",
+                    "count": 1
+                },
+                {
+                    "key": "UNKNOWN",
+                    "count": 7
+                }
+            ],
+            "subscriptions.effectivePaidThrough": [
+                {
+                    "key": "2099-03-01",
+                    "count": 1
+                },
+                {
+                    "key": "UNKNOWN",
+                    "count": 7
+                }
+            ],
+            "invoices.states": [
+                {
+                    "key": "OPEN",
+                    "count": 6
+                },
+                {
+                    "key": "PAID",
+                    "count": 2
+                }
+            ],
+            "onboarding.states": [
+                {
+                    "key": "APPROVED",
+                    "count": 1
+                },
+                {
+                    "key": "CANCELLED",
+                    "count": 1
+                },
+                {
+                    "key": "PENDING",
+                    "count": 1
+                },
+                {
+                    "key": "REJECTED",
+                    "count": 1
+                }
+            ]
+        },
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {
+            "open": [
+                {
+                    "currency": "CLF",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "JPY",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "KWD",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "MGA",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "USD",
+                    "metrics": {
+                        "amount": {
+                            "value": "4000000000",
+                            "observedValue": "4000000000",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 2,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                }
+            ],
+            "overdue": [
+                {
+                    "currency": "CLF",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "JPY",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "KWD",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "MGA",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "USD",
+                    "metrics": {
+                        "amount": {
+                            "value": "4000000000",
+                            "observedValue": "4000000000",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 2,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                }
+            ],
+            "paid": [
+                {
+                    "currency": "IQD",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "RUB",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                }
+            ]
+        },
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "PAID_INVOICE_NOT_BANK_SETTLEMENT",
+            "COURTESY_NOT_PAYMENT",
+            "CHAT_LINK_NOT_DELIVERY",
+            "WAAV_WINDOW_INDEPENDENT_OF_SELECTED_PERIOD"
+        ]
+    },
+    "active": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-12T07:23:41.834349Z",
+        "period": {
+            "from": "2026-03-28T00:00:00Z",
+            "to": "2026-03-31T00:00:00Z",
+            "timezone": "UTC",
+            "interval": "[from,to)"
+        },
+        "venueId": null,
+        "section": "all",
+        "tableId": null,
+        "metrics": {
+            "venues.total": {
+                "value": "8",
+                "observedValue": "8",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 8,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.created": {
+                "value": "8",
+                "observedValue": "8",
+                "unit": "COUNT",
+                "basis": "VENUE_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 8,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.guestAvailable": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AVAILABILITY_RESOLVER",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 1,
+                "reason": "SUBSCRIPTION_MISSING"
+            },
+            "venues.staffChatLinked": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_CONFIRMED_LINK_NOT_DELIVERY",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "venues.waav": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "ROLLING_168_HOURS_BATCH_TRANSITIONS",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 1,
+                "unknown": 1,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "subscriptions.paidThroughCurrent": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_PERIOD_END_INCLUSIVE_DATE",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 7,
+                "reason": "NO_RECORDED_PAID_PERIOD"
+            },
+            "subscriptions.effectivePaidThroughCurrent": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_PERIOD_END_INCLUSIVE_DATE",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 7,
+                "reason": "NO_RECORDED_PAID_PERIOD"
+            },
+            "subscriptions.withCourtesy": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_COURTESY_NOT_PAYMENT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.open": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 6,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.open.currencyCoverage": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.overdue": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 6,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.overdue.currencyCoverage": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paid": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paid.currencyCoverage": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_INVOICE_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.manualConfirmed": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "INVOICE_PAID_AT_MATCHED_MANUAL_CONFIRMATION",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.paidWithoutMatchingEvidence": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.inconsistentSuccessfulEvents": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.multipleMatchingSuccesses": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_RECONCILIATION_WARNING",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "invoices.bankSettlement": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MINOR_UNITS",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_BANK_SETTLEMENT_SOURCE"
+            },
+            "onboarding.total": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 4,
+                "unknown": 0,
+                "reason": null
+            },
+            "onboarding.created": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "REQUEST_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 4,
+                "unknown": 0,
+                "reason": null
+            },
+            "onboarding.linked": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_CONFIRMED_VENUE_LINK",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.total": {
+                "value": "3",
+                "observedValue": "3",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.active": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.oldestActiveAge": {
+                "value": "19725821834.349000000",
+                "observedValue": "19725821834.349000000",
+                "unit": "MILLISECONDS",
+                "basis": "SNAPSHOT_SUPPORT_TICKET",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.created": {
+                "value": "3",
+                "observedValue": "3",
+                "unit": "COUNT",
+                "basis": "TICKET_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.ttfrUnknown": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "TICKET_CREATED_AT_NO_HUMAN_REPLY",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "support.ttfr": {
+                "value": null,
+                "observedValue": "180000.000",
+                "unit": "MILLISECONDS",
+                "basis": "TICKET_CREATED_AT_FIRST_RECORDED_HUMAN_REPLY",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 1,
+                "unknown": 2,
+                "reason": "NO_RECORDED_HUMAN_REPLY"
+            },
+            "support.resolutionTime": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_COMPLETE_RESOLUTION_HISTORY"
+            }
+        },
+        "breakdowns": {
+            "venues.lifecycle": [
+                {
+                    "key": "ARCHIVED",
+                    "count": 1
+                },
+                {
+                    "key": "DELETED",
+                    "count": 1
+                },
+                {
+                    "key": "DRAFT",
+                    "count": 1
+                },
+                {
+                    "key": "HIDDEN",
+                    "count": 1
+                },
+                {
+                    "key": "PAUSED",
+                    "count": 1
+                },
+                {
+                    "key": "PUBLISHED",
+                    "count": 2
+                },
+                {
+                    "key": "SUSPENDED",
+                    "count": 1
+                }
+            ],
+            "subscriptions.states": [
+                {
+                    "key": "ACTIVE",
+                    "count": 2
+                },
+                {
+                    "key": "CANCELED",
+                    "count": 1
+                },
+                {
+                    "key": "MISSING",
+                    "count": 2
+                },
+                {
+                    "key": "PAST_DUE",
+                    "count": 1
+                },
+                {
+                    "key": "SUSPENDED",
+                    "count": 1
+                },
+                {
+                    "key": "SUSPENDED_BY_PLATFORM",
+                    "count": 1
+                }
+            ],
+            "subscriptions.paidThrough": [
+                {
+                    "key": "2099-01-14",
+                    "count": 1
+                },
+                {
+                    "key": "UNKNOWN",
+                    "count": 7
+                }
+            ],
+            "subscriptions.effectivePaidThrough": [
+                {
+                    "key": "2099-03-01",
+                    "count": 1
+                },
+                {
+                    "key": "UNKNOWN",
+                    "count": 7
+                }
+            ],
+            "invoices.states": [
+                {
+                    "key": "OPEN",
+                    "count": 6
+                },
+                {
+                    "key": "PAID",
+                    "count": 2
+                }
+            ],
+            "onboarding.states": [
+                {
+                    "key": "APPROVED",
+                    "count": 1
+                },
+                {
+                    "key": "CANCELLED",
+                    "count": 1
+                },
+                {
+                    "key": "PENDING",
+                    "count": 1
+                },
+                {
+                    "key": "REJECTED",
+                    "count": 1
+                }
+            ]
+        },
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {
+            "open": [
+                {
+                    "currency": "CLF",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "JPY",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "KWD",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "MGA",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "USD",
+                    "metrics": {
+                        "amount": {
+                            "value": "4000000000",
+                            "observedValue": "4000000000",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 2,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                }
+            ],
+            "overdue": [
+                {
+                    "currency": "CLF",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "JPY",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "KWD",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "MGA",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "USD",
+                    "metrics": {
+                        "amount": {
+                            "value": "4000000000",
+                            "observedValue": "4000000000",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 2,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                }
+            ],
+            "paid": [
+                {
+                    "currency": "IQD",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                },
+                {
+                    "currency": "RUB",
+                    "metrics": {
+                        "amount": {
+                            "value": "12345",
+                            "observedValue": "12345",
+                            "unit": "MINOR_UNITS",
+                            "basis": "SNAPSHOT_INVOICE_STATE",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 1,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                }
+            ]
+        },
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "PAID_INVOICE_NOT_BANK_SETTLEMENT",
+            "COURTESY_NOT_PAYMENT",
+            "CHAT_LINK_NOT_DELIVERY",
+            "WAAV_WINDOW_INDEPENDENT_OF_SELECTED_PERIOD"
+        ]
+    }
+}

@@ -1,0 +1,2187 @@
+{
+    "empty": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-10T12:00:00Z",
+        "period": {
+            "from": "2026-03-27T23:00:00Z",
+            "to": "2026-03-30T22:00:00Z",
+            "timezone": "Europe/Berlin",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "all",
+        "tableId": null,
+        "metrics": {
+            "orders.created": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "ORDER_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.created": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "BATCH_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "orders.firstAccepted": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "FIRST_EVER_ACCEPTED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.accepted": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.delivered": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.rejected": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.cohortAcceptedRate": {
+                "value": null,
+                "observedValue": null,
+                "unit": "RATIO",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "batches.acceptedDelay": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "batches.cohortDeliveredRate": {
+                "value": null,
+                "observedValue": null,
+                "unit": "RATIO",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "batches.deliveredDelay": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "orders.cancelledSnapshot": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "ORDER_CREATED_AT_CURRENT_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "items.excludedSnapshot": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "BATCH_CREATED_AT_CURRENT_ITEM_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "items.deliveredSnapshotCoverage": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "FIRST_OBSERVED_DELIVERY_CURRENT_ITEM_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.created": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "BOOKING_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.scheduled": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.seated": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.no_show": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.canceled": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.expired": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.future": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.unresolved": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.attendance": {
+                "value": null,
+                "observedValue": null,
+                "unit": "RATIO",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "seatings.registeredSessions": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "REGISTERED_SEATING_STARTED_AT_CURRENT_TABLE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.created": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CALL_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.acknowledged": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.operatorCompleted": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.autoCompleted": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.cancelled": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.firstResponse": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "CALL_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "calls.legacyUnknown": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CALL_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "finance.closedReports": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "finance.openShifts": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "finance.openReportCoverage": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            }
+        },
+        "breakdowns": {
+            "items.deliveredTop": [],
+            "bookings.createdStatuses": [],
+            "bookings.scheduledStatuses": [],
+            "calls.createdStatuses": []
+        },
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    },
+    "complete": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-10T12:00:00Z",
+        "period": {
+            "from": "2026-03-27T23:00:00Z",
+            "to": "2026-03-30T22:00:00Z",
+            "timezone": "Europe/Berlin",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "all",
+        "tableId": null,
+        "metrics": {
+            "orders.created": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "ORDER_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.created": {
+                "value": "3",
+                "observedValue": "3",
+                "unit": "COUNT",
+                "basis": "BATCH_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "orders.firstAccepted": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "FIRST_EVER_ACCEPTED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.accepted": {
+                "value": "3",
+                "observedValue": "3",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.delivered": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.rejected": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.cohortAcceptedRate": {
+                "value": "1.000000",
+                "observedValue": "1.000000",
+                "unit": "RATIO",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.acceptedDelay": {
+                "value": "90000000.000",
+                "observedValue": "90000000.000",
+                "unit": "MILLISECONDS",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.cohortDeliveredRate": {
+                "value": "0.666667",
+                "observedValue": "0.666667",
+                "unit": "RATIO",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.deliveredDelay": {
+                "value": "93600000.000",
+                "observedValue": "93600000.000",
+                "unit": "MILLISECONDS",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "orders.cancelledSnapshot": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "ORDER_CREATED_AT_CURRENT_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "items.excludedSnapshot": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "BATCH_CREATED_AT_CURRENT_ITEM_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "items.deliveredSnapshotCoverage": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "FIRST_OBSERVED_DELIVERY_CURRENT_ITEM_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.created": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "BOOKING_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.scheduled": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 6,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.seated": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.no_show": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.canceled": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.expired": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.future": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.unresolved": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.attendance": {
+                "value": "0.500000",
+                "observedValue": "0.500000",
+                "unit": "RATIO",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "seatings.registeredSessions": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "REGISTERED_SEATING_STARTED_AT_CURRENT_TABLE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.created": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "CALL_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 4,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.acknowledged": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.operatorCompleted": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.autoCompleted": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.cancelled": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.firstResponse": {
+                "value": "300000.000",
+                "observedValue": "300000.000",
+                "unit": "MILLISECONDS",
+                "basis": "CALL_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.legacyUnknown": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CALL_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "finance.closedReports": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "finance.openShifts": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "finance.openReportCoverage": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            }
+        },
+        "breakdowns": {
+            "items.deliveredTop": [
+                {
+                    "key": "Чай из заказа",
+                    "count": 4
+                }
+            ],
+            "bookings.createdStatuses": [
+                {
+                    "key": "SEATED",
+                    "count": 1
+                }
+            ],
+            "bookings.scheduledStatuses": [
+                {
+                    "key": "CANCELED",
+                    "count": 1
+                },
+                {
+                    "key": "CHANGED",
+                    "count": 1
+                },
+                {
+                    "key": "CONFIRMED",
+                    "count": 1
+                },
+                {
+                    "key": "EXPIRED",
+                    "count": 1
+                },
+                {
+                    "key": "NO_SHOW",
+                    "count": 1
+                },
+                {
+                    "key": "SEATED",
+                    "count": 1
+                }
+            ],
+            "calls.createdStatuses": [
+                {
+                    "key": "ACK",
+                    "count": 1
+                },
+                {
+                    "key": "CANCELLED",
+                    "count": 1
+                },
+                {
+                    "key": "DONE",
+                    "count": 2
+                }
+            ]
+        },
+        "closedShiftFinances": [
+            {
+                "currency": "RUB",
+                "metrics": {
+                    "accrued": {
+                        "value": "900719925474099312",
+                        "observedValue": "900719925474099312",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "operatorConfirmed": {
+                        "value": "400",
+                        "observedValue": "400",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "discounts": {
+                        "value": "20",
+                        "observedValue": "20",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "gifts": {
+                        "value": "30",
+                        "observedValue": "30",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "unpaid": {
+                        "value": "900719925474098912",
+                        "observedValue": "900719925474098912",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "sales": {
+                        "value": "2",
+                        "observedValue": "2",
+                        "unit": "COUNT",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "cash": {
+                        "value": "200",
+                        "observedValue": "200",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "card": {
+                        "value": "100",
+                        "observedValue": "100",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "transfer": {
+                        "value": "100",
+                        "observedValue": "100",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "averageAccruedSale": {
+                        "value": "450359962737049656",
+                        "observedValue": "450359962737049656",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 2,
+                        "unknown": 0,
+                        "reason": null
+                    }
+                }
+            },
+            {
+                "currency": "USD",
+                "metrics": {
+                    "accrued": {
+                        "value": "12345",
+                        "observedValue": "12345",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "operatorConfirmed": {
+                        "value": "400",
+                        "observedValue": "400",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "discounts": {
+                        "value": "20",
+                        "observedValue": "20",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "gifts": {
+                        "value": "30",
+                        "observedValue": "30",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "unpaid": {
+                        "value": "11945",
+                        "observedValue": "11945",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "sales": {
+                        "value": "2",
+                        "observedValue": "2",
+                        "unit": "COUNT",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "cash": {
+                        "value": "200",
+                        "observedValue": "200",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "card": {
+                        "value": "100",
+                        "observedValue": "100",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "transfer": {
+                        "value": "100",
+                        "observedValue": "100",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "averageAccruedSale": {
+                        "value": "6173",
+                        "observedValue": "6173",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 2,
+                        "unknown": 0,
+                        "reason": null
+                    }
+                }
+            }
+        ],
+        "openShiftFinances": [
+            {
+                "currency": "RUB",
+                "metrics": {
+                    "accrued": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "operatorConfirmed": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "discounts": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "gifts": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "unpaid": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "sales": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "COUNT",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "cash": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "card": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "transfer": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "averageAccruedSale": {
+                        "value": null,
+                        "observedValue": null,
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "UNAVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 0,
+                        "unknown": 0,
+                        "reason": "NO_MEASURABLE_SAMPLE"
+                    }
+                }
+            }
+        ],
+        "invoiceFinances": {},
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    },
+    "ordersAtTable": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-10T12:00:00Z",
+        "period": {
+            "from": "2026-03-27T23:00:00Z",
+            "to": "2026-03-30T22:00:00Z",
+            "timezone": "Europe/Berlin",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "orders",
+        "tableId": 1,
+        "metrics": {
+            "orders.created": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "ORDER_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.created": {
+                "value": "3",
+                "observedValue": "3",
+                "unit": "COUNT",
+                "basis": "BATCH_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "orders.firstAccepted": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "FIRST_EVER_ACCEPTED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.accepted": {
+                "value": "3",
+                "observedValue": "3",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.delivered": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.rejected": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.cohortAcceptedRate": {
+                "value": "1.000000",
+                "observedValue": "1.000000",
+                "unit": "RATIO",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.acceptedDelay": {
+                "value": "90000000.000",
+                "observedValue": "90000000.000",
+                "unit": "MILLISECONDS",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.cohortDeliveredRate": {
+                "value": "0.666667",
+                "observedValue": "0.666667",
+                "unit": "RATIO",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.deliveredDelay": {
+                "value": "93600000.000",
+                "observedValue": "93600000.000",
+                "unit": "MILLISECONDS",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "orders.cancelledSnapshot": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "ORDER_CREATED_AT_CURRENT_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "items.excludedSnapshot": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "BATCH_CREATED_AT_CURRENT_ITEM_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "items.deliveredSnapshotCoverage": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "FIRST_OBSERVED_DELIVERY_CURRENT_ITEM_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            }
+        },
+        "breakdowns": {
+            "items.deliveredTop": [
+                {
+                    "key": "Чай из заказа",
+                    "count": 4
+                }
+            ]
+        },
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    },
+    "seatingsAfterMove": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-10T12:00:00Z",
+        "period": {
+            "from": "2026-03-27T23:00:00Z",
+            "to": "2026-03-30T22:00:00Z",
+            "timezone": "Europe/Berlin",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "seatings",
+        "tableId": 2,
+        "metrics": {
+            "seatings.registeredSessions": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "REGISTERED_SEATING_STARTED_AT_CURRENT_TABLE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            }
+        },
+        "breakdowns": {},
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    },
+    "partial": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-10T12:00:00Z",
+        "period": {
+            "from": "2026-03-27T23:00:00Z",
+            "to": "2026-03-30T22:00:00Z",
+            "timezone": "Europe/Berlin",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "all",
+        "tableId": null,
+        "metrics": {
+            "orders.created": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "ORDER_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "batches.created": {
+                "value": "3",
+                "observedValue": "3",
+                "unit": "COUNT",
+                "basis": "BATCH_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 3,
+                "unknown": 0,
+                "reason": null
+            },
+            "orders.firstAccepted": {
+                "value": null,
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "FIRST_EVER_ACCEPTED_AT",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 1,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "batches.accepted": {
+                "value": null,
+                "observedValue": "3",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 3,
+                "unknown": 3,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "batches.delivered": {
+                "value": null,
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 2,
+                "unknown": 3,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "batches.rejected": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "DISTINCT_BATCH_TRANSITION_AT",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 1,
+                "unknown": 3,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "batches.cohortAcceptedRate": {
+                "value": null,
+                "observedValue": "1.000000",
+                "unit": "RATIO",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 3,
+                "unknown": 3,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "batches.acceptedDelay": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 3,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "batches.cohortDeliveredRate": {
+                "value": null,
+                "observedValue": "0.666667",
+                "unit": "RATIO",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 3,
+                "unknown": 3,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "batches.deliveredDelay": {
+                "value": null,
+                "observedValue": null,
+                "unit": "MILLISECONDS",
+                "basis": "BATCH_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 3,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "orders.cancelledSnapshot": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "ORDER_CREATED_AT_CURRENT_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "items.excludedSnapshot": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "BATCH_CREATED_AT_CURRENT_ITEM_STATE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "items.deliveredSnapshotCoverage": {
+                "value": null,
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "FIRST_OBSERVED_DELIVERY_CURRENT_ITEM_STATE",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 2,
+                "unknown": 3,
+                "reason": "ITEM_OR_HISTORY_COVERAGE_INCOMPLETE"
+            },
+            "bookings.created": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "BOOKING_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.scheduled": {
+                "value": "6",
+                "observedValue": "6",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 6,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.seated": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.no_show": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.canceled": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.expired": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.future": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.unresolved": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "bookings.attendance": {
+                "value": "0.500000",
+                "observedValue": "0.500000",
+                "unit": "RATIO",
+                "basis": "CURRENT_SCHEDULED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 2,
+                "unknown": 0,
+                "reason": null
+            },
+            "seatings.registeredSessions": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "REGISTERED_SEATING_STARTED_AT_CURRENT_TABLE",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.created": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "CALL_CREATED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 4,
+                "unknown": 0,
+                "reason": null
+            },
+            "calls.acknowledged": {
+                "value": null,
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 2,
+                "unknown": 1,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "calls.operatorCompleted": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 1,
+                "unknown": 1,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "calls.autoCompleted": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 1,
+                "unknown": 1,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "calls.cancelled": {
+                "value": null,
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CALL_TRANSITION_AT",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 1,
+                "unknown": 1,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "calls.firstResponse": {
+                "value": null,
+                "observedValue": "300000.000",
+                "unit": "MILLISECONDS",
+                "basis": "CALL_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 1,
+                "unknown": 1,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "calls.legacyUnknown": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CALL_CREATED_AT_SNAPSHOT_AS_OF",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "finance.closedReports": {
+                "value": null,
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 3,
+                "unknown": 1,
+                "reason": "REPORT_MISSING_OR_INCONSISTENT"
+            },
+            "finance.openShifts": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "finance.openReportCoverage": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            }
+        },
+        "breakdowns": {
+            "items.deliveredTop": [
+                {
+                    "key": "Чай из заказа",
+                    "count": 4
+                }
+            ],
+            "bookings.createdStatuses": [
+                {
+                    "key": "SEATED",
+                    "count": 1
+                }
+            ],
+            "bookings.scheduledStatuses": [
+                {
+                    "key": "CANCELED",
+                    "count": 1
+                },
+                {
+                    "key": "CHANGED",
+                    "count": 1
+                },
+                {
+                    "key": "CONFIRMED",
+                    "count": 1
+                },
+                {
+                    "key": "EXPIRED",
+                    "count": 1
+                },
+                {
+                    "key": "NO_SHOW",
+                    "count": 1
+                },
+                {
+                    "key": "SEATED",
+                    "count": 1
+                }
+            ],
+            "calls.createdStatuses": [
+                {
+                    "key": "ACK",
+                    "count": 1
+                },
+                {
+                    "key": "CANCELLED",
+                    "count": 1
+                },
+                {
+                    "key": "DONE",
+                    "count": 2
+                }
+            ]
+        },
+        "closedShiftFinances": [
+            {
+                "currency": "RUB",
+                "metrics": {
+                    "accrued": {
+                        "value": null,
+                        "observedValue": "900719925474099312",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "operatorConfirmed": {
+                        "value": null,
+                        "observedValue": "400",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "discounts": {
+                        "value": null,
+                        "observedValue": "20",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "gifts": {
+                        "value": null,
+                        "observedValue": "30",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "unpaid": {
+                        "value": null,
+                        "observedValue": "900719925474098912",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "sales": {
+                        "value": null,
+                        "observedValue": "2",
+                        "unit": "COUNT",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "cash": {
+                        "value": null,
+                        "observedValue": "200",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "card": {
+                        "value": null,
+                        "observedValue": "100",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "transfer": {
+                        "value": null,
+                        "observedValue": "100",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "averageAccruedSale": {
+                        "value": null,
+                        "observedValue": null,
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 0,
+                        "unknown": 1,
+                        "reason": "LEGACY_HISTORY_UNKNOWN"
+                    }
+                }
+            },
+            {
+                "currency": "USD",
+                "metrics": {
+                    "accrued": {
+                        "value": null,
+                        "observedValue": "12345",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "operatorConfirmed": {
+                        "value": null,
+                        "observedValue": "400",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "discounts": {
+                        "value": null,
+                        "observedValue": "20",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "gifts": {
+                        "value": null,
+                        "observedValue": "30",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "unpaid": {
+                        "value": null,
+                        "observedValue": "11945",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "sales": {
+                        "value": null,
+                        "observedValue": "2",
+                        "unit": "COUNT",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "cash": {
+                        "value": null,
+                        "observedValue": "200",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "card": {
+                        "value": null,
+                        "observedValue": "100",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "transfer": {
+                        "value": null,
+                        "observedValue": "100",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "REPORT_MISSING_OR_INCONSISTENT"
+                    },
+                    "averageAccruedSale": {
+                        "value": null,
+                        "observedValue": null,
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 0,
+                        "unknown": 1,
+                        "reason": "LEGACY_HISTORY_UNKNOWN"
+                    }
+                }
+            }
+        ],
+        "openShiftFinances": [
+            {
+                "currency": "RUB",
+                "metrics": {
+                    "accrued": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "operatorConfirmed": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "discounts": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "gifts": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "unpaid": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "sales": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "COUNT",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "cash": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "card": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "transfer": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "averageAccruedSale": {
+                        "value": null,
+                        "observedValue": null,
+                        "unit": "MINOR_UNITS",
+                        "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                        "availability": "UNAVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 0,
+                        "unknown": 0,
+                        "reason": "NO_MEASURABLE_SAMPLE"
+                    }
+                }
+            }
+        ],
+        "invoiceFinances": {},
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    }
+}

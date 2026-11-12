@@ -4,6 +4,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.client.j2se.MatrixToImageWriter
 import com.google.zxing.qrcode.QRCodeWriter
 import com.hookah.platform.backend.ai.AiAssistantService
+import com.hookah.platform.backend.analytics.AnalyticsChannel
 import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
@@ -22225,7 +22226,12 @@ class TelegramBotRouter internal constructor(
                     batchId = batchId,
                     expectedCurrentStatus = expectedStatus,
                     nextStatus = nextStatus,
-                    actor = OrderActionActor(userId = user.id, role = role.toVenueRole()),
+                    actor =
+                        OrderActionActor(
+                            userId = user.id,
+                            role = role.toVenueRole(),
+                            channel = AnalyticsChannel.TELEGRAM,
+                        ),
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueCallbackAnswer(chatId, callbackQueryId, text = "База недоступна", showAlert = true)
@@ -22656,7 +22662,12 @@ class TelegramBotRouter internal constructor(
                     venueId = action.venueId,
                     orderId = action.orderId,
                     nextStatus = OrderWorkflowStatus.CLOSED,
-                    actor = OrderActionActor(userId = user.id, role = role.toVenueRole()),
+                    actor =
+                        OrderActionActor(
+                            userId = user.id,
+                            role = role.toVenueRole(),
+                            channel = AnalyticsChannel.TELEGRAM,
+                        ),
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueCallbackAnswer(chatId, callbackQueryId, text = "База недоступна", showAlert = true)
@@ -22795,12 +22806,14 @@ class TelegramBotRouter internal constructor(
                 when (nextStatus) {
                     StaffCallStatus.ACK ->
                         staffCallRepository.ackStaffCall(
+                            channel = AnalyticsChannel.TELEGRAM,
                             venueId = venueId,
                             staffCallId = staffCallId,
                             actorUserId = user.id,
                         )
                     StaffCallStatus.DONE ->
                         staffCallRepository.doneStaffCall(
+                            channel = AnalyticsChannel.TELEGRAM,
                             venueId = venueId,
                             staffCallId = staffCallId,
                             actorUserId = user.id,
@@ -23605,7 +23618,7 @@ class TelegramBotRouter internal constructor(
                     venueId = venueId,
                     orderId = orderId,
                     batchItemId = batchItemId,
-                    actor = OrderActionActor(userId = userId, role = actorRole),
+                    actor = OrderActionActor(userId = userId, role = actorRole, channel = AnalyticsChannel.TELEGRAM),
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -23929,7 +23942,12 @@ class TelegramBotRouter internal constructor(
                     orderId = orderId,
                     batchItemId = batchItemId,
                     discountPercent = discountPercent,
-                    actor = OrderActionActor(userId = userId, role = role.toVenueRole()),
+                    actor =
+                        OrderActionActor(
+                            userId = userId,
+                            role = role.toVenueRole(),
+                            channel = AnalyticsChannel.TELEGRAM,
+                        ),
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -23996,7 +24014,7 @@ class TelegramBotRouter internal constructor(
                     orderId = orderId,
                     batchItemId = batchItemId,
                     reasonText = trimmed,
-                    actor = OrderActionActor(userId = userId, role = actorRole),
+                    actor = OrderActionActor(userId = userId, role = actorRole, channel = AnalyticsChannel.TELEGRAM),
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -24331,7 +24349,7 @@ class TelegramBotRouter internal constructor(
                     venueId = venueId,
                     orderId = orderId,
                     nextStatus = nextStatus,
-                    actor = OrderActionActor(userId = userId, role = actorRole),
+                    actor = OrderActionActor(userId = userId, role = actorRole, channel = AnalyticsChannel.TELEGRAM),
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -24409,7 +24427,7 @@ class TelegramBotRouter internal constructor(
                 venueOrdersRepository.acceptAllNewBatches(
                     venueId = venueId,
                     orderId = orderId,
-                    actor = OrderActionActor(userId = userId, role = actorRole),
+                    actor = OrderActionActor(userId = userId, role = actorRole, channel = AnalyticsChannel.TELEGRAM),
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -24485,7 +24503,7 @@ class TelegramBotRouter internal constructor(
                 venueOrdersRepository.deliverAllAcceptedBatches(
                     venueId = venueId,
                     orderId = orderId,
-                    actor = OrderActionActor(userId = userId, role = actorRole),
+                    actor = OrderActionActor(userId = userId, role = actorRole, channel = AnalyticsChannel.TELEGRAM),
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -24647,7 +24665,12 @@ class TelegramBotRouter internal constructor(
                         orderId = orderId,
                         reasonCode = "VENUE_ORDER_CANCELLED",
                         reasonText = reasonText,
-                        actor = OrderActionActor(userId = userId, role = actorRole),
+                        actor =
+                            OrderActionActor(
+                                userId = userId,
+                                role = actorRole,
+                                channel = AnalyticsChannel.TELEGRAM,
+                            ),
                     )
                 } else {
                     venueOrdersRepository.rejectLatestBatch(
@@ -24655,7 +24678,12 @@ class TelegramBotRouter internal constructor(
                         orderId = orderId,
                         reasonCode = "VENUE_BATCH_CANCELLED",
                         reasonText = reasonText,
-                        actor = OrderActionActor(userId = userId, role = actorRole),
+                        actor =
+                            OrderActionActor(
+                                userId = userId,
+                                role = actorRole,
+                                channel = AnalyticsChannel.TELEGRAM,
+                            ),
                     )
                 }
             } catch (e: DatabaseUnavailableException) {
@@ -30375,6 +30403,7 @@ class TelegramBotRouter internal constructor(
         return try {
             val createdBatch =
                 ordersRepository.createGuestOrderBatch(
+                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                     tableId = context.table.tableId,
                     venueId = context.table.venueId,
                     tableSessionId = tableSession.id,
@@ -30494,6 +30523,7 @@ class TelegramBotRouter internal constructor(
                             ).id
                         }
                     ordersRepository.createGuestOrderBatch(
+                        analyticsChannel = AnalyticsChannel.TELEGRAM,
                         connection = connection,
                         tableId = confirmed.context.tableId,
                         venueId = confirmed.context.venueId,
@@ -34379,6 +34409,7 @@ class TelegramBotRouter internal constructor(
                                 onDenied = { dialogStateRepository.transitionQuickOrderRequest(chatId, requestId) },
                             ) { connection, confirmed ->
                                 ordersRepository.createGuestOrderBatch(
+                                    analyticsChannel = AnalyticsChannel.TELEGRAM,
                                     connection = connection,
                                     tableId = confirmed.context.tableId,
                                     venueId = confirmed.context.venueId,
@@ -34400,6 +34431,7 @@ class TelegramBotRouter internal constructor(
                     }
                 } else {
                     ordersRepository.createGuestOrderBatch(
+                        analyticsChannel = AnalyticsChannel.TELEGRAM,
                         tableId = context.table.tableId,
                         venueId = context.table.venueId,
                         tableSessionId = tableSessionId,

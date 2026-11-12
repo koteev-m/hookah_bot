@@ -1,5 +1,18 @@
 # Product Spec v1 — Telegram Hookah Platform (Multi-tenant)
 
+## Analytics & Statistics implementation boundary
+
+Stage 1 domain facts: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS** (owner-supplied review).
+Stage 2 shared read models and versioned Venue/Platform GET APIs: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**.
+Stage 3 Venue UI, including the ISO money correction: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**; existing OWNER/MANAGER statistics use
+the v1 API, calendar periods, exact currency values and explicit coverage (`VENUE_OPERATIONS.md`).
+Stage 4 Platform UI: **LOCAL IMPLEMENTED / REVIEW PENDING**; the existing Platform Owner analytics entry
+uses v1 UTC aggregates, five groups, exact invoice money and explicit coverage (`PLATFORM_COCKPIT.md`).
+Overall block: **LOCAL / FINAL INTEGRATION REVIEW PENDING**. All stages are unpublished. D1–D4 are approved; formulas,
+period/timezone/coverage and truthful unavailable states live in `ANALYTICS_EVENTS.md`.
+Current Venue today/7d/30d API stays compatible. No publication or production-readiness claim.
+
+
 Nth Hookah loyalty (`HT-GROWTH-LOYALTY-PRODUCTIZE-001/002/003`, feature
 `GROWTH-LOYALTY-PRODUCTIZE-001`): **LOCAL IMPLEMENTED / REVIEW PENDING**. The approved paid-sale,
 RESERVED/confirmed-issue lifecycle includes exact paid-unit correction in closed multi-unit bills.

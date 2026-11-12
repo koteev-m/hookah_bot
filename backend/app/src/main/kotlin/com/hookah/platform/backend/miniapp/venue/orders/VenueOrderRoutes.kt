@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.miniapp.venue.orders
 
+import com.hookah.platform.backend.analytics.AnalyticsChannel
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
@@ -148,7 +149,7 @@ fun Route.venueOrderRoutes(
                     venueId,
                     orderId,
                     rewardId,
-                    OrderActionActor(userId, role),
+                    OrderActionActor(userId, role, AnalyticsChannel.MINIAPP),
                     request.requestId,
                     request.reason,
                 )
@@ -175,7 +176,7 @@ fun Route.venueOrderRoutes(
                     venueId,
                     orderId,
                     unitId,
-                    OrderActionActor(userId, role),
+                    OrderActionActor(userId, role, AnalyticsChannel.MINIAPP),
                     request.requestId,
                     request.reason,
                 )
@@ -202,7 +203,7 @@ fun Route.venueOrderRoutes(
                 venueId,
                 orderId,
                 rewardId,
-                OrderActionActor(userId, role),
+                OrderActionActor(userId, role, AnalyticsChannel.MINIAPP),
                 request.requestId,
                 "",
                 confirm = true,
@@ -225,7 +226,7 @@ fun Route.venueOrderRoutes(
                 venueId,
                 orderId,
                 rewardId,
-                OrderActionActor(userId, role),
+                OrderActionActor(userId, role, AnalyticsChannel.MINIAPP),
                 request.requestId,
                 request.reason,
             )
@@ -309,7 +310,7 @@ fun Route.venueOrderRoutes(
                     venueId = venueId,
                     orderId = orderId,
                     nextStatus = nextStatus,
-                    actor = OrderActionActor(userId, role),
+                    actor = OrderActionActor(userId, role, AnalyticsChannel.MINIAPP),
                 ) ?: throw NotFoundException()
             if (!result.applied) {
                 throw InvalidInputException("Invalid status transition")
@@ -364,7 +365,7 @@ fun Route.venueOrderRoutes(
                     orderId = orderId,
                     reasonCode = reasonCode,
                     reasonText = reasonText,
-                    actor = OrderActionActor(userId, role),
+                    actor = OrderActionActor(userId, role, AnalyticsChannel.MINIAPP),
                 ) ?: throw NotFoundException()
             if (!result.applied) {
                 throw InvalidInputException("Order already closed")
@@ -398,7 +399,7 @@ fun Route.venueOrderRoutes(
                     venueId = venueId,
                     orderId = orderId,
                     nextStatus = OrderWorkflowStatus.CLOSED,
-                    actor = OrderActionActor(userId, role),
+                    actor = OrderActionActor(userId, role, AnalyticsChannel.MINIAPP),
                 ) ?: throw NotFoundException()
             if (!result.applied) {
                 throw InvalidInputException("Invalid status transition")
@@ -449,7 +450,7 @@ fun Route.venueOrderRoutes(
                     orderId = orderId,
                     batchItemId = batchItemId,
                     reasonText = reasonText.take(200),
-                    actor = OrderActionActor(userId, role),
+                    actor = OrderActionActor(userId, role, AnalyticsChannel.MINIAPP),
                 )
             call.respondBillMutationResult(
                 venueOrdersRepository = venueOrdersRepository,
@@ -477,7 +478,7 @@ fun Route.venueOrderRoutes(
                     venueId = venueId,
                     orderId = orderId,
                     batchItemId = batchItemId,
-                    actor = OrderActionActor(userId, role),
+                    actor = OrderActionActor(userId, role, AnalyticsChannel.MINIAPP),
                 )
             call.respondBillMutationResult(
                 venueOrdersRepository = venueOrdersRepository,
@@ -510,7 +511,7 @@ fun Route.venueOrderRoutes(
                     orderId = orderId,
                     batchItemId = batchItemId,
                     discountPercent = request.discountPercent,
-                    actor = OrderActionActor(userId, role),
+                    actor = OrderActionActor(userId, role, AnalyticsChannel.MINIAPP),
                 )
             call.respondBillMutationResult(
                 venueOrdersRepository = venueOrdersRepository,

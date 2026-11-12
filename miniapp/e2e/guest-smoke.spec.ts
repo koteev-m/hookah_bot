@@ -1,5 +1,6 @@
 import type { OrderDetailDto } from '../src/shared/api/venueDtos'
 import { infoMediaPdf } from './fixtures/info-media'
+import { statsResponse } from './fixtures/venue-stats'
 import { readFileSync } from 'node:fs'
 import { expect, type Locator, type Page, type Route, test } from '@playwright/test'
 import tableQrFixture from './fixtures/table-qr.json' with { type: 'json' }
@@ -4011,6 +4012,14 @@ async function mockVenueStatsApi(
 
   await page.route('**/api/venue/1/stats**', async (route) => {
     const url = new URL(route.request().url())
+    if (url.pathname.endsWith('/stats/v1')) {
+      if (url.searchParams.get('section') === 'all') {
+        const days = (Date.parse(url.searchParams.get('to')!) - Date.parse(url.searchParams.get('from')!)) / 86_400_000
+        periods.push(days === 7 ? '7d' : days === 30 ? '30d' : 'today')
+      }
+      await route.fulfill(jsonResponse(statsResponse(url)))
+      return
+    }
     const period = (url.searchParams.get('period') || 'today') as 'today' | '7d' | '30d'
     periods.push(period)
     const stats = options.statsByPeriod?.[period] ?? buildVenueStats(period)
@@ -18837,7 +18846,7 @@ test('platform owner finds transferred support tickets and can reply and close',
     await route.fulfill(jsonResponse({ token: 'e2e-platform-token', expiresAtEpochSeconds: sessionExpiresAt }))
   })
   await page.route('**/api/platform/me', async (route) => {
-    await route.fulfill(jsonResponse({ ownerUserId: 123456789 }))
+    await route.fulfill(jsonResponse({ ok: true, ownerUserId: 123456789 }))
   })
   await page.route('**/api/platform/venues?**', async (route) => {
     await route.fulfill(jsonResponse({ venues: [] }))
@@ -18917,13 +18926,13 @@ test('venue manager sees read-only statistics and switches period', async ({ pag
   await expect(page.getByRole('link', { name: 'Статистика', exact: true })).toBeVisible()
   await openVenueSection(page, 'Статистика')
   await expect(page.getByRole('heading', { name: 'Статистика' })).toBeVisible()
-  await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Заказы' }).getByText('4')).toBeVisible()
-  await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Расчётная сумма заказов' })).toContainText(/5\s*000/)
-  await expect(page.getByText('Кальян')).toBeVisible()
+  await expect(page.locator('[data-kpi="orders.created"] .stats-value')).toHaveText('1')
+  await expect(page.locator('[data-kpi="batches.created"] .stats-value')).toHaveText('3')
+  await expect(page.getByText('Чай из заказа', { exact: true })).toBeVisible()
 
-  await page.getByRole('button', { name: '7 дней' }).click()
+  await page.getByRole('button', { name: 'Последние 7 дней', exact: true }).click()
 
-  await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Заказы' }).getByText('8')).toBeVisible()
+  await expect(page.locator('[data-kpi="orders.created"] .stats-value')).toHaveText('1')
   expect(api.getPeriods()).toEqual(['today', '7d'])
 })
 
@@ -19158,7 +19167,8 @@ test('venue owner sees statistics section', async ({ page }) => {
   await expect(page.getByRole('link', { name: 'Статистика', exact: true })).toBeVisible()
   await openVenueSection(page, 'Статистика')
   await expect(page.getByRole('heading', { name: 'Статистика' })).toBeVisible()
-  await expect(page.locator('.venue-stats-metric').filter({ hasText: 'Средний чек' })).toContainText(/1\s*250/)
+  await expect(page.getByRole('heading', { name: 'Финансовые итоги закрытых смен', exact: true })).toBeVisible()
+  await expect(page.locator('#stats-finance [data-kpi="averageAccruedSale"]').first()).toContainText('Средняя начисленная продажа')
 })
 
 test('venue owner creates edits activates and pauses informational promotion', async ({ page }) => {

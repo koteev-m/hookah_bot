@@ -438,10 +438,17 @@ class AccountingRepository(
         }
     }
 
+    internal fun readOnlyReport(
+        c: Connection,
+        venueId: Long,
+        shift: AccountingShiftHeader,
+    ): AccountingReport = report(c, venueId, shift, lockOrders = false)
+
     private fun report(
         c: Connection,
         venueId: Long,
         shift: AccountingShiftHeader,
+        lockOrders: Boolean = true,
     ): AccountingReport {
         if (shift.status == "CLOSED") {
             return c.query(
@@ -456,7 +463,8 @@ class AccountingRepository(
             }.associateBy { it.id }
         val digital =
             c.query(
-                "SELECT id, status FROM orders WHERE accounting_shift_id = ? AND venue_id = ? ORDER BY id FOR UPDATE",
+                "SELECT id, status FROM orders WHERE accounting_shift_id = ? AND venue_id = ? ORDER BY id" +
+                    if (lockOrders) " FOR UPDATE" else "",
                 shift.id,
                 venueId,
             ) { it.getLong(1) to it.getString(2) }.map { (id, status) ->

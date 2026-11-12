@@ -1,5 +1,223 @@
 # Analytics And Events Model
 
+## Analytics & Statistics stage 2 — KPI read models
+
+`HT-ANALYTICS-KPI-READMODELS-IMPLEMENT-01`: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**.
+Stage 1 is **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS** (owner-supplied independent
+review: no findings, FULL_BACKEND_PASS=YES). Stage 2 review including the bounded KPI fixes
+passed without open findings (owner-supplied result). Stage 3 Venue UI including the ISO money fix is
+**LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS** (owner-supplied targeted review, no findings).
+Stage 4 Platform UI is **LOCAL IMPLEMENTED / REVIEW PENDING**.
+Overall block: **LOCAL / FINAL INTEGRATION REVIEW PENDING**.
+All stages remain unpublished; publication requires a separate task after stage 4 and overall review.
+D1–D4 below remain APPROVED. The original three backlog IDs remain open for their later scope.
+
+### Versioned GET contract
+
+- `GET /api/venue/{venueId}/stats/v1?from=YYYY-MM-DD&to=YYYY-MM-DD`
+- `GET /api/platform/analytics/v1?from=YYYY-MM-DD&to=YYYY-MM-DD`
+- Required dates define **[from, to)**, with `to` exclusive. Venue uses `venue_settings.timezone`
+  and the existing default when absent/invalid (explicit `VENUE_TIMEZONE_FALLBACK` limitation).
+  Platform uses UTC. Calendar ranges are 1–370 days, following the existing Venue schedule
+  range ceiling as a technical request bound, not a tariff. DST days need not be 24 hours.
+- Each response includes `definitionVersion=2026-11-analytics-v1`, one server `asOf`, requested
+  UTC `period.from/to`, timezone and interval. `asOf` is truncated to microseconds before
+  SQL binding and serialization, matching timestamp precision on PostgreSQL/H2. Realized facts are clipped at `min(to, asOf)`;
+  scheduled bookings can include future dates. No historical-asOf parameter is accepted.
+- `section`: Venue `all|orders|finance|bookings|seatings|calls`; Platform
+  `all|venues|subscriptions|invoices|onboarding|support`. Default `all`.
+- Optional Venue `tableId` requires one operational section (`orders|bookings|seatings|calls`).
+  It means the object's current table association, including a seating after MOVE. Finance/all
+  do not accept it. Table ownership is checked after membership. Unknown/duplicate parameters,
+  source/payment-method filters, invalid dates and incompatible filters return validation errors.
+- Values are exact decimal **strings**, not floating point money. Metrics include `unit`, `basis`,
+  `samples`, `unknown`, `availability`, `coverage`, `value`, `observedValue`, safe `reason`.
+  `value=null` for partial history; `observedValue` is the confirmed part or measurable-sample
+  statistic, **not** the full KPI. A complete empty count is `0`; an empty ratio/mean is null.
+  Unsupported sources have `UNAVAILABLE_SOURCE`. COMPLETE_RECORDED_SOURCE describes retained
+  domain rows, not historical completeness before rollout or before data retention/deletion.
+- State/status breakdowns are current snapshot attributes, not transitions in the date range.
+  `breakdowns` are complete grouped counts except `items.deliveredTop` (explicit top 20).
+  Frozen/open finances and invoice currency totals are separate structures. No implicit currency
+  conversion. Average money rounds HALF_UP to a minor unit; ratios to 6 decimals, durations to
+  milliseconds with 3 decimals. Unsupported long monetary totals return NUMERIC_OVERFLOW.
+- All queries run on one read-only REPEATABLE_READ connection, including membership, timezone
+  and open-shift projection. GET never ensures subscriptions, writes events or repairs history.
+  Cache-Control is `no-store`. The old `/stats?period=today|7d|30d` DTO and behavior are unchanged.
+
+### Implemented definitions
+
+| Metric/group | Definition and authoritative source | Basis / limitations |
+| --- | --- | --- |
+| `orders.created`, `batches.created` | COUNT of orders / batches separately | Each entity's created_at; no status exclusion |
+| `orders.firstAccepted` | Complete-history orders whose first_accepted_at is in interval | Legacy orders cannot prove first-ever acceptance; unknown count covers pre-end legacy candidates |
+| `batches.accepted/delivered/rejected` | Distinct batches with matching `order_batch_status_facts` transition in interval | EXISTS prevents repeated transitions/retries inflating a batch count; venue/order/batch identities all joined |
+| `batches.cohortAcceptedRate`, `cohortDeliveredRate` | Confirmed first acceptance/delivery before asOf / same batch-created cohort size | Rates share one denominator; acceptance survives rejection; no CLOSED→DELIVERED inference |
+| `batches.acceptedDelay`, `deliveredDelay` | Mean first acceptance/delivery minus batch.created_at | Same created cohort; complete-history measurable samples only, nonnegative time |
+| `orders.cancelledSnapshot`, `items.excludedSnapshot` | Current CANCELLED orders / excluded or CANCELED item rows in created cohort | Item rows, not quantities; not cancellation-time metrics or refunds |
+| `items.deliveredTop` | SUM qty by immutable item_name_snapshot of first-observed-delivered batches in interval | Current eligible item state excludes exclusions/CANCELED; ignores live menu name/price; coverage counts covered batches and unknown candidate batches (including free-text batches without item rows); repeated deliveries do not multiply quantity |
+| Closed-shift finance | Frozen final_report.totals across shifts with closed_at in interval, grouped currency | Accrued, paid/operatorConfirmed, discount, gift, unpaid, sales count, CASH/CARD/TRANSFER; no live receipt/menu aggregation |
+| Average accrued sale | SUM frozen accruedMinor / SUM frozen salesCount | Includes manual sales; canceled sales treatment remains the frozen accounting definition; zero denominator null |
+| Open-shift finance | Existing accounting projection with locking disabled inside read-only snapshot | Separate provisional current shift; never added to closed-shift totals; same accounting calculations/writers |
+| Financial coverage | Invalid/unreadable reports, non-ISO/mixed sale/report currency or unresolved sale.issue make coverage partial | Such reports never become zero; no currency invented for an empty report set; `finance.closedReports` distinguishes empty from missing |
+| Bookings created | COUNT and current statuses of bookings created in interval | Separate from current scheduled_at cohort; rescheduling changes scheduled cohort membership |
+| Bookings scheduled | COUNT/current statuses whose scheduled_at falls in interval | SEATED, NO_SHOW, CANCELED, EXPIRED separately; unresolved means other status before asOf, future means other status at/after asOf |
+| `bookings.attendance` | SEATED/(SEATED+NO_SHOW) of scheduled cohort | CHANGED is unresolved/future, never inferred seating; zero denominator null |
+| `seatings.registeredSessions` | COUNT DISTINCT table_session_id in table_seatings by started_at | Includes WALK_IN/offline, MOVE is same session; not Guest History or unique people |
+| Calls | Created count; ACK, OPERATOR completed, ORDER_CLOSED auto completed, cancelled by actual timestamps | Auto BILL completion has no invented ACK; creation cohort mean acknowledged_at−created_at, complete-history samples; legacy unknown separate |
+| Venue lifecycle/created | Full SQL lifecycle grouping and created_at count | Lifecycle is snapshot; creation is period |
+| Guest availability | Existing VenueAvailabilityResolver(lifecycle, normalized subscription status) | PUBLISHED alone insufficient; past_due allowed; missing row disclosed as unknown, no lazy subscription creation |
+| WAAV | COUNT DISTINCT venue with ACCEPTED/DELIVERED fact in [asOf−168h,asOf) | Independent of selected dates/current lifecycle/subscription; legacy candidate venues mark partial history |
+| Subscription states | Full LEFT JOIN venues/subscriptions, normalized statuses | UNKNOWN and MISSING separately; no writes |
+| Paid-through | MAX period_end of PAID invoices per venue | Inclusive domain DATE, distribution and count covering current UTC date; absent recorded paid period unknown |
+| Effective paid-through | MAX(base paid-through, courtesy new_paid_through selected by the billing contract: ORDER BY new_paid_through DESC, id DESC) | Only COURTESY_DAYS created before asOf; a later shorter grant never shortens the effective date. Courtesy separate, not payment; full grouped read, not a 50-row invoice list |
+| Invoices | Snapshot OPEN/PAST_DUE, overdue due_at<asOf, PAID; sums per currency | No bank settlement; counted invoice once even with several payment events |
+| Manual confirmations | Distinct PAID invoices paid_at in interval with exact manual:id SUCCEEDED event matching invoice/provider/amount/currency | Existing server manual provenance; no raw payload or amounts of mismatched events summed |
+| Reconciliation warnings | Paid invoices without matching evidence, inconsistent successful events, invoices with >1 matching success | Diagnostics, not incoming money. Multiple-success warning counts each invoice created before asOf once, regardless of its current status; only SUCCEEDED events before asOf matching invoice/provider/amount/currency qualify |
+| Onboarding | Full request count/statuses/created_at cohort and FK-confirmed venue links | No lead-to-paid funnel |
+| Staff-chat | Venue has persisted staff_chat_id binding | Aggregate only, no IDs; linkage does not prove delivery |
+| Support | SUPPORT_TICKET total/active states OPEN, NEW, IN_PROGRESS, WAITING_USER; oldest active age | Excludes BOOKING_THREAD and VENUE_CHAT; no content or PII |
+| Support TTFR | First recorded non-SYSTEM VENUE/PLATFORM message with human author minus ticket.created_at, for created cohort | Guest and SYSTEM excluded; no recorded reply counted separately (not zero); resolution/reopen/escalation durations unavailable |
+
+Financial totals use frozen business facts, not analytics events or provider event totals.
+No settlement/refund/profit/MRR/unique-person metric, client funnel, export or AI summary is added.
+Historical item exclusions and seating table associations are snapshots; reconstructing their
+past timelines is outside this version. Stage-1 legacy markers remain false after later observed
+transitions. An installed migration alone never makes coverage complete.
+
+Implementation: `analytics/KpiModels.kt`, `KpiRepository.kt`, `KpiQueries.kt`,
+`VenueKpiQueries.kt`, `FinancialKpiQueries.kt`, `PlatformKpiQueries.kt`, `KpiRoutes.kt`.
+Permanent evidence: `KpiReadModelsH2Test`, `KpiReadModelsPostgresTest`, `KpiRoutesTest`.
+No stage-2 schema migration: existing indexes are measured with PostgreSQL EXPLAIN ANALYZE;
+plans and final regression provenance are recorded in the stage-2 local report.
+
+`HT-ANALYTICS-KPI-REVIEW-FIX-01` is included in the stage-2 **INDEPENDENT REVIEW PASS**.
+The two review corrections align courtesy selection with `BillingAdjustmentRepository` and
+aggregate matching payments in SQL before joining invoices, avoiding a full payment scan per
+invoice. Provider-event idempotency, money sources, DTOs and RBAC are unchanged. No new index or
+migration is required. `PlatformBillingKpiH2Test`/`PlatformBillingKpiPostgresTest` compare billing
+semantics, cutoff/unknown cases and old/new reconciliation results; the PostgreSQL dense fixture
+records both plans and complete snapshot equality. Timings are synthetic local evidence only.
+
+### Venue presentation — stage 3
+
+`HT-ANALYTICS-VENUE-STATS-UI-IMPLEMENT-01` consumes this exact v1 contract in the existing
+Venue statistics section. Today/last 7/last 30 include the venue's current calendar date;
+custom end date is inclusive in the form and converted to the following calendar date for GET.
+The server resolves UTC boundaries/DST. The screen first obtains timezone/asOf through the
+existing minimal `seatings` read, discards that result, then requests the chosen period.
+No new metadata endpoint, backend calculation or write-capable getter is introduced.
+
+Decimal-string money is formatted with BigInt and ISO currency digits, without Number rounding.
+`HT-ANALYTICS-VENUE-MONEY-FORMAT-FIX-01` pins minor-unit exponents to the official SIX
+[ISO 4217 List One](https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml),
+published 2026-09-17, retrieved 2026-11-11. The static `iso4217MinorUnits.json` projection is
+verified against a checked-in LF-normalized XML snapshot (upstream and normalized SHA-256 in
+the projection). IQD=3, MGA=2, CLF=4; Intl defaults are never a stored-unit scale. Both fraction
+digit options are explicit; BigInt quotient/remainder keeps Long limits exact. Unknown, invalid,
+withdrawn or N.A. codes without a supported exponent display «Недостаточно данных», with no
+default division by 100. No runtime download, FX conversion or backend financial change.
+Updating the snapshot/exponents requires an explicit reviewed source update, not a runtime refresh.
+Mean durations are labeled «Среднее». Transition totals, created cohorts and current status
+distributions remain separate. No time series is synthesized from aggregates. Top items use
+the server's immutable names and explicit coverage. Partial values display the observed subset
+as such, never as the full KPI; missing/unsupported means and ratios remain unavailable.
+Russian «Как считается» explanations, visible financial/legacy limits and scoped filters are
+specified in `VENUE_OPERATIONS.md`. Runtime version/context validation fails closed; old
+`/stats?period=...` and its DTO/client remain compatible. Permanent real HTTP fixtures are
+generated and compared by `VenueStatsUiContractTest`, consumed by `venue-stats.spec.ts`.
+
+
+### Platform presentation — stage 4
+
+`HT-ANALYTICS-PLATFORM-DASHBOARD-IMPLEMENT-01` replaces the existing Platform analytics placeholder.
+The same Platform Owner-only entry opens four overview cards and five expandable groups:
+venues, subscriptions, invoices/payments, onboarding/staff-chat and support. No additional API,
+KPI store, financial calculation or write action is introduced. Stage 3 formatter is reused unchanged.
+
+- `from/to` remain required exclusive UTC API boundaries. UI dates are inclusive; presets today/7d/30d
+  use server asOf (corrected after the first response), custom dates allow 1–370 days. Only `section`
+  filters are offered. Snapshot/selected-period/rolling-168h cards are explicitly distinguished.
+- Registered, published, guest-available and active venues remain separate. WAAV uses server facts,
+  not created orders. Missing subscriptions and legacy history retain partial values/unknown counts.
+- Subscription states come from server breakdowns. Paid-through and effective paid-through dates/counts
+  are displayed as supplied; courtesy is not payment and is never recomputed by the frontend.
+- Invoice open/overdue/paid amounts are snapshots grouped by currency. Overdue is a subset of open.
+  Manual-confirmed invoices use paid_at in the selected period; reconciliation counters have distinct
+  units and must not be added as money or a combined unique warning count. No bank settlement source.
+- Support totals/queue/oldest age are snapshots. TTFR is the mean among measurable created-period
+  tickets, with unknown/partial coverage shown. SYSTEM/GUEST messages and BOOKING_THREAD/VENUE_CHAT
+  are excluded by backend facts; the screen neither reads text nor creates its own response history.
+- Availability reasons and support-status distributions are not returned by v1 and are explicitly
+  unavailable. No invented charts/series, MRR/profit/refunds, TTR/reopen/CSAT or lead-to-paid funnel.
+- All non-obvious cards have tap/keyboard `Как считается`; zero, unavailable and observed partial
+  subsets remain separate. Missing fields do not become zero; incompatible envelopes fail closed.
+- Safe links lead to existing venues/billing, applications and Support Center without carrying filters.
+  Platform grant does not add venue accounting access. Errors/DOM contain no PII, messages or raw payloads.
+
+## Analytics & Statistics foundation — HT-ANALYTICS-FOUNDATION-IMPLEMENT-01
+
+**LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS.** This bounded stage retains backlog IDs
+`ANALYTICS-EVENT-COVERAGE-001`, `VENUE-STATS-ADVANCED-001` and
+`ANALYTICS-PLATFORM-DASHBOARD-001`. No KPI API or UI is included.
+
+Approved product definitions (D1–D4, **APPROVED**, supersede ambiguous target formulas below):
+- D1: first accepted order = first actual acceptance of any of its batches; later batches do
+  not count as new first accepted orders. WAAV = distinct venues with an actual batch transition
+  to ACCEPTED or DELIVERED in `[asOf - 168 hours, asOf)`. Lifecycle, subscription and guest
+  availability are separate snapshots. Creation time/current status cannot establish activity.
+- D2: financial MVP is **totals of shifts closed in the period**, using frozen `final_report`
+  and `closed_at`. Open shift is provisional and separate. Accrual, operator-confirmed
+  CASH/CARD/TRANSFER, discounts/gifts, recorded unpaid balance and average accrued sale
+  including manual sales remain separate. This is neither bank reconciliation nor calendar
+  cash flow; VOID_PAYMENT is not a real refund. Accounting writers/calculations are unchanged.
+- D3: bookings created in a period and bookings scheduled for visit dates are separate cohorts.
+  Scheduled cohort arrival share = `SEATED / (SEATED + NO_SHOW)`; unresolved/future/canceled/
+  expired are separate. Empty denominator = unavailable share, not 0% or all-request conversion.
+- D4: physical seating = distinct `table_session_id` among registered seating sessions,
+  including offline. MOVE within a session is not another seating. Guest History and unique
+  persons are different; unique visitors are outside MVP.
+
+All future shared reads use `[from,to)`, a single server `asOf`, UTC instants, Venue calendar
+boundaries in its timezone, and explicitly UTC Platform boundaries. Missing history is not zero.
+
+PG V138 / H2 V139 add domain `order_batch_status_facts` (one row per actual transition,
+key batch + transition sequence), first confirmed acceptance/delivery on batches and first
+confirmed acceptance on orders. First timestamps never clear on rejection or overwrite on
+append/replay. DELIVERED does not imply a known ACCEPTED time; CLOSED does not imply delivery
+or payment. Facts, state and analytics append share the writer transaction. Existing venue-first
+locking serializes single/bulk/whole-order and call writers; sequences distinguish actual reentry
+without modifying the allowed workflow. Facts are an extension of orders, not a second state machine.
+
+Physical names and existing store rows/keys remain unchanged. `canonicalAnalyticsEventType`
+normalizes `batch_created` to `order_batch_created`, `batch_status_changed` to
+`order_batch_status_changed` **at read time, one physical row counted once**. An alias of an old row does not establish
+a trustworthy batch transition or occurrence time. New envelopes have
+`contractVersion=2`, `canonicalEventType`, `occurredAt`, `producer`, `channel`; transitions add
+`batchFromStatus`, `batchToStatus`, `transitionSequence`. Legacy `fromStatus`/`toStatus` keep their
+workflow meanings for old consumers and must not be interpreted as exact batch statuses.
+New transition keys are `batch_status_changed:v2:<venue>:<order>:<batch>:<sequence>`;
+creation retains `batch_created:<venue>:<batch>`. Unrelated dedupe semantics are unchanged.
+Creation occurrence is the persisted server creation time; transition occurrence is server UTC
+at microsecond precision after locking, distinct from analytics row insertion time.
+Producer is the repository; channel MINIAPP/TELEGRAM is passed by trusted server code, otherwise
+UNKNOWN. `order_batches.source=MINIAPP` is not channel evidence. No reasons, comments, user ids,
+raw Telegram/initData, tokens or payment payloads are added to analytics.
+
+Legacy completeness: migrations default `status_history_complete` (batches/calls) and
+`acceptance_history_complete` (orders) to false; timestamps stay null. Upgraded creation writers
+explicitly set true. A new transition of a legacy object records a known fact, **never** changes
+its incomplete flag. For incomplete objects, first timestamps mean earliest confirmed observation,
+not a claim about unknown earlier history. Null + complete means no recorded qualifying transition;
+null + incomplete means unknown history. Complete flags describe instrumented writer history,
+not migration installation or proof of fleet-wide rollout; mixed old writers cannot establish full
+coverage. Readers never repair timestamps or emit events. No historical audit/created_at/updated_at
+backfill, retention change, financial source substitution or global analytics explorer is introduced.
+
+Next stages of the same block: shared KPI/read models → Venue Stats Advanced → Platform Analytics.
+Broad events (including feedback/subscription gaps), provider funnels and AI remain open backlog.
+
+
 Evidence reconciliation (2026-11-09): main `8292696…` / reported staging V132 include the
 accounting report and auto-open; live product acceptance remains open. Current literal server
 event names observed in source are `table_session_started`, `batch_created`, `batch_status_changed`,
@@ -429,7 +647,7 @@ Platform Owner:
 | Billing events | Billing audit exists for checkout ensure, mark-paid and courtesy days. Provider/webhook analytics needs verification. | Emit subscription, invoice and payment webhook facts. | Card/Stars metrics future until provider rollout. |
 | Staff profile/shift/tip events | Phase 1 staff profiles/today shift runtime is done/local-smoke-passed; analytics emission coverage still needs verification. Canonical model is `docs/STAFF_PROFILES_SHIFTS_TIPS.md`. | Emit safe profile view/publish, today-shift view/mark-active, future schedule shift-created/confirmed and future tip intent/click facts. | Tip intent/click must not be interpreted as payment confirmation; schedule/tip events remain future until those domains exist. |
 | Growth events | Guest History and Feedback are closed; `feedback_submitted` and server-side transactional `promotion_applied` are implemented. Favorite-item, repeat, loyalty and placement runtime foundations exist, but their analytics coverage still needs verification. | Emit favorite, visit, repeat, feedback, promotion, loyalty and placement facts only from authoritative server mutations. | `visit_recorded` must count only real completed visits/orders. `feedback_submitted` excludes raw comment text; `feedback_requested` and automated prompts remain disabled. Do not mistake partial domain runtime for complete event coverage. |
-| Dashboard UI | Venue read-only stats exist; Platform analytics dashboard is future/partial. | Role-specific dashboards from reliable events. | Advanced dashboards after event reliability. |
+| Dashboard UI | Venue v1 UI independently reviewed; bounded Platform v1 dashboard locally implemented, stage-4 review pending. | Role-specific dashboards from authoritative domain facts; events remain supplementary. | Final integration review and separate publication before release acceptance; broader analytics stays future. |
 | Audit logs | Several critical audit rows exist where implemented. | Audit all critical state changes with actor and safe old/new fields. | Fill gaps for menu price, QR rotate, force close, tab reopen, provider config. |
 | Notification outbox | Telegram outbox/workers exist and expose operational metrics. | Delivery state is technical telemetry, separate from analytics facts. | Do not treat outbox rows as business conversions. |
 

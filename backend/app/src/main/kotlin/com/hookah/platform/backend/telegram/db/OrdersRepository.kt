@@ -1,8 +1,10 @@
 package com.hookah.platform.backend.telegram.db
 
+import com.hookah.platform.backend.analytics.AnalyticsChannel
 import com.hookah.platform.backend.analytics.AnalyticsEventRecord
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
+import com.hookah.platform.backend.analytics.batchCreationContract
 import com.hookah.platform.backend.api.CartMenuSelectionIssue
 import com.hookah.platform.backend.api.CartMenuSelectionKind
 import com.hookah.platform.backend.api.CartMenuSelectionReason
@@ -1039,8 +1041,8 @@ class OrdersRepository(
         val generatedKeys = if (isH2) Statement.RETURN_GENERATED_KEYS else Statement.NO_GENERATED_KEYS
         val sql =
             """
-            INSERT INTO order_batches (order_id, tab_id, author_user_id, source, status, guest_comment)
-            VALUES (?, ?, ?, 'CHAT', 'NEW', ?)$returningClause
+            INSERT INTO order_batches (order_id, tab_id, author_user_id, source, status, guest_comment, status_history_complete)
+            VALUES (?, ?, ?, 'CHAT', 'NEW', ?, TRUE)$returningClause
             """.trimIndent()
         return connection.prepareStatement(sql, generatedKeys).use { statement ->
             statement.setLong(1, orderId)
@@ -1083,6 +1085,7 @@ class OrdersRepository(
         chatOrder: Boolean = false,
         expectedTableToken: String? = null,
         quickOrderRequest: QuickOrderRequest? = null,
+        analyticsChannel: AnalyticsChannel = AnalyticsChannel.UNKNOWN,
     ): CreatedOrderBatch? {
         if (chatOrder && (items.isNotEmpty() || comment.isNullOrBlank() || expectedTableToken.isNullOrBlank())) {
             throw InvalidInputException("A chat order requires a table token, text and no menu items")
@@ -1321,6 +1324,7 @@ class OrdersRepository(
                                             orderId = orderId,
                                             batchId = batchId,
                                             tabId = tabId,
+                                            extra = batchCreationContract(connection, batchId, analyticsChannel),
                                         ),
                                     venueId = venueId,
                                     tableId = tableId,
@@ -1430,6 +1434,7 @@ class OrdersRepository(
         chatOrder: Boolean = false,
         expectedTableToken: String? = null,
         quickOrderRequest: QuickOrderRequest? = null,
+        analyticsChannel: AnalyticsChannel = AnalyticsChannel.UNKNOWN,
     ): CreatedOrderBatch? {
         if (chatOrder && (items.isNotEmpty() || comment.isNullOrBlank() || expectedTableToken.isNullOrBlank())) {
             throw InvalidInputException("A chat order requires a table token, text and no menu items")
@@ -1621,6 +1626,7 @@ class OrdersRepository(
                                 orderId = orderId,
                                 batchId = batchId,
                                 tabId = tabId,
+                                extra = batchCreationContract(connection, batchId, analyticsChannel),
                             ),
                         venueId = venueId,
                         tableId = tableId,
@@ -1906,9 +1912,9 @@ class OrdersRepository(
         return connection.prepareStatement(
             """
             INSERT INTO orders (
-                venue_id, table_id, table_session_id, status, display_number, display_date, accounting_shift_id
+                venue_id, table_id, table_session_id, status, display_number, display_date, acceptance_history_complete, accounting_shift_id
             )
-            VALUES (?, ?, ?, 'ACTIVE', ?, ?,
+            VALUES (?, ?, ?, 'ACTIVE', ?, ?, TRUE,
                 (SELECT id FROM venue_accounting_shifts WHERE venue_id = ? AND status = 'OPEN'))
             """.trimIndent(),
             Statement.RETURN_GENERATED_KEYS,
@@ -1974,8 +1980,8 @@ class OrdersRepository(
     ): Long {
         val sql =
             """
-            INSERT INTO order_batches (order_id, tab_id, author_user_id, source, status, guest_comment)
-            VALUES (?, ?, NULL, 'MINIAPP', 'NEW', ?)
+            INSERT INTO order_batches (order_id, tab_id, author_user_id, source, status, guest_comment, status_history_complete)
+            VALUES (?, ?, NULL, 'MINIAPP', 'NEW', ?, TRUE)
             """.trimIndent()
         return connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { statement ->
             statement.setLong(1, orderId)

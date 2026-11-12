@@ -314,7 +314,14 @@ class SeatingFixConcurrencyPostgresTest {
                     assertTrue(results.all { it.isSuccess })
                     val after = fullRow(ds, "staff_calls", call.id)
                     assertEquals(
-                        before + mapOf("status" to "DONE", "table_id" to tables[if (moveFirst) 1 else 0].toString()),
+                        before +
+                            mapOf(
+                                "status" to "DONE",
+                                "table_id" to tables[if (moveFirst) 1 else 0].toString(),
+                                "completed_at" to assertNotNull(after["completed_at"]),
+                                "completion_kind" to "OPERATOR",
+                                "completion_channel" to "UNKNOWN",
+                            ),
                         after,
                     )
                     ds.connection.use { c ->
@@ -325,6 +332,13 @@ class SeatingFixConcurrencyPostgresTest {
                                 call.id,
                             ) {
                                 it.getInt(1)
+                            }.single(),
+                        )
+                    }
+                    ds.connection.use { c ->
+                        assertTrue(
+                            c.rows("SELECT completed_at >= acknowledged_at FROM staff_calls WHERE id = ?", call.id) {
+                                it.getBoolean(1)
                             }.single(),
                         )
                     }
