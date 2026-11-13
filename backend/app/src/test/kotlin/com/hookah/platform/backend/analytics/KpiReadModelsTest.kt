@@ -696,6 +696,15 @@ internal abstract class KpiReadModelsContract(private val postgres: Boolean) {
 
     @Test
     fun `product filters are strict scoped and money sort needs currency`() {
+        assertEquals(
+            "UNKNOWN",
+            parametersOf(
+                "from" to listOf("2026-11-01"),
+                "to" to listOf("2026-11-11"),
+                "section" to listOf("products"),
+                "currency" to listOf("UNKNOWN"),
+            ).kpiRequest(false).currency,
+        )
         assertFailsWith<InvalidInputException> {
             parametersOf(
                 "from" to listOf("2026-11-01"),
@@ -1245,6 +1254,493 @@ internal abstract class KpiReadModelsContract(private val postgres: Boolean) {
             assertEquals(before, f.fingerprint())
             f.exec("DELETE FROM venue_members WHERE venue_id=${f.venue} AND user_id=7")
             assertFailsWith<ForbiddenException> { snapshot() }
+        }
+
+    @Test
+    fun `product category totals precede pagination and retain stable duplicate identities`() =
+        fixture { f ->
+            val first = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Same category')")
+            val second = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Same category')")
+            val batch = f.batch()
+            f.exec(
+                "UPDATE order_batches SET status='DELIVERED',first_delivered_at=TIMESTAMP WITH TIME " +
+                    "ZONE '2026-11-09 00:00:00+00' WHERE id=$batch",
+            )
+            for (n in 1..64) {
+                val category = if (n <= 60) first else second
+                val item =
+                    f.insert(
+                        "INSERT INTO menu_items(venue_id,category_id,name,price_minor,currency) VALUES " +
+                            "(${f.venue},$category,'Current $n',99999,'RUB')",
+                    )
+                f.exec(
+                    "INSERT INTO " +
+                        "order_batch_items(order_batch_id,menu_item_id,qty,item_name_snapshot," +
+                        "base_unit_price_minor_snapshot,currency_snapshot) VALUES " +
+                        "($batch,$item,2,'Same historical',100,'RUB')",
+                )
+            }
+            val zero =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$first,'No sales',99999)",
+                )
+
+            fun report(page: Int) =
+                runBlocking {
+                    f.repo.venue(
+                        f.venue,
+                        7,
+                        request.copy(section = "products", expandedCategoryKey = first.toString(), page = page),
+                    )
+                }.products!!
+            val before = f.fingerprint()
+            val one = report(1)
+            val two = report(2)
+            assertEquals(before, f.fingerprint())
+            assertEquals("128", one.summary!!.units.value)
+            assertEquals("12800", one.summary.grossAmounts.single().gross.value)
+            assertEquals(one.summary, two.summary)
+            assertEquals(one.categoryTotals, two.categoryTotals)
+            assertEquals(2, one.categoryTotals.size)
+            assertEquals(setOf(first, second), one.categoryTotals.map { it.category.id }.toSet())
+            assertEquals("120", one.categoryTotals.single { it.category.id == first }.totals.units.value)
+            assertEquals(50, one.categoryPage!!.rows.size)
+            assertEquals(11, two.categoryPage!!.rows.size)
+            val all = one.categoryPage.rows + two.categoryPage.rows
+            assertEquals(61, all.map { it.itemId to it.currency }.toSet().size)
+            assertEquals(120, all.sumOf { it.units.value!!.toInt() })
+            assertEquals("0", all.single { it.itemId == zero }.units.value)
+            assertEquals(
+                "12000",
+                all.fold(java.math.BigInteger.ZERO) { sum, row -> sum + row.gross.value!!.toBigInteger() }.toString(),
+            )
+            val filtered =
+                runBlocking {
+                    f.repo.venue(
+                        f.venue,
+                        7,
+                        request.copy(
+                            section = "products",
+                            categoryKey = second.toString(),
+                            search = "historical",
+                            currency = "RUB",
+                            sort = "amount",
+                        ),
+                    )
+                }.products!!
+            assertEquals("8", filtered.summary!!.units.value)
+            assertEquals(1, filtered.categoryTotals.size)
+            assertEquals(
+                "0",
+                runBlocking {
+                    f.repo.venue(f.venue, 7, request.copy(section = "products", search = "missing"))
+                }.products!!.summary!!.units.value,
+            )
+        }
+
+    @Test
+    fun `product grouped currencies sources gifts and missing price never claim complete money`() =
+        fixture { f ->
+            val cat = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Menu')")
+            val item =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$cat,'Now expensive',999999)",
+                )
+            val batch = f.batch()
+            f.exec(
+                "UPDATE order_batches SET status='DELIVERED',first_delivered_at=TIMESTAMP WITH TIME " +
+                    "ZONE '2026-11-09 00:00:00+00' WHERE id=$batch",
+            )
+            val line =
+                f.insert(
+                    "INSERT INTO " +
+                        "order_batch_items(order_batch_id,menu_item_id,qty,item_name_snapshot," +
+                        "base_unit_price_minor_snapshot,currency_snapshot) VALUES " +
+                        "($batch,$item,3,'Historical',100,'RUB')",
+                )
+            f.exec(
+                "INSERT INTO " +
+                    "order_batch_item_options(order_batch_item_id,option_name_snapshot," +
+                    "price_delta_minor_snapshot) VALUES ($line,'Option',25)",
+            )
+            val shift =
+                f.insert(
+                    "INSERT INTO venue_accounting_shifts(venue_id,status,open_slot,timezone,opened_at) " +
+                        "VALUES (${f.venue},'OPEN',1,'UTC',TIMESTAMP WITH TIME ZONE '2026-11-01 00:00:00+00')",
+                )
+
+            fun sale(
+                id: String,
+                currency: String,
+                order: Boolean = false,
+            ) {
+                val value =
+                    AccountingSale(
+                        id = id,
+                        tableId = f.table,
+                        tableLabel = "Table",
+                        source = if (order) "MINIAPP" else "MANUAL",
+                        createdAt = "2026-11-09T00:00:00Z",
+                        currency = currency,
+                        lines =
+                            listOf(
+                                AccountingLine(
+                                    id = "manual",
+                                    name = "Manual historical",
+                                    qty = 2,
+                                    unitPriceMinor = 250,
+                                    menuItemId = item,
+                                    giftReason = if (order) null else "Gift",
+                                ),
+                            ),
+                        orderId = if (order) f.order else null,
+                    )
+                f.ds.connection.use {
+                        c ->
+                    c.prepareStatement(
+                        "INSERT INTO venue_accounting_sales(id,shift_id,snapshot_json) VALUES (?,?,?)",
+                    ).use {
+                            st ->
+                        st.setString(1, id)
+                        st.setLong(2, shift)
+                        st.setString(3, Json.encodeToString(value))
+                        st.executeUpdate()
+                    }
+                }
+            }
+            sale("manual-rub", "RUB")
+            sale("manual-usd", "USD")
+            sale("projection", "RUB", true)
+
+            fun report() =
+                runBlocking {
+                    f.repo.venue(f.venue, 7, request.copy(section = "products", expandedCategoryKey = cat.toString()))
+                }.products!!
+            val result = report()
+            assertEquals("7", result.summary!!.units.value)
+            assertEquals(setOf("RUB", "USD"), result.summary.grossAmounts.map { it.currency }.toSet())
+            assertEquals("875", result.summary.grossAmounts.single { it.currency == "RUB" }.gross.value)
+            assertEquals("4", result.summary.giftUnits.value)
+            val rub = result.categoryPage!!.rows.single { it.currency == "RUB" }
+            assertEquals("5", rub.units.value)
+            assertEquals(2, rub.sources.size)
+            assertEquals(listOf("Option"), rub.sources.first { it.source == "DIGITAL_DELIVERY" }.options)
+            f.exec("UPDATE order_batch_items SET base_unit_price_minor_snapshot=NULL WHERE id=$line")
+            val partial = report()
+            val amount = partial.summary!!.grossAmounts.single { it.currency == "RUB" }.gross
+            assertEquals("PARTIAL", amount.availability)
+            assertNull(amount.value)
+            assertEquals("500", amount.observedValue)
+            assertEquals("7", partial.summary.units.value)
+            f.exec("UPDATE order_batches SET status_history_complete=FALSE WHERE id=$batch")
+            val unknown = report()
+            assertEquals("PARTIAL", unknown.summary!!.units.availability)
+            assertNull(unknown.summary.units.value)
+        }
+
+    @Test
+    fun `product category filters reject foreign keys without losing unknown historical rows`() =
+        fixture { f ->
+            val foreign = f.insert("INSERT INTO venues(name,status) VALUES ('Other','PUBLISHED')")
+            val foreignCategory = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES ($foreign,'Foreign')")
+            assertFailsWith<InvalidInputException> {
+                runBlocking {
+                    f.repo.venue(
+                        f.venue,
+                        7,
+                        request.copy(section = "products", expandedCategoryKey = foreignCategory.toString()),
+                    )
+                }
+            }
+            for (key in listOf("-1", "01", "broken", "9223372036854775808")) {
+                assertFailsWith<InvalidInputException> {
+                    parametersOf(
+                        "from" to listOf("2026-11-01"),
+                        "to" to listOf("2026-11-11"),
+                        "section" to listOf("products"),
+                        "categoryKey" to listOf(key),
+                    ).kpiRequest(false)
+                }
+            }
+            val shift =
+                f.insert(
+                    "INSERT INTO venue_accounting_shifts(venue_id,status,open_slot,timezone,opened_at) " +
+                        "VALUES (${f.venue},'OPEN',1,'UTC',TIMESTAMP WITH TIME ZONE '2026-11-01 00:00:00+00')",
+                )
+            val sale =
+                AccountingSale(
+                    id = "orphan",
+                    tableId = f.table,
+                    tableLabel = "Table",
+                    source = "MANUAL",
+                    createdAt = "2026-11-09T00:00:00Z",
+                    currency = "RUB",
+                    lines =
+                        listOf(
+                            AccountingLine(
+                                id = "x",
+                                name = "Archived",
+                                qty = 2,
+                                unitPriceMinor = 100,
+                                menuItemId = 999999,
+                            ),
+                        ),
+                )
+            f.ds.connection.use {
+                    c ->
+                c.prepareStatement("INSERT INTO venue_accounting_sales(id,shift_id,snapshot_json) VALUES (?,?,?)").use {
+                        st ->
+                    st.setString(1, "orphan")
+                    st.setLong(2, shift)
+                    st.setString(3, Json.encodeToString(sale))
+                    st.executeUpdate()
+                }
+            }
+            val r =
+                runBlocking {
+                    f.repo.venue(f.venue, 7, request.copy(section = "products", expandedCategoryKey = "uncategorized"))
+                }.products!!
+            assertEquals("Без категории", r.categoryTotals.single().category.name)
+            assertNull(r.categoryTotals.single().category.id)
+            assertEquals("2", r.summary!!.units.value)
+            assertEquals(999999, r.categoryPage!!.rows.single().itemId.toInt())
+        }
+
+    @Test
+    fun `product search retains every source and currency of matching stable identities before pagination`() =
+        fixture { f ->
+            val cat = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Search')")
+            val batch = f.batch()
+            f.exec(
+                "UPDATE order_batches SET status='DELIVERED',first_delivered_at=TIMESTAMP WITH TIME " +
+                    "ZONE '2026-11-09 00:00:00+00' WHERE id=$batch",
+            )
+            val items =
+                (1..52).map { n ->
+                    val item =
+                        f.insert(
+                            "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                                "(${f.venue},$cat,'Current $n',999999)",
+                        )
+                    f.exec(
+                        "INSERT INTO order_batch_items(order_batch_id,menu_item_id,qty,item_name_snapshot," +
+                            "base_unit_price_minor_snapshot,currency_snapshot) VALUES " +
+                            "($batch,$item,2,'Unified tea',100,'RUB')",
+                    )
+                    item
+                }
+            val shift =
+                f.insert(
+                    "INSERT INTO venue_accounting_shifts(venue_id,status,open_slot,timezone,opened_at) " +
+                        "VALUES (${f.venue},'OPEN',1,'UTC',TIMESTAMP WITH TIME ZONE '2026-11-01 00:00:00+00')",
+                )
+            for ((id, currency, qty) in listOf(
+                Triple("rub", "RUB", 3),
+                Triple("eur", "EUR", 4),
+                Triple("projection", "RUB", 99),
+            )) {
+                val sale =
+                    AccountingSale(
+                        id = id,
+                        tableId = f.table,
+                        tableLabel = "Table",
+                        source = if (id == "projection") "MINIAPP" else "MANUAL",
+                        createdAt = "2026-11-09T00:00:00Z",
+                        currency = currency,
+                        orderId = if (id == "projection") f.order else null,
+                        lines =
+                            listOf(
+                                AccountingLine(
+                                    id = id,
+                                    name = "Manual alias",
+                                    qty = qty,
+                                    unitPriceMinor = 100,
+                                    menuItemId = items.first(),
+                                    giftReason = if (id == "rub") "Gift" else null,
+                                ),
+                            ),
+                    )
+                f.ds.connection.use { c ->
+                    c.prepareStatement(
+                        "INSERT INTO venue_accounting_sales(id,shift_id,snapshot_json) VALUES (?,?,?)",
+                    ).use {
+                            st ->
+                        st.setString(1, id)
+                        st.setLong(2, shift)
+                        st.setString(3, Json.encodeToString(sale))
+                        st.executeUpdate()
+                    }
+                }
+            }
+
+            fun report(
+                search: String? = null,
+                page: Int = 1,
+                currency: String? = null,
+                sort: String = "popular",
+            ) = runBlocking {
+                f.repo.venue(
+                    f.venue,
+                    7,
+                    request.copy(
+                        section = "products",
+                        expandedCategoryKey = cat.toString(),
+                        categoryKey = cat.toString(),
+                        search = search,
+                        page = page,
+                        currency = currency,
+                        sort = sort,
+                    ),
+                )
+            }.products!!
+            val before = f.fingerprint()
+            val all = report()
+            val found = report("Unified tea")
+            assertEquals(
+                "5",
+                found.categoryPage!!.rows.single { it.itemId == items.first() && it.currency == "RUB" }.units.value,
+            )
+            assertEquals(
+                "500",
+                found.categoryPage.rows.single { it.itemId == items.first() && it.currency == "RUB" }.gross.value,
+            )
+            assertEquals(all.summary, found.summary)
+            assertEquals(all.categoryTotals, found.categoryTotals)
+            assertEquals("111", found.summary!!.units.value)
+            assertEquals("3", found.summary.giftUnits.value)
+            assertEquals("10700", found.summary.grossAmounts.single { it.currency == "RUB" }.gross.value)
+            assertEquals("400", found.summary.grossAmounts.single { it.currency == "EUR" }.gross.value)
+            val pages = found.categoryPage.rows + report("Unified tea", page = 2).categoryPage!!.rows
+            assertEquals(53, pages.size)
+            assertEquals(53, pages.map { it.itemId to it.currency }.toSet().size)
+            assertEquals(111, pages.sumOf { it.units.value!!.toInt() })
+            assertEquals(52, pages.map { it.itemId }.toSet().size)
+            val alias = report("Manual alias")
+            assertEquals("9", alias.summary!!.units.value)
+            assertEquals(2, alias.categoryPage!!.rows.size)
+            assertEquals(2, alias.categoryPage.rows.single { it.currency == "RUB" }.sources.size)
+            assertEquals("107", report("Unified tea", currency = "RUB", sort = "amount").summary!!.units.value)
+            assertEquals(
+                items.first(),
+                report("Unified tea", currency = "RUB", sort = "amount").categoryPage!!.rows.first().itemId,
+            )
+            assertEquals(
+                "5",
+                report("Unified tea", page = 2, currency = "RUB", sort = "rare").categoryPage!!.rows.last().units.value,
+            )
+            assertEquals(before, f.fingerprint())
+        }
+
+    @Test
+    fun `product currency filters preserve scoped unknown currency without assigning its units or money`() =
+        fixture { f ->
+            val cat = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Uncertain')")
+            val clean = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Clean')")
+            val item =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$cat,'Current',999999)",
+                )
+            f.exec(
+                "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                    "(${f.venue},$clean,'Unsold',999999)",
+            )
+            val batch = f.batch()
+            f.exec(
+                "UPDATE order_batches SET status='DELIVERED',first_delivered_at=TIMESTAMP WITH TIME " +
+                    "ZONE '2026-11-09 00:00:00+00' WHERE id=$batch",
+            )
+            f.exec(
+                "INSERT INTO " +
+                    "order_batch_items(order_batch_id,menu_item_id,qty,item_name_snapshot," +
+                    "base_unit_price_minor_snapshot)" +
+                    " VALUES ($batch,$item,2,'Historic',100)",
+            )
+            val shift =
+                f.insert(
+                    "INSERT INTO venue_accounting_shifts(venue_id,status,open_slot,timezone,opened_at) " +
+                        "VALUES (${f.venue},'OPEN',1,'UTC',TIMESTAMP WITH TIME ZONE '2026-11-01 00:00:00+00')",
+                )
+            for ((currency, qty) in listOf("RUB" to 3, "USD" to 4)) {
+                val sale =
+                    AccountingSale(
+                        id = currency,
+                        tableId = f.table,
+                        tableLabel = "Table",
+                        source = "MANUAL",
+                        createdAt = "2026-11-09T00:00:00Z",
+                        currency = currency,
+                        lines =
+                            listOf(
+                                AccountingLine(
+                                    id = currency,
+                                    name = "Manual",
+                                    qty = qty,
+                                    unitPriceMinor = 100,
+                                    menuItemId = item,
+                                ),
+                            ),
+                    )
+                f.ds.connection.use { c ->
+                    c.prepareStatement(
+                        "INSERT INTO venue_accounting_sales(id,shift_id,snapshot_json) VALUES (?,?,?)",
+                    ).use {
+                            st ->
+                        st.setString(1, currency)
+                        st.setLong(2, shift)
+                        st.setString(3, Json.encodeToString(sale))
+                        st.executeUpdate()
+                    }
+                }
+            }
+
+            fun report(
+                currency: String? = null,
+                category: Long = cat,
+                search: String? = null,
+            ) = runBlocking {
+                f.repo.venue(
+                    f.venue,
+                    7,
+                    request.copy(
+                        section = "products",
+                        currency = currency,
+                        categoryKey = category.toString(),
+                        expandedCategoryKey = category.toString(),
+                        search = search,
+                    ),
+                )
+            }.products!!
+            val before = f.fingerprint()
+            val all = report()
+            assertEquals("PARTIAL", all.coverage.availability)
+            assertEquals("9", all.summary!!.units.value)
+            for ((currency, units) in listOf("RUB" to "3", "USD" to "4")) {
+                val filtered = report(currency)
+                val total = filtered.summary!!
+                assertEquals("PARTIAL", total.units.availability)
+                assertEquals(units, total.units.observedValue)
+                assertEquals("PARTIAL", total.grossAmounts.single().gross.availability)
+                assertEquals((units.toInt() * 100).toString(), total.grossAmounts.single().gross.observedValue)
+                assertEquals(total, filtered.categoryTotals.single().totals)
+                assertEquals(total.grossAmounts.single().gross, filtered.categoryPage!!.rows.single().gross)
+                assertEquals("PRODUCT_CURRENCY_UNKNOWN", total.grossAmounts.single().gross.reason)
+                assertEquals(listOf(currency), total.grossAmounts.map { it.currency })
+                assertEquals(total, report(currency, search = "Historic").summary)
+            }
+            val unknown = report("UNKNOWN")
+            assertEquals("2", unknown.summary!!.units.value)
+            assertEquals("0", unknown.summary.grossAmounts.single().gross.observedValue)
+            assertEquals("PARTIAL", unknown.summary.grossAmounts.single().gross.availability)
+            assertEquals("AVAILABLE", report("RUB", category = clean).summary!!.units.availability)
+            assertEquals("0", report("RUB", category = clean).summary!!.grossAmounts.single().gross.value)
+            assertEquals("0", report("RUB", search = "absent").summary!!.grossAmounts.single().gross.value)
+            assertEquals(all.summary, report().summary)
+            assertEquals(before, f.fingerprint())
+            f.exec("UPDATE order_batches SET status_history_complete=FALSE WHERE id=$batch")
+            assertEquals("PARTIAL", report("RUB", category = clean).summary!!.units.availability)
         }
 
     protected fun fixture(block: (Fixture) -> Unit) {

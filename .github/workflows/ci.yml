@@ -125,6 +125,7 @@ jobs:
             --tests "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest" \
             --tests "com.hookah.platform.backend.analytics.KpiReadModelsH2Test" \
             --tests "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest" \
+            --tests "com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest" \
             --tests "com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest" \
             --tests "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest" \
             --tests "com.hookah.platform.backend.analytics.KpiRoutesTest" \
@@ -241,9 +242,10 @@ jobs:
               "com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test",
               "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest",
           }
-          strict_classes = billing_classes | {"com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest", "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest"}
+          strict_classes = billing_classes | {"com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest", "com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest", "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest"}
           report_dir = Path("backend/app/build/test-results/test")
           expected_classes = [
+              "com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest",
               "com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test",
               "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest",
               "com.hookah.platform.backend.analytics.KpiReadModelsH2Test",
@@ -339,12 +341,13 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
+              "com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest": 1,
               "com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest": 1,
               "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest": 1,
               "com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test": 5,
               "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest": 6,
-              "com.hookah.platform.backend.analytics.KpiReadModelsH2Test": 25,
-              "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest": 27,
+              "com.hookah.platform.backend.analytics.KpiReadModelsH2Test": 30,
+              "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest": 32,
               "com.hookah.platform.backend.analytics.KpiRoutesTest": 1,
               "com.hookah.platform.backend.analytics.VenueStatsUiContractTest": 2,
               "com.hookah.platform.backend.analytics.PlatformAnalyticsUiContractTest": 1,
@@ -420,7 +423,15 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           required_test_names = {
+              "com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest": {
+                  "product categories complete range HTTP preserves RBAC read only and real click contract",
+              },
               "com.hookah.platform.backend.analytics.KpiReadModelsH2Test": {
+                  "product search retains every source and currency of matching stable identities before pagination",
+                  "product currency filters preserve scoped unknown currency without assigning its units or money",
+                  "product category totals precede pagination and retain stable duplicate identities",
+                  "product grouped currencies sources gifts and missing price never claim complete money",
+                  "product category filters reject foreign keys without losing unknown historical rows",
                   "tab scoped completed additions and complete product quantity do not merge personal bills",
                   "complete product source includes unsold identities and pagination independent search",
                   "legacy missing time and missing tab remain unknown instead of zero repeat share",
@@ -432,6 +443,11 @@ jobs:
                   "booking attention follows committed guest conversation not booking status or closed thread",
               },
               "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest": {
+                  "product search retains every source and currency of matching stable identities before pagination",
+                  "product currency filters preserve scoped unknown currency without assigning its units or money",
+                  "product category totals precede pagination and retain stable duplicate identities",
+                  "product grouped currencies sources gifts and missing price never claim complete money",
+                  "product category filters reject foreign keys without losing unknown historical rows",
                   "tab scoped completed additions and complete product quantity do not merge personal bills",
                   "complete product source includes unsold identities and pagination independent search",
                   "legacy missing time and missing tab remain unknown instead of zero repeat share",
@@ -1907,7 +1923,7 @@ jobs:
           from pathlib import Path
 
           report_path = Path("playwright-results.json")
-          minimum_executed = 224
+          minimum_executed = 234
           if not report_path.is_file():
               raise SystemExit(f"missing Playwright JSON report: {report_path}")
 
@@ -1945,6 +1961,25 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("venue-products-category.spec.ts", "product categories compact hierarchy 360 light"): 1,
+              ("venue-products-category.spec.ts", "product categories compact hierarchy 360 dark"): 1,
+              ("venue-products-category.spec.ts", "product categories compact hierarchy 390 light"): 1,
+              ("venue-products-category.spec.ts", "product categories compact hierarchy 390 dark"): 1,
+              ("venue-products-category.spec.ts", "product categories compact hierarchy 1440 light"): 1,
+              ("venue-products-category.spec.ts", "product categories compact hierarchy 1440 dark"): 1,
+              ("venue-products-category.spec.ts", "product category empty error search and retry retain honest scope"): 1,
+              ("venue-products-category.spec.ts", "product category stale period account venue and revoked access close private details"): 1,
+              ("venue-products-category.spec.ts", "product categories real PostgreSQL Ktor adapter click through full range"): 1,
+              ("venue-products-category.spec.ts", "product category exact large amounts unknown gifts and long names stay compact"): 1,
+              ("venue-products-category.spec.ts", "product category invalid sort keeps DOM disclosure and first keyboard click 360"): 1,
+              ("venue-products-category.spec.ts", "product category failed filter preserves last DOM and recovers 400 360"): 1,
+              ("venue-products-category.spec.ts", "product category failed filter preserves last DOM and recovers 500 360"): 1,
+              ("venue-products-category.spec.ts", "product category failed filter preserves last DOM and recovers timeout 360"): 1,
+              ("venue-products-category.spec.ts", "product category invalid sort keeps DOM disclosure and first keyboard click 390"): 1,
+              ("venue-products-category.spec.ts", "product category failed filter preserves last DOM and recovers 400 390"): 1,
+              ("venue-products-category.spec.ts", "product category failed filter preserves last DOM and recovers 500 390"): 1,
+              ("venue-products-category.spec.ts", "product category failed filter preserves last DOM and recovers timeout 390"): 1,
+              ("venue-products-category.spec.ts", "product merged search and scoped unknown currencies retain honest HTTP totals"): 1,
               ("venue-booking-attention.spec.ts", "booking attention click selects exact conversation outside inventory 360"): 1,
               ("venue-booking-attention.spec.ts", "booking attention click selects exact conversation outside inventory 390"): 1,
               ("venue-booking-attention.spec.ts", "booking attention click selects exact conversation outside inventory 1440"): 1,

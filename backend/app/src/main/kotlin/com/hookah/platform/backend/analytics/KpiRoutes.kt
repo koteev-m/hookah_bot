@@ -52,7 +52,10 @@ internal fun Parameters.kpiRequest(platform: Boolean): KpiRequest {
                 "section",
             )
         } else {
-            setOf("from", "to", "section", "tableId", "search", "category", "currency", "sort", "page")
+            setOf(
+                "from", "to", "section", "tableId", "search", "category",
+                "categoryKey", "expandedCategoryKey", "currency", "sort", "page",
+            )
         }
     if (names().any { it !in allowed || getAll(it)?.size != 1 }) {
         throw InvalidInputException(
@@ -77,7 +80,7 @@ internal fun Parameters.kpiRequest(platform: Boolean): KpiRequest {
     if (table != null && section !in setOf("orders", "bookings", "seatings", "calls")) {
         throw InvalidInputException("ANALYTICS_TABLE_FILTER_REQUIRES_OPERATIONAL_SECTION")
     }
-    val productFilters = setOf("search", "category", "currency", "sort", "page")
+    val productFilters = setOf("search", "category", "categoryKey", "expandedCategoryKey", "currency", "sort", "page")
     if (section != "products" &&
         names().any {
             it in productFilters
@@ -90,11 +93,22 @@ internal fun Parameters.kpiRequest(platform: Boolean): KpiRequest {
     val currency = get("currency")
     val sort = get("sort") ?: "popular"
     val page = get("page")?.toIntOrNull() ?: if (get("page") == null) 1 else 0
+    val invalidCurrency = currency != null && currency != "UNKNOWN" && !Regex("[A-Z]{3}").matches(currency)
     if ((search?.length ?: 0) > 100 || (category?.length ?: 0) > 100 ||
-        (currency != null && !Regex("[A-Z]{3}").matches(currency)) || sort !in setOf("popular", "rare", "amount") ||
+        invalidCurrency || sort !in setOf("popular", "rare", "amount") ||
         page !in 1..100000 || (sort == "amount" && currency == null)
     ) {
         throw InvalidInputException("ANALYTICS_INVALID_PRODUCT_FILTER")
     }
-    return KpiRequest(from, to, section, table, search, category, currency, sort, page)
+    val categoryKey = get("categoryKey")
+    val expandedCategoryKey = get("expandedCategoryKey")
+    if (listOfNotNull(categoryKey, expandedCategoryKey).any {
+            it != "uncategorized" && (it.toLongOrNull()?.takeIf { id -> id > 0 }?.toString() != it)
+        } || (categoryKey != null && category != null)
+    ) {
+        throw InvalidInputException("ANALYTICS_INVALID_PRODUCT_FILTER")
+    }
+    return KpiRequest(
+        from, to, section, table, search, category, currency, sort, page, categoryKey, expandedCategoryKey,
+    )
 }

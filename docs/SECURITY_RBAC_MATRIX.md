@@ -10,6 +10,12 @@ OWNER/MANAGER получают products/additions только своего venu
 в dashboard/KPI payload. Потеря доступа закрывает панель и очищает данные; late response не возвращает
 старый контекст. Sound/mute/view не являются бизнес-authority и не создают ACK/DONE.
 
+Товарные summary/categoryTotals/categoryPage сохраняют те же OWNER/MANAGER grants. categoryKey и
+expandedCategoryKey проверяются внутри разрешённого venue; чужой/неизвестный ID не раскрывает имя
+или наличие чужой категории. Новый scope не даёт Staff/Guest/Platform Owner без venue grant доступа
+к статистике. Все три уровня строятся одной read-only транзакцией; GET не создаёт факты или отметки.
+Категории/детали и ответы прежнего аккаунта очищаются при revoke и смене контекста.
+
 
 Booking attention deep link (LOCAL REVIEW PENDING): только разрешённая BOOKING_MESSAGE получает
 threadId из той же связи booking/venue/guest. Messages detail сохраняет SUPPORT_MANAGE и собственную

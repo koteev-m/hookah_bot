@@ -25,7 +25,7 @@ export function midnight(date: string, timezone: string): string {
 
 export function statsResponse(url: URL, options: { variant?: StatsVariant; timezone?: string; asOf?: string } = {}): VenueKpiSnapshot {
   const selected = url.searchParams.get('section')
-  const response = structuredClone(statsHttp[(selected === 'products' || selected === 'additions' ? selected : options.variant ?? 'complete') as StatsVariant])
+  const response = structuredClone(statsHttp[(selected === 'products' ? (url.searchParams.has('expandedCategoryKey') ? 'productsCategory' : 'products') : selected === 'additions' ? selected : options.variant ?? 'complete') as StatsVariant])
   const timezone = options.timezone ?? response.period.timezone
   response.venueId = Number(url.pathname.split('/')[3])
   response.section = (url.searchParams.get('section') ?? 'all') as StatsSection

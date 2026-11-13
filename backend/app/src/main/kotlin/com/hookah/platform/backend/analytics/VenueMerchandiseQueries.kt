@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.analytics
 
+import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.venue.accounting.AccountingSale
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -35,6 +36,38 @@ data class ProductRow(
     val options: List<String>,
     val catalogCreatedAt: String? = null,
     val categoryActive: Boolean? = null,
+    val categoryId: Long? = null,
+)
+
+@Serializable
+data class ProductCurrencyTotal(val currency: String, val gross: KpiValue)
+
+@Serializable
+data class ProductTotals(val units: KpiValue, val giftUnits: KpiValue, val grossAmounts: List<ProductCurrencyTotal>)
+
+@Serializable
+data class ProductCategoryOption(val key: String, val id: Long?, val name: String)
+
+@Serializable
+data class ProductCategoryTotal(val category: ProductCategoryOption, val totals: ProductTotals)
+
+@Serializable
+data class ProductCategoryItem(
+    val itemId: Long,
+    val name: String,
+    val currency: String,
+    val units: KpiValue,
+    val gross: KpiValue,
+    val sources: List<ProductRow>,
+)
+
+@Serializable
+data class ProductCategoryPage(
+    val key: String,
+    val page: Int,
+    val totalRows: Int,
+    val rows: List<ProductCategoryItem>,
+    val pageSize: Int = 50,
 )
 
 @Serializable
@@ -49,6 +82,10 @@ data class ProductReport(
     val unassignedManualUnits: String,
     val basis: String = "ITEM_FULFILLED_OR_BATCH_FIRST_DELIVERED_AT;MANUAL_SALE_CREATED_AT",
     val netAmount: KpiValue = kpi(null, "UNSUPPORTED", reason = "ORDER_ADJUSTMENTS_NOT_ALLOCATED"),
+    val summary: ProductTotals? = null,
+    val categoryOptions: List<ProductCategoryOption> = emptyList(),
+    val categoryTotals: List<ProductCategoryTotal> = emptyList(),
+    val categoryPage: ProductCategoryPage? = null,
 )
 
 private data class ProductAccumulator(
@@ -58,6 +95,7 @@ private data class ProductAccumulator(
     val available: Boolean,
     val source: String,
     val currency: String,
+    val categoryId: Long?,
     var units: Long = 0,
     var gifts: Long = 0,
     var gross: BigDecimal = BigDecimal.ZERO,
@@ -79,10 +117,12 @@ internal fun KpiCollector.products(
         val currency: String,
         val createdAt: String,
         val active: Boolean,
+        val categoryId: Long,
     )
     val catalog =
         c.read(
-            "SELECT m.id,m.name,cat.name,m.is_available,m.currency,m.created_at,cat.is_active FROM menu_items m " +
+            "SELECT m.id,m.name,cat.name,m.is_available,m.currency,m.created_at,cat.is_active,cat.id " +
+                "FROM menu_items m " +
                 "JOIN menu_categories cat ON cat.id=m.category_id AND " +
                 "cat.venue_id=m.venue_id WHERE m.venue_id = ? ORDER BY m.id",
             listOf(venue),
@@ -95,6 +135,7 @@ internal fun KpiCollector.products(
                 it.getString(5),
                 it.getTimestamp(6).toInstant().toString(),
                 it.getBoolean(7),
+                it.getLong(8),
             )
         }.associateBy { it.id }
     val rows = linkedMapOf<Triple<Long, String, String>, ProductAccumulator>()
@@ -104,6 +145,7 @@ internal fun KpiCollector.products(
                 "AND b.created_at < ? AND NOT b.status_history_complete",
             listOf(venue, window.observedTo),
         )
+    var historyUnknown = unknown
 
     fun accumulator(
         id: Long,
@@ -120,6 +162,7 @@ internal fun KpiCollector.products(
                 item?.available ?: false,
                 source,
                 currency,
+                item?.categoryId,
             )
         }.also { if (name != null) it.name = name }
     }
@@ -185,26 +228,31 @@ internal fun KpiCollector.products(
         }
         r.getString(6)?.let { row.options.add(it) }
     }
-    unknown +=
+    val textUnknown =
         c.count(
             "SELECT COUNT(*) FROM order_batches b JOIN orders o ON o.id=b.order_id WHERE o.venue_id=? " +
                 "AND b.first_delivered_at>=? AND b.first_delivered_at<? " +
                 "AND NOT EXISTS (SELECT 1 FROM order_batch_items i WHERE i.order_batch_id=b.id)",
             listOf(venue, window.from, window.observedTo),
         )
+    unknown = Math.addExact(unknown, textUnknown)
+    historyUnknown = Math.addExact(historyUnknown, textUnknown)
     var unassigned = 0L
     for ((_, sale) in accounting) {
         if (sale == null) {
             unknown++
+            historyUnknown++
         } else if (sale.orderId == null && sale.cancelReason == null && sale.disputeReason == null) {
             val at = runCatching { Instant.parse(sale.createdAt) }.getOrNull()
             if (at == null) {
                 unknown++
+                historyUnknown++
             } else if (at >= window.from && at < window.observedTo) {
                 if (sale.source != "MANUAL" || sale.issue != null ||
                     sale.lines.any { it.qty <= 0 || it.unitPriceMinor < 0 }
                 ) {
                     unknown++
+                    historyUnknown++
                 } else {
                     for (line in sale.lines) {
                         val id = line.menuItemId
@@ -237,11 +285,146 @@ internal fun KpiCollector.products(
     }
     val categories = catalog.values.map { it.category }.distinct().sorted()
     val currencies = rows.values.map { it.currency }.distinct().sorted()
-    val filtered =
+    val categoryOptions =
+        rows.values.map {
+            ProductCategoryOption(
+                it.categoryId?.toString() ?: "uncategorized",
+                it.categoryId,
+                it.category.ifEmpty {
+                    "Без категории"
+                },
+            )
+        }.distinctBy { it.key }.sortedWith(compareBy({ it.name }, { it.key }))
+    if (listOfNotNull(request.categoryKey, request.expandedCategoryKey).any { key ->
+            key != "uncategorized" && categoryOptions.none { it.key == key }
+        }
+    ) {
+        throw InvalidInputException("ANALYTICS_INVALID_PRODUCT_FILTER")
+    }
+    val matchingIds =
         rows.values.filter {
-            (request.search == null || it.name.contains(request.search, ignoreCase = true)) &&
+            request.search == null || it.name.contains(request.search, ignoreCase = true)
+        }.map { it.id }.toHashSet()
+    val scoped =
+        rows.values.filter {
+            it.id in matchingIds &&
                 (request.category == null || it.category == request.category) &&
-                (request.currency == null || it.currency == request.currency)
+                (
+                    request.categoryKey == null ||
+                        (it.categoryId?.toString() ?: "uncategorized") == request.categoryKey
+                )
+        }
+    val filtered = scoped.filter { request.currency == null || it.currency == request.currency }
+    val history = Math.addExact(historyUnknown, unassigned)
+
+    fun total(
+        values: List<ProductAccumulator>,
+        currency: String? = request.currency,
+        scope: List<ProductAccumulator> = values,
+    ): ProductTotals {
+        val unknownCurrencies = scope.count { it.currency == "UNKNOWN" }.toLong()
+        val excludedCurrency = if (currency != null && currency != "UNKNOWN") unknownCurrencies else 0L
+        val amounts =
+            (values.map { it.currency } + listOfNotNull(currency)).distinct().sorted().map { cur ->
+                val same = values.filter { it.currency == cur }
+                ProductCurrencyTotal(
+                    cur,
+                    kpi(
+                        same.fold(BigDecimal.ZERO) { sum, row -> sum + row.gross },
+                        "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                        unknown =
+                            Math.addExact(
+                                Math.addExact(history, if (cur == "UNKNOWN") 0L else unknownCurrencies),
+                                same.count { it.missingPrice }.toLong(),
+                            ),
+                        unit = "MINOR",
+                        reason = if (cur != "UNKNOWN" && unknownCurrencies > 0) "PRODUCT_CURRENCY_UNKNOWN" else null,
+                    ),
+                )
+            }
+        return ProductTotals(
+            kpi(
+                values.fold(java.math.BigInteger.ZERO) { sum, row -> sum + row.units.toBigInteger() },
+                "RECORDED_PRODUCT_UNITS",
+                unknown = Math.addExact(history, excludedCurrency),
+                reason = if (excludedCurrency > 0) "PRODUCT_CURRENCY_UNKNOWN" else null,
+            ),
+            kpi(
+                values.fold(
+                    java.math.BigInteger.ZERO,
+                ) { sum, row -> sum + row.gifts.toBigInteger() },
+                "RECORDED_GIFT_UNITS",
+                unknown =
+                    Math.addExact(
+                        Math.addExact(history, excludedCurrency),
+                        values.count {
+                            it.unknownGifts
+                        }.toLong(),
+                    ),
+                reason = if (excludedCurrency > 0) "PRODUCT_CURRENCY_UNKNOWN" else null,
+            ),
+            amounts,
+        )
+    }
+
+    fun sourceRow(it: ProductAccumulator) =
+        ProductRow(
+            it.id, it.name, it.category, it.available, it.source, it.currency,
+            it.units.toString(), if (it.unknownGifts) null else it.gifts.toString(),
+            if (it.unknownGifts) null else (it.units - it.gifts).toString(),
+            if (it.missingPrice) null else it.gross.toPlainString(), it.options.toList(),
+            catalog[it.id]?.createdAt, catalog[it.id]?.active, it.categoryId,
+        )
+    val groups =
+        filtered.groupBy { it.id to it.currency }.values.map { sources ->
+            val ordered = sources.sortedBy { it.source }
+            val totals = total(ordered, ordered.first().currency, scoped.filter { it.id == ordered.first().id })
+            ProductCategoryItem(
+                ordered.first().id,
+                ordered.first().name,
+                ordered.first().currency,
+                totals.units,
+                totals.grossAmounts.single().gross,
+                ordered.map(::sourceRow),
+            )
+        }
+    val categoryTotals =
+        categoryOptions.mapNotNull { category ->
+            val values = filtered.filter { (it.categoryId?.toString() ?: "uncategorized") == category.key }
+            val scope = scoped.filter { (it.categoryId?.toString() ?: "uncategorized") == category.key }
+            if (values.isEmpty() && (
+                    request.currency == null || request.currency == "UNKNOWN" ||
+                        scope.none { it.currency == "UNKNOWN" }
+                )
+            ) {
+                null
+            } else {
+                ProductCategoryTotal(category, total(values, scope = scope))
+            }
+        }
+    val categoryPage =
+        request.expandedCategoryKey?.let { key ->
+            val selected = groups.filter { (it.sources.first().categoryId?.toString() ?: "uncategorized") == key }
+            val ordered =
+                when (request.sort) {
+                    "rare" ->
+                        selected.sortedWith(
+                            compareBy({ it.units.observedValue!!.toBigInteger() }, { it.itemId }, { it.currency }),
+                        )
+                    "amount" ->
+                        selected.sortedWith(
+                            compareByDescending<ProductCategoryItem> {
+                                it.gross.observedValue!!.toBigDecimal()
+                            }.thenBy { it.itemId }.thenBy { it.currency },
+                        )
+                    else ->
+                        selected.sortedWith(
+                            compareByDescending<ProductCategoryItem> {
+                                it.units.observedValue!!.toBigInteger()
+                            }.thenBy { it.itemId }.thenBy { it.currency },
+                        )
+                }
+            ProductCategoryPage(key, request.page, ordered.size, ordered.drop((request.page - 1) * 50).take(50))
         }
     val sorted =
         when (request.sort) {
@@ -261,30 +444,24 @@ internal fun KpiCollector.products(
         }
     return ProductReport(
         rows =
-            sorted.drop((request.page - 1) * 50).take(50).map {
-                ProductRow(
-                    it.id, it.name, it.category, it.available, it.source, it.currency,
-                    it.units.toString(), if (it.unknownGifts) null else it.gifts.toString(),
-                    if (it.unknownGifts) null else (it.units - it.gifts).toString(),
-                    if (it.missingPrice) null else it.gross.toPlainString(),
-                    it.options.toList(),
-                    catalog[it.id]?.createdAt,
-                    catalog[it.id]?.active,
-                )
-            },
+            sorted.drop((request.page - 1) * 50).take(50).map(::sourceRow),
         totalRows = filtered.size,
         page = request.page,
         categories = categories,
         currencies = currencies,
         coverage =
             kpi(
-                rows.values.sumOf {
-                    it.units
+                rows.values.fold(java.math.BigInteger.ZERO) { sum, row ->
+                    sum + row.units.toBigInteger()
                 },
                 "CONFIRMED_ITEMS_AND_MANUAL_SALES",
                 unknown = Math.addExact(unknown, unassigned),
             ),
         unassignedManualUnits = unassigned.toString(),
+        summary = total(filtered, scope = scoped),
+        categoryOptions = categoryOptions,
+        categoryTotals = categoryTotals,
+        categoryPage = categoryPage,
     )
 }
 

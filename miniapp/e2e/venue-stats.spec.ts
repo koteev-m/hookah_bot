@@ -414,35 +414,15 @@ for (const width of [360, 390, 1440]) for (const theme of ['light', 'dark']) {
     await page.getByRole('button', { name: 'Последние 7 дней' }).click(); await ready(page)
     const from = api.requests.at(-1)!.searchParams.get('from')
     await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('products')
-    await expect(page.locator('.stats-product-row')).toHaveCount(statsHttp.products.products!.rows.length)
+    await expect(page.locator('.product-category-toggle')).toHaveCount(statsHttp.products.products!.categoryTotals!.length)
+    await expect(page.locator('.product-item')).toHaveCount(0)
     expect(api.requests.at(-1)!.searchParams.get('from')).toBe(from)
-    await expect(page.getByText('Чай из заказа', { exact: true })).toBeVisible()
-    await expect(page.getByText(/Единиц: 4/)).toBeVisible()
-    if (width === 360) api.corrupt(body => {
-      if (body.products?.rows[0]) {
-        body.products.rows[0].name = 'Чай — длинное историческое название товара '.repeat(5)
-        body.products.rows[0].snapshotGrossMinor = '27670116110564327646'
-      }
-    })
-    if (width === 390 && theme === 'dark') api.corrupt(body => {
-      if (!body.products) return
-      Object.assign(body.products.coverage, { value: null, observedValue: '0', availability: 'PARTIAL', coverage: 'PARTIAL', unknown: 2, reason: 'LEGACY_HISTORY_UNKNOWN' })
-      body.products.rows.forEach(row => Object.assign(row, { units: '0', giftUnits: '0', nonGiftUnits: '0', snapshotGrossMinor: '0' }))
-    })
-    await page.getByText('Поиск и фильтры товаров', { exact: true }).click()
-    await page.getByLabel('Поиск товара').fill('Чай')
-    await page.getByRole('button', { name: 'Найти товары' }).click()
-    await expect.poll(() => api.requests.at(-1)?.searchParams.get('search')).toBe('Чай')
-    await expect(page.getByLabel('Поиск товара')).toHaveValue('Чай')
-    if (width === 360) await expect.poll(async () => moneyNumber(await page.locator('.stats-product-row').getByText(/Стоимость до скидок:/).innerText())).toBe('276701161105643276,46')
-    if (width === 390 && theme === 'dark') {
-      await expect(page.locator('.stats-coverage')).toHaveAttribute('data-coverage', 'partial')
-      await expect(page.locator('.stats-coverage')).toContainText('Частичные данные')
-      await expect(page.locator('.stats-coverage')).not.toContainText('не содержит точного времени')
-      await expect(page.locator('.stats-product-row')).toContainText('Нет подтверждённых продаж в доступных данных')
-      await expect(page.locator('.stats-product-row')).toContainText('Стоимость до скидок: Недостаточно данных')
-      await expect(page.locator('.stats-content')).toContainText('состав, цена, источник или время')
-    }
+    await page.locator('.product-category-toggle').first().click()
+    await expect(page.locator('.product-item')).toHaveCount(statsHttp.productsCategory.products!.categoryPage!.rows.length)
+    await page.locator('.product-item-toggle').first().click()
+    await expect(page.locator('.product-detail')).toContainText('Единиц: 4')
+    await expect(page.locator('.product-detail')).toContainText('Чай из заказа')
+    await expect(page.locator('.product-detail')).toContainText('Стоимость до скидок и подарков:')
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`products-${width}-${theme}.png`), fullPage: true })
     await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('additions')
@@ -456,14 +436,19 @@ test('review F1 unknown gift allocation retains units and money without inventin
   const api = await fixture(page, { overview: true }); await ready(page)
   api.corrupt(body => {
     if (!body.products) return
-    body.products.rows[0].giftUnits = null; body.products.rows[0].nonGiftUnits = null
-    body.products.coverage = { ...body.products.coverage, value: null, observedValue: '4', availability: 'PARTIAL', coverage: 'PARTIAL', unknown: 1 }
+    const report = body.products
+    const source = report.categoryPage?.rows[0].sources[0]
+    if (source) { source.giftUnits = null; source.nonGiftUnits = null }
+    if (report.summary) report.summary.giftUnits = { ...report.summary.giftUnits, value: null, observedValue: '0', availability: 'PARTIAL', coverage: 'PARTIAL', unknown: 1 }
+    report.categoryTotals?.forEach(group => { group.totals.giftUnits = { ...group.totals.giftUnits, value: null, observedValue: '0', availability: 'PARTIAL', coverage: 'PARTIAL', unknown: 1 } })
   })
   await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('products')
-  await expect(page.locator('.stats-product-row').first()).toContainText('Единиц: 4')
-  await expect(page.locator('.stats-product-row').first()).toContainText('Количество подарочных единиц не подтверждено')
-  await expect(page.locator('.stats-product-row').first()).not.toContainText('без подарков: 4')
-  await expect(page.locator('.stats-warning').first()).toBeVisible()
+  await expect(page.locator('.product-summary')).toContainText('4')
+  await expect(page.locator('.product-report-warning')).toBeVisible()
+  await page.locator('.product-category-toggle').first().click()
+  await page.locator('.product-item-toggle').first().click()
+  await expect(page.locator('.product-detail')).toContainText('подарочных: недостаточно данных')
+  await expect(page.locator('.product-detail')).not.toContainText('без подарков: 4')
   expect(api.mutations()).toBe(0)
 })
 
@@ -472,7 +457,8 @@ test('operations PostgreSQL HTTP response passes the real adapter and merchandis
   if (!directory) {
     await fixture(page, { overview: true }); await ready(page)
     await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('products')
-    await expect(page.locator('.stats-product-row')).toHaveCount(statsHttp.products.products!.rows.length)
+    await expect(page.locator('.product-category-toggle')).toHaveCount(statsHttp.products.products!.categoryTotals!.length)
+    await expect(page.locator('.product-item')).toHaveCount(0)
     return
   }
   test.setTimeout(180000)
@@ -481,10 +467,12 @@ test('operations PostgreSQL HTTP response passes the real adapter and merchandis
   try {
     await fixture(page, { overview: true, live }); await ready(page)
     await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('products')
-    await expect(page.getByRole('heading', { name: 'Исторический чай' })).toBeVisible()
-    await expect(page.getByText(/Единиц: 4/)).toBeVisible()
-    await expect(page.locator('.stats-product-row').filter({ hasText: 'Исторический чай' })).toContainText('49,380')
-    await expect(page.locator('.stats-product-row').filter({ hasText: 'Подарок из учёта' })).toContainText('подарочных: 3')
+    await page.locator('.product-category-toggle').first().click()
+    await page.locator('.product-item').filter({ hasText: 'Исторический чай' }).locator('.product-item-toggle').click()
+    await expect(page.locator('.product-detail')).toContainText('Единиц: 4')
+    await expect(page.locator('.product-item').filter({ hasText: 'Исторический чай' })).toContainText('49,380')
+    await page.locator('.product-item').filter({ hasText: 'Подарок из учёта' }).locator('.product-item-toggle').click()
+    await expect(page.locator('.product-detail')).toContainText('подарочных: 3')
     await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('additions')
     await expect(metric(page, 'additions.completedTabs').locator('.stats-value')).toHaveText('1')
     await expect(metric(page, 'additions.openTabs').locator('.stats-value')).toHaveText('1')

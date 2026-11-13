@@ -268,6 +268,7 @@ class VenueStatsUiContractTest {
             )
             captures["complete"] = capture()
             captures["products"] = capture("&section=products")
+            captures["productsCategory"] = capture("&section=products&expandedCategoryKey=$category")
             captures["additions"] = capture("&section=additions")
             captures["ordersAtTable"] = capture("&section=orders&tableId=$table")
             captures["seatingsAfterMove"] = capture("&section=seatings&tableId=$moved")

@@ -16,6 +16,12 @@ export type KpiValue = {
 }
 export type KpiBucket = { key: string; count: number }
 export type FinancialKpis = { currency: string; metrics: Record<string, KpiValue> }
+export type ProductRow = { itemId: number; name: string; category: string; currentlyAvailable: boolean; source: string; currency: string;
+  units: string; giftUnits: string | null; nonGiftUnits: string | null; snapshotGrossMinor: string | null; options: string[];
+  catalogCreatedAt?: string | null; categoryActive?: boolean | null; categoryId?: number | null }
+export type ProductTotals = { units: KpiValue; giftUnits: KpiValue; grossAmounts: { currency: string; gross: KpiValue }[] }
+export type ProductCategoryOption = { key: string; id: number | null; name: string }
+export type ProductCategoryItem = { itemId: number; name: string; currency: string; units: KpiValue; gross: KpiValue; sources: ProductRow[] }
 export type VenueKpiSnapshot = {
   definitionVersion: string
   asOf: string
@@ -29,20 +35,23 @@ export type VenueKpiSnapshot = {
   openShiftFinances: FinancialKpis[]
   invoiceFinances: Record<string, FinancialKpis[]>
   products?: {
-    rows: { itemId: number; name: string; category: string; currentlyAvailable: boolean; source: string; currency: string;
-      units: string; giftUnits: string | null; nonGiftUnits: string | null; snapshotGrossMinor: string | null; options: string[]; catalogCreatedAt?: string | null; categoryActive?: boolean | null }[]
+    rows: ProductRow[]
     totalRows: number; page: number; pageSize: number; categories: string[]; currencies: string[]; coverage: KpiValue;
     unassignedManualUnits: string; basis: string; netAmount: KpiValue
+    summary?: ProductTotals | null
+    categoryOptions?: ProductCategoryOption[]
+    categoryTotals?: { category: ProductCategoryOption; totals: ProductTotals }[]
+    categoryPage?: { key: string; page: number; pageSize: number; totalRows: number; rows: ProductCategoryItem[] } | null
   } | null
   limitations: string[]
 }
-export type VenueStatsQuery = { venueId: number; from: string; to: string; section: StatsSection; tableId?: number; search?: string; category?: string; currency?: string; sort?: string; page?: number }
+export type VenueStatsQuery = { venueId: number; from: string; to: string; section: StatsSection; tableId?: number; search?: string; category?: string; categoryKey?: string; expandedCategoryKey?: string; currency?: string; sort?: string; page?: number }
 
 export async function venueGetStatsV1(
   backendUrl: string, query: VenueStatsQuery, deps: RequestDependencies, signal: AbortSignal
 ): Promise<ApiResult<VenueKpiSnapshot>> {
   const params = new URLSearchParams({ from: query.from, to: query.to, section: query.section })
-  for (const key of ['search', 'category', 'currency', 'sort', 'page'] as const) {
+  for (const key of ['search', 'category', 'categoryKey', 'expandedCategoryKey', 'currency', 'sort', 'page'] as const) {
     if (query[key] != null && query[key] !== '') params.set(key, String(query[key]))
   }
   if (query.tableId != null) params.set('tableId', String(query.tableId))
@@ -66,6 +75,24 @@ export async function venueGetStatsV1(
     }
     if (date(data.period.from) !== query.from || date(data.period.to) !== query.to ||
       Date.parse(data.period.to) <= Date.parse(data.period.from)) throw new Error('incompatible period')
+    if (query.section === 'products') {
+      const p = data.products
+      const metric = (m: KpiValue | undefined) => m != null &&
+        [m.value, m.observedValue].every(v => v == null || typeof v === 'string' && /^\d+$/.test(v)) &&
+        ['AVAILABLE', 'PARTIAL', 'UNAVAILABLE'].includes(m.availability)
+      const totals = (t: ProductTotals | undefined | null) => t != null && metric(t.units) && metric(t.giftUnits) &&
+        Array.isArray(t.grossAmounts) && t.grossAmounts.every(a => typeof a.currency === 'string' && metric(a.gross))
+      if (!p || !totals(p.summary) || !Array.isArray(p.categoryOptions) || !Array.isArray(p.categoryTotals) ||
+        new Set(p.categoryOptions.map(c => c.key)).size !== p.categoryOptions.length ||
+        new Set(p.categoryTotals.map(c => c.category.key)).size !== p.categoryTotals.length ||
+        p.categoryTotals.some(c => !totals(c.totals) || !p.categoryOptions!.some(o => o.key === c.category.key)) ||
+        (query.expandedCategoryKey && (p.categoryPage?.key !== query.expandedCategoryKey || p.categoryPage.page !== (query.page ?? 1))) ||
+        (p.categoryPage && (p.categoryPage.pageSize !== 50 || p.categoryPage.rows.length > 50 ||
+          p.categoryPage.rows.some(r => !Number.isSafeInteger(r.itemId) || !metric(r.units) || !metric(r.gross) ||
+            !r.sources.length || r.sources.some(s => s.itemId !== r.itemId || s.currency !== r.currency))))) {
+        throw new Error('incompatible product report')
+      }
+    }
     return result
   } catch {
     return { ok: false, error: { status: 0, code: 'STATS_CONTRACT_UNAVAILABLE' } }
