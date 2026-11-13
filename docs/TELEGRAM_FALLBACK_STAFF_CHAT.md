@@ -1,5 +1,24 @@
 # Telegram Fallback And Staff-Chat Model
 
+## Сигнал новой отправки — локальная UX доработка
+
+HT-VENUE-OPERATIONS-STATS-UX-01 / REVIEW PENDING. Mini App — основной рабочий экран; staff-chat
+показывает те же серверные задачи. Если новая committed отправка обновляет уже существующую
+activity-card, к тому же notification claim атомарно добавляется отдельный короткий sendMessage
+с разрешённой кнопкой существующего заказа. Первая отправка нового личного tab не называется дозаказом.
+При отсутствии прежней карточки обычный sendMessage сам является сигналом; второе сообщение не добавляется.
+Replacement-before-accept и status-only refresh не создают radar. Notification dedupe, rollback,
+linked venue и outbound traffic policy остаются обязательными. Radar сохраняет существующую outbox-связь
+с исходным заказом: worker повторно проверяет именно его venue после unlink/relink. Зарезервированный
+dedupe prefix `staff-order-radar:` обозначает назначение сообщения, без дополнительных полей Telegram
+payload. Radar без order link отклоняется; успешный sendMessage не заменяет ID activity-card.
+Retry claim не создаёт новый outbox signal.
+
+Это локальное доказательство enqueue, не гарантия физической Telegram-доставки или звука iPhone.
+Между domain commit и асинхронным вызовом существующего notifier сохраняется прежняя граница
+best-effort: новый брокер, durable event bus и гарантия доставки не вводятся. Реальная доставка OPEN.
+
+
 Дата актуализации: 2026-09-01.
 
 Статус: **current product reference / SPEC UPDATED**. Telegram bot remains an entrypoint,

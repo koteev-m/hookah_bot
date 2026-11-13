@@ -8275,6 +8275,8 @@ extra = {
     'h2/V138__loyalty_unit_corrections.sql': 'c0873f2adee8f39659a4c28f569425e8373517b7ba51a32a0615f6af919f27a5',
     'postgresql/V138__analytics_transition_facts.sql': 'f164924add1fd946be41e4da9c987d6ba4a3c731a557c65044308fa3ead1bcad',
     'h2/V139__analytics_transition_facts.sql': 'f164924add1fd946be41e4da9c987d6ba4a3c731a557c65044308fa3ead1bcad',
+    'postgresql/V139__order_closed_fact.sql': '436d11999369fc24ce9730bec9423552956b0536eb42fba786e2798f77de7fe4',
+    'h2/V140__order_closed_fact.sql': '436d11999369fc24ce9730bec9423552956b0536eb42fba786e2798f77de7fe4',
 }
 paths = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if not p.is_dir() or p.is_symlink()}
 if set(paths) != set(historical) | set(extra):
@@ -8385,7 +8387,9 @@ PY
     postgresql/V137__loyalty_unit_corrections.sql \
     h2/V138__loyalty_unit_corrections.sql \
     postgresql/V138__analytics_transition_facts.sql \
-    h2/V139__analytics_transition_facts.sql; do
+    h2/V139__analytics_transition_facts.sql \
+    postgresql/V139__order_closed_fact.sql \
+    h2/V140__order_closed_fact.sql; do
     printf '\n-- forbidden reviewed tail drift\n' >> "${fixture}/${addition}"
     expect_failure "changed reviewed tail SQL rejects lineage: ${addition}" 'reviewed migration drift' \
       verify_current_migration_lineage "${fixture}"
@@ -8401,7 +8405,9 @@ PY
     postgresql/V137__loyalty_unit_corrections.sql \
     h2/V138__loyalty_unit_corrections.sql \
     postgresql/V138__analytics_transition_facts.sql \
-    h2/V139__analytics_transition_facts.sql; do
+    h2/V139__analytics_transition_facts.sql \
+    postgresql/V139__order_closed_fact.sql \
+    h2/V140__order_closed_fact.sql; do
     rm "${fixture}/${addition}"
     expect_failure "missing reviewed menu SQL rejects lineage: ${addition}" 'migration inventory drift' \
       verify_current_migration_lineage "${fixture}"

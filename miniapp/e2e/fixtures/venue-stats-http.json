@@ -1182,6 +1182,188 @@
             "SEATINGS_NOT_UNIQUE_PEOPLE"
         ]
     },
+    "products": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-10T12:00:00Z",
+        "period": {
+            "from": "2026-03-27T23:00:00Z",
+            "to": "2026-03-30T22:00:00Z",
+            "timezone": "Europe/Berlin",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "products",
+        "tableId": null,
+        "metrics": {},
+        "breakdowns": {},
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "products": {
+            "rows": [
+                {
+                    "itemId": 1,
+                    "name": "Чай из заказа",
+                    "category": "Напитки",
+                    "currentlyAvailable": true,
+                    "source": "DIGITAL_DELIVERY",
+                    "currency": "RUB",
+                    "units": "4",
+                    "giftUnits": "0",
+                    "nonGiftUnits": "4",
+                    "snapshotGrossMinor": "400",
+                    "options": [],
+                    "catalogCreatedAt": "2026-03-01T00:00:00Z",
+                    "categoryActive": true
+                }
+            ],
+            "totalRows": 1,
+            "page": 1,
+            "pageSize": 50,
+            "categories": [
+                "Напитки"
+            ],
+            "currencies": [
+                "RUB"
+            ],
+            "coverage": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "CONFIRMED_ITEMS_AND_MANUAL_SALES",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "unassignedManualUnits": "0",
+            "basis": "ITEM_FULFILLED_OR_BATCH_FIRST_DELIVERED_AT;MANUAL_SALE_CREATED_AT",
+            "netAmount": {
+                "value": null,
+                "observedValue": null,
+                "unit": "COUNT",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "ORDER_ADJUSTMENTS_NOT_ALLOCATED"
+            }
+        },
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    },
+    "additions": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-10T12:00:00Z",
+        "period": {
+            "from": "2026-03-27T23:00:00Z",
+            "to": "2026-03-30T22:00:00Z",
+            "timezone": "Europe/Berlin",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "additions",
+        "tableId": null,
+        "metrics": {
+            "additions.completedTabs": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CLOSED_TABS_OF_ORDERS_CLOSED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "additions.none": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CLOSED_TABS_OF_ORDERS_CLOSED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "additions.one": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CLOSED_TABS_OF_ORDERS_CLOSED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "additions.twoOrMore": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CLOSED_TABS_OF_ORDERS_CLOSED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "additions.count": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CLOSED_TABS_OF_ORDERS_CLOSED_AT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "additions.share": {
+                "value": null,
+                "observedValue": null,
+                "unit": "RATIO",
+                "basis": "CLOSED_TABS_OF_ORDERS_CLOSED_AT",
+                "availability": "UNAVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "NO_MEASURABLE_SAMPLE"
+            },
+            "additions.openTabs": {
+                "value": null,
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "ACTIVE_TABS_WITH_FULFILLED_ITEMS_SNAPSHOT",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 3,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            }
+        },
+        "breakdowns": {
+            "additions.items": []
+        },
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    },
     "ordersAtTable": {
         "definitionVersion": "2026-11-analytics-v1",
         "asOf": "2026-11-10T12:00:00Z",

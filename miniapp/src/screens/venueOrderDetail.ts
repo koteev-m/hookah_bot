@@ -440,12 +440,22 @@ function renderBatches(
       : order.bill.loyaltyDiscountTotalMinor > 0
         ? 'Лояльность'
         : 'Акции'
-  order.batches.forEach((batch, index) => {
+  const fresh = el('section', { className: 'order-send-group' })
+  const handled = el('section', { className: 'order-send-group' })
+  fresh.append(el('h3', { text: 'Новые позиции — ожидают принятия' }))
+  handled.append(el('h3', { text: 'Обработанные отправки' }))
+  const sendsByTab = new Map<string, number>()
+  order.batches.forEach((batch) => {
+    const key = String(batch.tabId ?? 'unknown')
+    const index = sendsByTab.get(key) ?? 0
+    sendsByTab.set(key, index + 1)
     const card = el('div', { className: 'order-batch' })
+    card.dataset.batchId = String(batch.batchId)
+    card.id = `order-send-${batch.batchId}`
     const header = el('div', { className: 'order-batch-header' })
     append(
       header,
-      el('strong', { text: index === 0 ? 'Основная заявка' : `Дозаказ ${index}` }),
+      el('strong', { text: batch.tabId == null ? 'Новые позиции · счёт не определён' : index === 0 ? 'Первый заказ' : `Дозаказ ${index}` }),
       el('span', { text: orderStatusLabel(batch.status) })
     )
     const tabContext = batch.tabDisplayLabel
@@ -495,8 +505,10 @@ function renderBatches(
       })
       card.appendChild(promoList)
     }
-    container.appendChild(card)
+    ;(batch.status === 'new' ? fresh : handled).appendChild(card)
   })
+  if (fresh.children.length > 1) container.append(fresh)
+  if (handled.children.length > 1) container.append(handled)
 }
 
 export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
@@ -509,6 +521,7 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
   let loadAbort: AbortController | null = null
   let loadSeq = 0
   let isLoading = false
+  let highlightedTarget: string | null = null
   let isUpdating = false
   let lastSuccessfulRefreshAt: Date | null = null
 
@@ -1015,6 +1028,12 @@ export function renderVenueOrderDetailScreen(options: OrderDetailOptions) {
         onDiscount: setItemDiscount
       }
     )
+    const targetBatch = new URL(window.location.href).hash.split('?')[1]
+    const targetId = new URLSearchParams(targetBatch ?? '').get('batchId')
+    if (targetId && /^\d+$/.test(targetId)) {
+      const target = refs.batches.querySelector<HTMLElement>(`[data-batch-id="${targetId}"]`)
+      if (target && highlightedTarget !== targetId) { target.classList.add('order-send-highlight'); highlightedTarget = targetId; target.dataset.highlighted = 'true'; target.tabIndex = -1; target.focus({ preventScroll: true }); target.scrollIntoView({ block: 'start' }) }
+    }
     refs.rejectCard.hidden = !canReject || order.status === 'closed'
   }
 

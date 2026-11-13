@@ -58,6 +58,7 @@ class SupportThreadReadCursorMigrationH2Test {
                     "137" to "V137__loyalty_paid_lifecycle.sql",
                     "138" to "V138__loyalty_unit_corrections.sql",
                     "139" to "V139__analytics_transition_facts.sql",
+                    "140" to "V140__order_closed_fact.sql",
                 ),
             ddlFailureContract = MigrationDdlFailureContract.NON_TRANSACTIONAL,
         )

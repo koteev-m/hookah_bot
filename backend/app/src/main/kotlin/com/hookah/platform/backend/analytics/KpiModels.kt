@@ -86,6 +86,11 @@ internal data class KpiRequest(
     val to: String,
     val section: String = "all",
     val tableId: Long? = null,
+    val search: String? = null,
+    val category: String? = null,
+    val currency: String? = null,
+    val sort: String = "popular",
+    val page: Int = 1,
 ) {
     fun window(
         zone: ZoneId,
@@ -118,6 +123,7 @@ data class KpiBucket(val key: String, val count: Long)
 @Serializable
 data class FinancialKpis(val currency: String, val metrics: Map<String, KpiValue>)
 
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
 data class KpiSnapshot(
     val definitionVersion: String = KPI_DEFINITION_VERSION,
@@ -131,6 +137,8 @@ data class KpiSnapshot(
     val closedShiftFinances: List<FinancialKpis> = emptyList(),
     val openShiftFinances: List<FinancialKpis> = emptyList(),
     val invoiceFinances: Map<String, List<FinancialKpis>> = emptyMap(),
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val products: ProductReport? = null,
     val limitations: List<String> =
         listOf("RECORDED_DOMAIN_FACTS_ONLY", "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS"),
 )

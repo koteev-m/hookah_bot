@@ -32,6 +32,7 @@ data class TelegramOutboxMessage(
     val payloadJson: String,
     val attempts: Int,
     val staffLiveOrderId: Long? = null,
+    val staffOrderRadar: Boolean = false,
 )
 
 class TelegramOutboxRepository(
@@ -325,6 +326,7 @@ class TelegramOutboxRepository(
     }
 
     companion object {
+        const val STAFF_ORDER_RADAR_DEDUPE_PREFIX = "staff-order-radar:"
         const val GUEST_ORDER_ENTRY_DEDUPE_PREFIX = "guest-qr-order-entry:"
 
         private val strictJson = Json { ignoreUnknownKeys = false }
@@ -414,6 +416,7 @@ class TelegramOutboxRepository(
                                    o.method,
                                    o.payload_json,
                                    o.attempts,
+                                   o.dedupe_key,
                                    (
                                        SELECT live.order_id
                                        FROM telegram_staff_chat_order_outbox_links live
@@ -479,6 +482,9 @@ class TelegramOutboxRepository(
                                             payloadJson = payloadJson,
                                             attempts = attempts,
                                             staffLiveOrderId = staffLiveOrderId,
+                                            staffOrderRadar =
+                                                resultSet.getString("dedupe_key")
+                                                    ?.startsWith(STAFF_ORDER_RADAR_DEDUPE_PREFIX) == true,
                                         ),
                                     )
                                 }

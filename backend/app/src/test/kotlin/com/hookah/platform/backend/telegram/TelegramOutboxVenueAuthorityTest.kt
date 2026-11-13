@@ -1,13 +1,21 @@
 package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.telegram.db.BindResult
+import com.hookah.platform.backend.telegram.db.StaffChatNotificationClaim
 import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
 import com.hookah.platform.backend.telegram.db.UnlinkResult
 import com.hookah.platform.backend.telegram.db.VenueRepository
 import com.hookah.platform.backend.test.PostgresTestEnv
 import io.ktor.server.config.MapApplicationConfig
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.mockk
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Test
 import java.sql.Connection
 import java.sql.DriverManager
@@ -16,6 +24,167 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class TelegramOutboxVenueAuthorityTest {
+    @Test
+    fun `new send radar and activity edit share one claim rollback and PostgreSQL concurrent retry`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            val ds = PostgresTestEnv.createDataSource(database)
+            try {
+                val repo = com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository(ds, productPolicy())
+                val venue = ds.connection.use { insertVenue(it, "Radar", -100920001L) }
+
+                fun exec(sql: String) =
+                    ds.connection.use {
+                        it.createStatement().use { statement ->
+                            statement.executeUpdate(
+                                sql,
+                            )
+                        }
+                    }
+
+                fun count(table: String) =
+                    ds.connection.use {
+                        it.createStatement().use { statement ->
+                            statement.executeQuery("SELECT COUNT(*) FROM $table").use { rows ->
+                                rows.next()
+                                rows.getLong(1)
+                            }
+                        }
+                    }
+                val order =
+                    ds.connection.use { c ->
+                        c.prepareStatement(
+                            "INSERT INTO venue_tables(venue_id,table_number) VALUES ($venue,1)",
+                        ).use { it.executeUpdate() }
+                        c.createStatement().use {
+                            it.executeUpdate(
+                                "INSERT INTO table_sessions(venue_id,table_id,status,started_at," +
+                                    "last_activity_at,expires_at) SELECT $venue,id,'ACTIVE',CURRENT_TIMESTAMP," +
+                                    "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP FROM venue_tables WHERE venue_id=$venue",
+                            )
+                        }
+                        c.prepareStatement(
+                            "INSERT INTO orders(venue_id,table_id,table_session_id,status) SELECT " +
+                                "$venue,table_id,id,'ACTIVE' FROM table_sessions WHERE venue_id=$venue",
+                            java.sql.Statement.RETURN_GENERATED_KEYS,
+                        ).use {
+                            it.executeUpdate()
+                            it.generatedKeys.use {
+                                    r ->
+                                r.next()
+                                r.getLong(1)
+                            }
+                        }
+                    }
+                assertTrue(repo.upsertOrderMessage(order, venue, -100920001L, 333L))
+                exec("ALTER TABLE telegram_outbox ADD CONSTRAINT reject_radar_test CHECK (method <> 'sendMessage')")
+
+                suspend fun enqueue(key: Long = 991L) =
+                    repo.tryClaimAndEnqueueOrderMessage(
+                        key,
+                        order,
+                        venue,
+                        -100920001L,
+                        "editMessageText",
+                        """{"chat_id":-100920001,"message_id":333,"text":"Activity"}""",
+                        """{"chat_id":-100920001,"text":"New send"}""",
+                    )
+                assertEquals(StaffChatNotificationClaim.ERROR, enqueue())
+                assertEquals(0, count("telegram_outbox"))
+                assertEquals(0, count("telegram_staff_chat_notifications"))
+                exec("ALTER TABLE telegram_outbox DROP CONSTRAINT reject_radar_test")
+                val start = java.util.concurrent.CountDownLatch(1)
+                val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+                try {
+                    val futures =
+                        (1..2).map {
+                            pool.submit<StaffChatNotificationClaim> {
+                                start.await()
+                                runBlocking { enqueue() }
+                            }
+                        }
+                    start.countDown()
+                    val results = futures.map { it.get(15, java.util.concurrent.TimeUnit.SECONDS) }
+                    assertEquals(
+                        1,
+                        results.count { it == StaffChatNotificationClaim.CLAIMED },
+                    )
+                    assertEquals(
+                        1,
+                        results.count { it == StaffChatNotificationClaim.ALREADY },
+                    )
+                } finally {
+                    pool.shutdownNow()
+                }
+                assertEquals(2, count("telegram_outbox"))
+                assertEquals(1, count("telegram_staff_chat_notifications"))
+                assertEquals(2, count("telegram_staff_chat_order_outbox_links"))
+                val outbox = TelegramOutboxRepository(ds, productPolicy())
+                val now = java.time.Instant.parse("2030-01-01T00:00:00Z")
+                val timeout = java.time.Duration.ofSeconds(30)
+                val pending = outbox.claimBatch(10, now, timeout)
+                assertEquals(2, pending.size)
+                assertTrue(pending.all { it.staffLiveOrderId == order })
+                assertEquals(1, pending.count { it.staffOrderRadar })
+                exec("UPDATE telegram_outbox SET status='NEW',next_attempt_at=NULL WHERE status='SENDING'")
+                val api: TelegramApiClient = mockk()
+                coEvery { api.dispatchOutbox(any(), any(), any()) } returns
+                    TelegramCallResult.Success(buildJsonObject { put("message_id", 900) })
+                val worker =
+                    TelegramOutboxWorker(
+                        repository = outbox,
+                        apiClientProvider = { api },
+                        json = Json { ignoreUnknownKeys = true },
+                        rateLimiter = TelegramRateLimiter { },
+                        config = TelegramOutboxConfig(batchSize = 10, maxConcurrency = 1),
+                        scope = CoroutineScope(Dispatchers.IO),
+                        nowProvider = { now },
+                    )
+                worker.processOnce()
+                coVerify(exactly = 1) { api.dispatchOutbox(-100920001L, "sendMessage", any()) }
+                assertEquals(333L, repo.findOrderMessage(order)?.messageId)
+                assertEquals(StaffChatNotificationClaim.CLAIMED, enqueue(992))
+                val next = outbox.claimBatch(10, now, timeout)
+                assertEquals(2, next.size)
+                exec("UPDATE venues SET staff_chat_id=NULL WHERE id=$venue")
+                ds.connection.use { insertVenue(it, "Another venue", -100920001L) }
+                for (message in next) assertFalse(
+                    outbox.isRecipientAuthorized(message.chatId, message.staffLiveOrderId),
+                )
+                exec("UPDATE telegram_outbox SET status='NEW',next_attempt_at=NULL WHERE status='SENDING'")
+                assertTrue(outbox.claimBatch(10, now, timeout).isEmpty())
+                assertEquals(StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY, enqueue(993))
+                assertEquals(4, count("telegram_outbox"))
+                ds.connection.use { c ->
+                    c.prepareStatement(
+                        "INSERT INTO telegram_outbox(chat_id,method,payload_json,dedupe_key) " +
+                            "VALUES (?,'sendMessage',?,?)",
+                    ).use {
+                        it.setLong(1, -100920001L)
+                        it.setString(2, """{"chat_id":-100920001,"text":"Unknown context"}""")
+                        it.setString(3, "${TelegramOutboxRepository.STAFF_ORDER_RADAR_DEDUPE_PREFIX}orphan-fixture")
+                        it.executeUpdate()
+                    }
+                }
+                worker.processOnce()
+                coVerify(exactly = 1) { api.dispatchOutbox(-100920001L, "sendMessage", any()) }
+                assertEquals(
+                    1,
+                    ds.connection.use { c ->
+                        c.createStatement().use {
+                            it.executeQuery("SELECT COUNT(*) FROM telegram_outbox WHERE status='FAILED'").use {
+                                    r ->
+                                r.next()
+                                r.getInt(1)
+                            }
+                        }
+                    },
+                )
+            } finally {
+                ds.close()
+            }
+        }
+
     @Test
     fun `product venue enqueue rejects stale staff chat after relink`() =
         runBlocking {

@@ -237,6 +237,14 @@ class StaffChatNotifier(
                         updatedAt = event.updatedAt,
                     ),
                 notificationKey = event.batchId,
+                radarText =
+                    if (!event.isReplacementBeforeAccept) {
+                        val label = if (event.isFirstBatch) "🆕 Первый заказ" else "➕ Дозаказ"
+                        "$label · новые позиции\nСтол: ${event.tableLabel}\n" +
+                            "Откройте отправку в Mini App или карточке заказа."
+                    } else {
+                        null
+                    },
             )
         }
         val summary = event.itemsSummary?.takeIf { it.isNotBlank() } ?: "без деталей"
@@ -519,6 +527,7 @@ class StaffChatNotifier(
     private suspend fun notifyLiveOrderMessageNow(
         event: StaffOrderLiveMessage,
         notificationKey: Long?,
+        radarText: String? = null,
     ): StaffChatNotificationResult {
         val logKey = notificationKey ?: event.orderId
         if (!isTelegramActive()) {
@@ -606,6 +615,15 @@ class StaffChatNotifier(
                     chatId = chatId,
                     method = method,
                     payloadJson = payloadJson,
+                    radarPayloadJson =
+                        if (radarText != null && existingMessage?.messageId != null) {
+                            json.encodeToString(
+                                SendMessagePayload.serializer(),
+                                buildSendMessagePayload(json, chatId, radarText, replyMarkup),
+                            )
+                        } else {
+                            null
+                        },
                 )
             } else if (notificationRepository.enqueueOrderMessage(
                     orderId = event.orderId,

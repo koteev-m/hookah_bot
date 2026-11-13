@@ -5,13 +5,13 @@ import { exactCount, exactMoney, formatDuration, formatRatio } from '../shared/u
 type Definition = [key: string, label: string, explanation: string]
 const createdOrders: Definition[] = [
   ['orders.created', 'Созданные заказы', 'Заказы, созданные в выбранные даты до времени обновления. Каждый заказ считается один раз независимо от его текущего состояния.'],
-  ['batches.created', 'Созданные части заказов', 'Части заказов, созданные в выбранные даты. Первый заказ и каждый дозаказ могут содержать отдельную часть; это не количество заказов.']
+  ['batches.created', 'Отправки заказа', 'Части заказов, созданные в выбранные даты. Первый заказ и каждый дозаказ могут содержать отдельную часть; это не количество заказов.']
 ]
 const transitions: Definition[] = [
   ['orders.firstAccepted', 'Впервые принятые заказы', 'Заказ учитывается в момент первого фактического принятия любой его части. Дозаказы не добавляют ещё один принятый заказ. Принятие сохраняется после отказа; неизвестная старая история отмечается отдельно.'],
-  ['batches.accepted', 'Принятые части заказов', 'Различные части заказов с подтверждённым переходом в принятое состояние в выбранные даты. Повторный переход той же части в периоде не увеличивает число.'],
-  ['batches.delivered', 'Выданные части заказов', 'Различные части с подтверждённой выдачей в выбранные даты. Закрытие заказа само по себе не является выдачей или оплатой.'],
-  ['batches.rejected', 'Отклонённые части заказов', 'Различные части с зафиксированным отказом в выбранные даты. Ранее принятое состояние не стирается; это не возврат денег.']
+  ['batches.accepted', 'Принятые отправки заказов', 'Различные части заказов с подтверждённым переходом в принятое состояние в выбранные даты. Повторный переход той же части в периоде не увеличивает число.'],
+  ['batches.delivered', 'Выданные отправки заказов', 'Различные части с подтверждённой выдачей в выбранные даты. Закрытие заказа само по себе не является выдачей или оплатой.'],
+  ['batches.rejected', 'Отклонённые отправки заказов', 'Различные части с зафиксированным отказом в выбранные даты. Ранее принятое состояние не стирается; это не возврат денег.']
 ]
 const cohort: Definition[] = [
   ['batches.cohortAcceptedRate', 'Доля принятых частей', 'Среди частей, созданных в выбранные даты: число с известным первым принятием до времени обновления, делённое на число всех созданных частей. Тот же знаменатель используется для доли выданных.'],
@@ -169,9 +169,61 @@ function financeGroups(groups: FinancialKpis[], provisional: boolean) {
   return root
 }
 
-export function renderStatsContent(snapshot: VenueKpiSnapshot): HTMLElement {
+export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview' | 'products' | 'additions' | 'finance' | 'service'): HTMLElement {
   const root = el('div', { className: 'stats-sections' })
   const m = snapshot.metrics
+  if (view === 'overview') {
+    root.classList.add('card', 'stats-section', 'stats-overview')
+    root.append(group('Обзор заведения', 'Основные результаты за выбранный период. Подробности доступны в тематических разделах.', [
+      ['orders.created', 'Созданные заказы', 'Заказы по времени создания. Дозаказы не создают новый заказ.'],
+      ['orders.firstAccepted', 'Впервые принятые заказы', 'Первое фактическое принятие отправки заказа.'],
+      ['seatings.registeredSessions', 'Посадки', 'Зарегистрированные физические посадки, включая гостей без бронирования; перемещение внутри сессии не добавляет посадку.'],
+      ['bookings.attendance', 'Доля пришедших', 'Пришли / (пришли + не пришли) по запланированным датам.'],
+      ['calls.firstResponse', 'Среднее время ответа', 'От создания вызова до первого подтверждённого ответа сотрудника.']
+    ], m))
+    return root
+  }
+  if (view === 'products') {
+    const report = snapshot.products
+    root.append(el('h2', { text: 'Товары' }), el('p', { className: 'stats-notice', text: 'Цифровые позиции — по подтверждённому времени выдачи. Ручные продажи — отдельный источник по дате записи продажи. Это разные основания периода; они не совпадают с итогами закрытых смен.' }))
+    if (!report) { root.append(el('p', { text: 'Товарный отчёт недоступен. Обновите приложение и сервер.' })); return root }
+    if (report.coverage.availability !== 'AVAILABLE') root.append(el('p', { className: 'stats-warning', text: 'Часть товарных данных не подтверждена: состав, цена, источник или время.' }))
+    root.append(el('p', { className: 'stats-note', text: 'Стоимость показана до общих скидок и сборов. Итоговая сумма по товарам не распределена.' }))
+    root.append(calculation('Единицы сгруппированы по карточке товара, одинаковые названия не объединяются. Исключённые и отменённые позиции не включаются. Стоимость до скидок берётся из исторической цены и опций. Скидки, сборы и общие корректировки не распределяются по товарам; Итог после общих корректировок по товарам недоступен. Категории и доступность показывают текущую карточку, а не всю историю. Подарочные единицы не означают оплату. Строки с неподтверждённым видом продажи, количеством или ценой в отчёт не включаются; полнота отмечена отдельно.'))
+    for (const row of report.rows) {
+      const card = el('article', { className: 'card stats-product-row' }); card.dataset.itemId = String(row.itemId)
+      append(card, el('h3', { text: row.name }), el('p', { text: `${row.category} · ${row.source === 'MANUAL_SALE' ? 'Ручная продажа' : 'Подтверждённая выдача'} · ${row.currentlyAvailable ? 'В меню включён сейчас' : 'Сейчас недоступен'} ` }),
+        el('p', { text: row.units === '0' ? report.coverage.availability === 'AVAILABLE' ? 'За период нет зарегистрированных выдач. Доступность весь период не подтверждается.' : 'Нет подтверждённых продаж в доступных данных.' : `Единиц: ${exactCount(row.units)} · ${row.giftUnits === null || row.nonGiftUnits === null ? 'Количество подарочных единиц не подтверждено' : `без подарков: ${exactCount(row.nonGiftUnits)} · подарочных: ${exactCount(row.giftUnits)}`}` }),
+        el('p', { text: `Стоимость до скидок: ${row.snapshotGrossMinor == null || (row.units === '0' && report.coverage.availability !== 'AVAILABLE') ? 'Недостаточно данных' : exactMoney(row.snapshotGrossMinor, row.currency)}` }))
+      if (row.catalogCreatedAt) card.append(el('p', { className: 'stats-note', text: `Карточка создана: ${new Date(row.catalogCreatedAt).toLocaleDateString('ru-RU', { timeZone: snapshot.period.timezone })}${Date.parse(row.catalogCreatedAt) >= Date.parse(snapshot.period.from) && Date.parse(row.catalogCreatedAt) < Date.parse(snapshot.period.to) ? ' · новая за период' : ''}${row.categoryActive === false ? ' · категория скрыта' : ''}` }))
+      if (row.options.length) { const details = el('details'); append(details, el('summary', { text: 'Варианты и опции' }), el('p', { text: row.options.join(', ') })); card.append(details) }
+      root.append(card)
+    }
+    if (!report.rows.length) root.append(el('p', { text: 'По выбранным условиям товары не найдены.' }))
+    root.append(el('p', { className: 'stats-note', text: `Неразнесённые единицы ручных продаж: ${exactCount(report.unassignedManualUnits)}. Товар по названию не угадывается.` }))
+    return root
+  }
+  if (view === 'additions') {
+    root.append(group('Дозаказы', 'Только завершённые счета в заказах, закрытых в период. Даты относятся к закрытию заказа, а не счёта. Личные и общие счета считаются отдельно. Закрытие не означает оплату.', [
+      ['additions.completedTabs', 'Счета с выполненными позициями', 'Счета со статусом «Закрыт» в закрытых заказах, хотя бы с одной подтверждённой выдачей.'],
+      ['additions.none', 'Без выполненных дозаказов', 'Одна выполненная отправка в счёте.'],
+      ['additions.one', 'С одним дозаказом', 'Две выполненные отправки в счёте.'],
+      ['additions.twoOrMore', 'С двумя и более дозаказами', 'Три или более выполненных отправок в счёте.'],
+      ['additions.share', 'Доля счетов с дозаказом', 'Счета с двумя и более выполненными отправками / счета с выполненными позициями. Нулевой знаменатель — нет данных.'],
+      ['additions.count', 'Выполненные дозаказы', 'Сумма выполненных отправок после первой выполненной отправки каждого счёта. Повтор того же запроса не добавляет дозаказ.'],
+      ['additions.openTabs', 'Открытые счета — предварительно', 'Текущее число ACTIVE счетов с выполненными позициями, в том числе при уже закрытом заказе. Не включается в итоговую долю.']
+    ], m))
+    const top = el('section'); top.append(el('h3', { text: 'Чаще в дозаказах' }))
+    for (const item of snapshot.breakdowns['additions.items'] ?? []) top.append(el('p', { text: `${item.key.slice(item.key.indexOf(':') + 1)} · ${exactCount(item.count)} единиц` }))
+    root.append(top); return root
+  }
+  if (view === 'service' && snapshot.section === 'all') {
+    for (const [kind, title] of [['orders', 'Заказы'], ['bookings', 'Бронирования'], ['seatings', 'Посадки'], ['calls', 'Вызовы персонала']] as const) {
+      const details = el('details', { className: 'stats-service-details' })
+      append(details, el('summary', { text: title }), renderStatsContent({ ...snapshot, section: kind })); root.append(details)
+    }
+    return root
+  }
   const chosen = snapshot.section
   if (chosen === 'all' || chosen === 'orders') {
     const orders = section('Заказы', 'orders', 'Заказ и его части считаются отдельно. Дозаказ — новая часть существующего заказа.')
@@ -228,6 +280,14 @@ export function renderStatsContent(snapshot: VenueKpiSnapshot): HTMLElement {
     callSection.append(distribution('Текущее состояние созданных вызовов', snapshot.breakdowns['calls.createdStatuses']))
     callSection.append(el('p', { className: 'stats-note', text: 'Распределение показывает состояние на время обновления. В завершённых могут быть как ручные, так и автоматические случаи; они разделены в карточках выше.' }))
     root.append(callSection)
+  }
+  if (view === 'service') {
+    const blocks = Array.from(root.children)
+    root.replaceChildren()
+    blocks.forEach(block => {
+      const details = el('details', { className: 'stats-service-details' }); details.open = snapshot.section !== 'all'
+      append(details, el('summary', { text: block.querySelector('h2')?.textContent ?? 'Подробности обслуживания' }), block); root.append(details)
+    })
   }
   return root
 }

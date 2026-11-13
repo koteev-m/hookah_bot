@@ -1,5 +1,57 @@
 # Analytics And Events Model
 
+## Товары и дозаказы — локальный read model
+
+HT-VENUE-OPERATIONS-STATS-UX-01: LOCAL IMPLEMENTED / REVIEW PENDING; D1–D4 остаются APPROVED.
+`stats/v1` совместимо принимает новые section=products|additions. Прежний all не включает новые
+большие товарные данные. products содержит optional ProductReport; при отсутствии он не сериализуется.
+Права те же OWNER/MANAGER своего venue, repeatable-read и один server asOf, UTC [from,to),
+календарные даты в timezone venue. GET не дописывает факты.
+
+Товары идентифицируются menu_item_id. Цифровые единицы — qty активных, не исключённых строк
+неотменённых заказов/неотклонённых отправок, по first_delivered_at (fallback на достоверный
+item.fulfilled_at). Историческая цена + snapshot option delta дают стоимость ДО скидок.
+Подарочное количество берётся из reward_qty / выданной APPLIED loyalty redemption (одна единица):
+совпадающее свидетельство одной строки не складывается, результат ограничивается qty; остальные единицы не называются
+оплаченными. Сохранённое имя/цена не заменяются текущим меню. Если имя snapshot отсутствует, текущая карточка
+может дать подпись известному ID, но сумма остаётся unknown и coverage PARTIAL. Варианты не умножают базовую qty.
+Ручные AccountingSale с source=MANUAL и без orderId включаются отдельно по sale.createdAt;
+canceled/disputed исключены. Нераспознанный source, issue или недопустимые qty/цены в legacy snapshots
+дают unknown вместо угадывания ручной продажи.
+Цифровая accounting projection с orderId не считается второй раз. Неразнесённые строки ручных продаж
+показываются отдельным количеством; отсутствие ID не восстанавливается по имени.
+Net по товарам UNAVAILABLE: общие скидки/сборы/adjustments не распределяются произвольно.
+Валюты раздельны; суммы decimal strings в minor units, без float.
+
+Каталог позволяет показывать текущие позиции без найденных фактов. Текущая категория/доступность
+не доказывает доступность весь период. Legacy timestamps, неструктурированные выдачи и отсутствующие
+snapshots дают PARTIAL: «нет подтверждённых продаж в доступных данных», а не надёжный ноль.
+
+F1–F5 review corrections (HT-VENUE-OPERATIONS-STATS-UX-F1-F5-FIX-01 / LOCAL / REVIEW PENDING):
+цифровая accounting-проекция не добавляет количество повторно. Её `order:<id>` / `item:<batchItemId>`
+сопоставляются с тем же order, menu ID, qty, валютой и исторической ценой. Подтверждённый line giftReason
+означает подарок всей строки. Promotion/loyalty и accounting evidence одной единицы не суммируются.
+Денежная корректировка без однозначной unit allocation не делится пропорционально: giftUnits и
+nonGiftUnits в такой строке null, общая coverage PARTIAL; units и gross сохраняются. Для известных
+строк поля и значения прежнего контракта сохраняются. Accounting writers/исторические суммы не меняются.
+
+Дозаказы: выполненные отправки группируются по (orderId,tabId), с venue/session JOIN на tab.
+В итоговую когорту включается только tab.status=CLOSED при order.status=CLOSED.
+Основание периода — orders.closed_at (`CLOSED_TABS_OF_ORDERS_CLOSED_AT`), не дата закрытия tab; COUNT отправок минус одна первая выполненная
+даёт число дозаказов. Отклонённая/невыполненная отправка не даёт успешную единицу. Счета 1/2/3+
+выполненных отправок дают группы 0/1/2+ дозаказов; доля = счета 2+ / счета с выполненными позициями.
+При знаменателе 0 доля null. ACTIVE tabs с выполненными позициями — отдельный snapshot на asOf, включая уже закрытые orders;
+в итоговую долю они не входят. CLOSED tab при ACTIVE order не входит в когорту закрытых orders.
+TAB не имеет paid_at/closed_at и состояния PAID; закрытие не означает оплату.
+Неизвестный tab/legacy history или закрытый order без closed_at даёт PARTIAL/unknown.
+
+PostgreSQL V139 / H2 V140 добавляют nullable orders.closed_at, range index и индекс первой отправки (order_id, tab_id, id). Единственный существующий
+close-writer фиксирует его атомарно с закрытием из server instant после блокировок (UTC, microseconds),
+COALESCE сохраняет первое время при retry. Время начала PostgreSQL-транзакции не подменяет момент действия.
+Старые CLOSED не backfill-ятся из updated_at. Состояние CLOSED не становится оплатой или выдачей.
+Analytics event store, billing и accounting writers не меняются.
+
+
 ## Analytics & Statistics stage 2 — KPI read models
 
 `HT-ANALYTICS-KPI-READMODELS-IMPLEMENT-01`: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**.

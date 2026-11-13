@@ -1335,6 +1335,7 @@ class OrdersRepository(
                                     idempotencyKey = "batch_created:$venueId:$batchId",
                                 ),
                         )
+                        val firstTabSend = isFirstTabSend(connection, orderId, tabId, batchId)
                         connection.commit()
                         val discounts = promotionResult.discounts + listOfNotNull(loyaltyRedemption?.discount)
                         val pricing =
@@ -1349,7 +1350,7 @@ class OrdersRepository(
                             idempotencyReplay = false,
                             displayNumber = orderDisplay.displayNumber,
                             displayDate = orderDisplay.displayDate,
-                            isFirstBatch = existingOrderId == null,
+                            isFirstBatch = firstTabSend,
                             promotionDiscounts = discounts,
                             items = createdItems,
                             pricing = pricing,
@@ -1650,7 +1651,7 @@ class OrdersRepository(
                 idempotencyReplay = false,
                 displayNumber = orderDisplay.displayNumber,
                 displayDate = orderDisplay.displayDate,
-                isFirstBatch = existingOrderId == null,
+                isFirstBatch = isFirstTabSend(connection, orderId, tabId, batchId),
                 promotionDiscounts = discounts,
                 items = createdItems,
                 pricing = pricing,
@@ -4224,4 +4225,20 @@ class OrdersRepository(
             priceDeltaMinor = priceDeltaMinor,
         )
     }
+
+    private fun isFirstTabSend(
+        connection: Connection,
+        orderId: Long,
+        tabId: Long,
+        batchId: Long,
+    ): Boolean =
+        connection.prepareStatement("SELECT COUNT(*) FROM order_batches WHERE order_id=? AND tab_id=? AND id<?").use {
+            it.setLong(1, orderId)
+            it.setLong(2, tabId)
+            it.setLong(3, batchId)
+            it.executeQuery().use { rows ->
+                rows.next()
+                rows.getLong(1) == 0L
+            }
+        }
 }

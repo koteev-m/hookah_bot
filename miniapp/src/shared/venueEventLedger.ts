@@ -16,7 +16,7 @@ type DeviceLedger = { version: 2; scopes: Scope[] }
 export class VenueLedgerCapacityError extends Error {}
 export class VenueLedgerBusyError extends VenueLedgerCapacityError {}
 
-function validId(id: unknown): id is string { return typeof id === 'string' && /^(batch|call):[1-9]\d{0,18}$/.test(id) }
+function validId(id: unknown): id is string { return typeof id === 'string' && /^(batch|call|booking|bookingMessage):[1-9]\d{0,18}$/.test(id) }
 
 /** Bounded current receipts, not a creation history or a server ACK. Only successful channel
  * attempts advance channel receipts. A silent observer leaves audio pending for another tab.
@@ -40,6 +40,17 @@ export class VenueEventLedger {
     const value = JSON.parse(raw) as DeviceLedger
     if (value.version !== 2 || !Array.isArray(value.scopes) || value.scopes.length > MAX_SCOPES) throw new Error('invalid ledger')
     for (const scope of value.scopes) {
+      // Protocol-2 readers keep accepting their batch/call ledger. Booking-only extension
+      // fields are preserved by their object round-trips and share the same lease lock.
+      const extended = scope as Scope & { bookingReceipts?: Record<string, Receipt>; bookingLease?: DeliveryLease | null }
+      if (extended.bookingReceipts) {
+        if (!Object.keys(extended.bookingReceipts).every(id => /^booking(?:Message)?:[1-9]\d{0,18}$/.test(id))) throw new Error('invalid booking receipts')
+        scope.receipts = { ...scope.receipts, ...extended.bookingReceipts }
+      }
+      if (scope.lease && extended.bookingLease?.owner === scope.lease.owner && extended.bookingLease.expires === scope.lease.expires) {
+        scope.lease.audio.push(...extended.bookingLease.audio); scope.lease.desktop.push(...extended.bookingLease.desktop)
+      }
+      delete extended.bookingReceipts; delete extended.bookingLease
       if (typeof scope.key !== 'string' || scope.key.length > 512 || !Number.isFinite(scope.usedAt) || !scope.receipts || typeof scope.receipts !== 'object') throw new Error('invalid scope')
       const entries = Object.entries(scope.receipts)
       if (entries.length > EVENT_CAPACITY + MAX_RETIRED) throw new VenueLedgerCapacityError('Слишком много локальных квитанций.')
@@ -52,7 +63,13 @@ export class VenueEventLedger {
   }
 
   private write(value: DeviceLedger) {
-    const raw = JSON.stringify(value)
+    const stored = { ...value, scopes: value.scopes.map(scope => ({ ...scope,
+      receipts: Object.fromEntries(Object.entries(scope.receipts).filter(([id]) => !id.startsWith('booking'))),
+      bookingReceipts: Object.fromEntries(Object.entries(scope.receipts).filter(([id]) => id.startsWith('booking'))),
+      lease: scope.lease && { ...scope.lease, audio: scope.lease.audio.filter(id => !id.startsWith('booking')), desktop: scope.lease.desktop.filter(id => !id.startsWith('booking')) },
+      bookingLease: scope.lease && { ...scope.lease, audio: scope.lease.audio.filter(id => id.startsWith('booking')), desktop: scope.lease.desktop.filter(id => id.startsWith('booking')) }
+    })) }
+    const raw = JSON.stringify(stored)
     if (raw.length + VENUE_LEDGER_KEY.length > LEDGER_MAX_BYTES || new TextEncoder().encode(raw + VENUE_LEDGER_KEY).byteLength > LEDGER_MAX_BYTES) throw new VenueLedgerCapacityError('Локальный журнал достиг лимита размера.')
     localStorage.setItem(VENUE_LEDGER_KEY, raw)
   }

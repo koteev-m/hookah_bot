@@ -95,7 +95,9 @@ class TelegramOutboxWorker(
         if (message.method == "sendMessage" || message.method == "venueInfo") {
             rateLimiter.awaitPermit(message.chatId)
         }
-        if (!repository.isRecipientAuthorized(message.chatId, message.staffLiveOrderId)) {
+        if ((message.staffOrderRadar && message.staffLiveOrderId == null) ||
+            !repository.isRecipientAuthorized(message.chatId, message.staffLiveOrderId)
+        ) {
             rejectLocalValidation(message, LocalValidationFailure.RECIPIENT_NOT_AUTHORIZED)
             return
         }
@@ -183,7 +185,9 @@ class TelegramOutboxWorker(
         result: TelegramCallResult.Success,
     ) {
         metrics?.incrementOutboundSendSuccess()
-        if (message.method == "sendMessage" && message.staffLiveOrderId != null && result.responseJson != null) {
+        if (message.method == "sendMessage" && message.staffLiveOrderId != null &&
+            !message.staffOrderRadar && result.responseJson != null
+        ) {
             rememberLiveOrderMessageId(message, result.responseJson)
         }
         try {

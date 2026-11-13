@@ -149,6 +149,7 @@ open class StaffChatNotificationRepository(
         chatId: Long,
         method: String,
         payloadJson: String,
+        radarPayloadJson: String? = null,
     ): StaffChatNotificationClaim {
         if (!allowsOutboundChat(chatId)) {
             return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
@@ -185,6 +186,16 @@ open class StaffChatNotificationRepository(
                         method = method,
                         payloadJson = payloadJson,
                     )
+                    if (radarPayloadJson != null) {
+                        enqueueLinkedOutboxInTransaction(
+                            connection = connection,
+                            orderId = orderId,
+                            chatId = chatId,
+                            method = "sendMessage",
+                            payloadJson = radarPayloadJson,
+                            dedupeKey = "${TelegramOutboxRepository.STAFF_ORDER_RADAR_DEDUPE_PREFIX}$notificationKey",
+                        )
+                    }
                     connection.commit()
                     StaffChatNotificationClaim.CLAIMED
                 } catch (e: SQLException) {
@@ -493,18 +504,20 @@ open class StaffChatNotificationRepository(
         chatId: Long,
         method: String,
         payloadJson: String,
+        dedupeKey: String? = null,
     ) {
         val outboxId =
             connection.prepareStatement(
                 """
-                INSERT INTO telegram_outbox (chat_id, method, payload_json)
-                VALUES (?, ?, ?)
+                INSERT INTO telegram_outbox (chat_id, method, payload_json, dedupe_key)
+                VALUES (?, ?, ?, ?)
                 """.trimIndent(),
                 Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
                 statement.setLong(1, chatId)
                 statement.setString(2, method)
                 statement.setString(3, payloadJson)
+                statement.setString(4, dedupeKey)
                 statement.executeUpdate()
                 statement.generatedKeys.use { keys ->
                     if (keys.next()) {

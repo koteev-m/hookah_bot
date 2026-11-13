@@ -125,6 +125,8 @@ jobs:
             --tests "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest" \
             --tests "com.hookah.platform.backend.analytics.KpiReadModelsH2Test" \
             --tests "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest" \
+            --tests "com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest" \
+            --tests "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest" \
             --tests "com.hookah.platform.backend.analytics.KpiRoutesTest" \
             --tests "com.hookah.platform.backend.analytics.VenueStatsUiContractTest" \
             --tests "com.hookah.platform.backend.analytics.PlatformAnalyticsUiContractTest" \
@@ -239,12 +241,15 @@ jobs:
               "com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test",
               "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest",
           }
+          strict_classes = billing_classes | {"com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest", "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest"}
           report_dir = Path("backend/app/build/test-results/test")
           expected_classes = [
               "com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test",
               "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest",
               "com.hookah.platform.backend.analytics.KpiReadModelsH2Test",
               "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest",
+              "com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest",
+              "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest",
               "com.hookah.platform.backend.analytics.KpiRoutesTest",
               "com.hookah.platform.backend.analytics.VenueStatsUiContractTest",
               "com.hookah.platform.backend.analytics.PlatformAnalyticsUiContractTest",
@@ -334,14 +339,16 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest",
           ]
           required_minimums = {
+              "com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest": 1,
+              "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest": 1,
               "com.hookah.platform.backend.analytics.PlatformBillingKpiH2Test": 5,
               "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest": 6,
-              "com.hookah.platform.backend.analytics.KpiReadModelsH2Test": 16,
-              "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest": 18,
+              "com.hookah.platform.backend.analytics.KpiReadModelsH2Test": 25,
+              "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest": 27,
               "com.hookah.platform.backend.analytics.KpiRoutesTest": 1,
               "com.hookah.platform.backend.analytics.VenueStatsUiContractTest": 2,
               "com.hookah.platform.backend.analytics.PlatformAnalyticsUiContractTest": 1,
-              "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardRoutesTest": 2,
+              "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardRoutesTest": 3,
               "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardPostgresTest": 1,
               "com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardCapacityPostgresTest": 1,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingAutoOpenH2Test": 7,
@@ -384,7 +391,7 @@ jobs:
               "com.hookah.platform.backend.support.SupportThreadReadRepositoryTest": 21,
               "com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifierTest": 8,
               "com.hookah.platform.backend.telegram.StaffChatNotifierTest": 40,
-              "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest": 2,
+              "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest": 3,
               "com.hookah.platform.backend.telegram.TelegramOutboxWorkerTest": 19,
               "com.hookah.platform.backend.miniapp.guest.GuestOrderRoutesTest": 61,
               "com.hookah.platform.backend.telegram.db.GuestOrderIdempotencyFingerprintTest": 7,
@@ -413,6 +420,35 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           required_test_names = {
+              "com.hookah.platform.backend.analytics.KpiReadModelsH2Test": {
+                  "tab scoped completed additions and complete product quantity do not merge personal bills",
+                  "complete product source includes unsold identities and pagination independent search",
+                  "legacy missing time and missing tab remain unknown instead of zero repeat share",
+                  "product filters are strict scoped and money sort needs currency",
+                  "gift quantity and historical manual lines remain separate from digital accounting projection",
+                  "accounting EDIT gifts preserve exact delivered identity without duplicating quantities",
+                  "ambiguous accounting gift amounts remain unknown and canonical gifts never double count",
+                  "completed additions require CLOSED tab while ACTIVE tabs remain a separate snapshot",
+                  "booking attention follows committed guest conversation not booking status or closed thread",
+              },
+              "com.hookah.platform.backend.analytics.KpiReadModelsPostgresTest": {
+                  "tab scoped completed additions and complete product quantity do not merge personal bills",
+                  "complete product source includes unsold identities and pagination independent search",
+                  "legacy missing time and missing tab remain unknown instead of zero repeat share",
+                  "product filters are strict scoped and money sort needs currency",
+                  "gift quantity and historical manual lines remain separate from digital accounting projection",
+                  "accounting EDIT gifts preserve exact delivered identity without duplicating quantities",
+                  "ambiguous accounting gift amounts remain unknown and canonical gifts never double count",
+                  "completed additions require CLOSED tab while ACTIVE tabs remain a separate snapshot",
+                  "booking attention follows committed guest conversation not booking status or closed thread",
+              },
+              "com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest": {
+                  "committed PostgreSQL writers reach authenticated HTTP and real browser adapter without read writes",
+              },
+              "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest": {
+                  "booking attention exact thread HTTP preserves isolation read markers and unseen new messages",
+              },
+
               "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest": {
                   "dense PostgreSQL snapshot preserves results without a payment scan per invoice",
               },
@@ -442,6 +478,7 @@ jobs:
                   "product worker rechecks staff chat authority immediately before dispatch",
               },
               "com.hookah.platform.backend.telegram.TelegramOutboxVenueAuthorityTest": {
+                  "new send radar and activity edit share one claim rollback and PostgreSQL concurrent retry",
                   "product venue enqueue rejects stale staff chat after relink",
               },
               "com.hookah.platform.backend.miniapp.venue.VenueStaffRoutesTest": {
@@ -493,7 +530,7 @@ jobs:
               for key, value in counts.items():
                   totals[key] += value
               minimum_tests = required_minimums.get(class_name, 1)
-              if class_name in billing_classes:
+              if class_name in strict_classes:
                   cases = suite.findall("testcase")
                   if suite.tag != "testsuite" or suite.attrib.get("name") != class_name:
                       problems.append(f"billing suite identity mismatch: {class_name}")
@@ -1171,12 +1208,12 @@ jobs:
               (
                   "H2 analytics foundation migration and rollback",
                   report_dir / "TEST-com.hookah.platform.backend.analytics.AnalyticsFoundationH2Test.xml",
-                  6,
+                  7,
               ),
               (
                   "PostgreSQL analytics foundation migration concurrency and rollback",
                   report_dir / "TEST-com.hookah.platform.backend.analytics.AnalyticsFoundationPostgresTest.xml",
-                  9,
+                  10,
               ),
               (
                   "H2 Telegram dialog-state migration",
@@ -1870,7 +1907,7 @@ jobs:
           from pathlib import Path
 
           report_path = Path("playwright-results.json")
-          minimum_executed = 216
+          minimum_executed = 224
           if not report_path.is_file():
               raise SystemExit(f"missing Playwright JSON report: {report_path}")
 
@@ -1908,6 +1945,25 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("venue-booking-attention.spec.ts", "booking attention click selects exact conversation outside inventory 360"): 1,
+              ("venue-booking-attention.spec.ts", "booking attention click selects exact conversation outside inventory 390"): 1,
+              ("venue-booking-attention.spec.ts", "booking attention click selects exact conversation outside inventory 1440"): 1,
+              ("venue-booking-attention.spec.ts", "booking attention exact failures and revoke never substitute or retain another conversation"): 1,
+              ("venue-booking-attention.spec.ts", "PostgreSQL booking writer dashboard attention click opens exact Messages and preserves unread boundary"): 1,
+              ("venue-stats.spec.ts", "operations stats focused overview and product read model 360 light"): 1,
+              ("venue-stats.spec.ts", "operations stats focused overview and product read model 360 dark"): 1,
+              ("venue-dashboard-alerts.spec.ts", "operations compact alerts and single task surface 360"): 1,
+              ("venue-stats.spec.ts", "operations stats focused overview and product read model 390 light"): 1,
+              ("venue-stats.spec.ts", "operations stats focused overview and product read model 390 dark"): 1,
+              ("venue-dashboard-alerts.spec.ts", "operations compact alerts and single task surface 390"): 1,
+              ("venue-stats.spec.ts", "operations stats focused overview and product read model 1440 light"): 1,
+              ("venue-stats.spec.ts", "operations stats focused overview and product read model 1440 dark"): 1,
+              ("venue-dashboard-alerts.spec.ts", "operations compact alerts and single task surface 1440"): 1,
+              ("venue-stats.spec.ts", "operations PostgreSQL HTTP response passes the real adapter and merchandise DOM"): 1,
+              ("venue-operations-review.spec.ts", "review F4 real AudioContext status recovers only after successful Web Lock coordination"): 1,
+              ("venue-operations-review.spec.ts", "review F5 booking target stays highlighted after reconciliation without repeated scroll or focus"): 1,
+              ("venue-stats.spec.ts", "review F1 unknown gift allocation retains units and money without inventing ordinary units"): 1,
+
               ('platform-analytics.spec.ts', 'platform analytics real Ktor H2 JSON passes the adapter and screen without write operations'): 1,
               ('platform-analytics.spec.ts', 'platform analytics samples real HTTP counts keep unknown without a default sample size'): 1,
               ('platform-analytics.spec.ts', 'platform analytics samples COUNT defaults stay absent across zero null period reload and reentry'): 1,

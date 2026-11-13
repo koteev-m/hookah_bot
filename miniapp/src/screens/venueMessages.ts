@@ -364,6 +364,12 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     abortController = null
     setLoading(false)
     if (!result.ok) {
+      if (result.error.status === 401 || result.error.status === 403) {
+        threads = []; selectedThreadId = null; initialInventoryPending = false
+        clearThreadDetail(); renderThreadList()
+        refs.status.textContent = 'Доступ к перепискам потерян. Обновите права или войдите заново.'
+        return
+      }
       reconciliationState = bookingThreadError()
       refs.status.textContent = 'Не удалось сверить список переписок. Отправка сообщений заблокирована.'
       refs.refreshButton.textContent = 'Обновить переписку'
@@ -448,6 +454,12 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     if (disposed || abortController !== controller) return
     abortController = null
     if (!result.ok) {
+      if (result.error.status === 401 || result.error.status === 403) {
+        threads = []; selectedThreadId = null; initialInventoryPending = false
+        clearThreadDetail(); renderThreadList()
+        refs.status.textContent = 'Доступ к переписке потерян. Обновите права или войдите заново.'
+        return
+      }
       reconciliationState = bookingThreadError()
       showReconciliationError('Не удалось загрузить сообщения. Черновик сохранён; обновите переписку.')
       return
@@ -492,6 +504,10 @@ export function renderVenueMessagesScreen(options: VenueMessagesOptions) {
     }
     renderThreadList()
     showThreadDetail(exactThread, result.data.messages, preservedDraft)
+    if (canLoadExactInitialTarget) {
+      const heading = refs.detail.querySelector<HTMLElement>('h3')
+      if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); heading.scrollIntoView({ block: 'start' }) }
+    }
     onConversationUnreadChanged?.()
   }
 

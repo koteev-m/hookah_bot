@@ -341,14 +341,22 @@ class LoyaltyPaidMigrationTest {
             val current = Flyway.configure().dataSource(ds).locations("classpath:db/migration/$dialect").load()
             val expectedTail =
                 if (dialect == "postgresql") {
-                    listOf("V137__loyalty_unit_corrections.sql", "V138__analytics_transition_facts.sql")
+                    listOf(
+                        "V137__loyalty_unit_corrections.sql",
+                        "V138__analytics_transition_facts.sql",
+                        "V139__order_closed_fact.sql",
+                    )
                 } else {
-                    listOf("V138__loyalty_unit_corrections.sql", "V139__analytics_transition_facts.sql")
+                    listOf(
+                        "V138__loyalty_unit_corrections.sql",
+                        "V139__analytics_transition_facts.sql",
+                        "V140__order_closed_fact.sql",
+                    )
                 }
             assertEquals(expectedTail, current.info().pending().map { it.script })
-            assertEquals(2, current.migrate().migrationsExecuted)
+            assertEquals(expectedTail.size, current.migrate().migrationsExecuted)
             current.validate()
-            assertEquals(if (dialect == "postgresql") "138" else "139", current.info().current().version.version)
+            assertEquals(if (dialect == "postgresql") "139" else "140", current.info().current().version.version)
             assertEquals(before, snapshot())
             assertEquals(
                 history,
@@ -356,7 +364,7 @@ class LoyaltyPaidMigrationTest {
                     "SELECT \"version\",\"script\",\"checksum\" " +
                         "FROM \"flyway_schema_history\" ORDER BY " +
                         "\"installed_rank\"",
-                ) { r -> (1..3).map { r.getString(it) } }.dropLast(2),
+                ) { r -> (1..3).map { r.getString(it) } }.dropLast(expectedTail.size),
             )
             assertEquals(
                 listOf("VENUE_COMPENSATION"),

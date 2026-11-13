@@ -1,5 +1,24 @@
 # Order / Session / Tab Core Model
 
+
+F2 correction / LOCAL REVIEW PENDING: завершённый tab определяется только tab.status=CLOSED.
+CLOSED order не закрывает ACTIVE tab для целей статистики. Дозаказы анализируются по отдельным tabId,
+с завершённой когортой «Завершённые счета в заказах, закрытых в период» по orders.closed_at.
+Достоверной даты закрытия tab нет; её не восстанавливают из order. ACTIVE tabs — отдельный snapshot,
+CLOSED tab незакрытого order вне этой когорты. В схеме TAB только ACTIVE/CLOSED, PAID не существует.
+
+
+## Рабочая отправка и когорта закрытия — локальное расширение
+
+HT-VENUE-OPERATIONS-STATS-UX-01 / REVIEW PENDING: UI называет отправки «Первый заказ» и «Дозаказ»
+внутри конкретного личного/общего tab. Монитор ведёт задачи по batch ID, а deep link выделяет
+точную отправку; открытие не принимает её. Два личных счёта одной посадки не объединяются.
+Read model выполненных дозаказов использует (orderId,tabId), подтверждённую выдачу и closed order cohort.
+Nullable orders.closed_at (PG V139 / H2 V140) записывается существующим close-writer в его транзакции
+из того же server instant, который вычисляется после блокировок и используется для действия;
+исторические закрытия остаются unknown. Ни lifecycle, ownership, writer оплаты, ни D1–D4 не меняются.
+
+
 ## Analytics stage 2 consumers
 
 Read-only KPI consumers use stage-1 domain first times and transition facts. Created orders and

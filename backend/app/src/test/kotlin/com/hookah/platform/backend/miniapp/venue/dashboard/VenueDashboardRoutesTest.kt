@@ -65,6 +65,107 @@ internal fun Connection.dashboardCall(
 
 class VenueDashboardRoutesTest {
     @Test
+    fun `protocol three scopes booking tasks and per tab initial sends without breaking protocol two`() =
+        runBlocking {
+            h2Seating().use { ds ->
+                val (venue, tables) = seedSeating(ds)
+                val repo = VenueDashboardRepository(ds)
+                ds.connection.use { c ->
+                    val order = c.dashboardOrder(venue, tables[0])
+                    val session =
+                        c.rows(
+                            "SELECT table_session_id FROM orders WHERE id=?",
+                            order,
+                        ) { it.getLong(1) }.single()
+                    val tab1 =
+                        c.insert(
+                            "INSERT INTO tab(venue_id,table_session_id,type) VALUES (?,?,'SHARED')",
+                            venue,
+                            session,
+                        )
+                    val tab2 =
+                        c.insert(
+                            "INSERT INTO tab(venue_id,table_session_id,type,owner_user_id) VALUES (?,?,'PERSONAL',?)",
+                            venue,
+                            session,
+                            OWNER,
+                        )
+                    val first = c.dashboardBatch(order)
+                    val extra = c.dashboardBatch(order)
+                    val personal = c.dashboardBatch(order)
+                    c.write("UPDATE order_batches SET tab_id=? WHERE id=?", tab1, first)
+                    c.write("UPDATE order_batches SET tab_id=? WHERE id=?", tab1, extra)
+                    c.write("UPDATE order_batches SET tab_id=? WHERE id=?", tab2, personal)
+                    val booking =
+                        c.insert(
+                            "INSERT INTO bookings(venue_id,user_id,scheduled_at,status,display_date," +
+                                "display_number) VALUES (?,?,CURRENT_TIMESTAMP,'PENDING',CURRENT_DATE,1)",
+                            venue,
+                            STAFF,
+                        )
+                    c.insert(
+                        "INSERT INTO bookings(venue_id,user_id,scheduled_at,status,display_date," +
+                            "display_number) VALUES (?,?,CURRENT_TIMESTAMP,'CHANGED',CURRENT_DATE,2)",
+                        venue,
+                        OWNER,
+                    )
+                    val current = repo.snapshot(venue, OWNER, 3)
+                    assertEquals(3, current.monitoringVersion)
+                    assertEquals("ORDER_CREATED", current.attention.single { it.id == "batch:$personal" }.kind)
+                    assertEquals("BATCH_ADDED", current.attention.single { it.id == "batch:$extra" }.kind)
+                    assertEquals(listOf(booking), current.attention.mapNotNull { it.bookingId })
+                    assertTrue(repo.snapshot(venue, STAFF, 3).attention.none { it.bookingId != null })
+                    assertTrue(
+                        repo.snapshot(venue, OWNER).attention.none { it.bookingId != null || it.batchId != null },
+                    )
+                    c.write("UPDATE bookings SET status='CONFIRMED' WHERE id=?", booking)
+                    assertTrue(repo.snapshot(venue, OWNER, 3).attention.none { it.bookingId == booking })
+                    val thread =
+                        c.insert(
+                            "INSERT INTO support_threads(venue_id,guest_user_id,booking_id,category,status," +
+                                "thread_type,assignee_scope,created_source,title) " +
+                                "VALUES (?,?,?,'BOOKING','NEW','BOOKING_THREAD','VENUE','GUEST_MINIAPP','Booking')",
+                            venue,
+                            STAFF,
+                            booking,
+                        )
+                    c.insert(
+                        "INSERT INTO support_messages(thread_id,author_role,source,text) " +
+                            "VALUES (?,'SYSTEM','SYSTEM','Internal')",
+                        thread,
+                    )
+                    assertTrue(repo.snapshot(venue, OWNER, 3).attention.none { it.kind == "BOOKING_MESSAGE" })
+                    val message =
+                        c.insert(
+                            "INSERT INTO support_messages(thread_id,author_user_id,author_role,source,text) " +
+                                "VALUES (?,?,'GUEST','GUEST_MINIAPP','Private guest message')",
+                            thread,
+                            STAFF,
+                        )
+                    assertEquals(
+                        "bookingMessage:$message",
+                        repo.snapshot(venue, OWNER, 3).attention.single {
+                            it.kind == "BOOKING_MESSAGE"
+                        }.id,
+                    )
+                    c.write(
+                        "INSERT INTO support_thread_reads(thread_id,user_id,last_read_message_id) VALUES (?,?,?)",
+                        thread,
+                        OWNER,
+                        message,
+                    )
+                    assertTrue(repo.snapshot(venue, OWNER, 3).attention.none { it.kind == "BOOKING_MESSAGE" })
+                    val bill = c.dashboardCall(venue, tables[0])
+                    c.write("UPDATE staff_calls SET reason='BILL' WHERE id=?", bill)
+                    assertEquals(
+                        true,
+                        repo.snapshot(venue, OWNER, 3).attention.single { it.callId == bill }.billRequest,
+                    )
+                }
+            }
+        }
+
+    @Test
     fun `bounded current snapshot preserves first and append without history or read mutations`() =
         runBlocking<Unit> {
             h2Seating().use { ds ->
@@ -160,6 +261,21 @@ class VenueDashboardRoutesTest {
                     val body = Json.decodeFromString<VenueDashboardSnapshot>(response.bodyAsText())
                     assertEquals(actor, body.userId)
                     assertEquals(3, body.attention.size)
+                    val upgradedResponse =
+                        client.get("$endpoint?monitoringVersion=3") {
+                            bearerAuth(tokens.issueToken(actor).token)
+                        }
+                    assertEquals(HttpStatusCode.OK, upgradedResponse.status)
+                    val upgraded = Json.decodeFromString<VenueDashboardSnapshot>(upgradedResponse.bodyAsText())
+                    assertEquals(3, upgraded.monitoringVersion)
+                    assertEquals(2, upgraded.attention.count { it.batchId != null })
+                    assertTrue(upgraded.attention.filter { it.batchId != null }.all { it.kind == "ORDER_SEND_UNKNOWN" })
+                    assertEquals(
+                        HttpStatusCode.BadRequest,
+                        client.get("$endpoint?monitoringVersion=4") {
+                            bearerAuth(tokens.issueToken(actor).token)
+                        }.status,
+                    )
                     assertTrue(body.attentionComplete)
                     assertEquals(if (actor == STAFF) null else false, body.staffChatLinked)
                     assertEquals(

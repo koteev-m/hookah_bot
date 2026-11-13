@@ -1,5 +1,5 @@
 import type { VenueAccessDto } from '../shared/api/venueDtos'
-import type { VenueMonitor } from '../shared/venueEventMonitor'
+import { venueAttentionHref, type VenueMonitor } from '../shared/venueEventMonitor'
 import { append, el } from '../shared/ui/dom'
 
 export type VenueDashboardOptions = {
@@ -63,25 +63,40 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
   const { root, access, monitor, canAccessRoute } = options
   if (!root) return () => undefined
   const summary = el('div', { className: 'venue-dashboard-cards' })
-  root.replaceChildren(buildVenueHome(options), summary)
+  root.replaceChildren(...(access.venueStatus === 'DRAFT' ? [buildVenueHome(options), summary] : [summary, buildVenueHome(options)]))
   if (!['DRAFT', 'PUBLISHED'].includes(access.venueStatus?.toUpperCase() ?? '')) return () => undefined
   const refresh = el('button', { className: 'button-secondary', text: 'Обновить обзор' })
   refresh.onclick = () => monitor?.refresh()
   root.append(refresh)
   if (!monitor) { summary.append(el('p', { text: 'Оперативные данные пока недоступны.' })); return () => undefined }
+  let extrasOpen = false
+  let renderedSnapshotKey: string | undefined
   return monitor.subscribe(snapshot => {
+    const key = JSON.stringify(snapshot ? { ...snapshot, refreshedAt: '' } : null)
+    if (key === renderedSnapshotKey) return
+    renderedSnapshotKey = key
+    const focused = document.activeElement instanceof HTMLElement && summary.contains(document.activeElement)
+      ? document.activeElement : null
+    const focusedKey = focused?.closest('a')?.dataset.dashboardKey
+    const focusedHref = focused?.closest('a')?.getAttribute('href')
+    const focusedExtras = focused?.tagName === 'SUMMARY'
     summary.replaceChildren()
+    let cardCount = 0
+    const extras = el('details', { className: 'venue-dashboard-extras' }); extras.open = extrasOpen
+    extras.append(el('summary', { text: 'Остальные показатели заведения' }))
+    extras.ontoggle = () => { extrasOpen = extras.open }
     const card = (route: Parameters<typeof canAccessRoute>[0], title: string, value: string) => {
       if (!canAccessRoute(route)) return
-      const link = el('a', { className: 'card venue-dashboard-card' }); link.href = `#/${route}`
-      append(link, el('strong', { text: title }), el('span', { text: value })); summary.append(link)
+      const link = el('a', { className: 'card venue-dashboard-card' }); link.href = `#/${route}`; link.dataset.dashboardKey = title
+      append(link, el('strong', { text: title }), el('span', { text: value })); (cardCount++ < 3 ? summary : extras).append(link)
     }
     const count = (value: number | null | undefined) => value == null ? 'Нет подтверждённых данных' : String(value)
-    card('orders', 'Новые партии, включая дозаказы', snapshot ? `${snapshot.attention.filter(e => e.orderId != null).length}${snapshot.attentionComplete ? '' : ' в неполном списке — мониторинг ограничен'}` : '—')
-    card('orders', 'Активные заказы', count(snapshot?.activeOrders))
+    card('orders', 'Новые заказы и дозаказы', snapshot ? `${snapshot.attention.filter(e => e.orderId != null).length}${snapshot.attentionComplete ? '' : ' в неполном списке — мониторинг ограничен'}` : '—')
     card('calls', 'Новые вызовы:', snapshot ? `${snapshot.attention.filter(e => e.callId != null).length}${snapshot.attentionComplete ? '' : ' в неполном списке — мониторинг ограничен'}` : '—')
-    card('calls', 'Вызовы в работе', count(snapshot?.callsInWork))
     card('bookings', 'Бронирования, ожидающие ответа', count(snapshot?.bookingsPending))
+    card('orders', 'Активные заказы', count(snapshot?.activeOrders))
+    card('calls', 'Вызовы в работе', count(snapshot?.callsInWork))
+    if (snapshot?.bookingsUpcoming != null) card('bookings', 'Подтверждённые будущие брони · отдельно от срочных задач', String(snapshot.bookingsUpcoming))
     card('hall', 'Посадка за столами', snapshot && snapshot.occupiedTables != null && snapshot.activeTables != null
       ? `Занято: ${snapshot.occupiedTables}. Активных столов: ${snapshot.activeTables}. Физическая посадка, без предположений по заказам.` : 'Нет подтверждённых данных')
     card('accounting', 'Учётная смена', !snapshot ? '—' : snapshot.accountingOpenedAt
@@ -93,6 +108,19 @@ export function renderVenueDashboardScreen(options: VenueDashboardOptions) {
     const subscriptionLabels: Record<string, string> = { TRIAL: 'Пробный период', ACTIVE: 'Подписка активна', PAST_DUE: 'Оплата просрочена — проверьте подписку', SUSPENDED: 'Подписка приостановлена — проверьте ограничения' }
     if (access.role === 'OWNER') card('subscription', 'Состояние заведения и подписки', snapshot
       ? `${venueLabels[snapshot.venueStatus] ?? snapshot.venueStatus} · ${subscriptionLabels[snapshot.subscriptionStatus ?? ''] ?? 'Подписка не подтверждена'}` : '—')
-    summary.append(el('p', { className: 'venue-alert-help', text: 'Учётная смена, стоимость выполненных заказов и внешние оплаты имеют разные основания. Денежные показатели открываются в соответствующих разделах.' }))
+    if (snapshot?.attention.length) {
+      const preview = el('section', { className: 'card venue-task-preview' }); preview.append(el('h3', { text: 'Ближайшие задачи' }))
+      snapshot.attention.slice(0, 3).forEach(task => {
+        const link = el('a', { text: task.kind === 'BOOKING_PENDING' ? 'Бронь ожидает решения' : task.kind === 'BOOKING_MESSAGE' ? 'Сообщение по брони' : task.kind === 'ORDER_SEND_UNKNOWN' ? 'Новые позиции · счёт не определён' : task.kind === 'BATCH_ADDED' ? 'Дозаказ · новые позиции' : task.callId ? 'Вызов гостя' : 'Первый заказ' })
+        link.dataset.dashboardKey = task.id
+        const href = venueAttentionHref(task)
+        if (href) link.href = href; else link.setAttribute('aria-disabled', 'true')
+        preview.append(link)
+      }); summary.prepend(preview)
+    }
+    if (extras.children.length > 1) summary.append(extras)
+    if (focusedHref) Array.from(summary.querySelectorAll<HTMLAnchorElement>('a')).find(link => focusedKey ? link.dataset.dashboardKey === focusedKey : link.getAttribute('href') === focusedHref)?.focus({ preventScroll: true })
+    else if (focusedExtras) extras.querySelector('summary')?.focus({ preventScroll: true })
+    extras.append(el('p', { className: 'venue-alert-help' , text: 'Учётная смена, стоимость выполненных заказов и внешние оплаты имеют разные основания. Денежные показатели открываются в соответствующих разделах.' }))
   })
 }

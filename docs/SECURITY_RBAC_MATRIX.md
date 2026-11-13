@@ -1,5 +1,23 @@
 # Security / RBAC Permission Matrix
 
+## Рабочий обзор и товарные read models — локальное расширение
+
+HT-VENUE-OPERATIONS-STATS-UX-01 / REVIEW PENDING: dashboard protocol 3 не расширяет права.
+STAFF получает свои разрешённые заказы/вызовы; booking tasks/messages требуют BOOKING_MANAGE.
+OWNER/MANAGER получают products/additions только своего venue через server-side membership check
+в той же read transaction. Platform Owner без venue grant и Guest management aggregates не получают.
+Все новые JOIN ограничивают venue/session/tab; raw contacts, сообщения и Telegram identifiers не входят
+в dashboard/KPI payload. Потеря доступа закрывает панель и очищает данные; late response не возвращает
+старый контекст. Sound/mute/view не являются бизнес-authority и не создают ACK/DONE.
+
+
+Booking attention deep link (LOCAL REVIEW PENDING): только разрешённая BOOKING_MESSAGE получает
+threadId из той же связи booking/venue/guest. Messages detail сохраняет SUPPORT_MANAGE и собственную
+серверную проверку типа/venue/участников. BOOKING_MANAGE не расширяет эти права. STAFF/Guest/foreign/
+revoked и Platform Owner без venue grant не получают management-переписку или read-marker mutation.
+Dashboard остаётся read-only; только разрешённое точное открытие меняет cursor actor/thread.
+401/403 очищает ранее загруженные detail/list; поздний ответ disposed контекста не возвращает данные.
+
 ## Analytics stage 2 API access
 
 | API | Allowed | Explicitly denied |

@@ -4,6 +4,21 @@
 
 Статус: **current product reference**. Этот документ является single source of truth для guest communication routing после smoke-tested Support/Tickets and Venue Chat MVP. Старые audit notes про `Сообщения`, booking support и staff-chat нужно сверять с этой моделью перед будущими задачами Codex. Role/scoping decisions for these flows are governed by `docs/SECURITY_RBAC_MATRIX.md`; Venue operational handling is governed by `docs/VENUE_OPERATIONS.md`; booking lifecycle details are governed by `docs/BOOKING_LIFECYCLE.md`; Telegram fallback and staff-chat behavior is governed by `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`; validation strategy is governed by `docs/TESTING_QA_SMOKE_STRATEGY.md`; release/deploy operations are governed by `docs/DEPLOYMENT_RUNBOOK.md`.
 
+## Booking attention exact opening — local review pending
+
+HT-VENUE-BOOKING-ATTENTION-DEEPLINK-FIX-01: dashboard v3 BOOKING_MESSAGE carries the exact existing
+BOOKING_THREAD id from the authorized booking/venue/guest join. The operational list and home preview
+open `#/messages?threadId=<id>`; BOOKING_PENDING still opens `#/bookings?bookingId=<id>`.
+The id is neither derived from bookingId nor resolved by creating a conversation. No message text,
+contact or Telegram identity is included in attention. Missing/unsafe thread identity fails closed.
+
+Venue Messages uses the existing exact initial detail operation even outside the capped/filtered
+inventory. An exact initial open focuses that detail once; refresh does not steal focus. Denied or
+foreign targets never fall back to the first conversation. Authorization failures clear old detail.
+The dashboard GET/link do not advance read cursors; authorized detail GET preserves the existing
+booking -> thread -> actor read-marker transaction and message-id snapshot. A later committed message
+remains unread. No new notification, conversation UI, repository or management permission is introduced.
+
 ## Core Rule
 
 Guest communication is split into four different product scenarios. Do not merge them into one generic chat or support workspace.

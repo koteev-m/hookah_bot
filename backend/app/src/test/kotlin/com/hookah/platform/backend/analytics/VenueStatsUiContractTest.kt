@@ -170,6 +170,7 @@ class VenueStatsUiContractTest {
                     "INSERT INTO menu_items(venue_id,category_id,name,price_minor) " +
                         "VALUES ($venue,$category,'Новое имя',99999)",
                 )
+            sql("UPDATE menu_items SET created_at=$stamp '2026-03-01 00:00:00+00' WHERE id=$item")
             for (index in 1..3) {
                 val delivered = if (index <= 2) "$stamp '2026-03-29 12:00:00+00'" else "NULL"
                 val batch =
@@ -266,6 +267,8 @@ class VenueStatsUiContractTest {
                     "VALUES ($venue,'OPEN',1,'Europe/Berlin',$stamp '2026-03-30 00:00:00+00')",
             )
             captures["complete"] = capture()
+            captures["products"] = capture("&section=products")
+            captures["additions"] = capture("&section=additions")
             captures["ordersAtTable"] = capture("&section=orders&tableId=$table")
             captures["seatingsAfterMove"] = capture("&section=seatings&tableId=$moved")
             val period = captures.getValue("complete").jsonObject.getValue("period").jsonObject

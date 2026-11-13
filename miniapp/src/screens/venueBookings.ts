@@ -479,6 +479,7 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
   const disposables: Array<() => void> = []
   let disposed = false
   let isLoading = false
+  let highlightedTarget: string | null = null
   let abortController: AbortController | null = null
   let bookingMessageModal: ReturnType<typeof openBookingMessageModal> | null = null
   let currentBookings: VenueBookingDto[] = []
@@ -508,6 +509,14 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
       (booking) => void seatBooking(booking),
       (booking) => void noShowBooking(booking)
     )
+    const targetId = new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('bookingId')
+    if (targetId && /^\d+$/.test(targetId)) {
+      const target = refs.list.querySelector<HTMLElement>(`[data-booking-id="${targetId}"]`)
+      if (target) {
+        target.dataset.highlighted = 'true'; target.classList.add('order-send-highlight')
+        if (highlightedTarget !== targetId) { highlightedTarget = targetId; target.scrollIntoView({ block: 'start' }) }
+      }
+    }
   }
 
   const loadBookings = async () => {
@@ -524,6 +533,9 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
     if (!result.ok) {
       abortController = null
       setLoading(false)
+      if (result.error.status === 401 || result.error.status === 403) {
+        currentBookings = []; highlightedTarget = null; refs.list.replaceChildren()
+      }
       bookingThreadReconciliation = bookingThreadStates(currentBookings.map((booking) => booking.bookingId), 'ERROR')
       bookingMessageModal?.setReconciliationState(bookingThreadError())
       if (currentBookings.length) renderCurrentBookings()
@@ -547,6 +559,13 @@ export function renderVenueBookingsScreen(options: VenueBookingsOptions) {
           )
           if (disposed || abortController !== controller) return
           if (!reconciliationResult.ok) {
+            if (reconciliationResult.error.status === 401 || reconciliationResult.error.status === 403) {
+              currentBookings = []; highlightedTarget = null; refs.list.replaceChildren()
+              bookingMessageModal?.dispose(); bookingMessageModal = null
+              abortController = null; setLoading(false)
+              renderApiError(refs.status, reconciliationResult.error, isDebug)
+              return
+            }
             throw new Error('Booking thread reconciliation request failed')
           }
           const chunkReconciliation = reconcileBookingThreadItems(
