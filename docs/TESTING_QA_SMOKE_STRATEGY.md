@@ -1,5 +1,44 @@
 # Testing / QA Smoke Strategy
 
+## HT-VENUE-PRODUCTS-CATEGORY-UX-01 — category report validation
+
+LOCAL IMPLEMENTED / REVIEW PENDING. Summary and category totals must precede pagination, merge only
+compatible item ID/currency sources and preserve historical gross, gift uncertainty and exact strings.
+Shared KpiReadModelsH2Test/PostgresTest require the three named product category/grouped cases
+(minima 30/32). They cover >50 items, identical category/item names with different IDs, full totals,
+search/filters/pages, missing price/history, gifts, source dedupe and unlinked historical manual rows.
+Existing accounting EDIT, promotion/loyalty, cancellation/exclusion and query-plan cases stay mandatory.
+R1/R2 add two exact mandatory shared cases: merged item search retains digital/manual aliases,
+separate currencies and distinct IDs through category filters/sort/pages; currency filters keep scoped
+UNKNOWN uncertainty without assigning its units or gross to a known currency. Both assert fingerprints.
+HTTP captures and required live clicks exercise 5 units/500 minor after search and partial RUB/USD;
+UNKNOWN/clear/search/category/zero remain distinct. Browser regressions require real category buttons,
+aria-expanded, first Enter after invalid sort, 400/500/timeout and successful retry at 360/390 px,
+plus rapid disclosure clicks with an ignored-abort stale response. Failed filter application retains
+last successful DOM/scope; access/period boundaries continue to clear private/old data.
+
+
+VenueProductsCategoryPostgresHttpTest (one mandatory exact case) commits real batch writers into
+PostgreSQL, serves real Ktor HTTP and verifies OWNER/MANAGER, denied Staff/Guest/foreign/revoked/
+Platform roles, invalid filters and all-table read-only fingerprints. Its 65 sold items plus unsold
+items exercise full/category/page equalities and different currencies. Live browser handoff uses the
+same unique ignored `VENUE_PRODUCTS_CATEGORY_LIVE_DIR` for the backend test and
+`product categories real PostgreSQL Ktor adapter click through full range` Chromium case. A ready.json
+contains only ephemeral synthetic test context; done releases the backend fingerprint assertion.
+This live run is required in addition to deterministic captured real HTTP fixtures, not replaced by mocks.
+
+All nineteen `venue-products-category.spec.ts` cases are mandatory in PR/main browser inventories with
+missing/skipped negatives in test_analytics_billing_ci.py. Cover initially closed categories, real
+click/category/item/close/other category, page totals, >50 rows, zero/partial/unknown, empty/error/retry,
+search scope, precise large money, long names, keyboard/focus, reload, ignored-abort period races,
+account/venue/revoke. Capture and inspect 360/390/1440 light/dark initial/category/item/partial/empty
+screenshots, including narrow large amounts and long names. No DOM-only visual acceptance.
+
+After stabilization run fresh full backend and Chromium, compile/ktlint, TypeScript/build, seven
+native CI result gates, parser positive/negative checks, portable 72/24/18, exact migration identity
+checks and diff sanity. Keep source hashes and per-run XML/browser provenance. No migration/writer,
+operational monitor/audio, staff-chat, additions or Platform Analytics change is in this task.
+
 ## HT-VENUE-OPERATIONS-STATS-UX-01 — local validation contract
 
 LOCAL IMPLEMENTED / REVIEW PENDING. Required scenarios: A shift tasks + tab-scoped first/append +

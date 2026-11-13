@@ -1214,7 +1214,8 @@
                     "snapshotGrossMinor": "400",
                     "options": [],
                     "catalogCreatedAt": "2026-03-01T00:00:00Z",
-                    "categoryActive": true
+                    "categoryActive": true,
+                    "categoryId": 1
                 }
             ],
             "totalRows": 1,
@@ -1249,6 +1250,330 @@
                 "samples": 0,
                 "unknown": 0,
                 "reason": "ORDER_ADJUSTMENTS_NOT_ALLOCATED"
+            },
+            "summary": {
+                "units": {
+                    "value": "4",
+                    "observedValue": "4",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_PRODUCT_UNITS",
+                    "availability": "AVAILABLE",
+                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                    "samples": 0,
+                    "unknown": 0,
+                    "reason": null
+                },
+                "giftUnits": {
+                    "value": "0",
+                    "observedValue": "0",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_GIFT_UNITS",
+                    "availability": "AVAILABLE",
+                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                    "samples": 0,
+                    "unknown": 0,
+                    "reason": null
+                },
+                "grossAmounts": [
+                    {
+                        "currency": "RUB",
+                        "gross": {
+                            "value": "400",
+                            "observedValue": "400",
+                            "unit": "MINOR",
+                            "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                ]
+            },
+            "categoryOptions": [
+                {
+                    "key": "1",
+                    "id": 1,
+                    "name": "Напитки"
+                }
+            ],
+            "categoryTotals": [
+                {
+                    "category": {
+                        "key": "1",
+                        "id": 1,
+                        "name": "Напитки"
+                    },
+                    "totals": {
+                        "units": {
+                            "value": "4",
+                            "observedValue": "4",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_PRODUCT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "giftUnits": {
+                            "value": "0",
+                            "observedValue": "0",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_GIFT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "grossAmounts": [
+                            {
+                                "currency": "RUB",
+                                "gross": {
+                                    "value": "400",
+                                    "observedValue": "400",
+                                    "unit": "MINOR",
+                                    "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                                    "availability": "AVAILABLE",
+                                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                                    "samples": 0,
+                                    "unknown": 0,
+                                    "reason": null
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "categoryPage": null
+        },
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    },
+    "productsCategory": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-10T12:00:00Z",
+        "period": {
+            "from": "2026-03-27T23:00:00Z",
+            "to": "2026-03-30T22:00:00Z",
+            "timezone": "Europe/Berlin",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "products",
+        "tableId": null,
+        "metrics": {},
+        "breakdowns": {},
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "products": {
+            "rows": [
+                {
+                    "itemId": 1,
+                    "name": "Чай из заказа",
+                    "category": "Напитки",
+                    "currentlyAvailable": true,
+                    "source": "DIGITAL_DELIVERY",
+                    "currency": "RUB",
+                    "units": "4",
+                    "giftUnits": "0",
+                    "nonGiftUnits": "4",
+                    "snapshotGrossMinor": "400",
+                    "options": [],
+                    "catalogCreatedAt": "2026-03-01T00:00:00Z",
+                    "categoryActive": true,
+                    "categoryId": 1
+                }
+            ],
+            "totalRows": 1,
+            "page": 1,
+            "pageSize": 50,
+            "categories": [
+                "Напитки"
+            ],
+            "currencies": [
+                "RUB"
+            ],
+            "coverage": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "CONFIRMED_ITEMS_AND_MANUAL_SALES",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "unassignedManualUnits": "0",
+            "basis": "ITEM_FULFILLED_OR_BATCH_FIRST_DELIVERED_AT;MANUAL_SALE_CREATED_AT",
+            "netAmount": {
+                "value": null,
+                "observedValue": null,
+                "unit": "COUNT",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "ORDER_ADJUSTMENTS_NOT_ALLOCATED"
+            },
+            "summary": {
+                "units": {
+                    "value": "4",
+                    "observedValue": "4",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_PRODUCT_UNITS",
+                    "availability": "AVAILABLE",
+                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                    "samples": 0,
+                    "unknown": 0,
+                    "reason": null
+                },
+                "giftUnits": {
+                    "value": "0",
+                    "observedValue": "0",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_GIFT_UNITS",
+                    "availability": "AVAILABLE",
+                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                    "samples": 0,
+                    "unknown": 0,
+                    "reason": null
+                },
+                "grossAmounts": [
+                    {
+                        "currency": "RUB",
+                        "gross": {
+                            "value": "400",
+                            "observedValue": "400",
+                            "unit": "MINOR",
+                            "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                ]
+            },
+            "categoryOptions": [
+                {
+                    "key": "1",
+                    "id": 1,
+                    "name": "Напитки"
+                }
+            ],
+            "categoryTotals": [
+                {
+                    "category": {
+                        "key": "1",
+                        "id": 1,
+                        "name": "Напитки"
+                    },
+                    "totals": {
+                        "units": {
+                            "value": "4",
+                            "observedValue": "4",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_PRODUCT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "giftUnits": {
+                            "value": "0",
+                            "observedValue": "0",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_GIFT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "grossAmounts": [
+                            {
+                                "currency": "RUB",
+                                "gross": {
+                                    "value": "400",
+                                    "observedValue": "400",
+                                    "unit": "MINOR",
+                                    "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                                    "availability": "AVAILABLE",
+                                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                                    "samples": 0,
+                                    "unknown": 0,
+                                    "reason": null
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "categoryPage": {
+                "key": "1",
+                "page": 1,
+                "totalRows": 1,
+                "rows": [
+                    {
+                        "itemId": 1,
+                        "name": "Чай из заказа",
+                        "currency": "RUB",
+                        "units": {
+                            "value": "4",
+                            "observedValue": "4",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_PRODUCT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "gross": {
+                            "value": "400",
+                            "observedValue": "400",
+                            "unit": "MINOR",
+                            "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "sources": [
+                            {
+                                "itemId": 1,
+                                "name": "Чай из заказа",
+                                "category": "Напитки",
+                                "currentlyAvailable": true,
+                                "source": "DIGITAL_DELIVERY",
+                                "currency": "RUB",
+                                "units": "4",
+                                "giftUnits": "0",
+                                "nonGiftUnits": "4",
+                                "snapshotGrossMinor": "400",
+                                "options": [],
+                                "catalogCreatedAt": "2026-03-01T00:00:00Z",
+                                "categoryActive": true,
+                                "categoryId": 1
+                            }
+                        ]
+                    }
+                ],
+                "pageSize": 50
             }
         },
         "limitations": [

@@ -251,7 +251,8 @@ class AnalyticsBillingCiTest(unittest.TestCase):
         self.scenario(self.edit(name, lambda s: s.set('tests', '15')))
 
     def test_operations_postgres_http_is_mandatory_and_cannot_be_skipped(self):
-        for name in ('com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest',
+        for name in ('com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest',
+                     'com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest',
                      'com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest'):
             self.assertEqual(self.inventory['required_minimums'][name], 1)
             self.scenario(lambda reports, marker, env: (reports / f'TEST-{name}.xml').unlink())
@@ -264,8 +265,8 @@ class AnalyticsBillingCiTest(unittest.TestCase):
             name = f'com.hookah.platform.backend.analytics.KpiReadModels{suffix}Test'
             cases = {case for case in self.inventory['required_test_names'][name]
                      if case.startswith(('accounting EDIT', 'ambiguous accounting', 'completed additions',
-                                         'booking attention'))}
-            self.assertEqual(len(cases), 4)
+                                         'booking attention', 'product category', 'product grouped', 'product search', 'product currency'))}
+            self.assertEqual(len(cases), 9)
             for case in cases:
                 def replace(suite):
                     target = next(t for t in suite.findall('testcase') if t.get('name').removesuffix('()') == case)
@@ -285,8 +286,8 @@ class AnalyticsBillingCiTest(unittest.TestCase):
         specs = [{'file': file, 'title': title,
                   'tests': [{'status': 'expected', 'expectedStatus': 'passed', 'results': [{'status': 'passed'}]}
                             for _ in range(count)]} for (file, title), count in inventory.items()]
-        reviews = [index for index, spec in enumerate(specs) if spec['title'].startswith('review F') or spec['file'] == 'venue-booking-attention.spec.ts']
-        self.assertEqual(len(reviews), 8)
+        reviews = [index for index, spec in enumerate(specs) if spec['title'].startswith('review F') or spec['file'] in {'venue-booking-attention.spec.ts', 'venue-products-category.spec.ts'}]
+        self.assertEqual(len(reviews), 27)
         minimum = next(ast.literal_eval(node.value) for node in ast.parse(code).body
                        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
                        and node.targets[0].id == 'minimum_executed')

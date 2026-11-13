@@ -91,6 +91,8 @@ internal data class KpiRequest(
     val currency: String? = null,
     val sort: String = "popular",
     val page: Int = 1,
+    val categoryKey: String? = null,
+    val expandedCategoryKey: String? = null,
 ) {
     fun window(
         zone: ZoneId,

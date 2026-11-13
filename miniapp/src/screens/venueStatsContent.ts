@@ -1,3 +1,4 @@
+import { renderVenueProducts, type ProductsView } from './venueProducts'
 import type { FinancialKpis, KpiBucket, KpiValue, VenueKpiSnapshot } from '../shared/api/venueStatsApi'
 import { append, el } from '../shared/ui/dom'
 import { exactCount, exactMoney, formatDuration, formatRatio } from '../shared/ui/venueStatsFormat'
@@ -169,7 +170,7 @@ function financeGroups(groups: FinancialKpis[], provisional: boolean) {
   return root
 }
 
-export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview' | 'products' | 'additions' | 'finance' | 'service'): HTMLElement {
+export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview' | 'products' | 'additions' | 'finance' | 'service', productsView?: ProductsView): HTMLElement {
   const root = el('div', { className: 'stats-sections' })
   const m = snapshot.metrics
   if (view === 'overview') {
@@ -183,26 +184,7 @@ export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview'
     ], m))
     return root
   }
-  if (view === 'products') {
-    const report = snapshot.products
-    root.append(el('h2', { text: 'Товары' }), el('p', { className: 'stats-notice', text: 'Цифровые позиции — по подтверждённому времени выдачи. Ручные продажи — отдельный источник по дате записи продажи. Это разные основания периода; они не совпадают с итогами закрытых смен.' }))
-    if (!report) { root.append(el('p', { text: 'Товарный отчёт недоступен. Обновите приложение и сервер.' })); return root }
-    if (report.coverage.availability !== 'AVAILABLE') root.append(el('p', { className: 'stats-warning', text: 'Часть товарных данных не подтверждена: состав, цена, источник или время.' }))
-    root.append(el('p', { className: 'stats-note', text: 'Стоимость показана до общих скидок и сборов. Итоговая сумма по товарам не распределена.' }))
-    root.append(calculation('Единицы сгруппированы по карточке товара, одинаковые названия не объединяются. Исключённые и отменённые позиции не включаются. Стоимость до скидок берётся из исторической цены и опций. Скидки, сборы и общие корректировки не распределяются по товарам; Итог после общих корректировок по товарам недоступен. Категории и доступность показывают текущую карточку, а не всю историю. Подарочные единицы не означают оплату. Строки с неподтверждённым видом продажи, количеством или ценой в отчёт не включаются; полнота отмечена отдельно.'))
-    for (const row of report.rows) {
-      const card = el('article', { className: 'card stats-product-row' }); card.dataset.itemId = String(row.itemId)
-      append(card, el('h3', { text: row.name }), el('p', { text: `${row.category} · ${row.source === 'MANUAL_SALE' ? 'Ручная продажа' : 'Подтверждённая выдача'} · ${row.currentlyAvailable ? 'В меню включён сейчас' : 'Сейчас недоступен'} ` }),
-        el('p', { text: row.units === '0' ? report.coverage.availability === 'AVAILABLE' ? 'За период нет зарегистрированных выдач. Доступность весь период не подтверждается.' : 'Нет подтверждённых продаж в доступных данных.' : `Единиц: ${exactCount(row.units)} · ${row.giftUnits === null || row.nonGiftUnits === null ? 'Количество подарочных единиц не подтверждено' : `без подарков: ${exactCount(row.nonGiftUnits)} · подарочных: ${exactCount(row.giftUnits)}`}` }),
-        el('p', { text: `Стоимость до скидок: ${row.snapshotGrossMinor == null || (row.units === '0' && report.coverage.availability !== 'AVAILABLE') ? 'Недостаточно данных' : exactMoney(row.snapshotGrossMinor, row.currency)}` }))
-      if (row.catalogCreatedAt) card.append(el('p', { className: 'stats-note', text: `Карточка создана: ${new Date(row.catalogCreatedAt).toLocaleDateString('ru-RU', { timeZone: snapshot.period.timezone })}${Date.parse(row.catalogCreatedAt) >= Date.parse(snapshot.period.from) && Date.parse(row.catalogCreatedAt) < Date.parse(snapshot.period.to) ? ' · новая за период' : ''}${row.categoryActive === false ? ' · категория скрыта' : ''}` }))
-      if (row.options.length) { const details = el('details'); append(details, el('summary', { text: 'Варианты и опции' }), el('p', { text: row.options.join(', ') })); card.append(details) }
-      root.append(card)
-    }
-    if (!report.rows.length) root.append(el('p', { text: 'По выбранным условиям товары не найдены.' }))
-    root.append(el('p', { className: 'stats-note', text: `Неразнесённые единицы ручных продаж: ${exactCount(report.unassignedManualUnits)}. Товар по названию не угадывается.` }))
-    return root
-  }
+  if (view === 'products') return renderVenueProducts(snapshot, productsView)
   if (view === 'additions') {
     root.append(group('Дозаказы', 'Только завершённые счета в заказах, закрытых в период. Даты относятся к закрытию заказа, а не счёта. Личные и общие счета считаются отдельно. Закрытие не означает оплату.', [
       ['additions.completedTabs', 'Счета с выполненными позициями', 'Счета со статусом «Закрыт» в закрытых заказах, хотя бы с одной подтверждённой выдачей.'],
