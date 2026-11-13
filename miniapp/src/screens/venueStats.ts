@@ -20,8 +20,10 @@ type VenueStatsOptions = {
 }
 const periods: [StatsPreset, string][] = [['today', 'Сегодня'], ['7d', 'Последние 7 дней'],
   ['30d', 'Последние 30 дней'], ['custom', 'Произвольный период']]
-const sections: [StatsSection, string][] = [['all', 'Все разделы'], ['orders', 'Заказы'], ['finance', 'Финансы'],
-  ['bookings', 'Бронирования'], ['seatings', 'Посадки'], ['calls', 'Вызовы персонала']]
+type StatsView = 'overview' | 'products' | 'additions' | 'finance' | 'service'
+const sections: [StatsView, string][] = [['overview', 'Обзор'], ['products', 'Товары'], ['additions', 'Дозаказы'], ['finance', 'Финансы'], ['service', 'Обслуживание']]
+const serverSection = (view: string): StatsSection => view === 'overview' || view === 'service' ? 'all' : view as StatsSection
+
 const operational = (section: StatsSection) => ['orders', 'bookings', 'seatings', 'calls'].includes(section)
 
 export function renderVenueStatsScreen(options: VenueStatsOptions) {
@@ -36,7 +38,7 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
   const deps = { isDebug, getAccessToken, clearSession }
   const wrapper = el('div', { className: 'venue-stats' })
   const header = el('section', { className: 'card stats-header' })
-  append(header, el('p', { className: 'stats-eyebrow', text: 'Заведение · аналитика' }), el('h2', { text: 'Статистика' }),
+  append(header, el('h2', { text: 'Статистика' }),
     el('p', { className: 'stats-venue-name', text: access.venueName?.trim() || 'Текущее заведение' }))
   const controls = el('div', { className: 'stats-controls' })
   const periodRow = el('div', { className: 'venue-stats-periods' }); periodRow.setAttribute('aria-label', 'Период статистики')
@@ -58,12 +60,28 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
   const section = el('select'); section.id = 'stats-section'
   sections.forEach(([value, label]) => section.add(new Option(label, value)))
   const sectionLabel = el('label', { text: 'Показатели' }); sectionLabel.htmlFor = section.id; sectionLabel.append(section)
+  const serviceKind = el('select'); serviceKind.id = 'stats-service-kind'
+  for (const [value, label] of [['all', 'Все подробности'], ['orders', 'Заказы'], ['bookings', 'Бронирования'], ['seatings', 'Посадки'], ['calls', 'Вызовы']]) serviceKind.add(new Option(label, value))
+  const serviceLabel = el('label', { text: 'Показатели обслуживания' }); serviceLabel.htmlFor = serviceKind.id; serviceLabel.append(serviceKind); serviceLabel.hidden = true
+  const selectedSection = () => section.value === 'service' ? serviceKind.value as StatsSection : serverSection(section.value)
   const table = el('select'); table.id = 'stats-table'; table.add(new Option('Все столы', ''))
   const tableLabel = el('label', { text: 'Текущий стол' }); tableLabel.htmlFor = table.id; tableLabel.append(table); tableLabel.hidden = true
+  const productControls = el('details', { className: 'stats-product-controls' }); productControls.hidden = true
+  const productFilters = el('form', { className: 'stats-product-filters' })
+  append(productControls, el('summary', { text: 'Поиск и фильтры товаров' }), productFilters)
+  const search = el('input'); search.type = 'search'; search.maxLength = 100; search.placeholder = 'Поиск товара'
+  search.setAttribute('aria-label', 'Поиск товара')
+  const category = el('select'); category.setAttribute('aria-label', 'Категория товаров'); category.add(new Option('Все категории', ''))
+  const currency = el('select'); currency.setAttribute('aria-label', 'Валюта товаров'); currency.add(new Option('Все валюты', ''))
+  const sort = el('select'); sort.setAttribute('aria-label', 'Сортировка товаров')
+  for (const [value, label] of [['popular', 'Популярные'], ['rare', 'Редко заказываемые и без выдач'], ['amount', 'По стоимости до скидок']]) sort.add(new Option(label, value))
+  const find = el('button', { text: 'Найти товары' }); find.type = 'submit'
+  append(productFilters, search, category, currency, sort, find)
+  let page = 1
   const refresh = el('button', { className: 'button-secondary', text: 'Обновить статистику' }); refresh.type = 'button'
-  append(filterRow, sectionLabel, tableLabel, refresh)
+  append(filterRow, sectionLabel, serviceLabel, tableLabel, refresh)
   const tableNotice = el('p', { className: 'stats-note' }); tableNotice.hidden = true
-  append(controls, periodRow, form, filterRow, tableNotice)
+  append(controls, periodRow, form, filterRow, productControls, tableNotice, validation)
   const metadata = el('div', { className: 'stats-metadata' }); append(header, controls, metadata)
   const status = el('p', { className: 'status stats-load-status' }); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
   const skeleton = el('div', { className: 'stats-skeleton' }); skeleton.setAttribute('aria-hidden', 'true'); skeleton.hidden = true
@@ -119,18 +137,29 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
     metadata.replaceChildren(el('p', { text: `Период: ${formatCalendarDate(start)} — ${formatCalendarDate(end)} включительно` }),
       el('p', { text: `Часовой пояс: ${data.period.timezone}` }), el('p', { text: `Данные на ${refreshed}` }))
     const metrics = [...Object.values(data.metrics), ...data.closedShiftFinances.flatMap(group => Object.values(group.metrics)),
-      ...data.openShiftFinances.flatMap(group => Object.values(group.metrics))]
+      ...data.openShiftFinances.flatMap(group => Object.values(group.metrics)), ...(data.products ? [data.products.coverage] : [])]
     const partial = metrics.some(value => value.availability === 'PARTIAL' || value.coverage === 'PARTIAL')
     summary.dataset.coverage = partial ? 'partial' : 'complete'
-    summary.replaceChildren(el('strong', { text: partial ? 'Частичные данные' : 'Статистика по сохранённым операциям' }),
-      el('p', { text: partial ? 'Не все операции можно учесть полностью. Подтверждённые значения и ограничения указаны у каждого показателя.'
-        : 'Пустые выборки и показатели без достаточных данных отмечены отдельно. Отсутствие старой истории не означает нулевую активность.' }))
-    if (metrics.some(value => value.reason === 'LEGACY_HISTORY_UNKNOWN')) summary.append(el('p', { text: 'Часть старых операций не содержит точного времени.' }))
+    summary.replaceChildren(...(partial ? [el('strong', { text: 'Частичные данные' }), el('p', { text: 'Не все операции можно учесть полностью. Ограничения указаны у показателей.' })]
+      : [el('p', { text: 'По сохранённым операциям. Показатели без достаточных данных отмечены отдельно.' })]))
+    if (metrics.some(value => value !== data.products?.coverage && value.reason === 'LEGACY_HISTORY_UNKNOWN')) summary.append(el('p', { text: 'Часть старых операций не содержит точного времени.' }))
     if (data.limitations.includes('VENUE_TIMEZONE_FALLBACK')) summary.append(el('p', { text: 'Часовой пояс заведения не настроен или недоступен. Используется указанный сервером резервный часовой пояс.' }))
     const known = ['RECORDED_DOMAIN_FACTS_ONLY', 'STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS', 'CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW',
       'VOID_PAYMENT_NOT_REFUND', 'SEATINGS_NOT_UNIQUE_PEOPLE', 'VENUE_TIMEZONE_FALLBACK']
     if (data.limitations.some(value => !known.includes(value))) summary.append(el('p', { text: 'Сервер сообщил дополнительные ограничения расчёта. Полноту данных пока нельзя подтвердить.' }))
-    summary.hidden = false; content.replaceChildren(renderStatsContent(data)); stopLoading(); status.textContent = ''
+    summary.hidden = false; content.replaceChildren(renderStatsContent(data, section.value as StatsView))
+    if (data.products) {
+      for (const [select, values] of [[category, data.products.categories], [currency, data.products.currencies]] as const) {
+        const currentValue = select.value
+        while (select.options.length > 1) select.remove(1)
+        values.forEach(value => select.add(new Option(value, value))); select.value = currentValue
+      }
+      const pages = el('div', { className: 'button-row' })
+      const previous = el('button', { text: 'Предыдущие товары' }); previous.disabled = page <= 1
+      const next = el('button', { text: 'Следующие товары' }); next.disabled = page * data.products.pageSize >= data.products.totalRows
+      previous.onclick = () => { page--; void load() }; next.onclick = () => { page++; void load() }
+      append(pages, previous, el('span', { text: `Страница ${page} · строк ${data.products.totalRows}` }), next); content.append(pages)
+    }; stopLoading(); status.textContent = ''
   }
   const load = async (correction = 0): Promise<void> => {
     if (disposed || denied || !active || document.hidden) return
@@ -160,8 +189,9 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
       const invalid = periodValidation(from.value, to.value)
       from.setAttribute('aria-invalid', String(Boolean(invalid))); to.setAttribute('aria-invalid', String(Boolean(invalid)))
       if (invalid) { validation.textContent = invalid; stopLoading(); status.textContent = ''; return }
-      const query = { venueId, from: from.value, to: shiftCalendarDate(to.value, 1), section: section.value as StatsSection,
-        ...(operational(section.value as StatsSection) && table.value ? { tableId: Number(table.value) } : {}) }
+      const query = { venueId, from: from.value, to: shiftCalendarDate(to.value, 1), section: selectedSection(),
+        ...(section.value === 'products' ? { search: search.value.trim(), category: category.value, currency: currency.value, sort: sort.value, page } : {}),
+        ...(operational(selectedSection()) && table.value ? { tableId: Number(table.value) } : {}) }
       const result = await venueGetStatsV1(backendUrl, query, deps, request.signal)
       if (!current(seq)) { if (!currentActor()) loseAccess('changed'); return }
       if (!result.ok) { if (result.error.code !== REQUEST_ABORTED_CODE || timedOut) fail(result.error, timedOut); return }
@@ -194,17 +224,18 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
     tablesLoaded = true; table.disabled = false
   }
   const disposables = buttons.map((button, index) => on(button, 'click', () => {
-    preset = periods[index][0]; activePeriod(); form.hidden = preset !== 'custom'; validation.textContent = ''
+    preset = periods[index][0]; page = 1; activePeriod(); form.hidden = preset !== 'custom'; validation.textContent = ''
     if (preset === 'custom') { abort(); clearView(); error.hidden = true; status.textContent = 'Выберите даты и нажмите «Показать период».'; from.focus() }
     else void load()
   }))
-  disposables.push(on(form, 'submit', event => { event.preventDefault(); void load() }), on(refresh, 'click', () => void load()),
+  disposables.push(on(productFilters, 'submit', event => { event.preventDefault(); page = 1; if (sort.value === 'amount' && !currency.value) { validation.textContent = 'Выберите одну валюту для сортировки по стоимости.'; return }; void load() }), on(form, 'submit', event => { event.preventDefault(); page = 1; void load() }), on(refresh, 'click', () => void load()),
     on(section, 'change', () => {
-      table.value = ''; tableLabel.hidden = !operational(section.value as StatsSection); tableNotice.hidden = tableLabel.hidden
+      page = 1; productControls.hidden = section.value !== 'products'; serviceLabel.hidden = section.value !== 'service'
+      table.value = ''; tableLabel.hidden = !operational(selectedSection()); tableNotice.hidden = tableLabel.hidden
       tableNotice.textContent = 'Фильтр относится только к выбранным показателям и текущему столу. Прошлые перемещения не восстанавливаются.'
       if (!tableLabel.hidden) void loadTables()
       void load()
-    }), on(table, 'change', () => void load()), ...[from, to].map(input => on(input, 'input', () => {
+    }), on(serviceKind, 'change', () => { table.value = ''; tableLabel.hidden = !operational(selectedSection()); tableNotice.hidden = tableLabel.hidden; if (!tableLabel.hidden) void loadTables(); void load() }), on(table, 'change', () => void load()), ...[from, to].map(input => on(input, 'input', () => {
       abort(); clearView(); error.hidden = true; validation.textContent = ''; status.textContent = 'Нажмите «Показать период», чтобы применить даты.'
     })))
   const resume = () => {

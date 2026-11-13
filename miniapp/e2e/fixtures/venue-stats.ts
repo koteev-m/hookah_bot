@@ -24,7 +24,8 @@ export function midnight(date: string, timezone: string): string {
 }
 
 export function statsResponse(url: URL, options: { variant?: StatsVariant; timezone?: string; asOf?: string } = {}): VenueKpiSnapshot {
-  const response = structuredClone(statsHttp[options.variant ?? 'complete'])
+  const selected = url.searchParams.get('section')
+  const response = structuredClone(statsHttp[(selected === 'products' || selected === 'additions' ? selected : options.variant ?? 'complete') as StatsVariant])
   const timezone = options.timezone ?? response.period.timezone
   response.venueId = Number(url.pathname.split('/')[3])
   response.section = (url.searchParams.get('section') ?? 'all') as StatsSection
@@ -33,7 +34,7 @@ export function statsResponse(url: URL, options: { variant?: StatsVariant; timez
   response.period = { from: midnight(url.searchParams.get('from')!, timezone), to: midnight(url.searchParams.get('to')!, timezone),
     timezone, interval: '[from,to)' }
   const prefixes: Record<StatsSection, string[]> = { all: [], orders: ['orders.', 'batches.', 'items.'], finance: ['finance.'],
-    bookings: ['bookings.'], seatings: ['seatings.'], calls: ['calls.'] }
+    bookings: ['bookings.'], seatings: ['seatings.'], calls: ['calls.'], products: [], additions: ['additions.'] }
   if (response.section !== 'all') {
     const filter = (key: string) => prefixes[response.section].some(prefix => key.startsWith(prefix))
     response.metrics = Object.fromEntries(Object.entries(response.metrics).filter(([key]) => filter(key)))

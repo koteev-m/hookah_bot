@@ -41,6 +41,13 @@ internal class KpiRepository(private val dataSource: DataSource?, private val cl
             val window = request.window(zone, clock.instant())
             val collector = KpiCollector(c, window)
             collector.venueOperations(venueId, request)
+            val products =
+                if (request.section == "products") {
+                    collector.products(venueId, request)
+                } else {
+                    null
+                }
+            if (request.section == "additions") collector.additions(venueId)
             val financials =
                 if (request.section in setOf("all", "finance")) {
                     collector.finances(
@@ -51,7 +58,8 @@ internal class KpiRepository(private val dataSource: DataSource?, private val cl
                 }
             KpiSnapshot(
                 asOf = window.asOf.toString(), period = window.dto(), venueId = venueId, section = request.section,
-                tableId = request.tableId, metrics = collector.metrics, breakdowns = collector.breakdowns,
+                tableId = request.tableId, metrics = collector.metrics,
+                breakdowns = collector.breakdowns, products = products,
                 closedShiftFinances = financials.first, openShiftFinances = financials.second,
                 limitations =
                     listOf(

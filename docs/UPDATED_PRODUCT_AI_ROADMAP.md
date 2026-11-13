@@ -1,5 +1,14 @@
 # Product + Telegram AI Bots Roadmap
 
+## HT-VENUE-OPERATIONS-STATS-UX-01 — local follow-up
+
+Рабочий обзор/звук, точные отправки по счёту, radar staff-chat, товары и дозаказы локально реализованы
+в существующем Analytics & Statistics; LOCAL IMPLEMENTED / REVIEW PENDING.
+Это развитие действующих VENUE-STATS-ADVANCED-001 и операционного UX, без нового roadmap/ledger.
+D1–D4 и Platform Analytics сохраняются. Широкая event coverage остаётся backlog.
+Публикация, staging, device sound и реальная Telegram-доставка этой доработки не выполнялись.
+
+
 ## Analytics & Statistics — stages 1–4 local candidate
 
 `HT-ANALYTICS-KPI-READMODELS-IMPLEMENT-01`: **LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS**,

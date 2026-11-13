@@ -1,8 +1,10 @@
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { statsHttp, statsResponse, type StatsVariant } from './fixtures/venue-stats'
 import { calendarDateAt, exactMoney, formatRatio, periodValidation, presetDates, shiftCalendarDate, validCalendarDate } from '../src/shared/ui/venueStatsFormat'
 
-type Options = { role?: string; variant?: StatsVariant; timezone?: string; asOf?: string; shell?: boolean; ignoreAbort?: boolean }
+type Options = { role?: string; variant?: StatsVariant; timezone?: string; asOf?: string; shell?: boolean; ignoreAbort?: boolean; overview?: boolean; live?: { base: string; token: string } }
 async function fixture(page: Page, options: Options = {}) {
   let variant = options.variant ?? 'complete'
   let role = options.role ?? 'OWNER'
@@ -42,6 +44,11 @@ async function fixture(page: Page, options: Options = {}) {
     })) } })
     if (url.pathname === '/api/venue/tables') return route.fulfill(tableFailure ? { status: 503, json: {} } : { json: { tables: [1, 2].map(tableId => ({ tableId, tableNumber: tableId, tableLabel: `Стол ${tableId}`, isActive: true })) } })
     if (/\/stats\/v1$/.test(url.pathname)) {
+      if (options.live) {
+        requests.push(url)
+        const result = await route.fetch({ url: options.live.base + url.pathname + url.search, headers: { Authorization: `Bearer ${options.live.token}` } })
+        return route.fulfill({ response: result })
+      }
       requests.push(url)
       expect(route.request().headers().authorization).toMatch(/^Bearer /)
       const body = statsResponse(url, { ...options, variant }); corrupt?.(body)
@@ -53,12 +60,17 @@ async function fixture(page: Page, options: Options = {}) {
     return route.fulfill({ json: { items: [], unreadCount: 0 } })
   })
   await page.goto(`stats-test?venueId=1${options.shell ? '#/stats' : ''}`)
+  if (!options.overview && !options.shell && ['OWNER', 'MANAGER'].includes(role)) {
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('service')
+    await expect(page.locator('.stats-service-details').first()).toBeAttached()
+    await page.locator('.stats-service-details').evaluateAll(nodes => nodes.forEach(node => { (node as HTMLDetailsElement).open = true }))
+  }
   return { requests, mutations: () => mutations, setVariant(value: StatsVariant) { variant = value }, fail(value: number) { failure = value },
     hold(value: Promise<void> | null) { hold = value }, setRole(value: string) { role = value }, failTables() { tableFailure = true },
     corrupt(value: typeof corrupt) { corrupt = value } }
 }
 const metric = (page: Page, key: string) => page.locator(`[data-kpi="${key}"]`)
-const ready = (page: Page) => expect(page.locator('.stats-content .stats-section').first()).toBeVisible()
+const ready = async (page: Page) => { await expect(page.locator('.stats-content .stats-section').first()).toBeAttached(); await page.locator('.stats-service-details').evaluateAll(nodes => nodes.forEach(node => { (node as HTMLDetailsElement).open = true })); await expect(page.locator('.stats-content .stats-section').first()).toBeVisible() }
 const moneyNumber = (value: string) => value.replace(/[^\d,−-]/g, '').replace('−', '-')
 const refresh = (page: Page) => page.getByRole('button', { name: 'Обновить статистику', exact: true }).click()
 async function deliverLate(page: Page, url: URL, release: () => void) {
@@ -171,6 +183,7 @@ test('stats complete empty counters differ from unavailable attendance and mean 
   await expect(metric(page, 'orders.created')).toContainText('За выбранный период событий нет.')
   await expect(metric(page, 'bookings.attendance').locator('.stats-value')).toHaveText('Недостаточно данных')
   await expect(metric(page, 'calls.firstResponse').locator('.stats-value')).toHaveText('Недостаточно данных')
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
   await expect(page.getByText('За выбранный период закрытых смен нет.')).toBeVisible()
   await expect(page.locator('.stats-currency')).toHaveCount(0)
 })
@@ -181,6 +194,7 @@ test('stats partial history exposes observed subset samples and unknown without 
   await expect(metric(page, 'batches.accepted')).toContainText('По известным данным: 3')
   await expect(metric(page, 'batches.accepted')).toContainText('Без полной истории: 3')
   await expect(page.locator('.stats-coverage')).toContainText('Часть старых операций не содержит точного времени.')
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
   await expect(page.locator('#stats-finance')).toContainText('Не все отчёты смен доступны или полны.')
   await expect(page.locator('.venue-stats')).not.toContainText(/LEGACY_HISTORY_UNKNOWN|SHIFT_CLOSED_AT|BATCH_CREATED|SQL_SECRET/)
 })
@@ -251,6 +265,7 @@ for (const code of [401, 403]) test(`stats access loss ${code} clears data and d
 
 for (const role of ['OWNER', 'MANAGER']) test(`stats ${role} can read management data without mutations`, async ({ page }) => {
   const api = await fixture(page, { role }); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
   await expect(page.getByRole('heading', { name: 'Финансовые итоги закрытых смен', exact: true })).toBeVisible()
   expect(api.mutations()).toBe(0)
 })
@@ -264,7 +279,7 @@ for (const role of ['STAFF', 'GUEST', 'PLATFORM_OWNER']) test(`stats ${role} has
 test('stats filters apply table only within an operational section and preserve finance scope', async ({ page }) => {
   const api = await fixture(page); await ready(page)
   await expect(page.getByLabel('Текущий стол')).toBeHidden()
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('orders'); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели обслуживания', exact: true }).selectOption('orders'); await ready(page)
   await page.getByLabel('Текущий стол').selectOption('2'); await ready(page)
   expect(api.requests.at(-1)?.searchParams.get('section')).toBe('orders'); expect(api.requests.at(-1)?.searchParams.get('tableId')).toBe('2')
   await expect(page.getByText(/Прошлые перемещения не восстанавливаются/)).toBeVisible()
@@ -276,7 +291,7 @@ test('stats filters apply table only within an operational section and preserve 
 
 test('stats missing table capability keeps unfiltered results and explains the unavailable filter', async ({ page }) => {
   const api = await fixture(page); await ready(page); api.failTables()
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('calls'); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели обслуживания', exact: true }).selectOption('calls'); await ready(page)
   await expect(page.getByText(/Фильтр по столу сейчас недоступен/)).toBeVisible()
   expect(api.requests.at(-1)?.searchParams.has('tableId')).toBe(false)
 })
@@ -331,9 +346,11 @@ test('stats Telegram deactivate hides private data and activated reloads a curre
 for (const [currency, expected] of [['IQD', '12,345'], ['MGA', '123,45']]) {
   test(`stats money real Ktor H2 ${currency} response passes adapter and renders ISO minor units`, async ({ page }) => {
     await fixture(page, { variant: 'money' }); await ready(page)
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
     const response = page.waitForResponse(value => value.url().includes('from=2026-03-28') && value.url().includes('/stats/v1'))
     await custom(page, '2026-03-28', '2026-03-30'); await ready(page)
-    expect(await (await response).json()).toEqual(statsHttp.money)
+    const actualResponse = await response
+    expect(await actualResponse.json()).toEqual(statsResponse(new URL(actualResponse.url()), { variant: 'money' }))
     const group = statsHttp.money.closedShiftFinances.find(group => group.currency === currency)!
     expect(group.metrics.accrued.value).toBe('12345')
     const value = page.locator(`#stats-finance [data-currency="${currency}"] [data-kpi="accrued"] .stats-value`)
@@ -381,3 +398,111 @@ for (const [width, theme] of [[1440, 'light'], [360, 'dark']] as const) {
     await page.screenshot({ path: finance }); await info.attach('finance', { path: finance, contentType: 'image/png' })
   })
 }
+
+for (const width of [360, 390, 1440]) for (const theme of ['light', 'dark']) {
+  test(`operations stats focused overview and product read model ${width} ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 680 })
+    await page.emulateMedia({ colorScheme: theme as 'light' | 'dark' })
+    const api = await fixture(page, { overview: true })
+    await ready(page)
+    await expect(page.locator('html')).toHaveAttribute('data-color-scheme', theme)
+    await expect(page.getByRole('combobox', { name: 'Показатели', exact: true })).toHaveValue('overview')
+    await expect(page.locator('.stats-content [data-kpi]')).toHaveCount(5)
+    await expect(page.locator('#stats-finance')).toHaveCount(0)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`overview-${width}-${theme}.png`), fullPage: true })
+    await page.getByRole('button', { name: 'Последние 7 дней' }).click(); await ready(page)
+    const from = api.requests.at(-1)!.searchParams.get('from')
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('products')
+    await expect(page.locator('.stats-product-row')).toHaveCount(statsHttp.products.products!.rows.length)
+    expect(api.requests.at(-1)!.searchParams.get('from')).toBe(from)
+    await expect(page.getByText('Чай из заказа', { exact: true })).toBeVisible()
+    await expect(page.getByText(/Единиц: 4/)).toBeVisible()
+    if (width === 360) api.corrupt(body => {
+      if (body.products?.rows[0]) {
+        body.products.rows[0].name = 'Чай — длинное историческое название товара '.repeat(5)
+        body.products.rows[0].snapshotGrossMinor = '27670116110564327646'
+      }
+    })
+    if (width === 390 && theme === 'dark') api.corrupt(body => {
+      if (!body.products) return
+      Object.assign(body.products.coverage, { value: null, observedValue: '0', availability: 'PARTIAL', coverage: 'PARTIAL', unknown: 2, reason: 'LEGACY_HISTORY_UNKNOWN' })
+      body.products.rows.forEach(row => Object.assign(row, { units: '0', giftUnits: '0', nonGiftUnits: '0', snapshotGrossMinor: '0' }))
+    })
+    await page.getByText('Поиск и фильтры товаров', { exact: true }).click()
+    await page.getByLabel('Поиск товара').fill('Чай')
+    await page.getByRole('button', { name: 'Найти товары' }).click()
+    await expect.poll(() => api.requests.at(-1)?.searchParams.get('search')).toBe('Чай')
+    await expect(page.getByLabel('Поиск товара')).toHaveValue('Чай')
+    if (width === 360) await expect.poll(async () => moneyNumber(await page.locator('.stats-product-row').getByText(/Стоимость до скидок:/).innerText())).toBe('276701161105643276,46')
+    if (width === 390 && theme === 'dark') {
+      await expect(page.locator('.stats-coverage')).toHaveAttribute('data-coverage', 'partial')
+      await expect(page.locator('.stats-coverage')).toContainText('Частичные данные')
+      await expect(page.locator('.stats-coverage')).not.toContainText('не содержит точного времени')
+      await expect(page.locator('.stats-product-row')).toContainText('Нет подтверждённых продаж в доступных данных')
+      await expect(page.locator('.stats-product-row')).toContainText('Стоимость до скидок: Недостаточно данных')
+      await expect(page.locator('.stats-content')).toContainText('состав, цена, источник или время')
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`products-${width}-${theme}.png`), fullPage: true })
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('additions')
+    await expect(page.getByText('Доля счетов с дозаказом', { exact: true })).toBeVisible()
+    await expect(page.getByText(/Только завершённые счета в заказах, закрытых в период/)).toBeVisible()
+    expect(api.mutations()).toBe(0)
+  })
+}
+
+test('review F1 unknown gift allocation retains units and money without inventing ordinary units', async ({ page }) => {
+  const api = await fixture(page, { overview: true }); await ready(page)
+  api.corrupt(body => {
+    if (!body.products) return
+    body.products.rows[0].giftUnits = null; body.products.rows[0].nonGiftUnits = null
+    body.products.coverage = { ...body.products.coverage, value: null, observedValue: '4', availability: 'PARTIAL', coverage: 'PARTIAL', unknown: 1 }
+  })
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('products')
+  await expect(page.locator('.stats-product-row').first()).toContainText('Единиц: 4')
+  await expect(page.locator('.stats-product-row').first()).toContainText('Количество подарочных единиц не подтверждено')
+  await expect(page.locator('.stats-product-row').first()).not.toContainText('без подарков: 4')
+  await expect(page.locator('.stats-warning').first()).toBeVisible()
+  expect(api.mutations()).toBe(0)
+})
+
+test('operations PostgreSQL HTTP response passes the real adapter and merchandise DOM', async ({ page }) => {
+  const directory = process.env.VENUE_OPERATIONS_LIVE_DIR
+  if (!directory) {
+    await fixture(page, { overview: true }); await ready(page)
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('products')
+    await expect(page.locator('.stats-product-row')).toHaveCount(statsHttp.products.products!.rows.length)
+    return
+  }
+  test.setTimeout(180000)
+  await expect.poll(() => { try { return JSON.parse(readFileSync(join(directory, 'ready.json'), 'utf8')) } catch { return null } }, { timeout: 90000 }).not.toBeNull()
+  const live = JSON.parse(readFileSync(join(directory, 'ready.json'), 'utf8'))
+  try {
+    await fixture(page, { overview: true, live }); await ready(page)
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('products')
+    await expect(page.getByRole('heading', { name: 'Исторический чай' })).toBeVisible()
+    await expect(page.getByText(/Единиц: 4/)).toBeVisible()
+    await expect(page.locator('.stats-product-row').filter({ hasText: 'Исторический чай' })).toContainText('49,380')
+    await expect(page.locator('.stats-product-row').filter({ hasText: 'Подарок из учёта' })).toContainText('подарочных: 3')
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('additions')
+    await expect(metric(page, 'additions.completedTabs').locator('.stats-value')).toHaveText('1')
+    await expect(metric(page, 'additions.openTabs').locator('.stats-value')).toHaveText('1')
+    await page.route('**/api/venue/1/dashboard*', async route => {
+      const url = new URL(route.request().url())
+      const response = await route.fetch({ url: live.base + url.pathname + url.search, headers: { Authorization: `Bearer ${live.token}` } })
+      await route.fulfill({ response })
+    })
+    await page.evaluate(async () => {
+      // Vite loads the production monitor and its normal HTTP adapter, not a test implementation.
+      const url = '/miniapp/src/shared/venueEventMonitor.ts'
+      const { mountVenueEventMonitor } = await import(url)
+      const root = document.createElement('div'); document.body.prepend(root)
+      mountVenueEventMonitor({ root, backendUrl: location.origin, isDebug: false, access: { venueId: 1, role: 'OWNER', permissions: ['BOOKING_MANAGE'] }, userId: 7, onAccessChanged() {} })
+    })
+    await page.getByRole('button', { name: 'Требуют внимания: 1', exact: true }).click()
+    await expect(page.locator('.venue-alert-list a')).toHaveCount(1)
+    await expect(page.locator('.venue-alert-list a')).toHaveAttribute('href', '#/messages?threadId=1')
+    await expect(page.locator('.venue-alert-list')).not.toContainText('Private guest text')
+  } finally { writeFileSync(join(directory, 'done'), 'browser completed') }
+})

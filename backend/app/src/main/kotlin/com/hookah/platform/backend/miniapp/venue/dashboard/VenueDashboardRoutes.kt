@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.venue.dashboard
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
+import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
 import com.hookah.platform.backend.miniapp.venue.VenuePermissions
 import com.hookah.platform.backend.miniapp.venue.VenueRole
@@ -30,17 +31,22 @@ const val VENUE_DASHBOARD_MAX_BYTES = 131072
 // MIN(id) can choose a primary-key history walk for a rare order under skewed statistics.
 internal const val PENDING_BATCHES_SQL =
     "SELECT b.id, b.order_id, b.created_at, t.table_number, " +
-        "(SELECT first_batch.id FROM order_batches first_batch WHERE first_batch.order_id >= o.id " +
-        "ORDER BY first_batch.order_id, first_batch.id LIMIT 1) " +
+        "CASE WHEN b.tab_id IS NULL THEN (SELECT first_batch.id FROM order_batches first_batch WHERE " +
+        "first_batch.order_id=o.id AND first_batch.tab_id IS NULL ORDER BY " +
+        "first_batch.order_id,first_batch.tab_id,first_batch.id LIMIT 1) " +
+        "ELSE (SELECT first_batch.id FROM order_batches first_batch WHERE first_batch.order_id=o.id " +
+        "AND first_batch.tab_id=b.tab_id ORDER BY first_batch.order_id,first_batch.tab_id," +
+        "first_batch.id LIMIT 1) END, b.tab_id " +
         "FROM order_batches b JOIN orders o ON o.id = b.order_id " +
         "JOIN venue_tables t ON t.id = o.table_id AND t.venue_id = o.venue_id " +
         "WHERE b.status = 'NEW' AND o.status = 'ACTIVE' AND o.venue_id = ? LIMIT 257"
 
 internal const val PENDING_CALLS_SQL =
-    "SELECT sc.id, sc.created_at, t.table_number FROM staff_calls sc " +
+    "SELECT sc.id, sc.created_at, t.table_number, sc.reason FROM staff_calls sc " +
         "JOIN venue_tables t ON t.id = sc.table_id AND t.venue_id = sc.venue_id " +
         "WHERE sc.venue_id = ? AND sc.status = 'NEW' LIMIT 257"
 
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
 data class VenueAttentionEvent(
     val id: String,
@@ -49,8 +55,19 @@ data class VenueAttentionEvent(
     val orderId: Long? = null,
     val callId: Long? = null,
     val tableNumber: Int,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val batchId: Long? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val bookingId: Long? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val scheduledAt: String? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val billRequest: Boolean = false,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val threadId: Long? = null,
 )
 
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
 data class VenueDashboardSnapshot(
     val venueId: Long,
@@ -65,6 +82,8 @@ data class VenueDashboardSnapshot(
     val activeOrders: Long,
     val callsInWork: Long,
     val bookingsPending: Long? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val bookingsUpcoming: Long? = null,
     val occupiedTables: Long? = null,
     val activeTables: Long? = null,
     val unavailableItems: Long? = null,
@@ -84,6 +103,7 @@ class VenueDashboardRepository(private val dataSource: DataSource?) {
     suspend fun snapshot(
         venueId: Long,
         userId: Long,
+        monitoringVersion: Int = 2,
     ): VenueDashboardSnapshot =
         withContext(Dispatchers.IO) {
             val ds = dataSource ?: throw DatabaseUnavailableException()
@@ -113,9 +133,17 @@ class VenueDashboardRepository(private val dataSource: DataSource?) {
                         attention.add(
                             VenueAttentionEvent(
                                 id = id,
-                                kind = if (rs.getLong(1) == rs.getLong(5)) "ORDER_CREATED" else "BATCH_ADDED",
+                                kind =
+                                    if (monitoringVersion == 3 && rs.getObject(6) == null) {
+                                        "ORDER_SEND_UNKNOWN"
+                                    } else if (rs.getLong(1) == rs.getLong(5)) {
+                                        "ORDER_CREATED"
+                                    } else {
+                                        "BATCH_ADDED"
+                                    },
                                 createdAt = rs.getTimestamp(3).toInstant().toString(),
                                 orderId = rs.getLong(2),
+                                batchId = if (monitoringVersion == 3) rs.getLong(1) else null,
                                 tableNumber = rs.getInt(4),
                             ),
                         )
@@ -131,15 +159,69 @@ class VenueDashboardRepository(private val dataSource: DataSource?) {
                                 kind = "STAFF_CALL_CREATED",
                                 createdAt = rs.getTimestamp(2).toInstant().toString(),
                                 callId = rs.getLong(1),
+                                billRequest = monitoringVersion == 3 && rs.getString(4) == "BILL",
                                 tableNumber = rs.getInt(3),
                             ),
                         )
+                    }
+                    if (monitoringVersion == 3 && VenuePermission.BOOKING_MANAGE in permissions) {
+                        c.read(
+                            "SELECT b.id, b.created_at, b.scheduled_at, t.table_number FROM bookings b " +
+                                "LEFT JOIN venue_tables t ON t.id = b.table_id AND t.venue_id = b.venue_id " +
+                                "WHERE b.venue_id = ? AND b.status = 'PENDING' ORDER BY b.created_at, b.id LIMIT 257",
+                            venueId,
+                        ) { rs ->
+                            attention.add(
+                                VenueAttentionEvent(
+                                    id = "booking:${rs.getLong(1)}",
+                                    kind = "BOOKING_PENDING",
+                                    createdAt = rs.getTimestamp(2).toInstant().toString(),
+                                    scheduledAt = rs.getTimestamp(3).toInstant().toString(),
+                                    bookingId = rs.getLong(1),
+                                    tableNumber = rs.getInt(4),
+                                ),
+                            )
+                        }
+                    }
+                    if (monitoringVersion == 3 && VenuePermission.BOOKING_MANAGE in permissions) {
+                        c.read(
+                            "SELECT b.id,b.scheduled_at,t.table_number,MAX(m.id),MIN(m.created_at),st.id " +
+                                "FROM bookings b JOIN support_threads st ON st.booking_id=b.id AND " +
+                                "st.venue_id=b.venue_id " +
+                                "AND st.thread_type='BOOKING_THREAD' AND st.status NOT IN ('CLOSED','RESOLVED') " +
+                                "AND st.guest_user_id=b.user_id JOIN support_messages m ON m.thread_id=st.id " +
+                                "LEFT JOIN support_thread_reads sr ON sr.thread_id=st.id AND sr.user_id=? " +
+                                "LEFT JOIN venue_tables t ON t.id=b.table_id AND t.venue_id=b.venue_id " +
+                                "WHERE b.venue_id=? AND b.status <> 'PENDING' AND " +
+                                "m.author_role='GUEST' AND m.author_user_id=b.user_id " +
+                                "AND m.author_user_id IS DISTINCT FROM ? AND (sr.last_read_message_id IS " +
+                                "NULL OR m.id>sr.last_read_message_id) " +
+                                "GROUP BY b.id,b.scheduled_at,t.table_number,st.id " +
+                                "ORDER BY MIN(m.created_at),b.id LIMIT " +
+                                "257",
+                            userId,
+                            venueId,
+                            userId,
+                        ) { rs ->
+                            attention.add(
+                                VenueAttentionEvent(
+                                    id = "bookingMessage:${rs.getLong(4)}",
+                                    kind = "BOOKING_MESSAGE",
+                                    bookingId = rs.getLong(1),
+                                    threadId = rs.getLong(6),
+                                    scheduledAt = rs.getTimestamp(2).toInstant().toString(),
+                                    tableNumber = rs.getInt(3),
+                                    createdAt = rs.getTimestamp(5).toInstant().toString(),
+                                ),
+                            )
+                        }
                     }
                     val tablesAllowed = VenuePermission.TABLE_VIEW in permissions
                     val menuAllowed = VenuePermission.MENU_VIEW in permissions
                     val snapshot =
                         VenueDashboardSnapshot(
                             venueId = venueId,
+                            monitoringVersion = monitoringVersion,
                             userId = userId,
                             role = role.name,
                             permissions = permissions.map { it.name }.sorted(),
@@ -154,6 +236,16 @@ class VenueDashboardRepository(private val dataSource: DataSource?) {
                             bookingsPending =
                                 if (VenuePermission.BOOKING_VIEW in permissions) {
                                     c.count("bookings", "venue_id = ? AND status = 'PENDING'", venueId)
+                                } else {
+                                    null
+                                },
+                            bookingsUpcoming =
+                                if (monitoringVersion == 3 && VenuePermission.BOOKING_VIEW in permissions) {
+                                    c.count(
+                                        "bookings",
+                                        "venue_id = ? AND status = 'CONFIRMED' AND scheduled_at >= CURRENT_TIMESTAMP",
+                                        venueId,
+                                    )
                                 } else {
                                     null
                                 },
@@ -242,7 +334,18 @@ fun Route.venueDashboardRoutes(repository: VenueDashboardRepository) {
     val json = Json { encodeDefaults = true }
     get("/venue/{venueId}/dashboard") {
         call.response.headers.append(HttpHeaders.CacheControl, "no-store")
-        val body = json.encodeToJsonElement(repository.snapshot(call.requireVenueId(), call.requireUserId()))
+        val requestedVersion = call.request.queryParameters["monitoringVersion"]
+        if (requestedVersion != null && requestedVersion !in setOf("2", "3")) {
+            throw InvalidInputException("MONITORING_VERSION_UNSUPPORTED")
+        }
+        val body =
+            json.encodeToJsonElement(
+                repository.snapshot(
+                    call.requireVenueId(),
+                    call.requireUserId(),
+                    if (call.request.queryParameters["monitoringVersion"] == "3") 3 else 2,
+                ),
+            )
         check(body.toString().toByteArray(Charsets.UTF_8).size <= VENUE_DASHBOARD_MAX_BYTES)
         call.respond(body)
     }

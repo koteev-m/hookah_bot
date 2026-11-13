@@ -1,6 +1,28 @@
 # Booking Lifecycle Model
 
 
+F3/F5 correction / LOCAL REVIEW PENDING: attention сообщения определяется активным BOOKING_THREAD,
+непрочитанным GUEST message текущего гостя брони и BOOKING_MANAGE в том же venue. SEATED не закрывает
+разговор; CONFIRMED/CHANGED/SEATED и иные поддержанные состояния брони сами не заменяют thread lifecycle.
+CLOSED/RESOLVED threads не входят в активную очередь. Для PENDING уже есть отдельная задача решения,
+поэтому сообщения не дублируют её. GET не меняет read cursor, не открывает thread и не отправляет radar.
+Задача сообщения открывает точный существующий threadId в Messages, в том числе после SEATED и вне
+активной booking queue. Только PENDING-задача решения брони ведёт в Bookings.
+Deep link bookingId для booking task восстанавливает highlight на каждом актуальном render; scroll выполняется один раз
+для выбранной цели. Disposal/смена контекста/отзыв доступа не возвращают прежнее выделение.
+
+
+## Бронирования в рабочем обзоре — локальная доработка
+
+HT-VENUE-OPERATIONS-STATS-UX-01 / REVIEW PENDING: protocol 3 включает PENDING в рабочие задачи
+только для BOOKING_MANAGE. CHANGED означает ожидание гостя и сам по себе не создаёт срочную задачу.
+Для CONFIRMED/CHANGED новая task появляется только при непрочитанном GUEST message существующего
+BOOKING_THREAD по last_read_message_id текущего разрешённого актёра. Текст и контакты не возвращаются.
+Pending booking не дублируется отдельной message task. Future confirmation без сообщения не требует
+первичной реакции. Read path не двигает cursor; штатное открытие переписки остаётся authority чтения.
+
+
+
 For Hall SEAT of an existing booking, party size and agreed end are read-only agreement fields.
 OWNER/MANAGER can change them through ASSIGN_BOOKING before seating, with current revision and
 availability validation; STAFF gets guidance without expanded booking-edit rights. SEAT accepts

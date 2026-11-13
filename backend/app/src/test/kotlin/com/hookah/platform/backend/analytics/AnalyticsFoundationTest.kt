@@ -234,6 +234,25 @@ abstract class AnalyticsFoundationContract(private val postgres: Boolean) {
     protected val actor = OrderActionActor(7, VenueRole.STAFF, AnalyticsChannel.TELEGRAM)
 
     @Test
+    fun `order close occurrence rolls back atomically and replay retains the first time`() =
+        fixture { f ->
+            f.batch("DELIVERED")
+            assertFailsWith<IllegalStateException> {
+                runBlocking {
+                    f.orders { phase, _ -> if (phase == "BEFORE_COMMIT") error("injected") }
+                        .updateOrderStatus(f.venue, f.order, OrderWorkflowStatus.CLOSED, actor)
+                }
+            }
+            assertNull(f.instant("SELECT closed_at FROM orders WHERE id=${f.order}"))
+            assertEquals("ACTIVE", f.string("SELECT status FROM orders WHERE id=${f.order}"))
+            runBlocking { f.orders().updateOrderStatus(f.venue, f.order, OrderWorkflowStatus.CLOSED, actor) }
+            val time = f.instant("SELECT closed_at FROM orders WHERE id=${f.order}")
+            assertEquals(now, time)
+            runBlocking { f.orders().updateOrderStatus(f.venue, f.order, OrderWorkflowStatus.CLOSED, actor) }
+            assertEquals(time, f.instant("SELECT closed_at FROM orders WHERE id=${f.order}"))
+        }
+
+    @Test
     fun `legacy nonempty migration validate repeat and new facts preserve unknown`() =
         fixture(legacyRows = true) { f ->
             assertNull(f.instant("SELECT first_accepted_at FROM orders WHERE id = ${f.order}"))
@@ -464,10 +483,20 @@ abstract class AnalyticsFoundationContract(private val postgres: Boolean) {
             val f = Fixture(ds, location)
             val oldBatch = if (legacyRows) f.batch("DELIVERED") else null
             val oldCall = if (legacyRows) f.call("BILL", "DONE") else null
+            val oldClosed =
+                if (legacyRows) {
+                    f.insert(
+                        "INSERT INTO orders(venue_id,table_id,table_session_id,status) " +
+                            "VALUES (${f.venue},${f.table},${f.session},'CLOSED')",
+                    )
+                } else {
+                    null
+                }
             // Nonempty previous schema: migrated rows must remain unknown.
             f.flyway().migrate()
-            assertEquals(if (postgres) "138" else "139", f.flyway().info().current().version.version)
+            assertEquals(if (postgres) "139" else "140", f.flyway().info().current().version.version)
             if (legacyRows) {
+                assertNull(f.instant("SELECT closed_at FROM orders WHERE id=$oldClosed"))
                 assertNull(f.instant("SELECT first_delivered_at FROM order_batches WHERE id = $oldBatch"))
                 assertNull(f.instant("SELECT first_accepted_at FROM order_batches WHERE id = $oldBatch"))
                 assertNull(f.instant("SELECT completed_at FROM staff_calls WHERE id = $oldCall"))

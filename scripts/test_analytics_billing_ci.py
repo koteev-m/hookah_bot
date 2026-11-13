@@ -250,6 +250,73 @@ class AnalyticsBillingCiTest(unittest.TestCase):
         self.scenario(lambda reports, marker, env: (reports / f'TEST-{name}.xml').unlink())
         self.scenario(self.edit(name, lambda s: s.set('tests', '15')))
 
+    def test_operations_postgres_http_is_mandatory_and_cannot_be_skipped(self):
+        for name in ('com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest',
+                     'com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest'):
+            self.assertEqual(self.inventory['required_minimums'][name], 1)
+            self.scenario(lambda reports, marker, env: (reports / f'TEST-{name}.xml').unlink())
+            self.scenario(self.edit(name, lambda suite: suite.set('skipped', '1')))
+            self.scenario(self.edit(name, lambda suite: ET.SubElement(suite.find('testcase'), 'skipped')))
+
+
+    def test_venue_review_kpi_cases_are_mandatory_and_cannot_be_skipped(self):
+        for suffix in ('H2', 'Postgres'):
+            name = f'com.hookah.platform.backend.analytics.KpiReadModels{suffix}Test'
+            cases = {case for case in self.inventory['required_test_names'][name]
+                     if case.startswith(('accounting EDIT', 'ambiguous accounting', 'completed additions',
+                                         'booking attention'))}
+            self.assertEqual(len(cases), 4)
+            for case in cases:
+                def replace(suite):
+                    target = next(t for t in suite.findall('testcase') if t.get('name').removesuffix('()') == case)
+                    target.set('name', 'unrelated replacement()')
+                self.scenario(self.edit(name, replace))
+                def skip(suite):
+                    target = next(t for t in suite.findall('testcase') if t.get('name').removesuffix('()') == case)
+                    ET.SubElement(target, 'skipped')
+                    suite.set('skipped', '1')
+                self.scenario(self.edit(name, skip))
+
+    def test_venue_review_browser_cases_are_mandatory_and_cannot_be_skipped(self):
+        code = python_step(self.workflow, 'Assert full Mini App browser smoke results')
+        inventory = next(ast.literal_eval(node.value) for node in ast.parse(code).body
+                         if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                         and node.targets[0].id == 'required_specs')
+        specs = [{'file': file, 'title': title,
+                  'tests': [{'status': 'expected', 'expectedStatus': 'passed', 'results': [{'status': 'passed'}]}
+                            for _ in range(count)]} for (file, title), count in inventory.items()]
+        reviews = [index for index, spec in enumerate(specs) if spec['title'].startswith('review F') or spec['file'] == 'venue-booking-attention.spec.ts']
+        self.assertEqual(len(reviews), 8)
+        minimum = next(ast.literal_eval(node.value) for node in ast.parse(code).body
+                       if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                       and node.targets[0].id == 'minimum_executed')
+        while sum(len(spec['tests']) for spec in specs) < minimum:
+            specs.append({'file': 'additional.spec.ts', 'title': f'additional {len(specs)}', 'tests': [
+                {'status': 'expected', 'expectedStatus': 'passed', 'results': [{'status': 'passed'}]}]})
+        with tempfile.TemporaryDirectory(prefix='venue-review-browser-ci-') as directory:
+            report = Path(directory) / 'browser.json'
+            def check(index=None, skipped=False):
+                current = json.loads(json.dumps(specs))
+                count = sum(len(spec['tests']) for spec in current)
+                if index is not None:
+                    if skipped:
+                        current[index]['tests'][0]['status'] = 'skipped'
+                    else:
+                        current[index]['title'] = 'unrelated replacement'
+                report.write_text(json.dumps({'suites': [{'specs': current}], 'errors': [], 'stats': {
+                    'expected': count - int(skipped), 'unexpected': 0, 'flaky': 0, 'skipped': int(skipped)}}))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    exec(compile(code.replace('Path("playwright-results.json")', f'Path({str(report)!r})'),
+                                 'actual browser CI gate', 'exec'), {})
+            check()
+            for index in reviews:
+                with self.assertRaises(SystemExit):
+                    check(index)
+                with self.assertRaises(SystemExit):
+                    check(index, skipped=True)
+
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

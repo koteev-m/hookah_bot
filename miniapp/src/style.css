@@ -3381,12 +3381,12 @@ input[type="number"] {
 
 .venue-owner-shell .venue-header {
   margin: 0;
-  padding: max(1rem, env(safe-area-inset-top, 0px)) max(1rem, env(safe-area-inset-right, 0px)) 0.75rem max(1rem, env(safe-area-inset-left, 0px));
+  padding: max(.65rem, env(safe-area-inset-top, 0px)) max(1rem, env(safe-area-inset-right, 0px)) .5rem max(1rem, env(safe-area-inset-left, 0px));
   gap: 0.5rem;
 }
 
 .venue-owner-shell .app-brand h1 {
-  font-size: 1.3rem;
+  font-size: 1.15rem;
   overflow-wrap: anywhere;
 }
 
@@ -3414,7 +3414,9 @@ input[type="number"] {
 .venue-owner-nav .nav-button {
   min-height: 44px;
   padding: 0.65rem 0.2rem;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow-wrap: normal;
   border-radius: 9px;
   position: relative;
 }
@@ -3806,18 +3808,31 @@ input[type="number"] {
 .hall-marker::before { content:""; position:absolute; left:50%; top:50%; width:max(100%,44px); height:max(100%,44px); transform:translate(-50%,-50%); }
 /* Shared Venue cockpit remains in the shell while individual workspaces change. */
 .venue-event-root { display: contents; }
-.venue-alerts { position: sticky; top: var(--app-safe-top, 0px); z-index: 3; max-height: 26vh; overflow: auto; border-inline-start: 4px solid var(--app-accent); padding: 12px; background: var(--app-surface); }
-.venue-alerts h2 { position: sticky; top: 0; z-index: 1; background: var(--app-surface); font-size: 1rem; margin: 0 0 6px; }
-.venue-alerts p { margin: 4px 0; font-size: .82rem; }
+/* The monitor stays mounted; only its task dialog scrolls. */
+.venue-alerts { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem; padding: .5rem max(.75rem, var(--app-safe-left)); border-bottom: 1px solid var(--app-border); }
+.venue-alerts > p { margin: 0; font-size: .78rem; }
+.venue-alerts > button { padding: .4rem .65rem; min-height: 36px; }
 .venue-alert-status, .venue-alert-help { font-size: .82rem; color: var(--app-muted); }
-.venue-alert-list { max-height: 100px; overflow: auto; }
-.venue-alert-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; }
-.venue-alert-row a { flex: 1; min-width: 160px; }
-.venue-alerts input[type=range] { width: 100px; }
-.venue-dashboard-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
-.venue-dashboard-card { display: flex; flex-direction: column; gap: 8px; text-decoration: none; color: inherit; }
+.venue-alert-list { overflow: visible; }
+.venue-alert-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--app-border); }
+.venue-alert-row a { flex: 1; min-width: 160px; overflow-wrap: anywhere; }
+.venue-alerts input[type=range] { width: 140px; }
+.venue-alert-dialog { width: min(680px, 100%); max-height: 90dvh; overflow-y: auto; border: 1px solid var(--app-border); border-radius: 16px; padding: 1rem; color: var(--app-text); background: var(--app-surface); }
+.venue-alert-dialog::backdrop { background: #0008; }
+.venue-alert-dialog-body { display: grid; gap: .75rem; }
+@media (max-width: 600px) { .venue-alert-dialog { box-sizing: border-box; width: 100%; max-width: none; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; padding: max(1rem, var(--app-safe-top)) 1rem max(1rem, var(--app-safe-bottom)); } }
+.venue-dashboard-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 10px; min-width: 0; }
+.venue-dashboard-card { display: flex; flex-direction: column; gap: 8px; text-decoration: none; color: inherit; min-width: 0; overflow-wrap: anywhere; padding: .8rem; }
+.venue-dashboard-cards > :is(.venue-task-preview, .venue-dashboard-extras, p) { grid-column: 1 / -1; min-width: 0; }
+.venue-dashboard-extras[open] { display: grid; gap: 10px; }
+.venue-dashboard-extras > summary { cursor: pointer; padding-block: .75rem; }
+.venue-task-preview { display: grid; gap: .65rem; }
+.venue-task-preview h3 { margin: 0; }
+.venue-task-preview a { color: var(--app-accent); overflow-wrap: anywhere; }
+.order-send-highlight { outline: 3px solid var(--app-accent); outline-offset: 3px; }
+.order-send-group { display: grid; gap: .75rem; min-width: 0; }
 .venue-dashboard-card:focus-visible, .venue-alerts a:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 2px; }
-.venue-has-alerts .venue-content :is(input, select, textarea, button, a) { scroll-margin-top: calc(26vh + var(--app-safe-top, 0px)); }
+.venue-has-alerts .venue-content :is(input, select, textarea, button, a) { scroll-margin-top: calc(1rem + var(--app-safe-top, 0px)); }
 
 .menu-item-description, .menu-item-description-full {
   margin: 0.25rem 0;

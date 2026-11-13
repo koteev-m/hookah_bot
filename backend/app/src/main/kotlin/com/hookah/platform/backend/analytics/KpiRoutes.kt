@@ -44,7 +44,16 @@ internal fun Route.kpiRoutes(
 }
 
 internal fun Parameters.kpiRequest(platform: Boolean): KpiRequest {
-    val allowed = if (platform) setOf("from", "to", "section") else setOf("from", "to", "section", "tableId")
+    val allowed =
+        if (platform) {
+            setOf(
+                "from",
+                "to",
+                "section",
+            )
+        } else {
+            setOf("from", "to", "section", "tableId", "search", "category", "currency", "sort", "page")
+        }
     if (names().any { it !in allowed || getAll(it)?.size != 1 }) {
         throw InvalidInputException(
             "ANALYTICS_UNSUPPORTED_FILTER",
@@ -57,7 +66,7 @@ internal fun Parameters.kpiRequest(platform: Boolean): KpiRequest {
         if (platform) {
             setOf("all", "venues", "subscriptions", "invoices", "onboarding", "support")
         } else {
-            setOf("all", "orders", "finance", "bookings", "seatings", "calls")
+            setOf("all", "orders", "finance", "bookings", "seatings", "calls", "products", "additions")
         }
     if (section !in sections) throw InvalidInputException("ANALYTICS_INVALID_SECTION")
     val table =
@@ -68,5 +77,24 @@ internal fun Parameters.kpiRequest(platform: Boolean): KpiRequest {
     if (table != null && section !in setOf("orders", "bookings", "seatings", "calls")) {
         throw InvalidInputException("ANALYTICS_TABLE_FILTER_REQUIRES_OPERATIONAL_SECTION")
     }
-    return KpiRequest(from, to, section, table)
+    val productFilters = setOf("search", "category", "currency", "sort", "page")
+    if (section != "products" &&
+        names().any {
+            it in productFilters
+        }
+    ) {
+        throw InvalidInputException("ANALYTICS_FILTER_NOT_APPLICABLE")
+    }
+    val search = get("search")?.trim()?.takeIf { it.isNotEmpty() }
+    val category = get("category")
+    val currency = get("currency")
+    val sort = get("sort") ?: "popular"
+    val page = get("page")?.toIntOrNull() ?: if (get("page") == null) 1 else 0
+    if ((search?.length ?: 0) > 100 || (category?.length ?: 0) > 100 ||
+        (currency != null && !Regex("[A-Z]{3}").matches(currency)) || sort !in setOf("popular", "rare", "amount") ||
+        page !in 1..100000 || (sort == "amount" && currency == null)
+    ) {
+        throw InvalidInputException("ANALYTICS_INVALID_PRODUCT_FILTER")
+    }
+    return KpiRequest(from, to, section, table, search, category, currency, sort, page)
 }

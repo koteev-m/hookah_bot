@@ -2,12 +2,23 @@ package com.hookah.platform.backend.analytics
 
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenueRole
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingCommand
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingLine
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingLineInput
 import com.hookah.platform.backend.miniapp.venue.accounting.AccountingReport
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepository
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingSale
 import com.hookah.platform.backend.miniapp.venue.accounting.AccountingTotals
+import com.hookah.platform.backend.miniapp.venue.dashboard.VenueDashboardRepository
 import com.hookah.platform.backend.miniapp.venue.orders.OrderActionActor
 import com.hookah.platform.backend.miniapp.venue.orders.OrderBatchStatus
 import com.hookah.platform.backend.miniapp.venue.orders.VenueOrdersRepository
+import com.hookah.platform.backend.support.BookingConversationCheckpoint
+import com.hookah.platform.backend.support.SupportMessageAuthorRole
+import com.hookah.platform.backend.support.SupportMessageSource
+import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.telegram.db.StaffCallRepository
 import com.hookah.platform.backend.test.PostgresTestEnv
 import io.ktor.http.parametersOf
@@ -27,6 +38,7 @@ import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -80,10 +92,24 @@ internal class KpiReadModelsPostgresTest : KpiReadModelsContract(true) {
                     "CASE WHEN n % 100 = 0 THEN TIMESTAMPTZ '2026-11-05' ELSE TIMESTAMPTZ '2025-01-02' END, '{}' " +
                     "FROM generate_series(1,5000) n",
             )
+            val category = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Scale')")
+            val product =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$category,'Scale',100)",
+                )
+            f.exec(
+                "INSERT INTO order_batch_items(order_batch_id,menu_item_id,qty," +
+                    "item_name_snapshot,base_unit_price_minor_snapshot,currency_snapshot," +
+                    "fulfilled_at) SELECT id,$product,1,'Historical scale',100,'RUB',CASE WHEN " +
+                    "MOD(id,100)=0 THEN TIMESTAMPTZ '2026-11-05' ELSE TIMESTAMPTZ '2025-01-01' " +
+                    "END FROM order_batches",
+            )
             f.exec("ANALYZE")
             val queries =
                 listOf(
                     WAAV_SQL to listOf(now.minusSeconds(168 * 3600), now),
+                    PRODUCT_DELIVERY_SQL to listOf(f.venue, start, now),
                     "SELECT COUNT(*) FROM orders WHERE venue_id = ? AND " +
                         "created_at >= ? AND created_at < ?" to listOf(f.venue, start, now),
                     "SELECT status,COUNT(*) FROM venues GROUP BY status" to emptyList(),
@@ -546,6 +572,681 @@ internal abstract class KpiReadModelsContract(private val postgres: Boolean) {
             assertEquals("0", runBlocking { f.repo.platform(request) }.metrics.getValue("venues.guestAvailable").value)
         }
 
+    @Test
+    fun `tab scoped completed additions and complete product quantity do not merge personal bills`() =
+        fixture { f ->
+            val cat = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Drinks')")
+            val tea =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$cat,'Changed',99999)",
+                )
+            val hookah =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$cat,'Hookah',99999)",
+                )
+            val dessert =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$cat,'Dessert',99999)",
+                )
+            val tab1 =
+                f.insert(
+                    "INSERT INTO tab(venue_id,table_session_id,type) VALUES (${f.venue},${f.session},'SHARED')",
+                )
+            val tab2 =
+                f.insert(
+                    "INSERT INTO tab(venue_id,table_session_id,type,owner_user_id) VALUES " +
+                        "(${f.venue},${f.session},'PERSONAL',7)",
+                )
+            val rejected = f.batch()
+            f.exec(
+                "UPDATE order_batches SET tab_id=$tab1,status='REJECTED'," +
+                    "first_delivered_at=TIMESTAMP WITH TIME ZONE '2026-11-09 00:00:00+00' WHERE id=$rejected",
+            )
+            f.exec(
+                "INSERT INTO order_batch_items(order_batch_id,menu_item_id,qty,item_name_snapshot," +
+                    "base_unit_price_minor_snapshot,currency_snapshot) " +
+                    "VALUES ($rejected,$tea,100,'Rejected tea',100,'RUB')",
+            )
+            for ((index, pair) in listOf(tab1 to 2, tab1 to 1, tab1 to 1, tab2 to 1).withIndex()) {
+                val (tab, qty) = pair
+                val product =
+                    if (index == 2) {
+                        dessert
+                    } else if (index == 3) {
+                        hookah
+                    } else {
+                        tea
+                    }
+                val b = f.batch()
+                f.exec(
+                    "UPDATE order_batches SET tab_id=$tab,status='DELIVERED'," +
+                        "first_delivered_at=TIMESTAMP WITH TIME ZONE '2026-11-09 00:00:00+00' WHERE " +
+                        "id=$b",
+                )
+                if (index == 0) {
+                    f.exec(
+                        "INSERT INTO order_batch_items(order_batch_id,menu_item_id,qty," +
+                            "item_name_snapshot,base_unit_price_minor_snapshot,currency_snapshot) " +
+                            "VALUES ($b,$hookah,1,'Hookah',100,'RUB')",
+                    )
+                }
+                f.exec(
+                    "INSERT INTO order_batch_items(order_batch_id,menu_item_id,qty," +
+                        "item_name_snapshot,base_unit_price_minor_snapshot,currency_snapshot) " +
+                        "VALUES ($b,$product,$qty,'Original',100,'RUB')",
+                )
+            }
+            f.exec(
+                "UPDATE orders SET status='CLOSED',closed_at=TIMESTAMP WITH TIME ZONE " +
+                    "'2026-11-09 01:00:00+00' WHERE id=${f.order}",
+            )
+            f.exec("UPDATE tab SET status='CLOSED' WHERE id IN ($tab1,$tab2)")
+            val before = f.fingerprint()
+            val report = runBlocking { f.repo.venue(f.venue, 7, request.copy(section = "additions")) }
+            assertEquals("2", report.metrics.getValue("additions.completedTabs").value)
+            assertEquals("1", report.metrics.getValue("additions.none").value)
+            assertEquals("1", report.metrics.getValue("additions.twoOrMore").value)
+            assertEquals("0.500000", report.metrics.getValue("additions.share").value)
+            assertEquals("2", report.metrics.getValue("additions.count").value)
+            val products = runBlocking { f.repo.venue(f.venue, 7, request.copy(section = "products")) }.products!!
+            assertEquals("3", products.rows.single { it.itemId == tea }.units)
+            assertEquals("300", products.rows.single { it.itemId == tea }.snapshotGrossMinor)
+            assertEquals("Original", products.rows.single { it.itemId == tea }.name)
+            assertEquals(before, f.fingerprint())
+        }
+
+    @Test
+    fun `complete product source includes unsold identities and pagination independent search`() =
+        fixture { f ->
+            val cat = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Same')")
+            repeat(61) {
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$cat,'Identical',100)",
+                )
+            }
+            val report =
+                runBlocking {
+                    f.repo.venue(f.venue, 7, request.copy(section = "products", page = 2, search = "Ident"))
+                }.products!!
+            assertEquals(61, report.totalRows)
+            assertEquals(11, report.rows.size)
+            assertEquals(11, report.rows.map { it.itemId }.distinct().size)
+            assertTrue(report.rows.all { it.units == "0" })
+            assertEquals("AVAILABLE", report.coverage.availability)
+        }
+
+    @Test
+    fun `legacy missing time and missing tab remain unknown instead of zero repeat share`() =
+        fixture { f ->
+            f.batch(complete = false)
+            f.exec(
+                "UPDATE orders SET status='CLOSED',closed_at=TIMESTAMP WITH TIME ZONE " +
+                    "'2026-11-09 00:00:00+00' WHERE id=${f.order}",
+            )
+            val additions = runBlocking { f.repo.venue(f.venue, 7, request.copy(section = "additions")) }
+            assertNull(additions.metrics.getValue("additions.share").value)
+            assertTrue(additions.metrics.getValue("additions.share").unknown > 0)
+            val products = runBlocking { f.repo.venue(f.venue, 7, request.copy(section = "products")) }.products!!
+            assertEquals("PARTIAL", products.coverage.availability)
+        }
+
+    @Test
+    fun `product filters are strict scoped and money sort needs currency`() {
+        assertFailsWith<InvalidInputException> {
+            parametersOf(
+                "from" to listOf("2026-11-01"),
+                "to" to listOf("2026-11-02"),
+                "section" to listOf("calls"),
+                "search" to listOf("x"),
+            ).kpiRequest(false)
+        }
+        assertFailsWith<InvalidInputException> {
+            parametersOf(
+                "from" to listOf("2026-11-01"),
+                "to" to listOf("2026-11-02"),
+                "section" to listOf("products"),
+                "sort" to listOf("amount"),
+            ).kpiRequest(false)
+        }
+    }
+
+    @Test
+    fun `gift quantity and historical manual lines remain separate from digital accounting projection`() =
+        fixture { f ->
+            val cat = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Menu')")
+            val item =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$cat,'Same',99999)",
+                )
+            val b = f.batch()
+            f.exec(
+                "UPDATE order_batches SET status='DELIVERED',first_delivered_at=TIMESTAMP " +
+                    "WITH TIME ZONE '2026-11-09 00:00:00+00' WHERE id=$b",
+            )
+            val line =
+                f.insert(
+                    "INSERT INTO order_batch_items(order_batch_id,menu_item_id,qty," +
+                        "item_name_snapshot,base_unit_price_minor_snapshot,currency_snapshot) " +
+                        "VALUES ($b,$item,3,'Historic',100,'RUB')",
+                )
+            val rule =
+                f.insert(
+                    "INSERT INTO promotion_rules(venue_id,rule_type,target_type,target_value," +
+                        "discount_percent,status,created_by_user_id) VALUES (${f.venue}," +
+                        "'HAPPY_HOURS_PERCENT','CATEGORY_TYPE','TEA',10,'ACTIVE',7)",
+                )
+            val application =
+                f.insert(
+                    "INSERT INTO order_promotion_applications(order_id,batch_id,venue_id," +
+                        "user_id,rule_id,title_snapshot,rule_type,target_type,target_value," +
+                        "discount_percent,discount_total_minor,dedupe_key) VALUES (${f.order},$b," +
+                        "${f.venue},7,$rule,'Gift','HAPPY_HOURS_PERCENT','CATEGORY_TYPE','TEA',10," +
+                        "100,'gift-test')",
+                )
+            f.exec(
+                "INSERT INTO order_promotion_reward_items(application_id," +
+                    "reward_order_batch_item_id,reward_menu_item_id,reward_qty,label_snapshot) " +
+                    "VALUES ($application,$line,$item,1,'Gift')",
+            )
+            val shift =
+                f.insert(
+                    "INSERT INTO venue_accounting_shifts(venue_id,status,open_slot,timezone," +
+                        "opened_at) VALUES (${f.venue},'OPEN',1,'UTC',TIMESTAMP WITH TIME ZONE " +
+                        "'2026-11-01 00:00:00+00')",
+                )
+            val manual =
+                """
+                {"id":"manual","tableId":${f.table},"tableLabel":"Table","source":"MANUAL","createdAt":"2026-11-09T00:00:00Z","currency":"RUB","lines":[{"id":"m","name":"Manual historic","qty":2,"unitPriceMinor":250,"menuItemId":$item}]}
+                """.trimIndent()
+            f.ds.connection.use { connection ->
+                connection.prepareStatement(
+                    "INSERT INTO venue_accounting_sales(id,shift_id,snapshot_json) VALUES (?,?,?)",
+                ).use {
+                    it.setString(1, "manual")
+                    it.setLong(2, shift)
+                    it.setString(3, manual)
+                    it.executeUpdate()
+                    it.setString(1, "projection")
+                    it.setString(
+                        3,
+                        manual.replace("\"source\":\"MANUAL\"", "\"source\":\"MINIAPP\",\"orderId\":${f.order}"),
+                    )
+                    it.executeUpdate()
+                    for ((id, snapshot) in listOf(
+                        "unlinked-projection" to manual.replace("\"source\":\"MANUAL\"", "\"source\":\"MINIAPP\""),
+                        "invalid-quantity" to manual.replace("\"qty\":2", "\"qty\":-1"),
+                        "invalid-price" to manual.replace("\"unitPriceMinor\":250", "\"unitPriceMinor\":-250"),
+                    )) {
+                        it.setString(1, id)
+                        it.setString(3, snapshot)
+                        it.executeUpdate()
+                    }
+                }
+            }
+            val result = runBlocking { f.repo.venue(f.venue, 7, request.copy(section = "products")) }.products!!
+            assertEquals("3", result.rows.single { it.source == "DIGITAL_DELIVERY" }.units)
+            assertEquals("1", result.rows.single { it.source == "DIGITAL_DELIVERY" }.giftUnits)
+            assertEquals("2", result.rows.single { it.source == "DIGITAL_DELIVERY" }.nonGiftUnits)
+            assertEquals("2", result.rows.single { it.source == "MANUAL_SALE" }.units)
+            assertEquals("500", result.rows.single { it.source == "MANUAL_SALE" }.snapshotGrossMinor)
+            assertNull(result.netAmount.value)
+            f.exec("DELETE FROM order_promotion_reward_items WHERE reward_order_batch_item_id=$line")
+            val program =
+                f.insert(
+                    "INSERT INTO loyalty_programs(venue_id,program_type,status,nth_value,created_by_user_id) " +
+                        "VALUES (${f.venue},'NTH_HOOKAH_FREE','ACTIVE',3,7)",
+                )
+            f.insert(
+                "INSERT INTO loyalty_redemptions(program_id,venue_id,user_id,order_id,batch_id," +
+                    "order_batch_item_id,order_promotion_application_id,status,discount_minor,dedupe_key) " +
+                    "VALUES ($program,${f.venue},7,${f.order},$b,$line,$application,'APPLIED',100,'loyalty-gift')",
+            )
+            val loyalty = runBlocking { f.repo.venue(f.venue, 7, request.copy(section = "products")) }.products!!
+            assertEquals("3", loyalty.rows.single { it.source == "DIGITAL_DELIVERY" }.units)
+            assertEquals("1", loyalty.rows.single { it.source == "DIGITAL_DELIVERY" }.giftUnits)
+            assertEquals("2", loyalty.rows.single { it.source == "DIGITAL_DELIVERY" }.nonGiftUnits)
+            f.exec("UPDATE order_batch_items SET is_excluded=TRUE WHERE id=$line")
+            assertEquals(
+                "0",
+                runBlocking {
+                    f.repo.venue(f.venue, 7, request.copy(section = "products"))
+                }.products!!.rows.filter { it.source == "DIGITAL_DELIVERY" }.sumOf { it.units.toLong() }.toString(),
+            )
+
+            fun products() = runBlocking { f.repo.venue(f.venue, 7, request.copy(section = "products")) }.products!!
+            f.exec("UPDATE order_batch_items SET is_excluded=FALSE WHERE id=$line")
+            for (cancel in listOf(
+                "UPDATE order_batch_items SET item_status='CANCELED' WHERE id=$line",
+                "UPDATE order_batches SET status='REJECTED' WHERE id=$b",
+                "UPDATE orders SET status='CANCELLED' WHERE id=${f.order}",
+            )) {
+                f.exec(cancel)
+                assertEquals(
+                    "0",
+                    products().rows.filter { it.source == "DIGITAL_DELIVERY" }.sumOf { it.units.toLong() }.toString(),
+                )
+                f.exec("UPDATE order_batch_items SET item_status='ACTIVE' WHERE id=$line")
+                f.exec("UPDATE order_batches SET status='DELIVERED' WHERE id=$b")
+                f.exec("UPDATE orders SET status='ACTIVE' WHERE id=${f.order}")
+            }
+            f.insert(
+                "INSERT INTO order_batch_item_options(order_batch_item_id,option_name_snapshot," +
+                    "price_delta_minor_snapshot) VALUES ($line,'Historic option',75)",
+            )
+            val option = products().rows.single { it.source == "DIGITAL_DELIVERY" }
+            assertEquals("3", option.units)
+            assertEquals("525", option.snapshotGrossMinor)
+            assertEquals(listOf("Historic option"), option.options)
+            f.exec("UPDATE order_batch_items SET base_unit_price_minor_snapshot=9223372036854775807 WHERE id=$line")
+            assertEquals(
+                "27670116110564327646",
+                products().rows.single { it.source == "DIGITAL_DELIVERY" }.snapshotGrossMinor,
+            )
+            f.exec(
+                "UPDATE order_batch_items SET base_unit_price_minor_snapshot=NULL," +
+                    "item_name_snapshot=NULL WHERE id=$line",
+            )
+            val missing = products()
+            assertEquals("PARTIAL", missing.coverage.availability)
+            assertNull(missing.rows.single { it.source == "DIGITAL_DELIVERY" }.snapshotGrossMinor)
+            val text = f.batch()
+            f.exec(
+                "UPDATE order_batches SET status='DELIVERED',guest_comment='Legacy free text without item identity'," +
+                    "first_delivered_at=TIMESTAMP WITH TIME ZONE '2026-11-09 00:00:00+00' WHERE id=$text",
+            )
+            assertEquals(missing.coverage.unknown + 1, products().coverage.unknown)
+            f.ds.connection.use { c ->
+                c.prepareStatement("UPDATE venue_accounting_sales SET snapshot_json=? WHERE id='manual'").use {
+                    it.setString(
+                        1,
+                        manual.replace("\"menuItemId\":$item", "\"menuItemId\":null")
+                            .replace("Manual historic", "Same"),
+                    )
+                    it.executeUpdate()
+                }
+            }
+            val unassigned = products()
+            assertEquals("2", unassigned.unassignedManualUnits)
+            assertTrue(unassigned.rows.none { it.source == "MANUAL_SALE" })
+            assertEquals("PARTIAL", unassigned.coverage.availability)
+            assertTrue(unassigned.coverage.unknown >= 2)
+        }
+
+    @Test
+    fun `accounting EDIT gifts preserve exact delivered identity without duplicating quantities`() =
+        fixture { f ->
+            val category = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Gift')")
+            val item =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$category,'Renamed',99999)",
+                )
+            val batch = f.batch()
+            f.exec(
+                "UPDATE order_batches SET status='DELIVERED',first_delivered_at=TIMESTAMP WITH TIME ZONE " +
+                    "'2026-11-09 00:00:00+00' WHERE id=$batch",
+            )
+            val line =
+                f.insert(
+                    "INSERT INTO " +
+                        "order_batch_items(order_batch_id,menu_item_id,qty,item_name_snapshot," +
+                        "base_unit_price_minor_snapshot,currency_snapshot) VALUES ($batch,$item,3,'Historical'," +
+                        "100,'RUB')",
+                )
+            val shift =
+                f.insert(
+                    "INSERT INTO venue_accounting_shifts(venue_id,status,open_slot,timezone,opened_at) " +
+                        "VALUES (${f.venue},'OPEN',1,'UTC',TIMESTAMP WITH TIME ZONE '2026-11-01 00:00:00+00')",
+                )
+            f.exec(
+                "UPDATE orders SET status='CLOSED',accounting_shift_id=$shift,closed_at=TIMESTAMP WITH " +
+                    "TIME ZONE '2026-11-09 01:00:00+00' WHERE id=${f.order}",
+            )
+            val accounting =
+                AccountingRepository(
+                    f.ds,
+                    AuditLogRepository(f.ds),
+                    Clock.fixed(now.minusSeconds(1), ZoneOffset.UTC),
+                )
+
+            fun report() = runBlocking { f.repo.venue(f.venue, 7, request.copy(section = "products")) }.products!!
+            val initial = runBlocking { accounting.detail(f.venue, 7, shift) }!!.sales.single()
+            assertEquals("0", report().rows.single().giftUnits)
+            val command =
+                AccountingCommand(
+                    "gift-edit-request-001",
+                    "EDIT",
+                    shift,
+                    initial.id,
+                    initial.version,
+                    lines =
+                        initial.lines.map {
+                            AccountingLineInput(
+                                id = it.id,
+                                qty = it.qty,
+                                giftReason = "Venue gift",
+                            )
+                        },
+                    reason = "Venue gift",
+                )
+            val changed = runBlocking { accounting.execute(f.venue, 7, command) }
+            assertEquals(300L, changed.totals.giftMinor)
+            assertEquals(0L, changed.totals.accruedMinor)
+            assertNull(changed.sales.single().issue)
+            repeat(2) {
+                runBlocking { accounting.execute(f.venue, 7, command) }
+                val before = f.fingerprint()
+                val product = report()
+                assertEquals("3", product.rows.single().units)
+                assertEquals("3", product.rows.single().giftUnits)
+                assertEquals("0", product.rows.single().nonGiftUnits)
+                assertEquals("300", product.rows.single().snapshotGrossMinor)
+                assertEquals("AVAILABLE", product.coverage.availability)
+                assertEquals(before, f.fingerprint())
+            }
+            val manual =
+                AccountingCommand(
+                    "manual-gift-request-001",
+                    "CREATE",
+                    shiftId = shift,
+                    tableId = f.table,
+                    lines = listOf(AccountingLineInput(menuItemId = item, qty = 2, giftReason = "Manual gift")),
+                )
+            runBlocking { accounting.execute(f.venue, 7, manual) }
+            assertEquals("3", report().rows.single { it.source == "DIGITAL_DELIVERY" }.units)
+            assertEquals("2", report().rows.single { it.source == "MANUAL_SALE" }.giftUnits)
+        }
+
+    @Test
+    fun `ambiguous accounting gift amounts remain unknown and canonical gifts never double count`() =
+        fixture { f ->
+            val cat = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Gift')")
+            val item =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$cat,'Tea',99999)",
+                )
+            val batch = f.batch()
+            f.exec(
+                "UPDATE order_batches SET status='DELIVERED',first_delivered_at=TIMESTAMP WITH TIME ZONE " +
+                    "'2026-11-09 00:00:00+00' WHERE id=$batch",
+            )
+            val id =
+                f.insert(
+                    "INSERT INTO " +
+                        "order_batch_items(order_batch_id,menu_item_id,qty,item_name_snapshot," +
+                        "base_unit_price_minor_snapshot,currency_snapshot) VALUES ($batch,$item,3,'Tea',100," +
+                        "'RUB')",
+                )
+            val shift =
+                f.insert(
+                    "INSERT INTO venue_accounting_shifts(venue_id,status,open_slot,timezone,opened_at) " +
+                        "VALUES (${f.venue},'OPEN',1,'UTC',CURRENT_TIMESTAMP)",
+                )
+            val base =
+                AccountingSale(
+                    "order:${f.order}",
+                    f.table,
+                    "Table",
+                    "MINIAPP",
+                    orderId = f.order,
+                    createdAt = "2026-11-09T00:00:00Z",
+                    lines = listOf(AccountingLine("item:$id", "Tea", 3, 100, item, baseGiftMinor = 100)),
+                )
+
+            fun save(sale: AccountingSale) {
+                f.exec("DELETE FROM venue_accounting_sales")
+                f.ds.connection.use { c ->
+                    c.prepareStatement(
+                        "INSERT INTO venue_accounting_sales(id,shift_id,snapshot_json) VALUES (?,?,?)",
+                    ).use {
+                        it.setString(1, sale.id)
+                        it.setLong(2, shift)
+                        it.setString(3, Json.encodeToString(sale))
+                        it.executeUpdate()
+                    }
+                }
+            }
+
+            fun products() = runBlocking { f.repo.venue(f.venue, 7, request.copy(section = "products")) }.products!!
+            save(base)
+            assertNull(products().rows.single().giftUnits)
+            assertNull(products().rows.single().nonGiftUnits)
+            assertEquals("PARTIAL", products().coverage.availability)
+            val rule =
+                f.insert(
+                    "INSERT INTO " +
+                        "promotion_rules(venue_id,rule_type,target_type,target_value,discount_percent,status," +
+                        "created_by_user_id) VALUES (${f.venue},'HAPPY_HOURS_PERCENT','CATEGORY_TYPE','TEA',10," +
+                        "'ACTIVE',7)",
+                )
+            val application =
+                f.insert(
+                    "INSERT INTO " +
+                        "order_promotion_applications(order_id,batch_id,venue_id,user_id,rule_id,title_snapshot," +
+                        "rule_type,target_type,target_value,discount_percent,discount_total_minor,dedupe_key) " +
+                        "VALUES (${f.order},$batch,${f.venue},7,$rule,'Gift','HAPPY_HOURS_PERCENT'," +
+                        "'CATEGORY_TYPE','TEA',10,100,'gift')",
+                )
+            f.exec(
+                "INSERT INTO " +
+                    "order_promotion_reward_items(application_id,reward_order_batch_item_id," +
+                    "reward_menu_item_id,reward_qty,label_snapshot) VALUES ($application,$id,$item,1,'Gift')",
+            )
+            assertEquals("1", products().rows.single().giftUnits)
+            assertEquals("2", products().rows.single().nonGiftUnits)
+            save(base.copy(lines = base.lines.map { it.copy(giftReason = "Whole line") }))
+            assertEquals("3", products().rows.single().giftUnits)
+            val program =
+                f.insert(
+                    "INSERT INTO loyalty_programs(venue_id,program_type,status,nth_value,created_by_user_id) " +
+                        "VALUES (${f.venue},'NTH_HOOKAH_FREE','ACTIVE',3,7)",
+                )
+            f.exec(
+                "INSERT INTO " +
+                    "loyalty_redemptions(program_id,venue_id,user_id,order_id,batch_id,order_batch_item_id," +
+                    "order_promotion_application_id,status,discount_minor,dedupe_key) VALUES ($program," +
+                    "${f.venue},7,${f.order},$batch,$id,$application,'APPLIED',100,'gift')",
+            )
+            save(base)
+            assertEquals("1", products().rows.single().giftUnits)
+            save(base.copy(lines = base.lines.map { it.copy(baseGiftMinor = 150) }))
+            assertNull(products().rows.single().giftUnits)
+            save(base.copy(lines = base.lines.map { it.copy(id = "legacy-combined", baseGiftMinor = 200) }))
+            assertNull(products().rows.single().giftUnits)
+            save(base.copy(currency = "IQD"))
+            assertNull(products().rows.single().giftUnits)
+            save(base.copy(lines = base.lines.map { it.copy(baseGiftMinor = 0) }))
+            assertEquals("1", products().rows.single().giftUnits)
+            val other =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor,currency) VALUES " +
+                        "(${f.venue},$cat,'Other',99999,'IQD')",
+                )
+            f.exec(
+                "INSERT INTO " +
+                    "order_batch_items(order_batch_id,menu_item_id,qty,item_name_snapshot," +
+                    "base_unit_price_minor_snapshot,currency_snapshot) VALUES ($batch,$other,1,'Historical " +
+                    "other',100,'IQD')",
+            )
+            assertEquals(setOf("RUB", "IQD"), products().currencies.toSet())
+            assertEquals("0", products().rows.single { it.itemId == other }.giftUnits)
+            save(base.copy(lines = base.lines.map { it.copy(id = "legacy-combined", baseGiftMinor = 200) }))
+            assertTrue(products().rows.all { it.giftUnits == null && it.nonGiftUnits == null })
+            assertEquals(setOf("300", "100"), products().rows.map { it.snapshotGrossMinor }.toSet())
+        }
+
+    @Test
+    fun `completed additions require CLOSED tab while ACTIVE tabs remain a separate snapshot`() =
+        fixture { f ->
+            val tab =
+                f.insert(
+                    "INSERT INTO tab(venue_id,table_session_id,type) VALUES " +
+                        "(${f.venue},${f.session},'SHARED')",
+                )
+            val category = f.insert("INSERT INTO menu_categories(venue_id,name) VALUES (${f.venue},'Menu')")
+            val item =
+                f.insert(
+                    "INSERT INTO menu_items(venue_id,category_id,name,price_minor) VALUES " +
+                        "(${f.venue},$category,'Tea',100)",
+                )
+            val batch = f.batch()
+            f.exec(
+                "UPDATE order_batches SET tab_id=$tab,status='DELIVERED',first_delivered_at=TIMESTAMP " +
+                    "WITH TIME ZONE '2026-11-09 00:00:00+00' WHERE id=$batch",
+            )
+            f.exec(
+                "INSERT INTO " +
+                    "order_batch_items(order_batch_id,menu_item_id,qty,item_name_snapshot," +
+                    "base_unit_price_minor_snapshot,currency_snapshot) VALUES ($batch,$item,1,'Tea',100," +
+                    "'RUB')",
+            )
+            f.exec(
+                "UPDATE orders SET status='CLOSED',closed_at=TIMESTAMP WITH TIME ZONE '2026-11-09 " +
+                    "01:00:00+00' WHERE id=${f.order}",
+            )
+
+            fun stats() = runBlocking { f.repo.venue(f.venue, 7, request.copy(section = "additions")) }
+            assertEquals("0", stats().metrics.getValue("additions.completedTabs").value)
+            assertNull(stats().metrics.getValue("additions.share").value)
+            assertEquals("1", stats().metrics.getValue("additions.openTabs").value)
+            f.exec("UPDATE tab SET status='CLOSED' WHERE id=$tab")
+            val before = f.fingerprint()
+            repeat(2) { assertEquals("1", stats().metrics.getValue("additions.completedTabs").value) }
+            assertEquals(before, f.fingerprint())
+            assertEquals("0", stats().metrics.getValue("additions.openTabs").value)
+            f.exec("UPDATE orders SET status='ACTIVE' WHERE id=${f.order}")
+            assertEquals("0", stats().metrics.getValue("additions.completedTabs").value)
+            f.exec("UPDATE tab SET status='ACTIVE' WHERE id=$tab")
+            assertEquals("1", stats().metrics.getValue("additions.openTabs").value)
+            assertFailsWith<java.sql.SQLException> { f.exec("UPDATE tab SET status='PAID' WHERE id=$tab") }
+            f.exec("UPDATE orders SET status='CLOSED',closed_at=NULL WHERE id=${f.order}")
+            f.exec("UPDATE tab SET status='CLOSED' WHERE id=$tab")
+            assertEquals("PARTIAL", stats().metrics.getValue("additions.completedTabs").availability)
+            f.exec("UPDATE order_batches SET tab_id=NULL WHERE id=$batch")
+            assertEquals("PARTIAL", stats().metrics.getValue("additions.share").availability)
+        }
+
+    @Test
+    fun `booking attention follows committed guest conversation not booking status or closed thread`() =
+        fixture { f ->
+            f.exec("INSERT INTO users(telegram_user_id) VALUES (8),(9)")
+            f.exec("INSERT INTO venue_members(venue_id,user_id,role) VALUES (${f.venue},9,'STAFF')")
+            val booking =
+                f.insert(
+                    "INSERT INTO bookings(venue_id,user_id,scheduled_at,status,display_date,display_number) " +
+                        "VALUES (${f.venue},8,CURRENT_TIMESTAMP,'SEATED',CURRENT_DATE,1)",
+                )
+            f.insert(
+                "INSERT INTO support_threads(venue_id,guest_user_id,category,status,thread_type," +
+                    "assignee_scope,created_source,title) " +
+                    "VALUES (${f.venue},8,'OTHER','OPEN','VENUE_CHAT','VENUE','GUEST_BOT','Unrelated')",
+            )
+            val support = SupportThreadRepository(f.ds)
+
+            fun send(repo: SupportThreadRepository = support) =
+                runBlocking {
+                    repo.addBookingMessage(
+                        booking,
+                        8,
+                        SupportMessageAuthorRole.GUEST,
+                        SupportMessageSource.GUEST_BOT,
+                        "Private message and contact not for dashboard",
+                        expectedGuestUserId = 8,
+                        expectedVenueId = f.venue,
+                    )!!
+                }
+            val first = send()
+            val dashboard = VenueDashboardRepository(f.ds)
+
+            fun snapshot() = runBlocking { dashboard.snapshot(f.venue, 7, 3) }
+            for (status in listOf("CONFIRMED", "CHANGED", "SEATED")) {
+                f.exec("UPDATE bookings SET status='$status' WHERE id=$booking")
+                val before = f.fingerprint()
+                val result = snapshot()
+                assertEquals(listOf(booking), result.attention.mapNotNull { it.bookingId })
+                assertEquals(first.thread.id, result.attention.single().threadId)
+                assertTrue(first.thread.id != booking)
+                assertTrue(result.attentionComplete)
+                assertEquals(1, result.attentionTotalAtLeast)
+                assertFalse(Json.encodeToString(result).contains("Private message"))
+                assertEquals(before, f.fingerprint())
+            }
+            send()
+            assertEquals(1, snapshot().attention.size)
+            for (status in listOf("CLOSED", "RESOLVED")) {
+                f.exec("UPDATE support_threads SET status='$status' WHERE id=${first.thread.id}")
+                assertTrue(snapshot().attention.isEmpty())
+            }
+            f.exec("UPDATE support_threads SET status='IN_PROGRESS' WHERE id=${first.thread.id}")
+            f.exec(
+                "INSERT INTO support_thread_reads(thread_id,user_id,last_read_message_id) SELECT " +
+                    "${first.thread.id},7,MAX(id) FROM support_messages",
+            )
+            assertTrue(snapshot().attention.isEmpty())
+            runBlocking {
+                support.addBookingMessage(
+                    booking,
+                    7,
+                    SupportMessageAuthorRole.VENUE,
+                    SupportMessageSource.STAFF_CHAT,
+                    "Staff response",
+                    expectedVenueId = f.venue,
+                )
+            }
+            assertTrue(snapshot().attention.isEmpty())
+            val inserted = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            val delayed =
+                SupportThreadRepository(f.ds, bookingConversationCheckpoint = { phase ->
+                    if (phase == BookingConversationCheckpoint.AFTER_MESSAGE_WRITE) {
+                        inserted.countDown()
+                        check(release.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    }
+                })
+            val future = java.util.concurrent.CompletableFuture.supplyAsync { send(delayed) }
+            try {
+                assertTrue(inserted.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                assertTrue(snapshot().attention.isEmpty())
+            } finally {
+                release.countDown()
+            }
+            future.get(10, java.util.concurrent.TimeUnit.SECONDS)
+            assertEquals(1, snapshot().attention.size)
+            assertTrue(runBlocking { dashboard.snapshot(f.venue, 9, 3) }.attention.isEmpty())
+            val foreign = f.insert("INSERT INTO venues(name,status) VALUES ('Foreign','PUBLISHED')")
+            f.exec("UPDATE bookings SET venue_id=$foreign WHERE id=$booking")
+            assertTrue(snapshot().attention.isEmpty())
+            f.exec("UPDATE bookings SET venue_id=${f.venue} WHERE id=$booking")
+            f.ds.connection.use { c ->
+                c.prepareStatement(
+                    "INSERT INTO bookings(venue_id,user_id,scheduled_at,status,display_date,display_number) " +
+                        "VALUES (?,8,CURRENT_TIMESTAMP,'PENDING',CURRENT_DATE,?)",
+                ).use { st ->
+                    repeat(257) {
+                        st.setLong(1, f.venue)
+                        st.setInt(2, it + 2)
+                        st.addBatch()
+                    }
+                    st.executeBatch()
+                }
+            }
+            val overflow = snapshot()
+            assertFalse(overflow.attentionComplete)
+            assertEquals(256, overflow.attention.size)
+            assertEquals(257, overflow.attentionTotalAtLeast)
+            val before = f.fingerprint()
+            snapshot()
+            assertEquals(before, f.fingerprint())
+            f.exec("DELETE FROM venue_members WHERE venue_id=${f.venue} AND user_id=7")
+            assertFailsWith<ForbiddenException> { snapshot() }
+        }
+
     protected fun fixture(block: (Fixture) -> Unit) {
         val ds: DataSource =
             if (postgres) {
@@ -638,6 +1339,11 @@ internal abstract class KpiReadModelsContract(private val postgres: Boolean) {
                     "venue_subscriptions",
                     "venue_accounting_events",
                     "venue_accounting_commands",
+                    "venue_accounting_sales",
+                    "tab",
+                    "support_threads",
+                    "support_messages",
+                    "support_thread_reads",
                 )
                     .map { table ->
                         c.read("SELECT * FROM $table") { r ->

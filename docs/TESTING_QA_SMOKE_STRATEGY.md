@@ -1,5 +1,52 @@
 # Testing / QA Smoke Strategy
 
+## HT-VENUE-OPERATIONS-STATS-UX-01 — local validation contract
+
+LOCAL IMPLEMENTED / REVIEW PENDING. Required scenarios: A shift tasks + tab-scoped first/append +
+Bot claim/outbox/callback parity; B two tabs, 0/2 completed additions and 1/2 share; C stable IDs,
+qty/gift split, snapshots, manual/projection dedupe, excluded/canceled/missing data; D 360/390/1440,
+light/dark, small viewport/focus/context/revoke and screenshots; E device sound test/toggle/zero volume,
+blocked/suspended context, foreground/reload, two tabs and lease recovery. Physical iPhone sound and
+Telegram delivery remain OPEN; no real sends or hosted/staging actions in this task.
+
+Run existing KpiReadModels H2/PostgreSQL, VenueDashboardRoutes/CapacityPostgres, VenueStatsUiContract,
+StaffChatNotifier/OutboxVenueAuthority, AnalyticsFoundation and affected writers first. New mandatory
+VenueOperationsPostgresHttpTest exercises real PG transitions -> real Netty/Ktor GET. For live Chromium,
+set VENUE_OPERATIONS_LIVE_DIR to the same ignored local directory for the test and the matching
+`operations PostgreSQL HTTP response passes the real adapter and merchandise DOM` browser case.
+The fixture publishes ready.json with synthetic test context and waits for done; no real token/data.
+Full backend/Chromium on the final candidate, compile/ktlint, TypeScript/build, all seven CI result gates,
+portable 72/24/18 and exact migration inventories remain mandatory. No old XML mixture as fresh full PASS.
+PG V139 / H2 V140 inventories must preserve V126 and reject unknown/modified SQL. CI includes the new
+PostgreSQL HTTP suite, minima and named new KPI/browser cases, plus missing/skipped negative parser tests.
+Outbox authority regression must exercise claim and pre-dispatch checks after a chat is rebound to
+another venue, preserve the original activity-card id after radar delivery, and reject an orphan
+radar marker without an order link. No real Telegram dispatch is performed by these tests.
+F1–F5 fixes require real AccountingRepository EDIT (full line gift + replay), ambiguous allocation
+null/PARTIAL, promotion/loyalty overlap, mixed currencies and no double quantities on H2/PostgreSQL.
+TAB ACTIVE/CLOSED must be independent from order state; no fabricated PAID status or tab completion date.
+Booking-message tests use the real writer, late commit, guest/read/thread/venue/role boundaries and overflow.
+The PostgreSQL HTTP fixture feeds products, additions and dashboard through real adapters into Chromium DOM;
+all-table fingerprints must remain unchanged by GET. Real Chromium AudioContext and a genuinely held Web Lock
+prove timeout -> recovery -> receipt=1 and truthful suspended/zero-volume/reload/two-tab states.
+Reconciliation must retain booking highlight while preserving external focus and avoiding repeated scroll.
+Required PR/main inventories include all four new H2/PG cases and three new browser cases; absent/skipped
+cases must fail the real result parsers. Full backend/Chromium belong to the final frozen source hashes.
+The independently observed concurrent updateByVenue(CONFIRMED) race is separate and is not fixed here.
+HT-VENUE-BOOKING-ATTENTION-DEEPLINK-FIX-01 adds mandatory VenueBookingAttentionPostgresHttpTest:
+real booking-message writer -> Ktor Dashboard -> Mini App adapter -> actual click -> exact Messages
+read, with bookingId != threadId, >100 newer threads, absent SEATED queue row and CLOSED/RESOLVED exclusion.
+Check OWNER/MANAGER, Staff/Guest/foreign/revoked/Platform denial, unchanged dashboard fingerprints,
+actor-only read cursors and the existing real PostgreSQL read/write concurrency suite. Live browser
+handoff uses VENUE_BOOKING_ATTENTION_LIVE_DIR and the matching permanent browser case; a fixture control
+file commits a new Guest message after the open snapshot and verifies it stays unread. No real messages.
+Browser checks include 360/390/1440, keyboard, reload/Back, exact failure/revoke and no adjacent-thread fallback.
+The new backend suite/name and all five browser cases are mandatory in existing PR/main selectors/gates;
+missing/skipped negatives remain required. Reuse existing Messages/account/venue/stale-response regressions.
+
+ONBOARDING-H2-001 remains separate; fixture helpers do not prove packaged H2 upgrade acceptance.
+
+
 ## Final Analytics billing CI coverage — HT-ANALYTICS-FINAL-CI-COVERAGE-FIX-01
 
 Stages 1–4 are locally implemented and independently checked (owner-supplied final review).

@@ -4013,10 +4013,9 @@ async function mockVenueStatsApi(
   await page.route('**/api/venue/1/stats**', async (route) => {
     const url = new URL(route.request().url())
     if (url.pathname.endsWith('/stats/v1')) {
-      if (url.searchParams.get('section') === 'all') {
-        const days = (Date.parse(url.searchParams.get('to')!) - Date.parse(url.searchParams.get('from')!)) / 86_400_000
-        periods.push(days === 7 ? '7d' : days === 30 ? '30d' : 'today')
-      }
+      const days = (Date.parse(url.searchParams.get('to')!) - Date.parse(url.searchParams.get('from')!)) / 86_400_000
+      const selectedPeriod = days === 7 ? '7d' : days === 30 ? '30d' : 'today'
+      if (periods.at(-1) !== selectedPeriod) periods.push(selectedPeriod)
       await route.fulfill(jsonResponse(statsResponse(url)))
       return
     }
@@ -8870,7 +8869,7 @@ async function mockOwnerUx(page: Page, status = 'DRAFT', permissions = ownerUxPe
     { id: 1, status: 'NEW' }, { id: 2, status: 'ACK' }
   ] })))
   await page.route('**/api/venue/*/staff-chat', (route) => route.fulfill(jsonResponse({ isLinked: true })))
-  await page.route('**/api/venue/*/dashboard', route => route.fulfill(jsonResponse({
+  await page.route('**/api/venue/*/dashboard?monitoringVersion=3', route => route.fulfill(jsonResponse({
     venueId: Number(new URL(route.request().url()).pathname.split('/')[3]), userId: 123456789, role: 'OWNER', permissions,
     monitoringVersion: 2, eventCapacity: 256, attentionComplete: true, attentionTotalAtLeast: 1, attention: [{ id: 'call:1', kind: 'STAFF_CALL_CREATED', createdAt: '2030-01-01T00:00:00Z', callId: 1, orderId: null, tableNumber: 1 }],
     activeOrders: 0, callsInWork: 1, bookingsPending: 0, occupiedTables: 0, activeTables: 4, unavailableItems: 0,
@@ -13981,7 +13980,10 @@ test('venue bill renders persisted happy hours amounts without recalculating the
   await expect(bill).toContainText(/Счастливые часы.*−600,00\s*₽/)
   await expect(bill).toContainText(/К оплате.*600,00\s*₽/)
 
-  const batch = page.locator('.order-batch').filter({ hasText: 'Основная заявка' })
+  const batch = page.locator('.order-batch[data-batch-id="300"]')
+  await page.evaluate(() => { window.location.hash = window.location.hash.split('?')[0] + '?batchId=300' })
+  await expect(batch).toHaveAttribute('data-highlighted', 'true')
+  await expect(batch).toBeFocused()
   await expect(batch).toContainText('Скидки по заявке')
   await expect(batch).toContainText(/Счастливые часы.*−600,00\s*₽/)
   await expect(batch).toContainText(/Акции.*−600,00\s*₽.*к оплате.*600,00\s*₽/)
@@ -18927,6 +18929,9 @@ test('venue manager sees read-only statistics and switches period', async ({ pag
   await openVenueSection(page, 'Статистика')
   await expect(page.getByRole('heading', { name: 'Статистика' })).toBeVisible()
   await expect(page.locator('[data-kpi="orders.created"] .stats-value')).toHaveText('1')
+  await expect(page.locator('[data-kpi="batches.created"]')).toHaveCount(0)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('service')
+  await page.getByRole('combobox', { name: 'Показатели обслуживания', exact: true }).selectOption('orders')
   await expect(page.locator('[data-kpi="batches.created"] .stats-value')).toHaveText('3')
   await expect(page.getByText('Чай из заказа', { exact: true })).toBeVisible()
 
@@ -19167,6 +19172,7 @@ test('venue owner sees statistics section', async ({ page }) => {
   await expect(page.getByRole('link', { name: 'Статистика', exact: true })).toBeVisible()
   await openVenueSection(page, 'Статистика')
   await expect(page.getByRole('heading', { name: 'Статистика' })).toBeVisible()
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance')
   await expect(page.getByRole('heading', { name: 'Финансовые итоги закрытых смен', exact: true })).toBeVisible()
   await expect(page.locator('#stats-finance [data-kpi="averageAccruedSale"]').first()).toContainText('Средняя начисленная продажа')
 })
@@ -23454,7 +23460,7 @@ test('owner UX02 booking and extension forms save explicitly and protect unsaved
 
 test('owner UX02 load errors do not become zero counts and denied settings do not call APIs', async ({ page }) => {
   await mockOwnerUx(page, 'DRAFT', ['ORDER_QUEUE_VIEW'])
-  await page.route('**/api/venue/*/dashboard', (route) => route.fulfill(jsonResponse({ error: { code: 'INTERNAL_ERROR' } }, 500)))
+  await page.route('**/api/venue/*/dashboard?monitoringVersion=3', (route) => route.fulfill(jsonResponse({ error: { code: 'INTERNAL_ERROR' } }, 500)))
   await page.goto('?mode=venue#/dashboard')
   await expect(page.locator('.venue-dashboard-card').filter({ hasText: 'Новые вызовы:' })).toHaveText('Новые вызовы:—')
   await expect(page.locator('.venue-alert-status')).toContainText('Нет связи')

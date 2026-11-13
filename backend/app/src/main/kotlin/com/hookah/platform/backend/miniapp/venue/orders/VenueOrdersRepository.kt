@@ -1140,7 +1140,7 @@ class VenueOrdersRepository(
                         var changedBatchId: Long? = null
                         var previousBatchStatus: OrderBatchStatus? = null
                         if (nextStatus == OrderWorkflowStatus.CLOSED) {
-                            updateOrderStatusOnly(connection, orderId)
+                            updateOrderStatusOnly(connection, orderId, now)
                             visitRepository?.recordOrderClosedVisits(connection, orderId, now.toInstant())
                         } else {
                             val batchStatus =
@@ -1639,7 +1639,7 @@ class VenueOrdersRepository(
                                 applied = false,
                             )
                         }
-                        updateOrderStatusOnly(connection, orderId)
+                        updateOrderStatusOnly(connection, orderId, now)
                         insertAudit(
                             connection = connection,
                             orderId = orderId,
@@ -3338,16 +3338,19 @@ class VenueOrdersRepository(
     private fun updateOrderStatusOnly(
         connection: Connection,
         orderId: Long,
+        now: OffsetDateTime,
     ) {
         connection.prepareStatement(
             """
             UPDATE orders
             SET status = 'CLOSED',
+                closed_at = COALESCE(closed_at, ?),
                 updated_at = now()
             WHERE id = ?
             """.trimIndent(),
         ).use { statement ->
-            statement.setLong(1, orderId)
+            statement.setObject(1, now)
+            statement.setLong(2, orderId)
             statement.executeUpdate()
         }
     }

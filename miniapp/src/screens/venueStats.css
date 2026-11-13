@@ -50,3 +50,15 @@
   .stats-metadata { display: block; }
   .stats-filter-row > button, .stats-custom-period > button { width: 100%; }
 }
+.stats-product-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: .6rem; }
+.stats-product-row { overflow-wrap: anywhere; }
+.stats-service-details { border-block-end: 1px solid var(--app-border); padding: .8rem 0; }
+.stats-service-details > summary { font-size: 1.1rem; font-weight: 650; cursor: pointer; }
+
+.venue-stats .stats-overview .venue-stats-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 145px), 1fr)); }
+.venue-stats .stats-overview .venue-stats-metric { padding: .75rem; }
+.stats-overview .stats-group { margin-top: 0; }
+.stats-overview .stats-explanation summary { font-size: .8rem; }
+.stats-product-controls > summary { cursor: pointer; min-height: 44px; padding: .65rem 0; }
+.stats-product-controls[hidden] { display: none; }
+.stats-coverage p { margin: 0; font-size: .85rem; }
