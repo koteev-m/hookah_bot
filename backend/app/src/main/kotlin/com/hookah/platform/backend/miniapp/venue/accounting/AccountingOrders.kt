@@ -4,6 +4,13 @@ import com.hookah.platform.backend.miniapp.venue.orders.OrderDetail
 import com.hookah.platform.backend.miniapp.venue.orders.OrderWorkflowStatus
 import com.hookah.platform.backend.miniapp.venue.orders.toOrderBillSnapshot
 
+internal const val ACCOUNTING_TEXT_SOURCE_WARNING =
+    "Есть текстовая часть без товарного состава и цен. Учтены известные строки; нужна сверка исходного заказа."
+internal const val ACCOUNTING_TEXT_ISSUE =
+    "Текстовый заказ без товарного состава и цен. Нужна сверка исходного заказа; не добавляйте его повторно."
+internal const val ACCOUNTING_TEXT_DETAIL_UNKNOWN =
+    "Денежный итог подтверждён сверкой. Товарная детализация, полные скидки и подарки не установлены."
+
 /** Projection of the canonical bill; no guest/session/order is created for accounting. */
 internal fun OrderDetail.toAccountingSale(closed: Boolean): AccountingSale {
     val bill = toOrderBillSnapshot()
@@ -42,7 +49,11 @@ internal fun OrderDetail.toAccountingSale(closed: Boolean): AccountingSale {
                     !it.isExcluded && it.itemStatus == OrderBatchItemStatus.ACTIVE && it.priceMinor == null
                 }
         }
-    val issue =
+    val textIncomplete =
+        batches.any {
+            it.source == "CHAT" && it.items.isEmpty() && it.status != OrderWorkflowStatus.CLOSED
+        }
+    val financialIssue =
         when {
             lines.any { it.qty !in 1..1000 || it.unitPriceMinor !in 0..1_000_000_000L } ->
                 "Сумма исходного счёта выходит за допустимые пределы учёта. Нужна сверка."
@@ -54,6 +65,7 @@ internal fun OrderDetail.toAccountingSale(closed: Boolean): AccountingSale {
                 "Сумма позиций расходится с исходным счётом. Нужна сверка."
             else -> null
         }
+    val issue = financialIssue ?: if (textIncomplete && lines.isEmpty()) ACCOUNTING_TEXT_ISSUE else null
     return AccountingSale(
         id = "order:$orderId",
         orderId = orderId,
@@ -66,5 +78,12 @@ internal fun OrderDetail.toAccountingSale(closed: Boolean): AccountingSale {
         lines = lines,
         originalPayableMinor = bill.finalPayableTotalMinor,
         issue = issue,
+        sourceWarning =
+            if (financialIssue == null && textIncomplete && lines.isNotEmpty()) {
+                ACCOUNTING_TEXT_SOURCE_WARNING
+            } else {
+                null
+            },
+        textReconciliationAvailable = closed && textIncomplete && financialIssue == null,
     )
 }

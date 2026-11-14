@@ -260,6 +260,47 @@ class AnalyticsBillingCiTest(unittest.TestCase):
             self.scenario(self.edit(name, lambda suite: ET.SubElement(suite.find('testcase'), 'skipped')))
 
 
+    def test_accounting_percent_cases_are_selected_mandatory_and_cannot_be_skipped(self):
+        stem = 'com.hookah.platform.backend.miniapp.venue.accounting.'
+        for suffix in ('AccountingRepositoryH2Test', 'AccountingRepositoryPostgresTest',
+                       'AccountingPercentChannelsPostgresTest'):
+            name = stem + suffix
+            self.assertIn('--tests "' + name + '"', self.workflow)
+            cases = self.inventory['required_test_names'][name]
+            self.assertEqual(len(cases), 1 if 'Channels' in suffix else 6)
+            self.scenario(lambda reports, marker, env: (reports / f'TEST-{name}.xml').unlink())
+            for case in cases:
+                def replace(suite):
+                    target = next(t for t in suite.findall('testcase') if t.get('name').removesuffix('()') == case)
+                    target.set('name', 'unrelated replacement()')
+                self.scenario(self.edit(name, replace))
+                def skip(suite):
+                    target = next(t for t in suite.findall('testcase') if t.get('name').removesuffix('()') == case)
+                    ET.SubElement(target, 'skipped')
+                    suite.set('skipped', '1')
+                self.scenario(self.edit(name, skip))
+
+    def test_chat_reconciliation_cases_are_selected_mandatory_and_cannot_be_skipped(self):
+        stem = 'com.hookah.platform.backend.miniapp.venue.accounting.'
+        for suffix, count in [('H2Test', 4), ('PostgresTest', 5), ('PostgresHttpTest', 1)]:
+            name = stem + 'AccountingChatReconciliation' + suffix
+            self.assertIn('--tests "' + name + '"', self.workflow)
+            self.assertEqual(self.inventory['expected_classes'].count(name), 1)
+            self.assertEqual(self.inventory['required_minimums'][name], count)
+            cases = self.inventory['required_test_names'][name]
+            self.assertEqual(len(cases), count)
+            self.scenario(lambda reports, marker, env: (reports / f'TEST-{name}.xml').unlink())
+            for case in cases:
+                def replace(suite):
+                    target = next(t for t in suite.findall('testcase') if t.get('name').removesuffix('()') == case)
+                    target.set('name', 'unrelated replacement()')
+                self.scenario(self.edit(name, replace))
+                def skip(suite):
+                    target = next(t for t in suite.findall('testcase') if t.get('name').removesuffix('()') == case)
+                    ET.SubElement(target, 'skipped')
+                    suite.set('skipped', '1')
+                self.scenario(self.edit(name, skip))
+
     def test_venue_review_kpi_cases_are_mandatory_and_cannot_be_skipped(self):
         for suffix in ('H2', 'Postgres'):
             name = f'com.hookah.platform.backend.analytics.KpiReadModels{suffix}Test'
@@ -286,8 +327,8 @@ class AnalyticsBillingCiTest(unittest.TestCase):
         specs = [{'file': file, 'title': title,
                   'tests': [{'status': 'expected', 'expectedStatus': 'passed', 'results': [{'status': 'passed'}]}
                             for _ in range(count)]} for (file, title), count in inventory.items()]
-        reviews = [index for index, spec in enumerate(specs) if spec['title'].startswith('review F') or spec['file'] in {'venue-booking-attention.spec.ts', 'venue-products-category.spec.ts'}]
-        self.assertEqual(len(reviews), 27)
+        reviews = [index for index, spec in enumerate(specs) if spec['title'].startswith('review F') or spec['file'] in {'venue-booking-attention.spec.ts', 'venue-products-category.spec.ts', 'accounting-percent.spec.ts', 'accounting-chat-reconciliation.spec.ts'}]
+        self.assertEqual(len(reviews), 65)
         minimum = next(ast.literal_eval(node.value) for node in ast.parse(code).body
                        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
                        and node.targets[0].id == 'minimum_executed')

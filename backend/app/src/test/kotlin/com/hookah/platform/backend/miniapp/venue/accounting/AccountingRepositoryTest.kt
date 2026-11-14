@@ -113,6 +113,512 @@ abstract class AccountingRepositoryContract {
     protected abstract fun database(): HikariDataSource
 
     @Test
+    fun `percent discount is exact once per line retains mode and replays without payment`() =
+        runBlocking {
+            database().use { ds ->
+                seedAccounting(ds)
+                val repo = AccountingRepository(ds)
+                for ((percent, expected) in listOf(
+                    "0" to 0L,
+                    "10" to 30000L,
+                    "12.5" to 37500L,
+                    "100" to 300000L,
+                    "0,5" to 1500L,
+                )) {
+                    val input =
+                        AccountingLineInput(
+                            name = "Percent",
+                            qty = 2,
+                            unitPriceMinor = 150000,
+                            discountPercent = percent,
+                        )
+                    val request = command("CREATE").copy(tableId = 11, lines = listOf(input), reason = "Discount")
+                    val result = repo.execute(1, 103, request)
+                    val sale =
+                        result.sales.last {
+                            it.lines.single().name == "Percent" &&
+                                it.lines.single().discountPercent == percent.replace(',', '.')
+                        }
+                    assertEquals(expected, sale.lines.single().discountMinor)
+                    assertEquals(300000L - expected, sale.payable)
+                    assertEquals(0, sale.paid)
+                    assertEquals(null, sale.lines.single().giftReason)
+                    assertEquals(result, repo.execute(1, 103, request))
+                }
+                val rounding =
+                    repo.execute(
+                        1,
+                        103,
+                        command("CREATE").copy(
+                            tableId = 11,
+                            reason = "Rounding",
+                            lines =
+                                listOf(
+                                    AccountingLineInput(
+                                        name = "Round once",
+                                        qty = 3,
+                                        unitPriceMinor = 1,
+                                        discountPercent = "50",
+                                    ),
+                                ),
+                        ),
+                    )
+                assertEquals(
+                    2,
+                    rounding.sales.single { it.lines.single().name == "Round once" }.lines.single().discountMinor,
+                )
+                val large =
+                    repo.execute(
+                        1,
+                        103,
+                        command("CREATE").copy(
+                            tableId = 11,
+                            reason = "Large",
+                            lines =
+                                listOf(
+                                    AccountingLineInput(
+                                        name = "Large",
+                                        qty = 1000,
+                                        unitPriceMinor = 1000000000,
+                                        discountPercent = "99.99",
+                                    ),
+                                ),
+                        ),
+                    )
+                assertEquals(
+                    999900000000,
+                    large.sales.single { it.lines.single().name == "Large" }.lines.single().discountMinor,
+                )
+                assertEquals(0, large.totals.paidMinor)
+                ds.connection.use { c ->
+                    assertEquals(7, c.count("venue_accounting_sales"))
+                    assertEquals(7, c.count("audit_log", "action = 'VENUE_ACCOUNTING_CREATE'"))
+                    assertEquals(0, c.count("orders"))
+                    assertEquals(0, c.count("table_sessions"))
+                    assertEquals(0, c.count("telegram_outbox"))
+                }
+            }
+        }
+
+    @Test
+    fun `percent rejects invalid dual gifted and unreasoned input atomically and never creates overpayment`() =
+        runBlocking {
+            database().use { ds ->
+                seedAccounting(ds)
+                val repo = AccountingRepository(ds)
+                val base = command("CREATE").copy(tableId = 11, reason = "Discount")
+                for (value in listOf("-1", "100.01", "1.234", "NaN", "", "1e1")) {
+                    assertFailsWith<InvalidInputException> {
+                        repo.execute(
+                            1,
+                            103,
+                            base.copy(
+                                lines =
+                                    listOf(
+                                        AccountingLineInput(
+                                            name = "Bad",
+                                            unitPriceMinor = 100,
+                                            discountPercent = value,
+                                        ),
+                                    ),
+                            ),
+                        )
+                    }
+                }
+                for (line in listOf(
+                    AccountingLineInput(
+                        name = "Dual",
+                        unitPriceMinor = 100,
+                        discountPercent = "10",
+                        discountMinor = 10,
+                    ),
+                    AccountingLineInput(
+                        name = "Gift",
+                        unitPriceMinor = 100,
+                        discountPercent = "10",
+                        giftReason = "Gift",
+                    ),
+                )) {
+                    assertFailsWith<InvalidInputException> { repo.execute(1, 103, base.copy(lines = listOf(line))) }
+                }
+                assertFailsWith<InvalidInputException> {
+                    repo.execute(
+                        1,
+                        103,
+                        base.copy(
+                            reason = null,
+                            lines =
+                                listOf(
+                                    AccountingLineInput(name = "Reason", unitPriceMinor = 100, discountPercent = "10"),
+                                ),
+                        ),
+                    )
+                }
+                ds.connection.use {
+                        c ->
+                    assertEquals(0, c.count("venue_accounting_shifts"))
+                    assertEquals(0, c.count("audit_log"))
+                }
+                val request =
+                    base.copy(
+                        lines =
+                            listOf(
+                                AccountingLineInput(name = "Paid", unitPriceMinor = 10000, discountPercent = "10"),
+                            ),
+                    )
+                val created = repo.execute(1, 103, request)
+                val first = created.sales.single()
+                val paid =
+                    repo.execute(
+                        1,
+                        103,
+                        command("PAY", created.shiftId, first).copy(paymentMethod = "CASH", amountMinor = 9000),
+                    ).sales.single()
+                val edit =
+                    command(
+                        "EDIT",
+                        created.shiftId,
+                        paid,
+                    ).copy(
+                        reason = "Correction",
+                        lines =
+                            listOf(
+                                AccountingLineInput(
+                                    id = paid.lines.single().id,
+                                    name = "Paid",
+                                    unitPriceMinor = 10000,
+                                    discountPercent = "100",
+                                ),
+                            ),
+                    )
+                assertFailsWith<AccountingConflictException> { repo.execute(1, 103, edit) }
+                assertEquals(paid, repo.detail(1, 103, created.shiftId).sales.single())
+                val closed =
+                    repo.execute(
+                        1,
+                        101,
+                        command(
+                            "CLOSE",
+                            created.shiftId,
+                        ).copy(expectedReportHash = repo.detail(1, 101, created.shiftId).reportHash),
+                    )
+                assertFailsWith<AccountingConflictException> { repo.execute(1, 103, edit) }
+                assertEquals(closed, repo.detail(1, 101, created.shiftId))
+            }
+        }
+
+    @Test
+    fun `menu price conflict requires confirmation and hidden category cannot create a manual sale`() =
+        runBlocking {
+            database().use { ds ->
+                seedAccounting(ds)
+                val repo = AccountingRepository(ds)
+                val request =
+                    command(
+                        "CREATE",
+                    ).copy(
+                        tableId = 11,
+                        reason = "Discount",
+                        lines =
+                            listOf(
+                                AccountingLineInput(
+                                    menuItemId = 21,
+                                    qty = 2,
+                                    unitPriceMinor = 10000,
+                                    discountPercent = "10",
+                                ),
+                            ),
+                    )
+                ds.connection.use { it.exec("UPDATE menu_items SET price_minor=150000 WHERE id=21") }
+                val error = assertFailsWith<AccountingConflictException> { repo.execute(1, 103, request) }
+                assertEquals("price", error.details!!["field"]!!.toString().trim('"'))
+                ds.connection.use {
+                        c ->
+                    assertEquals(0, c.count("venue_accounting_shifts"))
+                    assertEquals(0, c.count("venue_accounting_sales"))
+                }
+                val agreed = request.copy(lines = listOf(request.lines.single().copy(unitPriceMinor = 150000)))
+                val result = repo.execute(1, 103, agreed)
+                assertEquals(300000, result.totals.grossMinor)
+                assertEquals(30000, result.totals.discountMinor)
+                assertEquals(270000, result.totals.accruedMinor)
+                ds.connection.use { it.exec("UPDATE menu_categories SET is_active=FALSE WHERE id=21") }
+                assertFailsWith<NotFoundException> {
+                    repo.execute(
+                        1,
+                        103,
+                        agreed.copy(requestId = UUID.randomUUID().toString()),
+                    )
+                }
+                assertEquals(result, repo.execute(1, 103, agreed))
+            }
+        }
+
+    @Test
+    fun `percent corrections preserve digital source discounts and atomic audit failure leaves no purchase`() =
+        runBlocking {
+            database().use { ds ->
+                seedAccounting(ds)
+                val percent =
+                    command(
+                        "CREATE",
+                    ).copy(
+                        tableId = 11,
+                        reason = "Discount",
+                        lines =
+                            listOf(
+                                AccountingLineInput(name = "Same", unitPriceMinor = 10000, discountPercent = "10"),
+                            ),
+                    )
+                val broken =
+                    AccountingRepository(ds, audit = {
+                            _,
+                            _,
+                            _,
+                            _,
+                            _,
+                            _,
+                        ->
+                        throw SQLException("Synthetic audit failure")
+                    })
+                assertFailsWith<DatabaseUnavailableException> { broken.execute(1, 103, percent) }
+                ds.connection.use { c ->
+                    for (table in listOf(
+                        "venue_accounting_sales",
+                        "venue_accounting_shifts",
+                        "venue_accounting_events",
+                        "venue_accounting_commands",
+                        "audit_log",
+                    )) assertEquals(0, c.count(table))
+                }
+                val repo = AccountingRepository(ds)
+                val one = repo.execute(1, 103, percent)
+                val two = repo.execute(1, 103, percent.copy(requestId = UUID.randomUUID().toString()))
+                assertEquals(2, two.sales.size)
+                assertEquals(18000, two.totals.accruedMinor)
+                assertEquals(two, repo.execute(1, 103, percent))
+                seedDigitalOrder(ds, 31, closed = true)
+                ds.connection.use {
+                    it.exec("UPDATE order_batch_items SET discount_percent=10 WHERE id=61")
+                    it.exec("UPDATE orders SET accounting_shift_id=${one.shiftId} WHERE id=31")
+                }
+                val digital = repo.detail(1, 103, one.shiftId).sales.single { it.orderId == 31L }
+                assertEquals(1000, digital.lines.single().baseDiscountMinor)
+                val edit =
+                    command(
+                        "EDIT",
+                        one.shiftId,
+                        digital,
+                    ).copy(
+                        reason = "Correction",
+                        lines =
+                            listOf(
+                                AccountingLineInput(
+                                    id = digital.lines.single().id,
+                                    qty = 1,
+                                    unitPriceMinor = 10000,
+                                    discountPercent = "10",
+                                ),
+                            ),
+                    )
+                assertFailsWith<InvalidInputException> { repo.execute(1, 103, edit) }
+                assertEquals(digital, repo.detail(1, 103, one.shiftId).sales.single { it.orderId == 31L })
+                val gifted =
+                    digital.copy(
+                        lines = digital.lines.map { it.copy(baseDiscountMinor = 0, baseGiftMinor = it.gross) },
+                    )
+                ds.connection.use { c ->
+                    c.prepareStatement(
+                        "INSERT INTO venue_accounting_sales(id,shift_id,snapshot_json) VALUES (?,?,?)",
+                    ).use {
+                            st ->
+                        st.setString(1, gifted.id)
+                        st.setLong(2, one.shiftId)
+                        st.setString(
+                            3,
+                            kotlinx.serialization.json.Json.encodeToString(AccountingSale.serializer(), gifted),
+                        )
+                        st.executeUpdate()
+                    }
+                }
+                for (value in listOf("0", "10")) {
+                    assertFailsWith<InvalidInputException> {
+                        repo.execute(1, 103, edit.copy(lines = edit.lines.map { it.copy(discountPercent = value) }))
+                    }
+                }
+            }
+        }
+
+    @Test
+    fun `text fallback without snapshots requires reconciliation instead of a confirmed zero bill`() =
+        runBlocking {
+            database().use { ds ->
+                seedAccounting(ds)
+                seedDigitalOrder(ds, 31, closed = true)
+                ds.connection.use {
+                    it.exec("DELETE FROM order_batch_items WHERE id=61")
+                    it.exec("UPDATE order_batches SET source='CHAT' WHERE id=51")
+                }
+                val repo = AccountingRepository(ds)
+                val opened = repo.execute(1, 101, command("OPEN"))
+                ds.connection.use { it.exec("UPDATE orders SET accounting_shift_id=${opened.shiftId} WHERE id=31") }
+                val report = repo.detail(1, 103, opened.shiftId)
+                val sale = report.sales.single()
+                assertNotNull(sale.issue)
+                assertTrue(sale.lines.isEmpty())
+                assertEquals(0, report.totals.accruedMinor)
+                assertFailsWith<AccountingConflictException> {
+                    repo.execute(
+                        1,
+                        103,
+                        command("PAY", report.shiftId, sale).copy(paymentMethod = "CASH", amountMinor = 1),
+                    )
+                }
+                assertFailsWith<AccountingConflictException> {
+                    repo.execute(
+                        1,
+                        101,
+                        command(
+                            "CLOSE",
+                            report.shiftId,
+                        ).copy(expectedReportHash = report.reportHash, acknowledgeUnpaid = true),
+                    )
+                }
+                assertEquals(0, ds.connection.use { it.count("venue_accounting_sales") })
+                ds.connection.use { c ->
+                    c.exec(
+                        "INSERT INTO " +
+                            "order_batch_items(id,order_batch_id,menu_item_id,qty,item_name_snapshot," +
+                            "base_unit_price_minor_snapshot,currency_snapshot) " +
+                            "OVERRIDING SYSTEM VALUE VALUES (61,51,21,1,'Tea',10000,'RUB')",
+                    )
+                    c.exec("UPDATE order_batches SET source='MINIAPP' WHERE id=51")
+                    c.exec(
+                        "INSERT INTO order_batches(id,order_id,source,status) OVERRIDING SYSTEM " +
+                            "VALUE VALUES (52,31,'CHAT','DELIVERED')",
+                    )
+                }
+                val partial = repo.detail(1, 103, opened.shiftId)
+                val mixed = partial.sales.single()
+                assertNull(mixed.issue)
+                assertNotNull(mixed.sourceWarning)
+                assertEquals(10000, partial.totals.accruedMinor)
+                assertEquals(1, partial.totals.ordersCount)
+                assertTrue(mixed.id in partial.disputedSaleIds)
+                assertFailsWith<AccountingConflictException> {
+                    repo.execute(
+                        1,
+                        103,
+                        command("PAY", partial.shiftId, mixed).copy(paymentMethod = "CASH", amountMinor = 100),
+                    )
+                }
+                assertFailsWith<AccountingConflictException> {
+                    repo.execute(
+                        1,
+                        101,
+                        command(
+                            "CLOSE",
+                            partial.shiftId,
+                        ).copy(expectedReportHash = partial.reportHash, acknowledgeUnpaid = true),
+                    )
+                }
+                val today = java.time.LocalDate.now(java.time.ZoneId.of(partial.timezone))
+                val finance =
+                    com.hookah.platform.backend.analytics.KpiRepository(ds).venue(
+                        1,
+                        101,
+                        com.hookah.platform.backend.analytics.KpiRequest(
+                            today.toString(),
+                            today.plusDays(1).toString(),
+                            section = "finance",
+                        ),
+                    )
+                val amount = finance.openShiftFinances.single().metrics.getValue("accrued")
+                assertEquals("PARTIAL", amount.availability)
+                assertEquals("10000", amount.observedValue)
+                assertNull(amount.value)
+                // Old saved projections cannot hide the incomplete canonical source in an open shift.
+                ds.connection.use { c ->
+                    c.prepareStatement(
+                        "INSERT INTO venue_accounting_sales(id,shift_id,snapshot_json) VALUES (?,?,?)",
+                    ).use {
+                            st ->
+                        st.setString(1, mixed.id)
+                        st.setLong(2, partial.shiftId)
+                        st.setString(
+                            3,
+                            kotlinx.serialization.json.Json.encodeToString(
+                                AccountingSale.serializer(),
+                                mixed.copy(sourceWarning = null),
+                            ),
+                        )
+                        st.executeUpdate()
+                    }
+                }
+                val cached = repo.detail(1, 103, partial.shiftId).sales.single()
+                assertNotNull(cached.sourceWarning)
+                assertEquals(10000, cached.payable)
+            }
+        }
+
+    @Test
+    fun `legacy command fingerprint and frozen snapshots omit new percent defaults`() =
+        runBlocking {
+            database().use { ds ->
+                seedAccounting(ds)
+                val old =
+                    """{"requestId":"legacy-request-0001","action":"CREATE","shiftId":null,""" +
+                        """"saleId":null,"expectedVersion":null,"tableId":11,"lines":[{"id":null,""" +
+                        """"menuItemId":null,"name":"Legacy","qty":1,"unitPriceMinor":100,""" +
+                        """"discountMinor":0,"giftReason":null}],"reason":null,"paymentMethod":null,""" +
+                        """"amountMinor":null,"paymentId":null,"expectedReportHash":null,""" +
+                        """"acknowledgeUnpaid":false}"""
+                val json = kotlinx.serialization.json.Json { encodeDefaults = true }
+                val request = json.decodeFromString<AccountingCommand>(old)
+                assertEquals(old, json.encodeToString(AccountingCommand.serializer(), request))
+                val repo = AccountingRepository(ds)
+                val result = repo.execute(1, 103, request)
+                val fingerprint =
+                    java.security.MessageDigest.getInstance(
+                        "SHA-256",
+                    ).digest(old.toByteArray()).joinToString("") {
+                        "%02x".format(it)
+                    }
+                ds.connection.use {
+                        c ->
+                    c.createStatement().use {
+                            st ->
+                        st.executeQuery(
+                            "SELECT fingerprint FROM venue_accounting_commands WHERE request_id='legacy-request-0001'",
+                        ).use {
+                                r ->
+                            r.next()
+                            assertEquals(fingerprint, r.getString(1))
+                        }
+                    }
+                }
+                assertEquals(result, repo.execute(1, 103, request))
+                val wire = json.encodeToString(AccountingReport.serializer(), result)
+                assertTrue(!wire.contains("discountPercent"))
+                assertTrue(!wire.contains("sourceWarning"))
+                for (field in listOf("textReconciliation", "unallocatedAccruedMinor", "financialDetailIncomplete")) {
+                    assertTrue(!wire.contains(field))
+                }
+                val closed =
+                    repo.execute(
+                        1,
+                        101,
+                        command(
+                            "CLOSE",
+                            result.shiftId,
+                        ).copy(expectedReportHash = result.reportHash, acknowledgeUnpaid = true),
+                    )
+                assertTrue(!json.encodeToString(AccountingReport.serializer(), closed).contains("discountPercent"))
+                assertEquals(closed, repo.detail(1, 101, result.shiftId))
+            }
+        }
+
+    @Test
     fun `manual menu snapshot partial mixed payments correction and immutable midnight close`() =
         runBlocking {
             database().use { ds ->

@@ -140,7 +140,8 @@ test('gift requires reason and menu amount is sent in integer minor units', asyn
   const api = await fixture(page)
   await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
   await page.getByLabel('Стол', { exact: true }).selectOption('11')
-  await page.getByLabel('Из меню или вручную').selectOption('21')
+  await page.getByLabel('Категория меню', { exact: true }).selectOption('1')
+  await page.getByLabel('Товар', { exact: true }).selectOption('21')
   await page.getByLabel('Подарок / бесплатно').check()
   await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('Укажите причину подарка')
@@ -465,6 +466,7 @@ const stored = (page: Page, key: string) => page.evaluate(k => sessionStorage.ge
 async function enterFirstDraft(page: Page) {
   await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
   await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Режим скидки', { exact: true }).selectOption('amount')
   await page.getByLabel('Название', { exact: true }).fill(draftCommands[0].lines[0].name)
   await page.getByLabel('Цена за единицу, ₽').fill('123,45')
 }
@@ -523,6 +525,7 @@ test('real quota fallback cleans the actual first draft and permits only a genui
   await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
   expect(api.commands).toHaveLength(1)
   await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Режим скидки', { exact: true }).selectOption('amount')
   await page.getByLabel('Название', { exact: true }).fill(draftCommands[1].lines[0].name)
   await page.getByLabel('Цена за единицу, ₽').fill('67,89')
   await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()

@@ -1,0 +1,578 @@
+{
+    "initial": {
+        "current": {
+            "shiftId": 1,
+            "venueId": 1,
+            "status": "OPEN",
+            "timezone": "UTC",
+            "openedAt": "2026-11-13T12:00:00Z",
+            "closedAt": null,
+            "currency": "RUB",
+            "sales": [
+                {
+                    "id": "order:1",
+                    "tableId": 11,
+                    "tableLabel": "Стол 1",
+                    "source": "CHAT",
+                    "orderId": 1,
+                    "displayNumber": 1,
+                    "orderClosed": true,
+                    "createdAt": "2026-11-13T12:00:00Z",
+                    "currency": "RUB",
+                    "lines": [],
+                    "payments": [],
+                    "version": 0,
+                    "cancelReason": null,
+                    "disputeReason": null,
+                    "originalPayableMinor": null,
+                    "issue": "Текстовый заказ без товарного состава и цен. Нужна сверка исходного заказа; не добавляйте его повторно.",
+                    "textReconciliationAvailable": true
+                }
+            ],
+            "totals": {
+                "salesCount": 1,
+                "ordersCount": 1,
+                "grossMinor": 0,
+                "discountMinor": 0,
+                "giftMinor": 0,
+                "accruedMinor": 0,
+                "paidMinor": 0,
+                "unpaidMinor": 0,
+                "cashMinor": 0,
+                "cardMinor": 0,
+                "transferMinor": 0
+            },
+            "byTable": [
+                {
+                    "label": "Стол 1",
+                    "qty": 1,
+                    "accruedMinor": 0
+                }
+            ],
+            "byItem": [],
+            "bySource": [],
+            "unpaidSaleIds": [],
+            "disputedSaleIds": [
+                "order:1"
+            ],
+            "reportHash": "captured-chat-report-hash"
+        },
+        "history": [],
+        "nextHistoryBeforeId": null
+    },
+    "reconciled": {
+        "current": {
+            "shiftId": 1,
+            "venueId": 1,
+            "status": "OPEN",
+            "timezone": "UTC",
+            "openedAt": "2026-11-13T12:00:00Z",
+            "closedAt": null,
+            "currency": "RUB",
+            "sales": [
+                {
+                    "id": "order:1",
+                    "tableId": 11,
+                    "tableLabel": "Стол 1",
+                    "source": "CHAT",
+                    "orderId": 1,
+                    "displayNumber": 1,
+                    "orderClosed": true,
+                    "createdAt": "2026-11-13T12:00:00Z",
+                    "currency": "RUB",
+                    "lines": [],
+                    "payments": [],
+                    "version": 1,
+                    "cancelReason": null,
+                    "disputeReason": "Денежный итог подтверждён сверкой. Товарная детализация, полные скидки и подарки не установлены.",
+                    "originalPayableMinor": null,
+                    "issue": null,
+                    "textReconciliation": {
+                        "confirmedAccruedMinor": 75000,
+                        "confirmationSource": "Кассовый документ №17",
+                        "reason": "Подтверждено по документу",
+                        "actorUserId": 101,
+                        "recordedAt": "2026-11-13T12:00:00Z",
+                        "originalIssue": "Текстовый заказ без товарного состава и цен. Нужна сверка исходного заказа; не добавляйте его повторно.",
+                        "originalSourceWarning": null
+                    }
+                }
+            ],
+            "totals": {
+                "salesCount": 1,
+                "ordersCount": 1,
+                "grossMinor": 0,
+                "discountMinor": 0,
+                "giftMinor": 0,
+                "accruedMinor": 75000,
+                "paidMinor": 0,
+                "unpaidMinor": 75000,
+                "cashMinor": 0,
+                "cardMinor": 0,
+                "transferMinor": 0,
+                "unallocatedAccruedMinor": 75000,
+                "financialDetailIncomplete": true
+            },
+            "byTable": [
+                {
+                    "label": "Стол 1",
+                    "qty": 1,
+                    "accruedMinor": 75000
+                }
+            ],
+            "byItem": [],
+            "bySource": [
+                {
+                    "label": "TEXT_CONFIRMED_UNALLOCATED",
+                    "qty": 0,
+                    "accruedMinor": 75000
+                }
+            ],
+            "unpaidSaleIds": [
+                "order:1"
+            ],
+            "disputedSaleIds": [
+                "order:1"
+            ],
+            "reportHash": "captured-chat-report-hash"
+        },
+        "history": [],
+        "nextHistoryBeforeId": null
+    },
+    "closed": {
+        "shiftId": 1,
+        "venueId": 1,
+        "status": "CLOSED",
+        "timezone": "UTC",
+        "openedAt": "2026-11-13T12:00:00Z",
+        "closedAt": "2026-11-13T12:00:00Z",
+        "currency": "RUB",
+        "sales": [
+            {
+                "id": "order:1",
+                "tableId": 11,
+                "tableLabel": "Стол 1",
+                "source": "CHAT",
+                "orderId": 1,
+                "displayNumber": 1,
+                "orderClosed": true,
+                "createdAt": "2026-11-13T12:00:00Z",
+                "currency": "RUB",
+                "lines": [],
+                "payments": [],
+                "version": 1,
+                "cancelReason": null,
+                "disputeReason": "Денежный итог подтверждён сверкой. Товарная детализация, полные скидки и подарки не установлены.",
+                "originalPayableMinor": null,
+                "issue": null,
+                "textReconciliation": {
+                    "confirmedAccruedMinor": 75000,
+                    "confirmationSource": "Кассовый документ №17",
+                    "reason": "Подтверждено по документу",
+                    "actorUserId": 101,
+                    "recordedAt": "2026-11-13T12:00:00Z",
+                    "originalIssue": "Текстовый заказ без товарного состава и цен. Нужна сверка исходного заказа; не добавляйте его повторно.",
+                    "originalSourceWarning": null
+                }
+            }
+        ],
+        "totals": {
+            "salesCount": 1,
+            "ordersCount": 1,
+            "grossMinor": 0,
+            "discountMinor": 0,
+            "giftMinor": 0,
+            "accruedMinor": 75000,
+            "paidMinor": 0,
+            "unpaidMinor": 75000,
+            "cashMinor": 0,
+            "cardMinor": 0,
+            "transferMinor": 0,
+            "unallocatedAccruedMinor": 75000,
+            "financialDetailIncomplete": true
+        },
+        "byTable": [
+            {
+                "label": "Стол 1",
+                "qty": 1,
+                "accruedMinor": 75000
+            }
+        ],
+        "byItem": [],
+        "bySource": [
+            {
+                "label": "TEXT_CONFIRMED_UNALLOCATED",
+                "qty": 0,
+                "accruedMinor": 75000
+            }
+        ],
+        "unpaidSaleIds": [
+            "order:1"
+        ],
+        "disputedSaleIds": [
+            "order:1"
+        ],
+        "reportHash": "captured-chat-report-hash"
+    },
+    "finance": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-13T12:00:00Z",
+        "period": {
+            "from": "2026-11-13T00:00:00Z",
+            "to": "2026-11-14T00:00:00Z",
+            "timezone": "UTC",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "finance",
+        "tableId": null,
+        "metrics": {
+            "finance.closedReports": {
+                "value": "1",
+                "observedValue": "1",
+                "unit": "COUNT",
+                "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 1,
+                "unknown": 0,
+                "reason": null
+            },
+            "finance.openShifts": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "finance.openReportCoverage": {
+                "value": "0",
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CURRENT_OPEN_SHIFT_PROVISIONAL",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            }
+        },
+        "breakdowns": {},
+        "closedShiftFinances": [
+            {
+                "currency": "RUB",
+                "metrics": {
+                    "accrued": {
+                        "value": "75000",
+                        "observedValue": "75000",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "operatorConfirmed": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "discounts": {
+                        "value": null,
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "TEXT_RECONCILIATION_DETAIL_UNKNOWN"
+                    },
+                    "gifts": {
+                        "value": null,
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "PARTIAL",
+                        "coverage": "PARTIAL",
+                        "samples": 1,
+                        "unknown": 1,
+                        "reason": "TEXT_RECONCILIATION_DETAIL_UNKNOWN"
+                    },
+                    "unpaid": {
+                        "value": "75000",
+                        "observedValue": "75000",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "sales": {
+                        "value": "1",
+                        "observedValue": "1",
+                        "unit": "COUNT",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "cash": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "card": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "transfer": {
+                        "value": "0",
+                        "observedValue": "0",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "unallocatedAccrued": {
+                        "value": "75000",
+                        "observedValue": "75000",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    },
+                    "averageAccruedSale": {
+                        "value": "75000",
+                        "observedValue": "75000",
+                        "unit": "MINOR_UNITS",
+                        "basis": "SHIFT_CLOSED_AT_FROZEN_REPORT",
+                        "availability": "AVAILABLE",
+                        "coverage": "COMPLETE_RECORDED_SOURCE",
+                        "samples": 1,
+                        "unknown": 0,
+                        "reason": null
+                    }
+                }
+            }
+        ],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    },
+    "products": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-13T12:00:00Z",
+        "period": {
+            "from": "2026-11-13T00:00:00Z",
+            "to": "2026-11-14T00:00:00Z",
+            "timezone": "UTC",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "products",
+        "tableId": null,
+        "metrics": {},
+        "breakdowns": {},
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "products": {
+            "rows": [
+                {
+                    "itemId": 21,
+                    "name": "Чай",
+                    "category": "Menu",
+                    "currentlyAvailable": true,
+                    "source": "DIGITAL_DELIVERY",
+                    "currency": "RUB",
+                    "units": "0",
+                    "giftUnits": "0",
+                    "nonGiftUnits": "0",
+                    "snapshotGrossMinor": "0",
+                    "options": [],
+                    "catalogCreatedAt": "2026-11-13T12:00:00Z",
+                    "categoryActive": true,
+                    "categoryId": 21
+                }
+            ],
+            "totalRows": 1,
+            "page": 1,
+            "pageSize": 50,
+            "categories": [
+                "Menu"
+            ],
+            "currencies": [
+                "RUB"
+            ],
+            "coverage": {
+                "value": null,
+                "observedValue": "0",
+                "unit": "COUNT",
+                "basis": "CONFIRMED_ITEMS_AND_MANUAL_SALES",
+                "availability": "PARTIAL",
+                "coverage": "PARTIAL",
+                "samples": 0,
+                "unknown": 1,
+                "reason": "LEGACY_HISTORY_UNKNOWN"
+            },
+            "unassignedManualUnits": "0",
+            "basis": "ITEM_FULFILLED_OR_BATCH_FIRST_DELIVERED_AT;MANUAL_SALE_CREATED_AT",
+            "netAmount": {
+                "value": null,
+                "observedValue": null,
+                "unit": "COUNT",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "ORDER_ADJUSTMENTS_NOT_ALLOCATED"
+            },
+            "summary": {
+                "units": {
+                    "value": null,
+                    "observedValue": "0",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_PRODUCT_UNITS",
+                    "availability": "PARTIAL",
+                    "coverage": "PARTIAL",
+                    "samples": 0,
+                    "unknown": 1,
+                    "reason": "LEGACY_HISTORY_UNKNOWN"
+                },
+                "giftUnits": {
+                    "value": null,
+                    "observedValue": "0",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_GIFT_UNITS",
+                    "availability": "PARTIAL",
+                    "coverage": "PARTIAL",
+                    "samples": 0,
+                    "unknown": 1,
+                    "reason": "LEGACY_HISTORY_UNKNOWN"
+                },
+                "grossAmounts": [
+                    {
+                        "currency": "RUB",
+                        "gross": {
+                            "value": null,
+                            "observedValue": "0",
+                            "unit": "MINOR",
+                            "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                            "availability": "PARTIAL",
+                            "coverage": "PARTIAL",
+                            "samples": 0,
+                            "unknown": 1,
+                            "reason": "LEGACY_HISTORY_UNKNOWN"
+                        }
+                    }
+                ]
+            },
+            "categoryOptions": [
+                {
+                    "key": "21",
+                    "id": 21,
+                    "name": "Menu"
+                }
+            ],
+            "categoryTotals": [
+                {
+                    "category": {
+                        "key": "21",
+                        "id": 21,
+                        "name": "Menu"
+                    },
+                    "totals": {
+                        "units": {
+                            "value": null,
+                            "observedValue": "0",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_PRODUCT_UNITS",
+                            "availability": "PARTIAL",
+                            "coverage": "PARTIAL",
+                            "samples": 0,
+                            "unknown": 1,
+                            "reason": "LEGACY_HISTORY_UNKNOWN"
+                        },
+                        "giftUnits": {
+                            "value": null,
+                            "observedValue": "0",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_GIFT_UNITS",
+                            "availability": "PARTIAL",
+                            "coverage": "PARTIAL",
+                            "samples": 0,
+                            "unknown": 1,
+                            "reason": "LEGACY_HISTORY_UNKNOWN"
+                        },
+                        "grossAmounts": [
+                            {
+                                "currency": "RUB",
+                                "gross": {
+                                    "value": null,
+                                    "observedValue": "0",
+                                    "unit": "MINOR",
+                                    "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                                    "availability": "PARTIAL",
+                                    "coverage": "PARTIAL",
+                                    "samples": 0,
+                                    "unknown": 1,
+                                    "reason": "LEGACY_HISTORY_UNKNOWN"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "categoryPage": null
+        },
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    }
+}

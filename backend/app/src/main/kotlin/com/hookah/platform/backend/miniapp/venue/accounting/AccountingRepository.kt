@@ -16,6 +16,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.security.MessageDigest
 import java.sql.Connection
 import java.sql.ResultSet
@@ -81,6 +83,7 @@ class AccountingRepository(
             if (command.reason != null && command.reason.length > 500) invalid("Причина должна быть до 500 символов.")
             if (command.lines.size > 100) invalid("В продаже может быть не более 100 позиций.")
             if (command.action == "CLOSE" && role == "STAFF") throw ForbiddenException()
+            if (command.action == "RECONCILE_TEXT" && role !in setOf("OWNER", "MANAGER")) throw ForbiddenException()
             val fingerprint = sha256(json.encodeToString(command))
             val replay =
                 c.query(
@@ -160,7 +163,7 @@ class AccountingRepository(
             conflict("Сначала завершите активные заказы в разделе «Заказы». Завершение заказа не означает оплату.")
         }
         if (report.sales.any {
-                it.issue != null
+                it.issue != null || it.sourceWarning != null
             }
         ) {
             conflict("Сначала устраните расхождения исходных счетов. Закрытие не выполнено.")
@@ -202,13 +205,19 @@ class AccountingRepository(
                 "Запись уже изменена. Обновите отчёт перед исправлением или оплатой.",
             )
         }
-        if (old != null && (!old.orderClosed || old.issue != null)) {
+        if (old != null && command.action != "RECONCILE_TEXT" &&
+            (!old.orderClosed || old.issue != null || old.sourceWarning != null)
+        ) {
             conflict("Сначала завершите и проверьте исходный заказ. Его расчётная сумма ещё может измениться.")
         }
         val changed =
             when (command.action) {
+                "RECONCILE_TEXT" -> reconcileText(c, report, checkNotNull(old), actor, command)
                 "CREATE" -> {
-                    val tableId = command.tableId ?: invalid("Выберите стол.")
+                    val tableId =
+                        command.tableId ?: throw InvalidInputException(
+                            "Выберите стол.", buildJsonObject { put("field", "table") },
+                        )
                     val label =
                         c.query(
                             "SELECT table_number FROM venue_tables WHERE id = ? AND venue_id = ? AND " +
@@ -216,7 +225,9 @@ class AccountingRepository(
                             tableId, report.venueId,
                         ) {
                             "Стол ${it.getInt(1)}"
-                        }.singleOrNull() ?: throw NotFoundException()
+                        }.singleOrNull() ?: throw NotFoundException(
+                            "Стол недоступен. Выберите другой стол.", buildJsonObject { put("field", "table") },
+                        )
                     AccountingSale(
                         id = "manual:${UUID.randomUUID()}",
                         tableId = tableId,
@@ -229,6 +240,11 @@ class AccountingRepository(
                 "EDIT" -> {
                     reason(command)
                     val sale = checkNotNull(old)
+                    if (sale.textReconciliation != null) {
+                        conflict(
+                            "Исправьте подтверждённый итог через форму сверки заказа.",
+                        )
+                    }
                     if (sale.cancelReason != null) {
                         conflict(
                             "Отменённая запись сохраняется в истории и не редактируется.",
@@ -286,6 +302,12 @@ class AccountingRepository(
                 "CANCEL" -> checkNotNull(old).copy(cancelReason = reason(command))
                 "DISPUTE" -> checkNotNull(old).copy(disputeReason = reason(command))
                 "RESOLVE" -> {
+                    if (old?.textReconciliation != null) {
+                        conflict(
+                            "Детализация текстового заказа остаётся неизвестной. " +
+                                "Закрытие требует подтверждения руководителя.",
+                        )
+                    }
                     reason(command)
                     checkNotNull(old).copy(disputeReason = null)
                 }
@@ -299,7 +321,10 @@ class AccountingRepository(
         }
         if (changed.lines.sumOf { it.gross } > MAX_SALE_MINOR) invalid("Слишком большая сумма продажи.")
         val newSales = report.sales.filterNot { it.id == changed.id } + changed
-        if (accountingTotals(newSales).grossMinor > MAX_SHIFT_MINOR) invalid("Превышен допустимый объём смены.")
+        val totals = accountingTotals(newSales)
+        if (totals.grossMinor > MAX_SHIFT_MINOR || totals.accruedMinor > MAX_SHIFT_MINOR) {
+            invalid("Превышен допустимый объём смены.")
+        }
         val saved = json.encodeToString(changed)
         val updated =
             c.exec(
@@ -334,6 +359,72 @@ class AccountingRepository(
         )
     }
 
+    private fun reconcileText(
+        c: Connection,
+        report: AccountingReport,
+        old: AccountingSale,
+        actor: Long,
+        command: AccountingCommand,
+    ): AccountingSale {
+        val order = old.orderId ?: conflict("Сверка предназначена только для цифрового текстового заказа.")
+        val status =
+            c.query(
+                "SELECT status FROM orders WHERE id=? AND venue_id=? AND accounting_shift_id=? FOR UPDATE",
+                order,
+                report.venueId,
+                report.shiftId,
+            ) { it.getString(1) }.singleOrNull()
+        if (status != "CLOSED" || old.cancelReason != null) conflict("Сначала завершите исходный текстовый заказ.")
+        val source = checkNotNull(orders.loadOrderDetail(c, report.venueId, order)).toAccountingSale(true)
+        if (!source.textReconciliationAvailable || missingSnapshots(c, order)) {
+            conflict("Этот тип расхождения нельзя устранить сверкой текстового заказа.")
+        }
+        if (command.lines.isNotEmpty()) invalid("Сверка не изменяет товарный состав заказа.")
+
+        fun invalidField(
+            field: String,
+            message: String,
+        ): Nothing =
+            throw InvalidInputException(
+                message,
+                buildJsonObject { put("field", field) },
+            )
+        val amount =
+            command.amountMinor?.takeIf { it in 1..MAX_SALE_MINOR }
+                ?: invalidField("amount", "Укажите подтверждённую сумму больше нуля в пределах лимита учёта.")
+        val confirmation =
+            command.confirmationSource?.trim()?.takeIf { it.length in 1..500 }
+                ?: invalidField("confirmationSource", "Укажите источник подтверждения суммы (до 500 символов).")
+        val explanation = reason(command)
+        return old.copy(
+            issue = null,
+            sourceWarning = null,
+            textReconciliationAvailable = false,
+            disputeReason = old.disputeReason ?: ACCOUNTING_TEXT_DETAIL_UNKNOWN,
+            textReconciliation =
+                AccountingTextReconciliation(
+                    amount,
+                    confirmation,
+                    explanation,
+                    actor,
+                    now().toInstant().toString(),
+                    old.textReconciliation?.originalIssue ?: old.issue ?: source.issue,
+                    old.textReconciliation?.originalSourceWarning ?: old.sourceWarning ?: source.sourceWarning,
+                ),
+        )
+    }
+
+    private fun missingSnapshots(
+        c: Connection,
+        order: Long,
+    ): Boolean =
+        c.query(
+            "SELECT COUNT(*) FROM order_batch_items i JOIN order_batches b ON b.id=i.order_batch_id " +
+                "WHERE b.order_id=? AND (i.base_unit_price_minor_snapshot IS NULL OR " +
+                "i.item_name_snapshot IS NULL OR i.currency_snapshot IS NULL)",
+            order,
+        ) { it.getInt(1) }.single() > 0
+
     private fun lines(
         c: Connection,
         venueId: Long,
@@ -353,13 +444,24 @@ class AccountingRepository(
                     "подарок или отмену учётной записи.",
             )
         }
-        return command.lines.map { input ->
+        return command.lines.mapIndexed { index, input ->
+            fun lineInvalid(
+                field: String,
+                message: String,
+            ): Nothing =
+                throw InvalidInputException(
+                    message,
+                    buildJsonObject {
+                        put("field", field)
+                        put("lineIndex", index)
+                    },
+                )
             val previous =
                 input.id?.let {
                         id ->
                     old?.lines?.find { it.id == id } ?: invalid("Позиция не найдена в записи.")
                 }
-            if (input.qty !in 1..1000) invalid("Количество должно быть от 1 до 1000.")
+            if (input.qty !in 1..1000) lineInvalid("qty", "Количество должно быть от 1 до 1000.")
             val base =
                 when {
                     old?.orderId != null -> {
@@ -374,11 +476,24 @@ class AccountingRepository(
                     }
                     previous == null && input.menuItemId != null ->
                         c.query(
-                            "SELECT name, price_minor, currency FROM menu_items WHERE id = ? AND " +
-                                "venue_id = ? AND is_available = TRUE",
+                            "SELECT m.name, m.price_minor, m.currency FROM menu_items m JOIN menu_categories cat " +
+                                "ON cat.id=m.category_id AND cat.venue_id=m.venue_id WHERE m.id=? AND " +
+                                "m.venue_id=? AND m.is_available=TRUE AND cat.is_active=TRUE",
                             input.menuItemId, venueId,
                         ) { rs ->
-                            if (rs.getString(3).trim() != "RUB") invalid("MVP учитывает только рублёвые продажи.")
+                            if (rs.getString(3).trim() != "RUB") {
+                                lineInvalid("item", "MVP учитывает только рублёвые продажи.")
+                            }
+                            if (input.unitPriceMinor != null && input.unitPriceMinor != rs.getLong(2)) {
+                                throw AccountingConflictException(
+                                    "Цена меню изменилась. Проверьте новый итог перед сохранением.",
+                                    buildJsonObject {
+                                        put("field", "price")
+                                        put("lineIndex", index)
+                                        put("currentUnitPriceMinor", rs.getLong(2))
+                                    },
+                                )
+                            }
                             AccountingLine(
                                 UUID.randomUUID().toString(),
                                 rs.getString(1),
@@ -386,55 +501,77 @@ class AccountingRepository(
                                 rs.getLong(2),
                                 input.menuItemId,
                             )
-                        }.singleOrNull() ?: throw NotFoundException()
+                        }.singleOrNull() ?: throw NotFoundException(
+                            "Позиция меню недоступна. Выберите другую позицию.",
+                            buildJsonObject {
+                                put("field", "item")
+                                put("lineIndex", index)
+                            },
+                        )
                     else ->
                         AccountingLine(
                             id = previous?.id ?: UUID.randomUUID().toString(),
                             name =
                                 input.name?.trim()?.takeIf { it.length in 1..200 }
-                                    ?: invalid("Введите название позиции (до 200 символов)."),
+                                    ?: lineInvalid("name", "Введите название позиции (до 200 символов)."),
                             qty = input.qty,
-                            unitPriceMinor = input.unitPriceMinor ?: invalid("Введите цену позиции."),
+                            unitPriceMinor = input.unitPriceMinor ?: lineInvalid("price", "Введите цену позиции."),
                             menuItemId = previous?.menuItemId,
                         )
                 }
             if (base.unitPriceMinor !in 0..MAX_UNIT_MINOR) {
-                invalid(
-                    "Цена должна быть неотрицательной и не превышать лимит.",
-                )
+                lineInvalid("price", "Цена должна быть неотрицательной и не превышать лимит.")
             }
             val giftReason =
                 input.giftReason?.let {
                     it.trim().takeIf {
                             text ->
                         text.length in 1..500
-                    } ?: invalid("Укажите причину подарка.")
+                    } ?: lineInvalid("giftReason", "Укажите причину подарка.")
                 }
-            if (
-                input.discountMinor < 0 ||
-                input.discountMinor > base.gross - base.baseDiscountMinor - base.baseGiftMinor
-            ) {
-                invalid(
-                    "Скидка превышает доступную сумму позиции.",
-                )
+            val percent =
+                input.discountPercent?.let { text ->
+                    if (!Regex("[0-9]{1,3}([.,][0-9]{1,2})?").matches(text)) {
+                        lineInvalid("discount", "Введите процент от 0 до 100, не более двух знаков после запятой.")
+                    }
+                    val value = text.replace(',', '.').toBigDecimal()
+                    if (value > BigDecimal(100)) lineInvalid("discount", "Процент должен быть от 0 до 100.")
+                    if (input.discountMinor != 0L) {
+                        lineInvalid(
+                            "discount",
+                            "Укажите только один способ скидки: процент или сумму.",
+                        )
+                    }
+                    if (base.baseDiscountMinor > 0 || base.baseGiftMinor > 0) {
+                        lineInvalid("discount", "Процент недоступен: в исходном заказе уже есть скидка или подарок.")
+                    }
+                    value
+                }
+            val discount =
+                percent?.let {
+                    base.gross.toBigDecimal().multiply(it)
+                        .divide(BigDecimal(100), 0, RoundingMode.HALF_UP).longValueExact()
+                } ?: input.discountMinor
+            if (discount < 0 || discount > base.gross - base.baseDiscountMinor - base.baseGiftMinor) {
+                lineInvalid("discount", "Скидка превышает доступную сумму позиции.")
             }
-            if (base.baseDiscountMinor > 0 && input.discountMinor > 0) {
-                invalid(
-                    "Ручная скидка не суммируется с действующей скидкой заказа.",
-                )
+            if (base.baseDiscountMinor > 0 && discount > 0) {
+                lineInvalid("discount", "Ручная скидка не суммируется с действующей скидкой заказа.")
             }
-            if (giftReason != null && (input.discountMinor > 0 || base.baseDiscountMinor > 0)) {
-                invalid(
-                    "Подарок и скидка одной позиции не суммируются.",
-                )
+            if (giftReason != null && (discount > 0 || (percent?.signum() ?: 0) > 0 || base.baseDiscountMinor > 0)) {
+                lineInvalid("discount", "Подарок и скидка одной позиции не суммируются.")
             }
-            if (input.discountMinor > 0) reason(command)
+            if (discount > 0 || (percent?.signum() ?: 0) > 0) reason(command)
             if (base.unitPriceMinor == 0L && giftReason == null && base.baseGiftMinor == 0L) {
                 invalid(
                     "Для бесплатной позиции обязательна причина.",
                 )
             }
-            base.copy(discountMinor = input.discountMinor, giftReason = giftReason)
+            base.copy(
+                discountMinor = discount,
+                giftReason = giftReason,
+                discountPercent = percent?.stripTrailingZeros()?.toPlainString(),
+            )
         }
     }
 
@@ -468,7 +605,28 @@ class AccountingRepository(
                 shift.id,
                 venueId,
             ) { it.getLong(1) to it.getString(2) }.map { (id, status) ->
-                saved["order:$id"] ?: checkNotNull(
+                val cached = saved["order:$id"]
+                val textIncomplete =
+                    cached != null && c.query(
+                        "SELECT COUNT(*) FROM order_batches b WHERE b.order_id=? AND b.source='CHAT' " +
+                            "AND b.status<>'REJECTED' AND NOT EXISTS " +
+                            "(SELECT 1 FROM order_batch_items i WHERE i.order_batch_id=b.id)",
+                        id,
+                    ) { it.getInt(1) }.single() > 0
+                cached?.let {
+                    if (textIncomplete && it.textReconciliation == null) {
+                        val source =
+                            checkNotNull(orders.loadOrderDetail(c, venueId, id))
+                                .toAccountingSale(status == "CLOSED")
+                        it.copy(
+                            sourceWarning = ACCOUNTING_TEXT_SOURCE_WARNING,
+                            textReconciliationAvailable =
+                                source.textReconciliationAvailable && !missingSnapshots(c, id),
+                        )
+                    } else {
+                        it
+                    }
+                } ?: checkNotNull(
                     orders.loadOrderDetail(
                         c,
                         venueId,
@@ -491,7 +649,13 @@ class AccountingRepository(
                             sale.issue
                         }
                     if (issue != null) {
-                        sale.copy(issue = issue, lines = emptyList(), originalPayableMinor = null)
+                        sale.copy(
+                            issue = issue,
+                            lines = emptyList(),
+                            originalPayableMinor = null,
+                            sourceWarning = null,
+                            textReconciliationAvailable = sale.textReconciliationAvailable && missing == 0,
+                        )
                     } else if (status == "CANCELLED") {
                         sale.copy(cancelReason = "Исходный заказ отменён")
                     } else {
@@ -501,7 +665,7 @@ class AccountingRepository(
             }
         val sales = (digital + saved.values.filter { it.orderId == null }).sortedBy { it.id }
         val active = sales.filter { it.cancelReason == null }
-        val allLines = active.flatMap { it.lines }
+        val allLines = active.filter { it.textReconciliation == null }.flatMap { it.lines }
 
         fun group(
             lines: List<AccountingLine>,
@@ -522,9 +686,23 @@ class AccountingRepository(
                         AccountingBreakdown(rows.first().tableLabel, rows.size.toLong(), rows.sumOf { it.payable })
                     }.sortedBy { it.label },
                 byItem = group(allLines) { "${it.name} · ${it.unitPriceMinor} коп." },
-                bySource = group(allLines) { it.source },
+                bySource =
+                    group(allLines) { it.source } +
+                        if (active.any { it.textReconciliation != null }) {
+                            listOf(
+                                AccountingBreakdown(
+                                    "TEXT_CONFIRMED_UNALLOCATED", 0,
+                                    active.filter { it.textReconciliation != null }.sumOf { it.payable },
+                                ),
+                            )
+                        } else {
+                            emptyList()
+                        },
                 unpaidSaleIds = sales.filter { it.payable > it.paid }.map { it.id },
-                disputedSaleIds = sales.filter { it.disputeReason != null || it.issue != null }.map { it.id },
+                disputedSaleIds =
+                    sales.filter {
+                        it.disputeReason != null || it.issue != null || it.sourceWarning != null
+                    }.map { it.id },
             )
         return report.copy(reportHash = sha256(json.encodeToString(report)))
     }
@@ -641,7 +819,9 @@ class AccountingRepository(
 
     private fun reason(command: AccountingCommand): String =
         command.reason?.trim()?.takeIf { it.length in 1..500 }
-            ?: invalid("Укажите причину (до 500 символов).")
+            ?: throw InvalidInputException(
+                "Укажите причину (до 500 символов).", buildJsonObject { put("field", "reason") },
+            )
 
     private fun invalid(message: String): Nothing = throw InvalidInputException(message)
 

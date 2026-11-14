@@ -139,6 +139,10 @@ jobs:
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingHttpContractTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingOrderProjectionTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresHttpTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingPercentChannelsPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test" \
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest" \
@@ -263,6 +267,10 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingHttpContractTest",
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest",
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingOrderProjectionTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationH2Test",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresHttpTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingPercentChannelsPostgresTest",
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test",
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest",
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest",
@@ -361,8 +369,12 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingHttpContractTest": 1,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest": 2,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingOrderProjectionTest": 1,
-              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test": 12,
-              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest": 13,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationH2Test": 4,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresTest": 5,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresHttpTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingPercentChannelsPostgresTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test": 18,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest": 19,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest": 1,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingMediaTest": 2,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingRepositoryTest": 5,
@@ -423,6 +435,41 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           required_test_names = {
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationH2Test": {
+                  "completed text reconciliation confirms only unallocated net and permits acknowledged frozen close",
+                  "unknown zero unverified currency corrupt snapshots active and foreign sources cannot reconcile",
+                  "reconciliation audit failure rolls back snapshot command history and money atomically",
+                  "mixed text confirmed total is never allocated to guessed goods discounts or gifts",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresTest": {
+                  "completed text reconciliation confirms only unallocated net and permits acknowledged frozen close",
+                  "unknown zero unverified currency corrupt snapshots active and foreign sources cannot reconcile",
+                  "reconciliation audit failure rolls back snapshot command history and money atomically",
+                  "mixed text confirmed total is never allocated to guessed goods discounts or gifts",
+                  "concurrent text reconciliation preserves CAS and one existing digital identity",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresHttpTest": {
+                  "completed CHAT webhook order has a guarded financial reconciliation and close path",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingPercentChannelsPostgresTest": {
+                  "Bot Mini App fallback percent accounting and analytics preserve one source per purchase over HTTP",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test": {
+                  "percent discount is exact once per line retains mode and replays without payment",
+                  "percent rejects invalid dual gifted and unreasoned input atomically and never creates overpayment",
+                  "menu price conflict requires confirmation and hidden category cannot create a manual sale",
+                  "percent corrections preserve digital source discounts and atomic audit failure leaves no purchase",
+                  "text fallback without snapshots requires reconciliation instead of a confirmed zero bill",
+                  "legacy command fingerprint and frozen snapshots omit new percent defaults",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest": {
+                  "percent discount is exact once per line retains mode and replays without payment",
+                  "percent rejects invalid dual gifted and unreasoned input atomically and never creates overpayment",
+                  "menu price conflict requires confirmation and hidden category cannot create a manual sale",
+                  "percent corrections preserve digital source discounts and atomic audit failure leaves no purchase",
+                  "text fallback without snapshots requires reconciliation instead of a confirmed zero bill",
+                  "legacy command fingerprint and frozen snapshots omit new percent defaults",
+              },
               "com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest": {
                   "product categories complete range HTTP preserves RBAC read only and real click contract",
               },
@@ -912,6 +959,22 @@ jobs:
               ),
           ]
           required_test_names = {
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationH2Test": {
+                  "completed text reconciliation confirms only unallocated net and permits acknowledged frozen close",
+                  "unknown zero unverified currency corrupt snapshots active and foreign sources cannot reconcile",
+                  "reconciliation audit failure rolls back snapshot command history and money atomically",
+                  "mixed text confirmed total is never allocated to guessed goods discounts or gifts",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresTest": {
+                  "completed text reconciliation confirms only unallocated net and permits acknowledged frozen close",
+                  "unknown zero unverified currency corrupt snapshots active and foreign sources cannot reconcile",
+                  "reconciliation audit failure rolls back snapshot command history and money atomically",
+                  "mixed text confirmed total is never allocated to guessed goods discounts or gifts",
+                  "concurrent text reconciliation preserves CAS and one existing digital identity",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresHttpTest": {
+                  "completed CHAT webhook order has a guarded financial reconciliation and close path",
+              },
               "TEST-com.hookah.platform.backend.miniapp.guest.BookingReminderWorkerTest.xml": {
                   "traffic policy skip leaves reminder unchanged and does not starve later allowed reminder",
                   "enqueue exception remains a failed reminder delivery",
@@ -1059,6 +1122,22 @@ jobs:
               "com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepositoryTest": 11,
           }
           required_test_names = {
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationH2Test": {
+                  "completed text reconciliation confirms only unallocated net and permits acknowledged frozen close",
+                  "unknown zero unverified currency corrupt snapshots active and foreign sources cannot reconcile",
+                  "reconciliation audit failure rolls back snapshot command history and money atomically",
+                  "mixed text confirmed total is never allocated to guessed goods discounts or gifts",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresTest": {
+                  "completed text reconciliation confirms only unallocated net and permits acknowledged frozen close",
+                  "unknown zero unverified currency corrupt snapshots active and foreign sources cannot reconcile",
+                  "reconciliation audit failure rolls back snapshot command history and money atomically",
+                  "mixed text confirmed total is never allocated to guessed goods discounts or gifts",
+                  "concurrent text reconciliation preserves CAS and one existing digital identity",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresHttpTest": {
+                  "completed CHAT webhook order has a guarded financial reconciliation and close path",
+              },
               "com.hookah.platform.backend.HttpAccessLogPrivacyTest": {
                   "product access logs use safe categories and canonical request ids only",
               },
@@ -1923,7 +2002,7 @@ jobs:
           from pathlib import Path
 
           report_path = Path("playwright-results.json")
-          minimum_executed = 234
+          minimum_executed = 932
           if not report_path.is_file():
               raise SystemExit(f"missing Playwright JSON report: {report_path}")
 
@@ -1961,6 +2040,44 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("accounting-chat-reconciliation.spec.ts", "closed text order reconciliation validation success and honest totals 360 light"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "closed text order reconciliation validation success and honest totals 360 dark"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "closed text order reconciliation validation success and honest totals 390 light"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "closed text order reconciliation validation success and honest totals 390 dark"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "closed text order reconciliation validation success and honest totals 1440 light"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "closed text order reconciliation validation success and honest totals 1440 dark"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation error 400 preserves draft or exact uncertain pending command"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation error 409 preserves draft or exact uncertain pending command"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation error 500 preserves draft or exact uncertain pending command"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation error 408 preserves draft or exact uncertain pending command"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation error -1 preserves draft or exact uncertain pending command"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation refuses unknown zero malformed and over-limit amounts without a write"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation staff and direct form URL cannot expose a privileged editor"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation revoked access closes private form and never reports success"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation late success after account switch cannot expose former account data"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation venue switch preserves the own draft and hides foreign order"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "text reconciliation stale version keeps draft and requires explicit current-state review"): 1,
+              ("accounting-chat-reconciliation.spec.ts", "closed CHAT PostgreSQL Ktor adapter DOM reconciles once across lost response restart and closes the shift"): 1,
+              ("accounting-percent.spec.ts", "manual accounting mixed text source retains known totals warns and blocks settlement"): 1,
+              ("accounting-percent.spec.ts", "manual percent accessible menu validation and compact draft 360 light"): 1,
+              ("accounting-percent.spec.ts", "manual percent accessible menu validation and compact draft 360 dark"): 1,
+              ("accounting-percent.spec.ts", "manual percent accessible menu validation and compact draft 390 light"): 1,
+              ("accounting-percent.spec.ts", "manual percent accessible menu validation and compact draft 390 dark"): 1,
+              ("accounting-percent.spec.ts", "manual percent accessible menu validation and compact draft 1440 light"): 1,
+              ("accounting-percent.spec.ts", "manual percent accessible menu validation and compact draft 1440 dark"): 1,
+              ("accounting-percent.spec.ts", "manual percent global search preserves stable IDs and excludes hidden foreign currency unavailable items"): 1,
+              ("accounting-percent.spec.ts", "manual percent exact line rounding comma bounds gift and explicit mode reset preserve input"): 1,
+              ("accounting-percent.spec.ts", "manual percent price conflict requires explicit recalculation and double click creates one command"): 1,
+              ("accounting-percent.spec.ts", "manual percent account switch closes private form without late success"): 1,
+              ("accounting-percent.spec.ts", "manual percent required table name quantity and price errors focus the first field without losing draft"): 1,
+              ("accounting-percent.spec.ts", "real Bot Mini App PostgreSQL HTTP accounting and product adapters render discounts without double counting"): 1,
+              ("accounting-percent.spec.ts", "manual percent failed submit 400 keeps draft focus and exact pending payload"): 1,
+              ("accounting-percent.spec.ts", "manual percent failed submit 409 keeps draft focus and exact pending payload"): 1,
+              ("accounting-percent.spec.ts", "manual percent failed submit 500 keeps draft focus and exact pending payload"): 1,
+              ("accounting-percent.spec.ts", "manual percent failed submit 408 keeps draft focus and exact pending payload"): 1,
+              ("accounting-percent.spec.ts", "manual percent failed submit -1 keeps draft focus and exact pending payload"): 1,
+              ("accounting-percent.spec.ts", "manual percent revoked access 401 closes private form and preserves pending safety"): 1,
+              ("accounting-percent.spec.ts", "manual percent revoked access 403 closes private form and preserves pending safety"): 1,
               ("venue-products-category.spec.ts", "product categories compact hierarchy 360 light"): 1,
               ("venue-products-category.spec.ts", "product categories compact hierarchy 360 dark"): 1,
               ("venue-products-category.spec.ts", "product categories compact hierarchy 390 light"): 1,

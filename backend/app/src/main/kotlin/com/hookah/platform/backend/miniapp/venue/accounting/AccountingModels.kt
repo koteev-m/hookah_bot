@@ -1,6 +1,9 @@
 package com.hookah.platform.backend.miniapp.venue.accounting
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class AccountingLine(
     val id: String,
@@ -14,6 +17,8 @@ data class AccountingLine(
     val baseGiftMinor: Long = 0,
     val discountMinor: Long = 0,
     val giftReason: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val discountPercent: String? = null,
 ) {
     val gross: Long get() = unitPriceMinor * qty
     val discount: Long get() = baseDiscountMinor + discountMinor
@@ -30,6 +35,7 @@ data class AccountingPayment(
     val voidReason: String? = null,
 )
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class AccountingSale(
     val id: String,
@@ -48,11 +54,34 @@ data class AccountingSale(
     val disputeReason: String? = null,
     val originalPayableMinor: Long? = null,
     val issue: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val sourceWarning: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val textReconciliationAvailable: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val textReconciliation: AccountingTextReconciliation? = null,
 ) {
-    val payable: Long get() = if (cancelReason == null) lines.sumOf { it.payable } else 0
+    val payable: Long get() =
+        if (cancelReason == null) {
+            textReconciliation?.confirmedAccruedMinor ?: lines.sumOf { it.payable }
+        } else {
+            0
+        }
     val paid: Long get() = payments.filter { it.voidReason == null }.sumOf { it.amountMinor }
 }
 
+@Serializable
+data class AccountingTextReconciliation(
+    val confirmedAccruedMinor: Long,
+    val confirmationSource: String,
+    val reason: String,
+    val actorUserId: Long,
+    val recordedAt: String,
+    val originalIssue: String?,
+    val originalSourceWarning: String?,
+)
+
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class AccountingTotals(
     val salesCount: Int,
@@ -66,6 +95,10 @@ data class AccountingTotals(
     val cashMinor: Long,
     val cardMinor: Long,
     val transferMinor: Long,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val unallocatedAccruedMinor: Long = 0,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val financialDetailIncomplete: Boolean = false,
 )
 
 @Serializable
@@ -110,6 +143,7 @@ data class AccountingState(
     val nextHistoryBeforeId: Long? = null,
 )
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class AccountingLineInput(
     val id: String? = null,
@@ -119,8 +153,11 @@ data class AccountingLineInput(
     val unitPriceMinor: Long? = null,
     val discountMinor: Long = 0,
     val giftReason: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val discountPercent: String? = null,
 )
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class AccountingCommand(
     val requestId: String,
@@ -136,6 +173,8 @@ data class AccountingCommand(
     val paymentId: String? = null,
     val expectedReportHash: String? = null,
     val acknowledgeUnpaid: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val confirmationSource: String? = null,
 )
 
 internal fun accountingTotals(sales: List<AccountingSale>): AccountingTotals {
@@ -153,5 +192,7 @@ internal fun accountingTotals(sales: List<AccountingSale>): AccountingTotals {
         cashMinor = payments.filter { it.method == "CASH" }.sumOf { it.amountMinor },
         cardMinor = payments.filter { it.method == "CARD" }.sumOf { it.amountMinor },
         transferMinor = payments.filter { it.method == "TRANSFER" }.sumOf { it.amountMinor },
+        unallocatedAccruedMinor = active.filter { it.textReconciliation != null }.sumOf { it.payable },
+        financialDetailIncomplete = active.any { it.textReconciliation != null },
     )
 }
