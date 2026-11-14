@@ -403,6 +403,14 @@ not another ordering engine. Manual sales create no order, guest, visit, tab or 
 Journal discounts/gifts are explicitly separate from the original guest bill. See
 `docs/VENUE_OPERATIONS.md` for the exact settlement, correction and closure prerequisites.
 
+Manual accounting entry creates only an independent accounting sale, never a guest/session/tab,
+order or kitchen/staff-chat work. A structured Bot checkout and Mini App add-batch share the
+existing order identity and its accounting shift; their projection is `order:<id>`. PAY is a
+separate operator confirmation. Text fallback without trustworthy items/prices retains that
+order identity and requires reconciliation; it is never inferred from a similar menu name or
+represented as an additional manual purchase. Journal percentage corrections snapshot a monetary
+discount and do not rewrite the original guest bill.
+
 ## Analytics And Dependencies
 
 Growth/retention depends on this core:

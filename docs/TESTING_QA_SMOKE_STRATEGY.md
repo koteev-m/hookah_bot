@@ -2407,6 +2407,27 @@ Target QA model:
 
 ## Venue accounting MVP local gate — HT-VENUE-SHIFT-SALES-MVP-01
 
+Manual sale category/percent gate (`HT-ACCOUNTING-MANUAL-SALE-UX-PERCENT-01`):
+`AccountingRepositoryH2Test` / `AccountingRepositoryPostgresTest` must execute the six named
+percent/menu-price/legacy-fingerprint/text-fallback cases without skips. They cover whole-line
+HALF_UP, 0–100 with two decimals, comma, large quantities, no gift/promotion stacking, reason,
+paid/closed guards, atomic audit rollback, legitimate identical purchases and exact old replay.
+`AccountingPercentChannelsPostgresTest` runs real webhook Bot cart and text fallback handlers
+with an in-memory Telegram transport, real Mini App add-batch HTTP, PostgreSQL, operational
+writers, accounting EDIT/PAY/manual CREATE and authenticated accounting/product/finance APIs.
+It checks read-only database fingerprints, no duplicate projections, frozen discount totals and
+old guest-bill prices. Mixed text/structured sources retain known amounts and PARTIAL open-finance
+coverage while blocking settlement; legacy saved projections cannot hide the warning. It never
+sends Telegram messages to the provider.
+`accounting-percent.spec.ts` exercises click/type/submit for 150 menu items, duplicate names,
+category/search, inline errors/focus, exact preview, explicit mode/price changes, 400/409 and
+uncertain 408/5xx/lost-response replay, double submission, account switch/revoke and 360/390/1440
+light/dark. Its checked-in HTTP capture is asserted against the channel/PG test; optional
+`ACCOUNTING_PERCENT_LIVE_DIR` bridges the same running PostgreSQL/Ktor instance to the real
+frontend adapters and DOM. All 20 browser cases and backend cases are mandatory CI inventory
+entries; parser negatives reject missing/skipped/replaced results. Real Telegram/iPhone and
+staging/device acceptance remain separate manual gates.
+
 Auto-opening local gate (`HT-ACCOUNTING-AUTO-SHIFT-OPEN-01`): `AccountingAutoOpenH2Test` and
 `AccountingAutoOpenPostgresTest` exercise first manual/digital/CHAT operations, actual initiator
 audit, role/tenant denials, invalid-input and post-write rollback, exact retry, multi-day/midnight
@@ -2445,6 +2466,23 @@ after safe integration retain its durable quick-order dialog/token/context guard
 current seating/migration suite against PostgreSQL V132 / H2 V133. No local old-base PASS
 substitutes for integrated MOVE/RELEASE/order-close/callback evidence.
 
+Text reconciliation P1 gate (`HT-ACCOUNTING-CHAT-ORDER-RECONCILIATION-P1-01`): reproduce the
+closed text CHAT blocker through the real webhook handler and PostgreSQL, then reconcile the same
+`order:<id>` with a confirmed amount/source/reason. Require one sale, zero manual rows, unchanged
+order/batch/session/outbox fingerprints, no implicit PAY, retained issue history and atomic audit.
+Run `AccountingChatReconciliationH2Test`, `AccountingChatReconciliationPostgresTest` and
+`AccountingChatReconciliationPostgresHttpTest` in the mandatory PR/main selectors. Cover unknown/
+zero/invalid amount, wrong currency, corrupt snapshot, active/foreign order, Staff denial, distinct
+writer CAS with actual PostgreSQL blocking, replay across Ktor restart, changed payload refusal,
+audit rollback, read-only GETs, hash/ack CLOSE and frozen financial incompleteness. Keep legacy
+percentage/amount/replay and Bot regressions. `accounting-chat-reconciliation.spec.ts` must use the
+production adapter and real click/type/submit at 360/390/1440 light/dark, local focus/errors,
+400/409/500/408/lost response, unchanged pending operation through restart, account/venue/revoke,
+explicit stale-version review and successful close with no invented receipt or product units.
+The live PostgreSQL→Ktor→adapter→DOM variant aborts a committed response, restarts Ktor and retries
+the exact stored command. Native full backend/Chromium results and fail-closed CI inventories are
+required after stabilization. Local tests do not establish Telegram/device/staging acceptance.
+
 First-draft cleanup gate (`HT-ACCOUNTING-FIRST-DRAFT-P2-FIX-01`): fill real Chromium sessionStorage
 to QuotaExceededError, let a guest-opened shift fail to adopt the first draft, then free space and
 save. Require one command/sale, removal of the actual source copy, an empty next editor and a new
@@ -2465,7 +2503,7 @@ response, frozen table/session/tab and replay tests. PostgreSQL barriers must al
 manual sale with SEAT/RELEASE and legacy order close in both orders, and checkout with ordinary
 session end. Verify single sale/shift, actual blocking PIDs, unpaid totals and byte-identical closed
 financial snapshots. All V132 PostgreSQL / V133 H2 migrations remain unchanged from main.
-The required route/security CI job selects all ten concrete Accounting suites explicitly and
+The required route/security CI job selects all eleven concrete Accounting suites explicitly and
 requires their JUnit XML, minimum case counts and zero skipped/failed/error cases; the extended
 Seating checkout concurrency suite requires all five cases.
 

@@ -35,7 +35,7 @@ internal fun KpiCollector.finances(venueId: Long): Pair<List<FinancialKpis>, Lis
             reason = if (unknown > 0) "REPORT_MISSING_OR_INCONSISTENT" else null,
         )
     metrics["finance.openShifts"] = kpi(open.size, "CURRENT_OPEN_SHIFT_PROVISIONAL", open.size.toLong())
-    val openUnknown = open.count { !valid(it) }.toLong()
+    val openUnknown = open.count { !valid(it) || it.sales.any { sale -> sale.sourceWarning != null } }.toLong()
     metrics["finance.openReportCoverage"] =
         kpi(
             open.count { valid(it) }, "CURRENT_OPEN_SHIFT_PROVISIONAL",
@@ -57,8 +57,18 @@ internal fun KpiCollector.finances(venueId: Long): Pair<List<FinancialKpis>, Lis
                     "card" to { it.totals.cardMinor },
                     "transfer" to { it.totals.transferMinor },
                 )
+            if (rows.any { it.totals.financialDetailIncomplete }) {
+                selectors["unallocatedAccrued"] = { it.totals.unallocatedAccruedMinor }
+            }
             val amounts =
                 selectors.mapValues { (name, selector) ->
+                    val metricUnknown =
+                        missing +
+                            if (name in setOf("discounts", "gifts")) {
+                                rows.count { it.totals.financialDetailIncomplete }
+                            } else {
+                                0
+                            }
                     val total =
                         try {
                             rows.fold(0L) { sum, row -> Math.addExact(sum, selector(row)) }
@@ -71,12 +81,14 @@ internal fun KpiCollector.finances(venueId: Long): Pair<List<FinancialKpis>, Lis
                         total,
                         basis,
                         rows.size.toLong(),
-                        missing,
+                        metricUnknown,
                         if (name == "sales") "COUNT" else "MINOR_UNITS",
                         if (total == null) {
                             "NUMERIC_OVERFLOW"
                         } else if (missing > 0) {
                             "REPORT_MISSING_OR_INCONSISTENT"
+                        } else if (metricUnknown > 0) {
+                            "TEXT_RECONCILIATION_DETAIL_UNKNOWN"
                         } else {
                             null
                         },

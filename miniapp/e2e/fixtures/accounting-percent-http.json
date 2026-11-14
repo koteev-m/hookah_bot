@@ -1,0 +1,906 @@
+{
+    "digital": {
+        "current": {
+            "shiftId": 1,
+            "venueId": 1,
+            "status": "OPEN",
+            "timezone": "UTC",
+            "openedAt": "2026-11-13T12:00:00Z",
+            "closedAt": null,
+            "currency": "RUB",
+            "sales": [
+                {
+                    "id": "order:1",
+                    "tableId": 11,
+                    "tableLabel": "Стол 1",
+                    "source": "MINIAPP",
+                    "orderId": 1,
+                    "displayNumber": 1,
+                    "orderClosed": true,
+                    "createdAt": "2026-11-13T12:00:00Z",
+                    "currency": "RUB",
+                    "lines": [
+                        {
+                            "id": "item:1",
+                            "name": "Чай",
+                            "qty": 1,
+                            "unitPriceMinor": 150000,
+                            "menuItemId": 21,
+                            "source": "MINIAPP",
+                            "tabId": 51,
+                            "baseDiscountMinor": 0,
+                            "baseGiftMinor": 0,
+                            "discountMinor": 15000,
+                            "giftReason": null,
+                            "discountPercent": "10"
+                        },
+                        {
+                            "id": "item:2",
+                            "name": "Чай",
+                            "qty": 1,
+                            "unitPriceMinor": 150000,
+                            "menuItemId": 21,
+                            "source": "MINIAPP",
+                            "tabId": 51,
+                            "baseDiscountMinor": 0,
+                            "baseGiftMinor": 0,
+                            "discountMinor": 15000,
+                            "giftReason": null,
+                            "discountPercent": "10"
+                        }
+                    ],
+                    "payments": [
+                        {
+                            "id": "line-0",
+                            "method": "CARD",
+                            "amountMinor": 270000,
+                            "recordedAt": "2026-11-13T12:00:00Z",
+                            "voidReason": null
+                        }
+                    ],
+                    "version": 2,
+                    "cancelReason": null,
+                    "disputeReason": null,
+                    "originalPayableMinor": 300000,
+                    "issue": null
+                }
+            ],
+            "totals": {
+                "salesCount": 1,
+                "ordersCount": 1,
+                "grossMinor": 300000,
+                "discountMinor": 30000,
+                "giftMinor": 0,
+                "accruedMinor": 270000,
+                "paidMinor": 270000,
+                "unpaidMinor": 0,
+                "cashMinor": 0,
+                "cardMinor": 270000,
+                "transferMinor": 0
+            },
+            "byTable": [
+                {
+                    "label": "Стол 1",
+                    "qty": 1,
+                    "accruedMinor": 270000
+                }
+            ],
+            "byItem": [
+                {
+                    "label": "Чай · 150000 коп.",
+                    "qty": 2,
+                    "accruedMinor": 270000
+                }
+            ],
+            "bySource": [
+                {
+                    "label": "MINIAPP",
+                    "qty": 2,
+                    "accruedMinor": 270000
+                }
+            ],
+            "unpaidSaleIds": [],
+            "disputedSaleIds": [],
+            "reportHash": "captured-report-hash"
+        },
+        "history": [],
+        "nextHistoryBeforeId": null
+    },
+    "digitalProducts": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-13T12:00:00Z",
+        "period": {
+            "from": "2026-11-13T00:00:00Z",
+            "to": "2026-11-14T00:00:00Z",
+            "timezone": "UTC",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "products",
+        "tableId": null,
+        "metrics": {},
+        "breakdowns": {},
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "products": {
+            "rows": [
+                {
+                    "itemId": 21,
+                    "name": "Чай",
+                    "category": "Menu",
+                    "currentlyAvailable": true,
+                    "source": "DIGITAL_DELIVERY",
+                    "currency": "RUB",
+                    "units": "2",
+                    "giftUnits": "0",
+                    "nonGiftUnits": "2",
+                    "snapshotGrossMinor": "300000",
+                    "options": [],
+                    "catalogCreatedAt": "2026-11-13T12:00:00Z",
+                    "categoryActive": true,
+                    "categoryId": 21
+                }
+            ],
+            "totalRows": 1,
+            "page": 1,
+            "pageSize": 50,
+            "categories": [
+                "Menu"
+            ],
+            "currencies": [
+                "RUB"
+            ],
+            "coverage": {
+                "value": "2",
+                "observedValue": "2",
+                "unit": "COUNT",
+                "basis": "CONFIRMED_ITEMS_AND_MANUAL_SALES",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "unassignedManualUnits": "0",
+            "basis": "ITEM_FULFILLED_OR_BATCH_FIRST_DELIVERED_AT;MANUAL_SALE_CREATED_AT",
+            "netAmount": {
+                "value": null,
+                "observedValue": null,
+                "unit": "COUNT",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "ORDER_ADJUSTMENTS_NOT_ALLOCATED"
+            },
+            "summary": {
+                "units": {
+                    "value": "2",
+                    "observedValue": "2",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_PRODUCT_UNITS",
+                    "availability": "AVAILABLE",
+                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                    "samples": 0,
+                    "unknown": 0,
+                    "reason": null
+                },
+                "giftUnits": {
+                    "value": "0",
+                    "observedValue": "0",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_GIFT_UNITS",
+                    "availability": "AVAILABLE",
+                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                    "samples": 0,
+                    "unknown": 0,
+                    "reason": null
+                },
+                "grossAmounts": [
+                    {
+                        "currency": "RUB",
+                        "gross": {
+                            "value": "300000",
+                            "observedValue": "300000",
+                            "unit": "MINOR",
+                            "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                ]
+            },
+            "categoryOptions": [
+                {
+                    "key": "21",
+                    "id": 21,
+                    "name": "Menu"
+                }
+            ],
+            "categoryTotals": [
+                {
+                    "category": {
+                        "key": "21",
+                        "id": 21,
+                        "name": "Menu"
+                    },
+                    "totals": {
+                        "units": {
+                            "value": "2",
+                            "observedValue": "2",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_PRODUCT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "giftUnits": {
+                            "value": "0",
+                            "observedValue": "0",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_GIFT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "grossAmounts": [
+                            {
+                                "currency": "RUB",
+                                "gross": {
+                                    "value": "300000",
+                                    "observedValue": "300000",
+                                    "unit": "MINOR",
+                                    "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                                    "availability": "AVAILABLE",
+                                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                                    "samples": 0,
+                                    "unknown": 0,
+                                    "reason": null
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "categoryPage": null
+        },
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    },
+    "manual": {
+        "current": {
+            "shiftId": 1,
+            "venueId": 1,
+            "status": "OPEN",
+            "timezone": "UTC",
+            "openedAt": "2026-11-13T12:00:00Z",
+            "closedAt": null,
+            "currency": "RUB",
+            "sales": [
+                {
+                    "id": "manual:captured",
+                    "tableId": 11,
+                    "tableLabel": "Стол 1",
+                    "source": "MANUAL",
+                    "orderId": null,
+                    "displayNumber": null,
+                    "orderClosed": true,
+                    "createdAt": "2026-11-13T12:00:00Z",
+                    "currency": "RUB",
+                    "lines": [
+                        {
+                            "id": "line-2",
+                            "name": "Чай",
+                            "qty": 2,
+                            "unitPriceMinor": 150000,
+                            "menuItemId": 21,
+                            "source": "MANUAL",
+                            "tabId": null,
+                            "baseDiscountMinor": 0,
+                            "baseGiftMinor": 0,
+                            "discountMinor": 30000,
+                            "giftReason": null,
+                            "discountPercent": "10"
+                        }
+                    ],
+                    "payments": [],
+                    "version": 1,
+                    "cancelReason": null,
+                    "disputeReason": null,
+                    "originalPayableMinor": null,
+                    "issue": null
+                },
+                {
+                    "id": "order:1",
+                    "tableId": 11,
+                    "tableLabel": "Стол 1",
+                    "source": "MINIAPP",
+                    "orderId": 1,
+                    "displayNumber": 1,
+                    "orderClosed": true,
+                    "createdAt": "2026-11-13T12:00:00Z",
+                    "currency": "RUB",
+                    "lines": [
+                        {
+                            "id": "item:1",
+                            "name": "Чай",
+                            "qty": 1,
+                            "unitPriceMinor": 150000,
+                            "menuItemId": 21,
+                            "source": "MINIAPP",
+                            "tabId": 51,
+                            "baseDiscountMinor": 0,
+                            "baseGiftMinor": 0,
+                            "discountMinor": 15000,
+                            "giftReason": null,
+                            "discountPercent": "10"
+                        },
+                        {
+                            "id": "item:2",
+                            "name": "Чай",
+                            "qty": 1,
+                            "unitPriceMinor": 150000,
+                            "menuItemId": 21,
+                            "source": "MINIAPP",
+                            "tabId": 51,
+                            "baseDiscountMinor": 0,
+                            "baseGiftMinor": 0,
+                            "discountMinor": 15000,
+                            "giftReason": null,
+                            "discountPercent": "10"
+                        }
+                    ],
+                    "payments": [
+                        {
+                            "id": "line-0",
+                            "method": "CARD",
+                            "amountMinor": 270000,
+                            "recordedAt": "2026-11-13T12:00:00Z",
+                            "voidReason": null
+                        }
+                    ],
+                    "version": 2,
+                    "cancelReason": null,
+                    "disputeReason": null,
+                    "originalPayableMinor": 300000,
+                    "issue": null
+                },
+                {
+                    "id": "order:2",
+                    "tableId": 13,
+                    "tableLabel": "Стол 2",
+                    "source": "CHAT",
+                    "orderId": 2,
+                    "displayNumber": 2,
+                    "orderClosed": false,
+                    "createdAt": "2026-11-13T12:00:00Z",
+                    "currency": "RUB",
+                    "lines": [],
+                    "payments": [],
+                    "version": 0,
+                    "cancelReason": null,
+                    "disputeReason": null,
+                    "originalPayableMinor": null,
+                    "issue": "Текстовый заказ без товарного состава и цен. Нужна сверка исходного заказа; не добавляйте его повторно."
+                }
+            ],
+            "totals": {
+                "salesCount": 3,
+                "ordersCount": 2,
+                "grossMinor": 600000,
+                "discountMinor": 60000,
+                "giftMinor": 0,
+                "accruedMinor": 540000,
+                "paidMinor": 270000,
+                "unpaidMinor": 270000,
+                "cashMinor": 0,
+                "cardMinor": 270000,
+                "transferMinor": 0
+            },
+            "byTable": [
+                {
+                    "label": "Стол 1",
+                    "qty": 2,
+                    "accruedMinor": 540000
+                },
+                {
+                    "label": "Стол 2",
+                    "qty": 1,
+                    "accruedMinor": 0
+                }
+            ],
+            "byItem": [
+                {
+                    "label": "Чай · 150000 коп.",
+                    "qty": 4,
+                    "accruedMinor": 540000
+                }
+            ],
+            "bySource": [
+                {
+                    "label": "MANUAL",
+                    "qty": 2,
+                    "accruedMinor": 270000
+                },
+                {
+                    "label": "MINIAPP",
+                    "qty": 2,
+                    "accruedMinor": 270000
+                }
+            ],
+            "unpaidSaleIds": [
+                "manual:captured"
+            ],
+            "disputedSaleIds": [
+                "order:2"
+            ],
+            "reportHash": "captured-report-hash"
+        },
+        "history": [],
+        "nextHistoryBeforeId": null
+    },
+    "products": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-13T12:00:00Z",
+        "period": {
+            "from": "2026-11-13T00:00:00Z",
+            "to": "2026-11-14T00:00:00Z",
+            "timezone": "UTC",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "products",
+        "tableId": null,
+        "metrics": {},
+        "breakdowns": {},
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "products": {
+            "rows": [
+                {
+                    "itemId": 21,
+                    "name": "Чай",
+                    "category": "Menu",
+                    "currentlyAvailable": true,
+                    "source": "DIGITAL_DELIVERY",
+                    "currency": "RUB",
+                    "units": "2",
+                    "giftUnits": "0",
+                    "nonGiftUnits": "2",
+                    "snapshotGrossMinor": "300000",
+                    "options": [],
+                    "catalogCreatedAt": "2026-11-13T12:00:00Z",
+                    "categoryActive": true,
+                    "categoryId": 21
+                },
+                {
+                    "itemId": 21,
+                    "name": "Чай",
+                    "category": "Menu",
+                    "currentlyAvailable": true,
+                    "source": "MANUAL_SALE",
+                    "currency": "RUB",
+                    "units": "2",
+                    "giftUnits": "0",
+                    "nonGiftUnits": "2",
+                    "snapshotGrossMinor": "300000",
+                    "options": [],
+                    "catalogCreatedAt": "2026-11-13T12:00:00Z",
+                    "categoryActive": true,
+                    "categoryId": 21
+                }
+            ],
+            "totalRows": 2,
+            "page": 1,
+            "pageSize": 50,
+            "categories": [
+                "Menu"
+            ],
+            "currencies": [
+                "RUB"
+            ],
+            "coverage": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "CONFIRMED_ITEMS_AND_MANUAL_SALES",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "unassignedManualUnits": "0",
+            "basis": "ITEM_FULFILLED_OR_BATCH_FIRST_DELIVERED_AT;MANUAL_SALE_CREATED_AT",
+            "netAmount": {
+                "value": null,
+                "observedValue": null,
+                "unit": "COUNT",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "ORDER_ADJUSTMENTS_NOT_ALLOCATED"
+            },
+            "summary": {
+                "units": {
+                    "value": "4",
+                    "observedValue": "4",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_PRODUCT_UNITS",
+                    "availability": "AVAILABLE",
+                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                    "samples": 0,
+                    "unknown": 0,
+                    "reason": null
+                },
+                "giftUnits": {
+                    "value": "0",
+                    "observedValue": "0",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_GIFT_UNITS",
+                    "availability": "AVAILABLE",
+                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                    "samples": 0,
+                    "unknown": 0,
+                    "reason": null
+                },
+                "grossAmounts": [
+                    {
+                        "currency": "RUB",
+                        "gross": {
+                            "value": "600000",
+                            "observedValue": "600000",
+                            "unit": "MINOR",
+                            "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                ]
+            },
+            "categoryOptions": [
+                {
+                    "key": "21",
+                    "id": 21,
+                    "name": "Menu"
+                }
+            ],
+            "categoryTotals": [
+                {
+                    "category": {
+                        "key": "21",
+                        "id": 21,
+                        "name": "Menu"
+                    },
+                    "totals": {
+                        "units": {
+                            "value": "4",
+                            "observedValue": "4",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_PRODUCT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "giftUnits": {
+                            "value": "0",
+                            "observedValue": "0",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_GIFT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "grossAmounts": [
+                            {
+                                "currency": "RUB",
+                                "gross": {
+                                    "value": "600000",
+                                    "observedValue": "600000",
+                                    "unit": "MINOR",
+                                    "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                                    "availability": "AVAILABLE",
+                                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                                    "samples": 0,
+                                    "unknown": 0,
+                                    "reason": null
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "categoryPage": null
+        },
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    },
+    "productCategory": {
+        "definitionVersion": "2026-11-analytics-v1",
+        "asOf": "2026-11-13T12:00:00Z",
+        "period": {
+            "from": "2026-11-13T00:00:00Z",
+            "to": "2026-11-14T00:00:00Z",
+            "timezone": "UTC",
+            "interval": "[from,to)"
+        },
+        "venueId": 1,
+        "section": "products",
+        "tableId": null,
+        "metrics": {},
+        "breakdowns": {},
+        "closedShiftFinances": [],
+        "openShiftFinances": [],
+        "invoiceFinances": {},
+        "products": {
+            "rows": [
+                {
+                    "itemId": 21,
+                    "name": "Чай",
+                    "category": "Menu",
+                    "currentlyAvailable": true,
+                    "source": "DIGITAL_DELIVERY",
+                    "currency": "RUB",
+                    "units": "2",
+                    "giftUnits": "0",
+                    "nonGiftUnits": "2",
+                    "snapshotGrossMinor": "300000",
+                    "options": [],
+                    "catalogCreatedAt": "2026-11-13T12:00:00Z",
+                    "categoryActive": true,
+                    "categoryId": 21
+                },
+                {
+                    "itemId": 21,
+                    "name": "Чай",
+                    "category": "Menu",
+                    "currentlyAvailable": true,
+                    "source": "MANUAL_SALE",
+                    "currency": "RUB",
+                    "units": "2",
+                    "giftUnits": "0",
+                    "nonGiftUnits": "2",
+                    "snapshotGrossMinor": "300000",
+                    "options": [],
+                    "catalogCreatedAt": "2026-11-13T12:00:00Z",
+                    "categoryActive": true,
+                    "categoryId": 21
+                }
+            ],
+            "totalRows": 2,
+            "page": 1,
+            "pageSize": 50,
+            "categories": [
+                "Menu"
+            ],
+            "currencies": [
+                "RUB"
+            ],
+            "coverage": {
+                "value": "4",
+                "observedValue": "4",
+                "unit": "COUNT",
+                "basis": "CONFIRMED_ITEMS_AND_MANUAL_SALES",
+                "availability": "AVAILABLE",
+                "coverage": "COMPLETE_RECORDED_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": null
+            },
+            "unassignedManualUnits": "0",
+            "basis": "ITEM_FULFILLED_OR_BATCH_FIRST_DELIVERED_AT;MANUAL_SALE_CREATED_AT",
+            "netAmount": {
+                "value": null,
+                "observedValue": null,
+                "unit": "COUNT",
+                "basis": "UNSUPPORTED",
+                "availability": "UNAVAILABLE",
+                "coverage": "UNAVAILABLE_SOURCE",
+                "samples": 0,
+                "unknown": 0,
+                "reason": "ORDER_ADJUSTMENTS_NOT_ALLOCATED"
+            },
+            "summary": {
+                "units": {
+                    "value": "4",
+                    "observedValue": "4",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_PRODUCT_UNITS",
+                    "availability": "AVAILABLE",
+                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                    "samples": 0,
+                    "unknown": 0,
+                    "reason": null
+                },
+                "giftUnits": {
+                    "value": "0",
+                    "observedValue": "0",
+                    "unit": "COUNT",
+                    "basis": "RECORDED_GIFT_UNITS",
+                    "availability": "AVAILABLE",
+                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                    "samples": 0,
+                    "unknown": 0,
+                    "reason": null
+                },
+                "grossAmounts": [
+                    {
+                        "currency": "RUB",
+                        "gross": {
+                            "value": "600000",
+                            "observedValue": "600000",
+                            "unit": "MINOR",
+                            "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        }
+                    }
+                ]
+            },
+            "categoryOptions": [
+                {
+                    "key": "21",
+                    "id": 21,
+                    "name": "Menu"
+                }
+            ],
+            "categoryTotals": [
+                {
+                    "category": {
+                        "key": "21",
+                        "id": 21,
+                        "name": "Menu"
+                    },
+                    "totals": {
+                        "units": {
+                            "value": "4",
+                            "observedValue": "4",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_PRODUCT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "giftUnits": {
+                            "value": "0",
+                            "observedValue": "0",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_GIFT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "grossAmounts": [
+                            {
+                                "currency": "RUB",
+                                "gross": {
+                                    "value": "600000",
+                                    "observedValue": "600000",
+                                    "unit": "MINOR",
+                                    "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                                    "availability": "AVAILABLE",
+                                    "coverage": "COMPLETE_RECORDED_SOURCE",
+                                    "samples": 0,
+                                    "unknown": 0,
+                                    "reason": null
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "categoryPage": {
+                "key": "21",
+                "page": 1,
+                "totalRows": 1,
+                "rows": [
+                    {
+                        "itemId": 21,
+                        "name": "Чай",
+                        "currency": "RUB",
+                        "units": {
+                            "value": "4",
+                            "observedValue": "4",
+                            "unit": "COUNT",
+                            "basis": "RECORDED_PRODUCT_UNITS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "gross": {
+                            "value": "600000",
+                            "observedValue": "600000",
+                            "unit": "MINOR",
+                            "basis": "HISTORICAL_GROSS_BEFORE_DISCOUNTS_GIFTS",
+                            "availability": "AVAILABLE",
+                            "coverage": "COMPLETE_RECORDED_SOURCE",
+                            "samples": 0,
+                            "unknown": 0,
+                            "reason": null
+                        },
+                        "sources": [
+                            {
+                                "itemId": 21,
+                                "name": "Чай",
+                                "category": "Menu",
+                                "currentlyAvailable": true,
+                                "source": "DIGITAL_DELIVERY",
+                                "currency": "RUB",
+                                "units": "2",
+                                "giftUnits": "0",
+                                "nonGiftUnits": "2",
+                                "snapshotGrossMinor": "300000",
+                                "options": [],
+                                "catalogCreatedAt": "2026-11-13T12:00:00Z",
+                                "categoryActive": true,
+                                "categoryId": 21
+                            },
+                            {
+                                "itemId": 21,
+                                "name": "Чай",
+                                "category": "Menu",
+                                "currentlyAvailable": true,
+                                "source": "MANUAL_SALE",
+                                "currency": "RUB",
+                                "units": "2",
+                                "giftUnits": "0",
+                                "nonGiftUnits": "2",
+                                "snapshotGrossMinor": "300000",
+                                "options": [],
+                                "catalogCreatedAt": "2026-11-13T12:00:00Z",
+                                "categoryActive": true,
+                                "categoryId": 21
+                            }
+                        ]
+                    }
+                ],
+                "pageSize": 50
+            }
+        },
+        "limitations": [
+            "RECORDED_DOMAIN_FACTS_ONLY",
+            "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",
+            "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
+            "VOID_PAYMENT_NOT_REFUND",
+            "SEATINGS_NOT_UNIQUE_PEOPLE"
+        ]
+    }
+}

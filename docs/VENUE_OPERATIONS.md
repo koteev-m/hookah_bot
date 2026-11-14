@@ -1175,6 +1175,28 @@ transactional venue lock allow only one open accounting shift per venue.
   RUB minor units. Menu name/price are snapshotted by the server at creation; editing a saved
   manual line is an explicit reasoned correction, never an implicit menu-price refresh. It creates
   no guest, QR session, tab, order batch, Telegram message or staff-chat notification.
+- Manual entry follows table → menu category → item, with global name search across the full
+  available RUB menu. Category/item IDs remain distinct even for identical names; changing the
+  category/search never substitutes an already selected item or removes other draft lines. Custom
+  “Позиция не из меню” remains separate. Manual entry is for purchases outside Bot/Mini App;
+  existing digital orders already appear automatically and must not be entered a second time.
+- New manual lines default to percentage discount, with optional RUB amount mode. Percent is an
+  exact decimal string (0–100, at most two decimal places; comma/dot input). The server computes
+  `unitPriceMinor × qty × percent / 100`, rounding HALF_UP to one minor unit once per whole line.
+  It snapshots the monetary discount and the selected percent in the existing sale JSON. A 100%
+  discount remains a discount, not a gift. Positive discounts require a sale reason; gifts have
+  their own reason and EDIT always requires a correction reason. Original discounts/gifts cannot
+  stack; percentage corrections are unavailable on digital lines with an original discount/gift.
+- Menu price changes produce an explicit conflict when the submitted price differs: the operator
+  must review/accept the new price and total before resubmitting. Old clients omitting the price
+  retain the established server-snapshot contract. Existing saved lines never refresh silently.
+- Old `discountMinor` values/drafts retain their amount meaning and reopen in RUB mode when no
+  percent is recorded. Optional `discountPercent=null` is omitted even when defaults are encoded,
+  preserving old payload fingerprints and frozen report hashes. Never replace a pending request
+  ID/payload after a timeout, 5xx or lost response; verify/retry the stored command unchanged.
+- Required field errors stay beside their controls and beside Save, with focus on the first error.
+  Drafts survive validation/conflict. Saving disables repeat submission; an uncertain result says
+  the sale may have committed. Switching discount units clears the input with a visible notice.
 - Digital lines preserve order/batch item identity, source, option/name/price, tab and service-charge
   context. Journal discounts/gifts are separate accounting corrections: they do not rewrite the
   guest's original bill. UI exposes the original amount and this consequence. Digital quantities,
@@ -1202,6 +1224,34 @@ transactional venue lock allow only one open accounting shift per venue.
   A mixed-source order remains one sale; its lines contribute to their actual source breakdown.
   Missing immutable prices, unsupported currency or source inconsistencies are disputed; their
   amounts are excluded from totals, never replaced by current menu prices, and block payment/closure.
+  A non-rejected text CHAT batch without structured items is explicitly incomplete, even if the
+  canonical bill currently totals zero: reconcile its source order, without a duplicate manual sale.
+  Mixed structured/text sources retain their known item subtotal and expose `sourceWarning`; their
+  payment/edit/closure stays blocked until source reconciliation. Open finance KPIs expose the
+  known amount as partial observedValue, never a complete total. Old saved open projections cannot
+  hide this warning; already frozen historical reports are unchanged.
+- Completed CHAT orders with a non-rejected unstructured text batch have a dedicated
+  `RECONCILE_TEXT` accounting action, only for OWNER/MANAGER in the same open shift. It verifies
+  the actual CLOSED source order, immutable snapshots and RUB currency; active orders, missing
+  price snapshots, currency errors and other technical issues cannot use this action.
+  The operator must confirm the whole order's net accrued amount (1–10,000,000,000,000 minor),
+  name a verifiable document/receipt/accounting source and explain the reconciliation. Text entry
+  records the operator's attestation, not independent document or payment verification. Unknown
+  or zero amounts cannot resolve this issue; there is no exceptional close with an unknown sum.
+- Reconciliation updates the existing `order:<id>` accounting snapshot, without changing the
+  guest bill or creating goods/manual sales/orders/messages. The whole confirmed net amount is
+  `unallocatedAccruedMinor`, even for a mixed text/structured order. Original known lines remain
+  provenance; the confirmed total is not allocated to their quantity, discount or gift. Gross,
+  discounts and gifts retain only known detail and `financialDetailIncomplete=true`; unknown
+  detail is never asserted to be zero. Financial discount/gift KPIs remain PARTIAL. PAY alone
+  records received money. This unresolved detail remains disputed, including after PAY, so CLOSE
+  still requires explicit management acknowledgment as well as its normal hash/active-order checks.
+- Each reconciliation/correction uses expectedVersion and the existing durable requestId ledger.
+  The original issue/warning, confirmed amount, source, reason and server actor/time are retained
+  in the typed snapshot and old/new event/audit transaction. Corrections replace that same total;
+  ordinary EDIT/RESOLVE cannot erase its unknown detail. A correction below recorded receipts is
+  refused. Closed reports freeze the amount and its limitations. No new ledger or migration exists;
+  absent new optional fields are omitted from serialization to preserve legacy command fingerprints.
 - Close stores the full final report. Unpaid/disputed records require explicit acknowledgment of
   their counts, balance and subsequent immutability. No normal edit, further receipt, reopen,
   carry-over debt settlement or post-close correction is provided in this MVP. Management must

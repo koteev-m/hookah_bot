@@ -65,6 +65,7 @@ export function calculation(text: string) {
 export function coverageText(kpi?: KpiValue): string {
   if (!kpi) return 'Недостаточно данных для расчёта.'
   if (kpi.reason === 'REPORT_MISSING_OR_INCONSISTENT') return 'Не все отчёты смен доступны или полны.'
+  if (kpi.reason === 'TEXT_RECONCILIATION_DETAIL_UNKNOWN') return 'Суммы текстовых заказов сверены. Полные скидки и подарки не установлены.'
   if (kpi.reason === 'ITEM_OR_HISTORY_COVERAGE_INCOMPLETE') return 'Не для всех выданных частей сохранены состав или точное время.'
   if (kpi.reason === 'NUMERIC_OVERFLOW') return 'Сумма превышает поддерживаемый диапазон расчёта.'
   if (kpi.reason === 'LEGACY_HISTORY_UNKNOWN') return 'Часть старых операций не содержит точного времени.'
@@ -158,6 +159,7 @@ function financeGroups(groups: FinancialKpis[], provisional: boolean) {
     block.append(el('h3', { text: `Валюта: ${/^[A-Z]{3}$/.test(group.currency) ? group.currency : 'не определена'}` }))
     const grid = el('div', { className: 'venue-stats-grid' })
     grid.append(...money.map(definition => metric(definition, group.metrics[definition[0]], group.currency, basis)))
+    if (group.metrics.unallocatedAccrued) grid.append(metric(['unallocatedAccrued', 'Сверено без товарной расшифровки', 'Подтверждённый итог текстовых заказов; состав, скидки и подарки не восстановлены. Это не полученная оплата.'], group.metrics.unallocatedAccrued, group.currency, basis))
     block.append(grid)
     const payments: Definition[] = [['cash', 'Наличными', 'Оплаты, внесённые сотрудником наличными.'],
       ['card', 'Картой', 'Оплаты, внесённые сотрудником как оплата картой.'], ['transfer', 'Переводом', 'Оплаты, внесённые сотрудником как перевод.']]

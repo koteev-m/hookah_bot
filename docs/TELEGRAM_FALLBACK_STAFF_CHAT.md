@@ -255,6 +255,12 @@ Target behavior:
   - rate limits apply;
   - unavailable item/order bypass is rejected.
 - If fallback is free text, store it as free-text batch/comment or staff clarification task according to current model; do not pretend it is a structured menu item unless a safe mapping exists.
+- A completed free-text CHAT order without trustworthy financial detail remains the same
+  `order:<id>` accounting record. OWNER/MANAGER may explicitly reconcile its confirmed net RUB
+  total with a verifiable source and reason in the open shift. This changes no guest bill, sends
+  no notification and creates no menu quantities or manual sale. Unknown amount remains blocking;
+  reconciliation is not payment. Detail/discount/gift incompleteness remains visible in the frozen
+  report; see `VENUE_OPERATIONS.md` for eligibility, audit, PAY and close requirements.
 - Staff-chat notification is allowed for the created order batch.
 - Venue Mode remains source of truth for queue/detail/status/bill.
 

@@ -669,6 +669,23 @@ order is counted once; mixed-source breakdowns sum its line sources, plus explic
 Missing/invalid source snapshots are listed as disputed and excluded from amount totals. They
 block financial recording and final closure rather than manufacturing a value from today's menu.
 
+Accounting percentage discounts use the server's single HALF_UP rounding on the whole line and
+remain monetary `discountMinor` in financial totals. Closed-shift discounts/accrual/receipts come
+from the frozen report. Product “Стоимость до скидок и подарков” stays historical gross, not net
+or received money; an `order:<id>` accounting correction never becomes a second merchandise sale.
+A text-only fallback without structured facts is a reconciliation issue, not a confirmed zero
+bill, guessed merchandise or automatically received payment. Mixed sources keep their known
+subtotal with explicit incompleteness; open financial KPIs expose that subtotal as PARTIAL
+observedValue until source reconciliation, while payment and closure remain blocked.
+
+Financial text reconciliation confirms a whole-order net accrued amount, not a receipt.
+`unallocatedAccruedMinor` is included once in accrued on the existing digital identity, without
+new product units or a manual sale. Known source lines are not a monetary allocation of that net.
+`financialDetailIncomplete` preserves unknown full gross/discount/gift detail; discount/gift KPIs
+are PARTIAL (`TEXT_RECONCILIATION_DETAIL_UNKNOWN`) while confirmed accrued and separate PAY facts
+remain usable. Frozen reports preserve this limitation. Product gross-before-discount semantics
+and all delivery/manual-source quantity rules remain unchanged.
+
 These confirmed amounts mean an operator recorded an external receipt; they are not bank/provider
 verification. No receipt is derived from bill-request payment preference or operational order state.
 `VENUE_ACCOUNTING_*` audit actions accompany immutable actor/time/old/new history; analytics events

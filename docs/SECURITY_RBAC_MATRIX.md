@@ -437,6 +437,13 @@ actor/time. Transactions lock venue then membership, recheck the current role af
 hold these locks through commit, including idempotent replay. This serializes against the current
 venue membership removal/role writer. Cross-venue shift/table/menu/sale references fail closed.
 
+`RECONCILE_TEXT` is OWNER/MANAGER-only, including fresh authorization before exact replay.
+It applies only to an own-venue CLOSED text-incomplete order in its OPEN accounting shift,
+with no unsupported currency/missing immutable snapshots. Positive confirmed RUB net amount,
+confirmation source and reason are mandatory. It updates the existing accounting identity only;
+no guest order/bill/payment authority is granted. Unknown detail remains disputed and requires
+normal close acknowledgment; unknown monetary amounts cannot bypass close.
+
 Payment/correction/close writes, actor/time/old/new/reason history, semantic audit and idempotency
 record share one transaction. Audit failure leaves no partial success. Version/hash conflicts,
 overpayment, negative values and closed-period writes are rejected. Correction of a payment is
