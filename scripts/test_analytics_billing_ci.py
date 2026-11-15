@@ -361,8 +361,8 @@ class AnalyticsBillingCiTest(unittest.TestCase):
         specs = [{'file': file, 'title': title,
                   'tests': [{'status': 'expected', 'expectedStatus': 'passed', 'results': [{'status': 'passed'}]}
                             for _ in range(count)]} for (file, title), count in inventory.items()]
-        reviews = [index for index, spec in enumerate(specs) if spec['title'].startswith(('review F', 'payment total validation')) or spec['file'] in {'venue-booking-attention.spec.ts', 'venue-products-category.spec.ts', 'accounting-percent.spec.ts', 'accounting-chat-reconciliation.spec.ts'}]
-        self.assertEqual(len(reviews), 76)
+        reviews = [index for index, spec in enumerate(specs) if spec['title'].startswith(('review F', 'payment total validation')) or spec['file'] in {'venue-booking-attention.spec.ts', 'venue-products-category.spec.ts', 'accounting-percent.spec.ts', 'accounting-chat-reconciliation.spec.ts', 'accounting-shift-clarity.spec.ts', 'accounting-midnight.spec.ts'}]
+        self.assertEqual(len(reviews), 98)
         minimum = next(ast.literal_eval(node.value) for node in ast.parse(code).body
                        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
                        and node.targets[0].id == 'minimum_executed')

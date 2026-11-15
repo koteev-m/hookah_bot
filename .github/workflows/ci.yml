@@ -2133,7 +2133,7 @@ jobs:
           from pathlib import Path
 
           report_path = Path("playwright-results.json")
-          minimum_executed = 956
+          minimum_executed = 978
           if not report_path.is_file():
               raise SystemExit(f"missing Playwright JSON report: {report_path}")
 
@@ -2171,6 +2171,28 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("accounting-midnight.spec.ts", "midnight full mountVenueApp updates counters labels and old shift without requests"): 1,
+              ("accounting-midnight.spec.ts", "midnight background return via visibilitychange updates without refresh"): 1,
+              ("accounting-midnight.spec.ts", "midnight background return via pageshow updates without refresh"): 1,
+              ("accounting-midnight.spec.ts", "midnight background return via activated updates without refresh"): 1,
+              ("accounting-midnight.spec.ts", "midnight sale draft focus selection scroll and Back survive rollover"): 1,
+              ("accounting-midnight.spec.ts", "midnight payment draft focus and uncertain pending request remain exact"): 1,
+              ("accounting-midnight.spec.ts", "midnight venue timezone DST spring23h differs from device"): 1,
+              ("accounting-midnight.spec.ts", "midnight venue timezone DST autumn25h differs from device"): 1,
+              ("accounting-midnight.spec.ts", "midnight venue switch late response and disposal remove scoped lifecycle handlers"): 1,
+              ("accounting-midnight.spec.ts", "midnight filters corrections and explicit report refresh retain financial scope"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity dates counters and compact rows 360"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity payment operations preserve components corrections and sale scope 360"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity close preview and keyboard access 360"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity closed empty report explains current shift 360"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity venue timezone DST and unknown dates 360"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity dates counters and compact rows 390"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity payment operations preserve components corrections and sale scope 390"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity close preview and keyboard access 390"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity closed empty report explains current shift 390"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity venue timezone DST and unknown dates 390"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity STAFF cannot close or read closed history"): 1,
+              ("accounting-shift-clarity.spec.ts", "shift clarity presentation never mutates reports or guesses legacy payment groups"): 1,
               ("accounting-payments-finalize.spec.ts", "payment total validation follows every component and submits once 390"): 1,
               ("accounting-payments-finalize.spec.ts", "payment total validation preserves independent errors draft and pending 390"): 1,
               ("accounting-payments-finalize.spec.ts", "payment total validation follows every component and submits once 1440"): 1,

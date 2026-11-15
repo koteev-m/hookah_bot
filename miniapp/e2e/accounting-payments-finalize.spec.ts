@@ -120,13 +120,13 @@ for (const [width, theme] of [[390, 'dark'], [360, 'dark'], [1440, 'light']] as 
   test(`ordinary partial split payment explicit states and accessible result ${width} ${theme}`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 844 }); await page.emulateMedia({ colorScheme: theme })
     const api = await setup(page, [makeSale('manual:ordinary'), makeSale('manual:split'), makeSale('manual:partial')])
-    await open(page); await expect(pay(page)).toContainText('Записать 990,00 ₽ наличными'); await screenshot(page, info, 'ordinary-payment')
+    await page.locator('.accounting-sales > [data-sale-id="manual:ordinary"]').click(); await expect(pay(page)).toContainText('Записать 990,00 ₽ наличными'); await screenshot(page, info, 'ordinary-payment')
     const release = api.hold(); await pay(page).click(); await expect(pay(page)).toBeDisabled(); await page.locator('.accounting-payment-form').evaluate(f => f.dispatchEvent(new Event('submit', { cancelable: true }))); release()
     await expect(page.getByText('Оплачено полностью', { exact: true })).toBeVisible(); await expect(page.locator('.accounting-payment-form')).toHaveCount(0); expect(api.commands).toHaveLength(1); await screenshot(page, info, 'fully-paid')
-    await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await page.locator('.accounting-sales > button').nth(1).click()
+    await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await page.locator('.accounting-sales > [data-sale-id="manual:split"]').click()
     await page.getByLabel('Способ оплаты').selectOption('SPLIT'); await page.getByLabel('Наличные, ₽').fill('400'); await page.getByLabel('Карта, ₽').fill('590'); await screenshot(page, info, 'combined-payment'); await pay(page).click()
     await expect(page.getByText('Оплачено полностью', { exact: true })).toBeVisible(); expect(api.commands[1]).toMatchObject({ action: 'PAY_SPLIT', paymentComponents: [{ method: 'CASH', amountMinor: 40000 }, { method: 'CARD', amountMinor: 59000 }] })
-    await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await page.locator('.accounting-sales > button').nth(2).click()
+    await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await page.locator('.accounting-sales > [data-sale-id="manual:partial"]').click()
     await page.getByLabel('Частичная оплата', { exact: true }).check(); await page.getByLabel('Получено, ₽').fill('400'); await pay(page).click(); await expect(page.getByRole('alert')).toContainText('подтвердите')
     await page.getByLabel('Подтверждаю частичную оплату:', { exact: false }).check(); await screenshot(page, info, 'partial-payment'); await pay(page).click()
     await expect(page.locator('.accounting-sale-balances')).toContainText('590,00'); await expect(pay(page)).toContainText('590,00'); await expect(page.locator('.accounting-success')).toContainText('400,00'); await screenshot(page, info, 'partial-result')
@@ -147,7 +147,7 @@ test('free canceled unknown and reconciliation remain honest in every sales filt
   const free = makeSale('manual:free', 0); free.lines[0].giftReason = 'Подарок'
   const unknown = makeSale('manual:unknown', 0); unknown.issue = 'UNKNOWN'
   const canceled = makeSale('manual:canceled'); canceled.cancelReason = 'Отмена'
-  const api = await setup(page, [free, unknown, canceled, makeSale('manual:same-a'), makeSale('manual:same-b')]); await open(page)
+  const api = await setup(page, [free, unknown, canceled, makeSale('manual:same-a'), makeSale('manual:same-b')]); await page.locator('.accounting-sales > [data-sale-id="manual:free"]').click()
   await expect(page.getByText('Оплата не требуется', { exact: true })).toBeVisible(); await expect(pay(page)).toHaveCount(0)
   await page.getByRole('button', { name: 'К отчёту', exact: true }).click()
   for (const filter of ['Не оплачены', 'Частично', 'Оплачены', 'Все']) { await page.getByRole('button', { name: filter, exact: true }).click(); await expect(page.locator('.accounting-sales > button').filter({ hasText: 'Сумма неизвестна' })).toHaveCount(1) }

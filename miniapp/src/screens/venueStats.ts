@@ -169,7 +169,10 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
         renderContent(data); restorePosition(position)
       },
       onPage: selected => { page = selected; expandedItem = null; void load(0, true) }
-    }, financeMode.value as 'current' | 'closed'))
+    }, financeMode.value as 'current' | 'closed', () => {
+      if (!currentActor() || denied || disposed) return
+      financeMode.value = 'current'; syncPeriods(); void load()
+    }))
   }
   const syncPeriods = () => {
     modeLabel.hidden = !['overview', 'finance'].includes(section.value)

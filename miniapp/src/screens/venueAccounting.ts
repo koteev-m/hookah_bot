@@ -1,3 +1,4 @@
+import { accountingStamp, compareAccountingTime, orderedSales, paymentOperations, venueDay, type PaymentOperation } from './accountingPresentation'
 import { accountingPaymentEditor, paymentNames, type PaymentDraft } from './accountingPaymentEditor'
 import { accountingTextReconciliation } from './accountingTextReconciliation'
 import { accountingSaleEditor, accountingDecimal as decimal, accountingMinor as minor, type LineDraft } from './accountingSaleEditor'
@@ -65,6 +66,8 @@ export function renderVenueAccountingScreen(options: Options) {
   let editor: ReturnType<typeof accountingSaleEditor> | ReturnType<typeof accountingPaymentEditor> | null = null
   let denied = false
   let saving = false
+  let calendarDay: string | null = null
+  let calendarTimer: number | undefined
   const identity = options.userId ?? getTelegramContext().telegramUserId ?? 'unknown'
   const scope = `hookah:accounting:${location.host}:${identity}:${venueId}`
   const pendingKey = `${scope}:pending`
@@ -92,18 +95,54 @@ export function renderVenueAccountingScreen(options: Options) {
   const selectedSale = sameVenue ? query.get('sale') : null
   const view = sameVenue ? query.get('view') : null
   const salesFilter = sameVenue ? query.get('filter') ?? 'all' : 'all'
+  const listMode = sameVenue && query.get('list') === 'payments' ? 'payments' : 'sales'
+  let saleNumbers = new Map<string, number>()
+  const reference = (sale: AccountingSale) => `Запись ${saleNumbers.get(sale.id) ?? '—'}`
   const wrapper = el('section', { className: 'venue-accounting' })
   const error = el('p', { className: 'error-card' }); error.setAttribute('role', 'alert'); error.hidden = true
   const content = el('div')
-  append(wrapper, el('h2', { text: 'Учёт смены' }), el('p', { className: 'muted', text: 'Внутренний учёт продаж и внешних оплат. Не касса и не эквайринг. Учётная смена не связана с графиком сотрудников.' }), error, content)
+  append(wrapper, el('h2', { text: 'Учёт смены' }), el('p', { className: 'muted', text: 'Продажи и уже полученные оплаты за учётную смену. Она не связана с графиком сотрудников.' }), error, content)
   root.replaceChildren(wrapper)
-  const date = (value: string, zone: string) => new Intl.DateTimeFormat('ru-RU', { timeZone: zone, dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
+  const date = (value: string, zone: string) => accountingStamp(value, zone)
+  const updateDailyCount = (node: HTMLElement, today: string | null) => {
+    const count = report!.sales.filter(s => s.cancelReason === null && today !== null && venueDay(s.createdAt, report!.timezone) === today).length
+    node.textContent = today ? `Продаж сегодня в этой смене: ${count}` : 'Продаж сегодня в этой смене: дата недоступна'
+    node.dataset.todayCount = today ? String(count) : 'unknown'
+  }
+  const oldShift = (today: string | null) => {
+    const opened = report && venueDay(report.openedAt, report.timezone)
+    return Boolean(report?.status === 'OPEN' && today && opened && opened < today)
+  }
+  const refreshCalendar = () => {
+    if (!report) return
+    const today = venueDay(new Date().toISOString(), report.timezone)
+    if (today === calendarDay) return
+    calendarDay = today
+    const x = window.scrollX, y = window.scrollY
+    const daily = content.querySelector<HTMLElement>('[data-today-count]')
+    if (daily) updateDailyCount(daily, today)
+    content.querySelectorAll<HTMLElement>('[data-sale-date]').forEach(heading => {
+      heading.textContent = `${heading.dataset.saleDate === today ? 'Сегодня · ' : ''}${heading.dataset.dateLabel}`
+    })
+    const warning = content.querySelector<HTMLElement>('.accounting-old-shift')
+    if (warning) warning.hidden = !oldShift(today)
+    window.scrollTo(x, y)
+  }
+  const pauseCalendar = () => { window.clearTimeout(calendarTimer); calendarTimer = undefined }
+  const checkCalendar = () => {
+    pauseCalendar()
+    if (disposed || denied || document.visibilityState === 'hidden') return
+    if (!currentActor()) { loseAccess(); return }
+    refreshCalendar()
+    // Align low-frequency checks to minute boundaries; each check uses the actual venue day, including DST.
+    if (report) calendarTimer = window.setTimeout(checkCalendar, 60_000 - Date.now() % 60_000)
+  }
   const navigate = (params: Record<string, string> = {}) => {
-    const q = new URLSearchParams({ av: String(venueId), ...(report ? { shift: String(report.shiftId) } : {}), filter: salesFilter, ...params })
+    const q = new URLSearchParams({ av: String(venueId), ...(report ? { shift: String(report.shiftId) } : {}), filter: salesFilter, list: listMode, ...params })
     location.hash = `#/accounting?${q}`
   }
   const currentActor = () => (getTelegramContext().telegramUserId ?? identity) === identity
-  const loseAccess = () => { denied = true; editor = null; report = null; categories = []; tables = []; content.replaceChildren(el('p', { text: 'Доступ изменился. Прежние данные закрыты. Вернитесь к выбору заведения.' })) }
+  const loseAccess = () => { pauseCalendar(); denied = true; editor = null; report = null; categories = []; tables = []; content.replaceChildren(el('p', { text: 'Доступ изменился. Прежние данные закрыты. Вернитесь к выбору заведения.' })) }
   const showError = (value: ApiErrorInfo | Error) => {
     if (disposed) return
     error.hidden = false
@@ -174,6 +213,42 @@ export function renderVenueAccountingScreen(options: Options) {
     }, false), button('Отмена', () => box.remove()))
     content.appendChild(box); reason.focus()
   }
+  const paymentBlock = (sale: AccountingSale, operation: PaymentOperation, corrections: boolean) => {
+    const block = el('section', { className: 'card accounting-payment-operation' })
+    block.dataset.paymentOperation = operation.key; block.dataset.saleId = sale.id
+    if (operation.requestId) block.dataset.paymentRequestId = operation.requestId
+    const original = operation.payments.reduce((sum, p) => sum + p.amountMinor, 0)
+    const active = operation.payments.filter(p => !p.voidReason).reduce((sum, p) => sum + p.amountMinor, 0)
+    append(block, el('h4', { text: operation.requestId ? `Комбинированная оплата · ${money(original)}` : 'Запись оплаты' }),
+      el('p', { className: 'muted', text: date(operation.recordedAt, report!.timezone) }))
+    if (operation.payments.some(p => p.voidReason)) block.append(el('p', { className: 'accounting-payment-corrected', text: `Есть исправленные записи · Сейчас учтено ${money(active)}` }))
+    operation.payments.forEach(payment => {
+      const row = el('div', { className: 'accounting-payment' }); row.dataset.paymentComponent = payment.id
+      const label = el('p', { id: `accounting-component-${crypto.randomUUID()}`, text: `${paymentNames[payment.method] ?? payment.method} · ${money(payment.amountMinor)}` })
+      row.append(label)
+      if (payment.voidReason) row.append(el('p', { className: 'accounting-payment-corrected', text: `Исправлено: ${payment.voidReason}` }))
+      if (corrections && !payment.voidReason) {
+        const correct = button('Исправить запись оплаты', () => reasonAction(sale, 'VOID_PAYMENT', 'Отменить запись оплаты', 'Это отменит только учётную запись и увеличит остаток. Реальные деньги не возвращаются. Для верной суммы затем запишите новую оплату.', { paymentId: payment.id }))
+        correct.setAttribute('aria-describedby', label.id); row.append(correct)
+      }
+      block.append(row)
+    })
+    return block
+  }
+  const closePreview = (opener: HTMLButtonElement) => {
+    const current = report
+    if (!current || current.status !== 'OPEN' || access.role === 'STAFF' || saving) return
+    content.querySelector('.accounting-close-preview')?.remove()
+    const box = el('section', { className: 'card accounting-close-preview' })
+    const heading = el('h3', { id: 'accounting-close-heading', text: 'Подтверждение закрытия смены' }); heading.tabIndex = -1
+    box.setAttribute('aria-labelledby', heading.id)
+    append(box, heading, el('p', { text: `Получено ${money(current.totals.paidMinor)}. Не оплачено: ${money(current.totals.unpaidMinor)} (${current.unpaidSaleIds.length} записей). Спорных: ${current.disputedSaleIds.length}. Итог будет сохранён, дальнейшее исправление и запись оплат в этой смене станут недоступны.` }))
+    const ack = el('input'); ack.type = 'checkbox'
+    const cancel = () => { box.remove(); opener.focus() }
+    append(box, field('Проверил неоплаченные и спорные записи; принимаю закрытие с этим остатком', ack), button('Подтвердить закрытие смены', () => submit({ action: 'CLOSE', shiftId: current.shiftId, expectedReportHash: current.reportHash, acknowledgeUnpaid: ack.checked }), false), button('Продолжить смену', cancel))
+    box.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); cancel() } })
+    content.append(box); heading.focus(); box.scrollIntoView({ block: 'nearest' })
+  }
   const lineEditor = (sale?: AccountingSale) => {
     const targetKey = `${scope}:draft:${report?.shiftId ?? 'first'}:${sale?.id ?? 'new'}`
     const blank = (): LineDraft => ({ name: '', qty: '1', price: '', discount: '', discountMode: 'percent', gift: false, giftReason: '' })
@@ -218,7 +293,9 @@ export function renderVenueAccountingScreen(options: Options) {
   const detail = (sale: AccountingSale) => {
     const box = el('section', { className: 'card' })
     append(box, el('h3', { text: `${sale.tableLabel} · ${sourceNames[sale.source] ?? sale.source}` }),
-      el('p', { text: `Запись ${sale.displayNumber ? `№${sale.displayNumber}` : sale.id.slice(-8)} · ${date(sale.createdAt, report!.timezone)}` }))
+      el('p', { text: `${reference(sale)} · ${date(sale.createdAt, report!.timezone)}` }))
+    const technical = el('details', { className: 'accounting-sale-technical' }); technical.append(el('summary', { text: 'Технические сведения' }), el('p', { text: `ID продажи: ${sale.id}` }))
+    sale.payments.forEach(p => technical.append(el('p', { text: `ID записи оплаты: ${p.id}` }))); box.append(technical)
     const remaining = Math.max(0, salePayable(sale) - salePaid(sale))
     if (sale.issue || sale.sourceWarning) box.append(el('p', { text: 'Расчётная сумма недоступна или неполна. Требуется сверка.' }))
     else {
@@ -240,14 +317,11 @@ export function renderVenueAccountingScreen(options: Options) {
     content.appendChild(box)
     const editable = report!.status === 'OPEN' && sale.orderClosed && !sale.issue && !sale.sourceWarning
     if (!sale.orderClosed) append(box, el('p', { text: 'Сначала завершите заказ в разделе «Заказы», затем запишите оплату. Завершение заказа само по себе не подтверждает поступление денег.' }))
-    const paymentHistory = el('details', { className: 'card accounting-payment-history' }); paymentHistory.append(el('summary', { text: `История оплат · ${sale.payments.length}` }))
-    sale.payments.forEach((payment) => {
-      const row = el('div', { className: 'accounting-payment' })
-      append(row, el('p', { text: `${paymentNames[payment.method]} · ${money(payment.amountMinor)} · ${date(payment.recordedAt, report!.timezone)}${payment.voidReason ? ` · Исправлено: ${payment.voidReason}` : ''}` }))
-      if (editable && !payment.voidReason) row.appendChild(button('Исправить запись оплаты', () => reasonAction(sale, 'VOID_PAYMENT', 'Отменить запись оплаты', 'Это отменит только учётную запись и увеличит остаток. Реальные деньги не возвращаются. Для верной суммы затем запишите новую оплату.', { paymentId: payment.id })))
-      paymentHistory.appendChild(row)
-    })
-    if (sale.payments.length) content.append(paymentHistory)
+    const operations = paymentOperations(sale)
+    const paymentHistory = el('details', { className: 'card accounting-payment-history' }); paymentHistory.append(el('summary', { text: `Оплаты по этой продаже · операций: ${operations.length}` }))
+    operations.forEach(operation => paymentHistory.append(paymentBlock(sale, operation, editable)))
+    if (!operations.length) paymentHistory.append(el('p', { text: 'По этой продаже оплата ещё не записана.' }))
+    content.append(paymentHistory)
     if (editable && !sale.cancelReason) {
       if (remaining > 0) {
         const key = `${scope}:draft:${report!.shiftId}:payment:${sale.id}`
@@ -272,10 +346,12 @@ export function renderVenueAccountingScreen(options: Options) {
     if (disposed || denied) return
     if (!currentActor()) { loseAccess(); return }
     editor = null; content.replaceChildren()
+    calendarDay = report ? venueDay(new Date().toISOString(), report.timezone) : null
+    saleNumbers = new Map(orderedSales(report?.sales ?? []).reverse().map((sale, index) => [sale.id, index + 1]))
     if (successNotice) { const notice = el('p', { className: 'accounting-success', text: successNotice }); notice.setAttribute('role', 'status'); content.append(notice) }
     if (savedSaleId && report && !selectedSale) content.append(savedSaleId !== 'choose'
       ? button('Перейти к записи оплаты', () => navigate({ sale: savedSaleId! }), false)
-      : button('Выбрать продажу для оплаты', () => content.querySelector('.accounting-sales')?.scrollIntoView({ block: 'start' }), false))
+      : button('Выбрать продажу для оплаты', () => { if (listMode === 'payments') navigate({ list: 'sales' }); else content.querySelector('.accounting-sales')?.scrollIntoView({ block: 'start' }) }, false))
     const pending = storageRead<PendingCommand>(pendingKey)
     if (pending) {
       const box = el('section', { className: 'card accounting-pending' }); box.setAttribute('role', 'alert')
@@ -288,11 +364,21 @@ export function renderVenueAccountingScreen(options: Options) {
       if (view === 'new') { lineEditor(); return }
       append(content, button('Добавить продажу', () => navigate({ view: 'new' }), false))
     } else {
-      append(content, el('p', { text: `${report.status === 'OPEN' ? 'Открыта' : 'Закрыта'} · ${date(report.openedAt, report.timezone)}${report.closedAt ? ` — ${date(report.closedAt, report.timezone)}` : ''} · ${report.timezone}` }))
-      if (report.status === 'CLOSED') append(content, el('p', { text: 'Сохранённый итог. Редактирование финансовых записей закрытой смены запрещено.' }))
+      const shift = el('section', { className: 'card accounting-shift-summary' })
+      append(shift, el('h3', { text: report.status === 'OPEN' ? 'Текущая смена' : 'Закрытая смена' }), el('p', { text: `Открыта ${date(report.openedAt, report.timezone)}` }))
+      if (report.closedAt) shift.append(el('p', { text: `Закрыта ${date(report.closedAt, report.timezone)}` }))
+      shift.append(el('p', { className: 'muted', text: `Время заведения: ${report.timezone || 'часовой пояс не передан'}` }))
+      const today = calendarDay
+      const shiftCount = el('p', { text: `Продаж за всю смену: ${report.totals.salesCount}` }); shiftCount.dataset.shiftCount = String(report.totals.salesCount); shift.append(shiftCount)
       if (report.status === 'OPEN') {
-        const day = new Intl.DateTimeFormat('sv-SE', { timeZone: report.timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
-        if (day.format(new Date(report.openedAt)) < day.format(new Date())) append(content, el('p', { className: 'error-card', text: `Смена открыта с ${date(report.openedAt, report.timezone)}. Новые продажи войдут в эту же смену. Полночь её не закрывает. Если прошлый рабочий период завершён, попросите владельца или менеджера сверить и закрыть смену до новой продажи.` }))
+        const daily = el('p'); updateDailyCount(daily, today); shift.append(daily)
+        shift.append(el('p', { className: 'muted', text: 'Счётчики не включают отменённые продажи. Смена охватывает всё время с открытия, даже несколько дат.' }))
+        if (report.sales.some(s => !venueDay(s.createdAt, report!.timezone))) shift.append(el('p', { className: 'muted', text: 'Записи без достоверной даты видны отдельно и не включены в счётчик за сегодня.' }))
+      }
+      content.append(shift)
+      if (report.status === 'CLOSED') content.append(el('p', { text: 'Сохранённый итог. Редактирование финансовых записей закрытой смены запрещено.' }))
+      if (report.status === 'OPEN') {
+        const warning = el('p', { className: 'error-card accounting-old-shift', text: `Смена открыта с ${date(report.openedAt, report.timezone)}. Она началась не сегодня. Новые продажи продолжают попадать в неё; полночь смену не закрывает. Если прошлый рабочий период завершён, владелец или менеджер должен сверить и закрыть смену.` }); warning.hidden = !oldShift(today); content.append(warning)
       }
       const sale = report.sales.find((item) => item.id === selectedSale)
       if (report.status === 'OPEN' && view === 'reconcile' && sale && access.role !== 'STAFF' && !sale.cancelReason && (sale.textReconciliationAvailable || sale.textReconciliation)) { reconciliationEditor(sale); return }
@@ -303,26 +389,52 @@ export function renderVenueAccountingScreen(options: Options) {
       const unknown = report.sales.filter((s) => s.issue).length
       if (unknown) append(content, el('p', { text: `${unknown} записей без достоверного снимка: суммы не включены в итог. Нужна сверка перед закрытием.` }))
       if (report.sales.some(s => s.sourceWarning)) append(content, el('p', { className: 'error-card', text: 'Есть текстовые части заказов без состава и цен. Итоги содержат известную часть; полнота суммы не подтверждена. Сверьте исходные заказы перед оплатой и закрытием.' }))
-      if (report.status === 'OPEN') append(content, button('Добавить продажу', () => navigate({ view: 'new' }), false), button('Обновить отчёт', () => void load()))
-      append(content, el('p', { text: `Продаж: ${t.salesCount} · Цифровых заказов: ${t.ordersCount}` }), el('h3', { text: 'Расчётные суммы' }))
-      const metrics = el('dl', { className: 'accounting-totals' })
-      for (const [label, value] of [['Стоимость позиций', t.grossMinor], ['Скидки', t.discountMinor], ['Подарки / бесплатно', t.giftMinor], ['Сумма продаж', t.accruedMinor], ['Получено по учёту', t.paidMinor], ['Неоплаченный остаток', t.unpaidMinor], ['Наличные', t.cashMinor], ['Карты', t.cardMinor], ['Переводы', t.transferMinor]] as const) append(metrics, el('dt', { text: label }), el('dd', { text: money(value) }))
-      if (t.financialDetailIncomplete) { append(metrics, el('dt', { text: 'Сверено без товарной расшифровки' }), el('dd', { text: money(t.unallocatedAccruedMinor ?? 0) })); content.append(el('p', { text: 'Начисления включают подтверждённые неразнесённые итоги. Стоимость позиций, скидки и подарки показаны только по известным данным; полнота детализации не подтверждена.' })) }
-      append(content, metrics, el('p', { text: 'Сумма продаж — после скидок и подарков. Получено по учёту — записи сотрудника, не банковская сверка.' }))
-
-      for (const [label, rows] of [['По столам', report.byTable], ['По позициям', report.byItem], ['По источникам', report.bySource]] as const) {
-        const section = el('details', { className: 'card' }); section.appendChild(el('summary', { text: label }))
-        rows.forEach((row) => append(section, el('p', { text: row.label === 'TEXT_CONFIRMED_UNALLOCATED' ? `Сверено без товарной расшифровки · ${money(row.accruedMinor)}` : `${sourceNames[row.label] ?? row.label} · ${row.qty} · ${money(row.accruedMinor)}` })))
-        content.appendChild(section)
+      if (report.status === 'OPEN') {
+        const actions = el('div', { className: 'accounting-shift-actions' })
+        actions.append(button('Добавить продажу', () => navigate({ view: 'new' }), false))
+        if (access.role !== 'STAFF') { const close = button('Предварительный итог и закрытие', () => closePreview(close)); actions.append(close) }
+        actions.append(button('Обновить отчёт', () => void load())); content.append(actions)
       }
-      const list = el('section', { className: 'accounting-sales' }); list.appendChild(el('h3', { text: 'Продажи и сверка' }))
+      const summary = el('section', { className: 'card accounting-shift-totals' }); summary.append(el('h3', { text: 'Итог всей смены' }))
+      const metrics = el('dl', { className: 'accounting-totals' })
+      for (const [label, value] of [['Сумма продаж', t.accruedMinor], ['Получено по учёту', t.paidMinor], ['Неоплаченный остаток', t.unpaidMinor]] as const) append(metrics, el('dt', { text: label }), el('dd', { text: money(value) }))
+      append(summary, metrics, el('p', { className: 'muted', text: 'Сумма — после скидок и подарков. Получено — записи сотрудника, не банковская сверка.' }))
+      const more = el('details', { className: 'accounting-shift-breakdown' }); more.append(el('summary', { text: 'Подробный итог смены' }), el('p', { text: `Цифровых заказов: ${t.ordersCount}` }))
+      const detailMetrics = el('dl', { className: 'accounting-totals' })
+      for (const [label, value] of [['Стоимость позиций', t.grossMinor], ['Скидки', t.discountMinor], ['Подарки / бесплатно', t.giftMinor], ['Наличные', t.cashMinor], ['Карты', t.cardMinor], ['Переводы', t.transferMinor]] as const) append(detailMetrics, el('dt', { text: label }), el('dd', { text: money(value) }))
+      if (t.financialDetailIncomplete) { append(detailMetrics, el('dt', { text: 'Сверено без товарной расшифровки' }), el('dd', { text: money(t.unallocatedAccruedMinor ?? 0) })); summary.append(el('p', { text: 'Начисления включают подтверждённые неразнесённые итоги. Полнота товарной детализации не подтверждена.' })) }
+      more.append(detailMetrics)
+      for (const [label, rows] of [['По столам', report.byTable], ['По позициям', report.byItem], ['По источникам', report.bySource]] as const) {
+        const section = el('details'); section.append(el('summary', { text: label }))
+        rows.forEach(row => section.append(el('p', { text: row.label === 'TEXT_CONFIRMED_UNALLOCATED' ? `Сверено без товарной расшифровки · ${money(row.accruedMinor)}` : `${sourceNames[row.label] ?? row.label} · ${row.qty} · ${money(row.accruedMinor)}` }))); more.append(section)
+      }
+      summary.append(more); content.append(summary)
+      const modes = el('div', { className: 'accounting-list-modes' }); modes.setAttribute('aria-label', 'Список учёта')
+      for (const [mode, label] of [['sales', 'Продажи'], ['payments', 'Оплаты смены']]) {
+        const control = button(label, () => navigate({ list: mode })); control.setAttribute('aria-pressed', String(listMode === mode)); modes.append(control)
+      }
+      content.append(modes)
+      if (listMode === 'payments') {
+        const timeline = el('section', { className: 'accounting-shift-payments', id: 'accounting-shift-payments' }); timeline.append(el('h3', { text: 'Оплаты всей смены' }), el('p', { className: 'muted', text: 'Записи сотрудников с открытия смены, включая исправленные. Каждая операция относится к одной продаже.' }))
+        const operations = report.sales.flatMap(sale => paymentOperations(sale).map(operation => ({ sale, operation })))
+        operations.sort((a, b) => compareAccountingTime(a.operation.recordedAt, b.operation.recordedAt, JSON.stringify([a.sale.id, a.operation.key]), JSON.stringify([b.sale.id, b.operation.key])))
+        timeline.append(el('p', { text: `Операций: ${operations.length} · Компонентов: ${report.sales.reduce((n, s) => n + s.payments.length, 0)}` }))
+        if (!operations.length) timeline.append(el('p', { text: 'В этой смене оплата ещё не записана.' }))
+        operations.forEach(({ sale, operation }) => {
+          const block = paymentBlock(sale, operation, false)
+          if (sale.cancelReason || sale.disputeReason || sale.issue || sale.sourceWarning) block.prepend(el('p', { className: 'accounting-row-warning', text: sale.cancelReason ? 'Продажа отменена' : 'Продажа требует сверки' }))
+          block.append(button(`Открыть продажу · ${sale.tableLabel} · ${reference(sale)}`, () => navigate({ sale: sale.id }))); timeline.append(block)
+        })
+        content.append(timeline)
+      }
+      const list = el('section', { className: 'accounting-sales', id: 'accounting-sales-list' }); list.appendChild(el('h3', { text: 'Продажи и сверка' }))
       if (!report.sales.length) list.appendChild(el('p', { text: 'В этой смене пока нет продаж.' }))
       const filters = el('div', { className: 'accounting-sales-filters' }); filters.setAttribute('aria-label', 'Состояние оплаты')
       for (const [value, label] of [['unpaid', 'Не оплачены'], ['partial', 'Частично'], ['paid', 'Оплачены'], ['all', 'Все']]) {
         const control = button(label, () => navigate({ filter: value })); control.setAttribute('aria-pressed', String(value === salesFilter)); filters.append(control)
       }
       list.append(filters, el('p', { className: 'muted', text: 'Требующие сверки записи видны при любом фильтре.' }))
-      const visible = report.sales.filter(item => {
+      const visible = orderedSales(report.sales).filter(item => {
         if (item.issue || item.sourceWarning || item.disputeReason) return true
         if (salesFilter === 'all') return true
         if (item.cancelReason) return false
@@ -330,24 +442,28 @@ export function renderVenueAccountingScreen(options: Options) {
         return salesFilter === 'paid' ? total > 0 && paid >= total : salesFilter === 'partial' ? paid > 0 && paid < total : paid === 0 && total > 0
       })
       if (report.sales.length && !visible.length) list.append(el('p', { text: 'Нет продаж с выбранным состоянием.' }))
+      let previousDay: string | null | undefined
+      let dayHeading = ''
       for (const item of visible) {
-        const total = salePayable(item), paid = salePaid(item)
-        const unknown = item.issue || item.sourceWarning
-        const state = item.cancelReason ? 'Отменено' : unknown ? 'Сумма не подтверждена · Требует сверки' : item.disputeReason ? 'Требует сверки' : total === 0 && paid === 0 ? 'Оплата не требуется' : paid >= total ? 'Оплачено' : paid > 0 ? 'Частично' : 'Не оплачено'
-        const row = button(`${item.tableLabel} · ${sourceNames[item.source] ?? item.source} · ${item.displayNumber ? `№${item.displayNumber}` : item.id.slice(-8)} · ${date(item.createdAt, report.timezone)} · ${unknown ? 'Сумма неизвестна' : money(total)} · Оплачено ${money(paid)} · Остаток ${unknown ? 'неизвестен' : money(Math.max(0, total - paid))} · ${state}`, () => navigate({ sale: item.id }))
-        list.appendChild(row)
+        const day = venueDay(item.createdAt, report.timezone)
+        if (day !== previousDay) {
+          const label = day ? accountingStamp(item.createdAt, report.timezone, 'date') : 'Дата не определена'
+          const heading = el('h4', { className: 'accounting-day-heading', id: `accounting-day-${day ?? 'unknown'}`, text: `${day && day === today ? 'Сегодня · ' : ''}${label}` })
+          heading.dataset.dateLabel = label; heading.dataset.saleDate = day ?? 'unknown'; list.append(heading); dayHeading = heading.id; previousDay = day
+        }
+        const total = salePayable(item), paid = salePaid(item), unknown = item.issue || item.sourceWarning
+        const state = item.cancelReason ? 'Отменено' : unknown ? 'Сумма не подтверждена · Требует сверки' : item.disputeReason ? 'Спорная · Требует сверки' : total === 0 && paid === 0 ? 'Оплата не требуется' : paid >= total ? 'Оплачено' : paid > 0 ? 'Частично' : 'Не оплачено'
+        const row = button('', () => navigate({ sale: item.id })); row.dataset.saleId = item.id; row.setAttribute('aria-describedby', dayHeading)
+        const title = el('span', { className: 'accounting-row-top' }); append(title, el('span', { className: 'accounting-row-title', text: `${item.tableLabel} · ${sourceNames[item.source] ?? item.source}` }), el('span', { className: 'accounting-row-amount', text: unknown ? 'Сумма неизвестна' : money(total) }))
+        append(row, title, el('span', { className: 'accounting-row-meta', text: `${reference(item)} · ${accountingStamp(item.createdAt, report.timezone, 'time')}` }), el('span', { className: item.cancelReason || unknown || item.disputeReason ? 'accounting-row-warning' : 'accounting-row-state', text: state }))
+        if (!unknown && !item.cancelReason && paid > 0 && paid < total) row.append(el('span', { className: 'accounting-row-remainder', text: `Осталось ${money(total - paid)}` }))
+        list.append(row)
       }
-      content.appendChild(list)
-      if (report.status === 'OPEN' && access.role !== 'STAFF') content.appendChild(button('Предварительный итог и закрытие', () => {
-        const box = el('section', { className: 'card' })
-        append(box, el('h3', { text: 'Подтверждение закрытия смены' }), el('p', { text: `Получено ${money(t.paidMinor)}. Не оплачено: ${money(t.unpaidMinor)} (${report!.unpaidSaleIds.length} записей). Спорных: ${report!.disputedSaleIds.length}. Итог будет сохранён, дальнейшее исправление и запись оплат в этой смене станут недоступны.` }))
-        const ack = el('input'); ack.type = 'checkbox'
-        append(box, field('Проверил неоплаченные и спорные записи; принимаю закрытие с этим остатком', ack), button('Подтвердить закрытие смены', () => submit({ action: 'CLOSE', shiftId: report!.shiftId, expectedReportHash: report!.reportHash, acknowledgeUnpaid: ack.checked }), false), button('Продолжить смену', () => box.remove()))
-        content.appendChild(box); box.scrollIntoView({ block: 'nearest' })
-      }))
+      if (listMode === 'sales') content.append(list)
     }
-    if (access.role !== 'STAFF' && history.length) {
+    if (access.role !== 'STAFF') {
       append(content, el('h3', { text: 'История закрытых смен' }))
+      if (!history.length) content.append(el('p', { text: report?.status === 'OPEN' ? 'Закрытых смен пока нет. Текущая смена открыта и появится здесь только после сверки и закрытия.' : 'Закрытых смен пока нет.' }))
       history.forEach((shift) => content.appendChild(button(`${date(shift.openedAt, shift.timezone)} — ${shift.closedAt ? date(shift.closedAt, shift.timezone) : ''}`, () => navigate({ shift: String(shift.id) }))))
       if (nextHistoryBeforeId) content.appendChild(button('Ещё закрытые смены', () => {
         void accountingState(backendUrl, venueId, deps, abort.signal, nextHistoryBeforeId!).then((result) => {
@@ -379,7 +495,7 @@ export function renderVenueAccountingScreen(options: Options) {
       if (!result.ok) { if ([401, 403].includes(result.error.status)) loseAccess(); showError(result.error); return }
       report = result.data
     }
-    render()
+    render(); checkCalendar()
   }
   void Promise.all([venueGetTables(backendUrl, venueId, deps, abort.signal), venueGetMenu(backendUrl, venueId, deps, abort.signal)]).then(([t, m]) => {
     if (disposed) return
@@ -389,5 +505,15 @@ export function renderVenueAccountingScreen(options: Options) {
     void load()
   })
   const identityWatch = window.setInterval(() => { if (!currentActor()) loseAccess() }, 1000)
-  return () => { disposed = true; abort.abort(); window.clearInterval(identityWatch) }
+  const telegramApp = getTelegramContext().webApp
+  const webApp = telegramApp?.onEvent && telegramApp.offEvent ? telegramApp : null
+  document.addEventListener('visibilitychange', checkCalendar)
+  window.addEventListener('pageshow', checkCalendar); window.addEventListener('pagehide', pauseCalendar)
+  webApp?.onEvent?.('activated', checkCalendar); webApp?.onEvent?.('deactivated', pauseCalendar)
+  return () => {
+    disposed = true; abort.abort(); window.clearInterval(identityWatch); pauseCalendar()
+    document.removeEventListener('visibilitychange', checkCalendar)
+    window.removeEventListener('pageshow', checkCalendar); window.removeEventListener('pagehide', pauseCalendar)
+    webApp?.offEvent?.('activated', checkCalendar); webApp?.offEvent?.('deactivated', pauseCalendar)
+  }
 }

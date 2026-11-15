@@ -186,7 +186,7 @@ test('stats complete empty counters differ from unavailable attendance and mean 
   await expect(metric(page, 'bookings.attendance').locator('.stats-value')).toHaveText('Недостаточно данных')
   await expect(metric(page, 'calls.firstResponse').locator('.stats-value')).toHaveText('Недостаточно данных')
   await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
-  await expect(page.getByText('За выбранный период закрытых смен нет.')).toBeVisible()
+  await expect(page.getByText('Нет смен, закрытых в выбранный период.', { exact: false })).toBeVisible()
   await expect(page.locator('.stats-currency')).toHaveCount(0)
 })
 

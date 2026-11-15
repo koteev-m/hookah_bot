@@ -2619,6 +2619,33 @@ shared total-message links. Recompute previously shown local errors, preserving 
 state; no auto-submit or form replacement. A frontend-only validation fix reuses verified unchanged
 backend inputs; it does not require a new full backend solely for this change.
 
+### Shift accounting presentation clarity
+
+`accounting-shift-clarity.spec.ts` is mandatory in the full browser result inventory (12 cases).
+Run Chromium and WebKit at 360/390 px: createdAt/ID ordering across 13/14/15 dates, distinct same-table
+sales, authoritative whole-shift versus today count, old-open warning, compact states, sale-scoped
+and whole-shift receipt history, confirmed PAY_SPLIT identity, component-only correction, retained
+legacy/voided entries, management close preview and STAFF denial. Check keyboard/focus, full-page
+scroll/overflow and actual screenshots. Empty closed-period finance must explain the open shift
+and navigate to its existing current mode. Preserve the invalid-draft/current-refresh regressions.
+
+Use a phone timezone different from the venue and a DST fallback: ordering follows instants, date
+headings/counts follow the venue. Unknown/naive dates and missing timezones never fall back to the
+phone. Presentation helpers must not mutate reports or merge separate sales/ambiguous receipts;
+include sub-millisecond timestamps. Existing payment, CREATE/replay, percentage, text reconciliation,
+account/venue/revoke and pending-command cases remain mandatory. A presentation-only change reuses
+verified unchanged backend inputs; it does not establish a fresh live PostgreSQL or Telegram iOS pass.
+
+Midnight follow-up: `accounting-midnight.spec.ts` adds ten mandatory full-mountVenueApp cases.
+Run Chromium/WebKit with controlled browser clocks across Moscow midnight, hidden/resumed
+visibilitychange, persisted pageshow and Telegram activation; assert actual counters/date headings,
+unchanged totals/salesCount and zero automatic GET/POST. Preserve sale/payment DOM identity, focus,
+caret, scroll, drafts and exact unknown-result requestId/payload. Cover venue/device timezone
+mismatch, Berlin23h/25h days, filters/corrected/disputed receipts, explicit new-data Refresh,
+late old-venue responses and disposed listeners/DOM. Missing/skipped cases fail parser negatives.
+A focused follow-up may reuse the verified prior full browser result for unaffected scopes;
+report that result as historical, not a fresh complete run of the enlarged inventory.
+
 ## QA Levels
 
 | Level | Purpose | Current / target |
