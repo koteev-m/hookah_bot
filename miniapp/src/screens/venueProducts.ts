@@ -57,7 +57,9 @@ export function renderVenueProducts(snapshot: VenueKpiSnapshot, view?: ProductsV
   }
   const totals = report.summary
   const top = el('div', { className: 'product-summary' })
-  const quantity = el('div'); append(quantity, el('span', { className: 'stats-note', text: 'Учтено единиц товаров и услуг' }), figure(totals.units)); top.append(quantity)
+  const quantity = el('div'); const units = figure(totals.units)
+  if (valueText(totals.units) !== '—') units.firstChild!.textContent += ' единиц'
+  append(quantity, el('span', { className: 'stats-note', text: 'Учтено:' }), units); top.append(quantity)
   const cost = el('div'); cost.append(el('span', { className: 'stats-note', text: 'Стоимость до скидок и подарков' }))
   totals.grossAmounts.forEach(amount => cost.append(figure(amount.gross, amount.currency)))
   if (!totals.grossAmounts.length) cost.append(el('span', { className: 'product-number', text: '—' }))

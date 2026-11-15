@@ -1180,7 +1180,8 @@
             "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
             "VOID_PAYMENT_NOT_REFUND",
             "SEATINGS_NOT_UNIQUE_PEOPLE"
-        ]
+        ],
+        "openShiftOpenedAt": "2026-03-30T00:00:00Z"
     },
     "products": {
         "definitionVersion": "2026-11-analytics-v1",
@@ -2689,6 +2690,7 @@
             "CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW",
             "VOID_PAYMENT_NOT_REFUND",
             "SEATINGS_NOT_UNIQUE_PEOPLE"
-        ]
+        ],
+        "openShiftOpenedAt": "2026-03-30T00:00:00Z"
     }
 }

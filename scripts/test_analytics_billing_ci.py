@@ -128,6 +128,40 @@ class AnalyticsBillingCiTest(unittest.TestCase):
         self.assertIn('assertEquals(10010,', source)
         self.assertIn('PostgresTestEnv.createDataSource(PostgresTestEnv.createDatabase())', source)
 
+    def test_split_payment_inventory_and_direct_browser_proof_are_required(self):
+        prefix = 'com.hookah.platform.backend.miniapp.venue.accounting.'
+        names = ['AccountingSplitPaymentH2Test', 'AccountingSplitPaymentPostgresTest',
+                 'AccountingSplitPaymentPostgresHttpTest']
+        for name, minimum in zip(names, [5, 7, 1]):
+            full = prefix + name
+            self.assertIn('--tests "' + full + '"', self.workflow)
+            self.assertEqual(self.inventory['required_minimums'][full], minimum)
+            self.assertEqual(len(self.inventory['required_test_names'][full]), minimum)
+            self.scenario(lambda reports, marker, env: (reports / f'TEST-{full}.xml').unlink())
+            self.scenario(self.edit(full, lambda suite: ET.SubElement(suite.find('testcase'), 'skipped')))
+        self.assertIn('scripts/test-accounting-payment-live.py',
+                      step(self.workflow, 'Verify accounting UI through PostgreSQL and restart'))
+        code = python_step(self.workflow, 'Assert full Mini App browser smoke results')
+        inventory = next(ast.literal_eval(node.value) for node in ast.parse(code).body
+                         if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                         and node.targets[0].id == 'required_specs')
+        self.assertEqual(sum(count for (file, _), count in inventory.items()
+                             if file == 'accounting-payments-finalize.spec.ts'), 19)
+
+    def test_create_result_inventory_rejects_missing_and_skipped_and_requires_both_live_browsers(self):
+        prefix = 'com.hookah.platform.backend.miniapp.venue.accounting.'
+        for name, minimum in [('AccountingCreateResultH2Test', 4), ('AccountingCreateResultPostgresTest', 5),
+                              ('AccountingCreateReplayPostgresHttpTest', 1), ('AccountingMigrationTest', 4)]:
+            full = prefix + name
+            self.assertIn('--tests "' + full + '"', self.workflow)
+            self.assertEqual(self.inventory['required_minimums'][full], minimum)
+            self.assertEqual(len(self.inventory['required_test_names'][full]), minimum)
+            self.scenario(lambda reports, marker, env: (reports / f'TEST-{full}.xml').unlink())
+            self.scenario(self.edit(full, lambda suite: ET.SubElement(suite.find('testcase'), 'skipped')))
+        live = step(self.workflow, 'Verify accounting UI through PostgreSQL and restart')
+        self.assertIn('test-accounting-create-replay-live.py build/accounting-create-live-chromium chromium', live)
+        self.assertIn('test-accounting-create-replay-live.py build/accounting-create-live-webkit webkit', live)
+
     def test_prepare_binds_marker_to_current_run_attempt_and_sha(self):
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / 'marker.json'
@@ -327,8 +361,8 @@ class AnalyticsBillingCiTest(unittest.TestCase):
         specs = [{'file': file, 'title': title,
                   'tests': [{'status': 'expected', 'expectedStatus': 'passed', 'results': [{'status': 'passed'}]}
                             for _ in range(count)]} for (file, title), count in inventory.items()]
-        reviews = [index for index, spec in enumerate(specs) if spec['title'].startswith('review F') or spec['file'] in {'venue-booking-attention.spec.ts', 'venue-products-category.spec.ts', 'accounting-percent.spec.ts', 'accounting-chat-reconciliation.spec.ts'}]
-        self.assertEqual(len(reviews), 65)
+        reviews = [index for index, spec in enumerate(specs) if spec['title'].startswith(('review F', 'payment total validation')) or spec['file'] in {'venue-booking-attention.spec.ts', 'venue-products-category.spec.ts', 'accounting-percent.spec.ts', 'accounting-chat-reconciliation.spec.ts'}]
+        self.assertEqual(len(reviews), 76)
         minimum = next(ast.literal_eval(node.value) for node in ast.parse(code).body
                        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
                        and node.targets[0].id == 'minimum_executed')

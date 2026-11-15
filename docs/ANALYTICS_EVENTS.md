@@ -1,5 +1,28 @@
 # Analytics And Events Model
 
+## Финансовый обзор и границы смен
+
+HT-ACCOUNTING-PAYMENTS-STATS-UX-FINALIZE-01: local implementation; release/device acceptance separate.
+Overview starts with the existing authoritative financial aggregates: net accrued sales, operator
+recorded receipts, unpaid remainder, sales count and accrued/count average. UI labels are «Сумма
+продаж», «Получено по учёту», «Средняя сумма продажи». A receipt component never increases salesCount;
+multiple shifts use total accrued / total count, not an average of averages. Existing null/partial,
+separate ISO currencies and HALF_UP minor-unit rounding are unchanged.
+
+Overview/Finance explicitly select current open shift or closed shifts. Only closed-shift selection
+uses the calendar (closed_at in the venue timezone). Current means the entire open shift as of the
+snapshot, even outside selected dates; its opening instant is exposed by additive optional
+`openShiftOpenedAt` from the same read snapshot. No open shift produces an honest empty state.
+Legacy responses without this timestamp disclose that the opening boundary is unavailable. GETs
+create no shift or business facts. Operational counts are secondary; manual sales do not become
+orders/seatings/calls. Products/Additions/Service retain their existing calendar definitions and
+selected dates. The editable closed-period draft is separate from the last successfully applied
+period. Current-shift load/refresh uses that applied read window (or server-anchored venue today
+initially), never the hidden date draft; its finance projection still covers the entire open shift.
+Returning to closed shifts preserves and validates the draft, with unapplied dates disclosed. A
+mode change starts a fresh guarded request; failure clears stale KPI and late old-mode responses
+are ignored. D1–D4 and frozen reports are unchanged.
+
 ## Товары и дозаказы — локальный read model
 
 HT-VENUE-OPERATIONS-STATS-UX-01: LOCAL IMPLEMENTED / REVIEW PENDING; D1–D4 остаются APPROVED.

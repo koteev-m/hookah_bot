@@ -84,23 +84,28 @@ class AccountingRepository(
             if (command.lines.size > 100) invalid("В продаже может быть не более 100 позиций.")
             if (command.action == "CLOSE" && role == "STAFF") throw ForbiddenException()
             if (command.action == "RECONCILE_TEXT" && role !in setOf("OWNER", "MANAGER")) throw ForbiddenException()
+            if (command.action != "PAY_SPLIT" &&
+                (command.paymentComponents.isNotEmpty() || command.acknowledgePartial)
+            ) {
+                invalid("Составляющие оплаты допустимы только для комбинированной операции.")
+            }
             val fingerprint = sha256(json.encodeToString(command))
             val replay =
                 c.query(
-                    "SELECT actor_user_id, fingerprint, shift_id FROM venue_accounting_commands " +
+                    "SELECT actor_user_id, fingerprint, shift_id, created_sale_id FROM venue_accounting_commands " +
                         "WHERE venue_id = ? AND request_id = ?",
                     venueId,
                     command.requestId,
-                ) { Triple(it.getLong(1), it.getString(2), it.getLong(3)) }.singleOrNull()
+                ) { CommandReceipt(it.getLong(1), it.getString(2), it.getLong(3), it.getString(4)) }.singleOrNull()
             if (replay != null) {
-                if (replay.first != actor || replay.second != fingerprint) {
+                if (replay.actor != actor || replay.fingerprint != fingerprint) {
                     conflict(
                         "Ключ уже использован с другими данными. Обновите отчёт.",
                     )
                 }
-                val shift = header(c, venueId, replay.third)
+                val shift = header(c, venueId, replay.shiftId)
                 if (shift.status == "CLOSED" && role == "STAFF") throw ForbiddenException()
-                return@transaction report(c, venueId, shift)
+                return@transaction report(c, venueId, shift).copy(createdSaleId = replay.createdSaleId)
             }
             val shift =
                 if (command.action == "OPEN") {
@@ -116,25 +121,35 @@ class AccountingRepository(
                         }
                     }
                 }
+            var createdSaleId: String? = null
             if (command.action != "OPEN") {
                 val before = report(c, venueId, shift)
                 if (command.action == "CLOSE") {
                     close(c, actor, before, command)
                 } else {
-                    mutateSale(c, actor, before, command)
+                    val changedId = mutateSale(c, actor, before, command)
+                    if (command.action == "CREATE") createdSaleId = changedId
                 }
             }
             c.exec(
                 "INSERT INTO venue_accounting_commands (venue_id, request_id, actor_user_id, " +
-                    "fingerprint, shift_id) VALUES (?, ?, ?, ?, ?)",
+                    "fingerprint, shift_id, created_sale_id) VALUES (?, ?, ?, ?, ?, ?)",
                 venueId,
                 command.requestId,
                 actor,
                 fingerprint,
                 shift.id,
+                createdSaleId,
             )
-            report(c, venueId, header(c, venueId, shift.id))
+            report(c, venueId, header(c, venueId, shift.id)).copy(createdSaleId = createdSaleId)
         }
+
+    private data class CommandReceipt(
+        val actor: Long,
+        val fingerprint: String,
+        val shiftId: Long,
+        val createdSaleId: String?,
+    )
 
     private fun open(
         c: Connection,
@@ -191,7 +206,7 @@ class AccountingRepository(
         actor: Long,
         report: AccountingReport,
         command: AccountingCommand,
-    ) {
+    ): String {
         val old =
             if (command.action == "CREATE") {
                 null
@@ -277,6 +292,38 @@ class AccountingRepository(
                                 ),
                     )
                 }
+                "PAY_SPLIT" -> {
+                    val sale = checkNotNull(old)
+                    if (sale.cancelReason != null) conflict("Нельзя оплатить отменённую запись.")
+                    if (command.amountMinor != null || command.paymentMethod != null) {
+                        invalid("Для комбинированной оплаты укажите только её составляющие.")
+                    }
+                    val components = command.paymentComponents
+                    if (components.size !in 2..3 || components.map { it.method }.distinct().size != components.size ||
+                        components.any {
+                            it.method !in setOf("CASH", "CARD", "TRANSFER") ||
+                                it.amountMinor <= 0 || it.amountMinor > MAX_SALE_MINOR
+                        }
+                    ) {
+                        invalid("Укажите два или три разных способа с положительными суммами.")
+                    }
+                    val amount = components.sumOf { it.amountMinor }
+                    val remaining = sale.payable - sale.paid
+                    if (amount > remaining) conflict("Сумма оплаты превышает остаток.")
+                    if (amount < remaining && !command.acknowledgePartial) {
+                        invalid("Подтвердите частичную оплату и оставшийся неоплаченный остаток.")
+                    }
+                    val recordedAt = now().toInstant().toString()
+                    sale.copy(
+                        payments =
+                            sale.payments +
+                                components.map {
+                                    AccountingPayment(
+                                        "${command.requestId}:${it.method}", it.method, it.amountMinor, recordedAt,
+                                    )
+                                },
+                    )
+                }
                 "VOID_PAYMENT" -> {
                     val sale = checkNotNull(old)
                     val reason = reason(command)
@@ -357,6 +404,7 @@ class AccountingRepository(
             "accounting:${command.requestId}:v:${changed.version}",
             actor,
         )
+        return changed.id
     }
 
     private fun reconcileText(

@@ -1203,8 +1203,41 @@ transactional venue lock allow only one open accounting shift per venue.
   prices and line composition remain immutable in the journal. Existing promotion/manual-discount
   non-stacking rules are retained; a gift and additional discount cannot stack on one line.
 - Actual receipts are only operator-confirmed external CASH/CARD/TRANSFER entries. Partial and
-  mixed payment use multiple entries; paid cannot exceed payable. A bill request, delivered/closed
+  mixed payment use the entries described below; paid cannot exceed payable. A bill request, delivered/closed
   status or `revenueMinor` never creates a receipt. No acquiring, fiscal receipt or real refund exists.
+- Payment UX shows sale total, already recorded and remaining amounts. Full payment defaults to the
+  authoritative remaining balance; partial payment is an explicit mode with acknowledgment of the
+  remainder. Missing partial acknowledgment marks its own checkbox; checking it clears only that
+  error and its ARIA state, without submitting or clearing amount/server errors.
+  A shared component-total error belongs to the total block and describes every participating
+  control. After an attempted submit, changes revalidate all dependent local constraints, without
+  clearing still-valid format/partial/server errors or interpreting invalid amounts as zero. CASH/CARD/TRANSFER
+  keep the existing PAY contract. Confirmed server success shows the
+  recorded components and current remainder, hides the payment form when fully settled, and retains
+  a separate receipt history. A free sale without receipts says payment is not required; unknown
+  amounts never acquire a paid state. An uncertain result retains the original request and payload.
+- Combined payment uses one `PAY_SPLIT` command with `paymentComponents` (two or three distinct
+  CASH/CARD/TRANSFER methods, positive minor-unit amounts). Empty UI fields produce no component.
+  The sum must not exceed the authoritative remainder; a partial sum requires `acknowledgePartial`.
+  Venue/membership, shift, sale state and expectedVersion are checked under the existing locks.
+  All receipts, one sale-version increment, one journal event, semantic audit, loyalty reconciliation
+  and the durable command record share the existing transaction. Receipt IDs are requestId:method,
+  stable across replay. No fourth payment-method total exists. VOID_PAYMENT reverses only its
+  identified receipt. Optional default command fields are omitted from encoded legacy fingerprints;
+  historical frozen reports are unchanged. No new migration or bank operation is introduced.
+- The native item select stays mounted after selection. Dependent fields and totals update in place;
+  no select focus is restored after a completed choice. Category/global search and exact item IDs
+  remain. Only the active row exposes details; structural add/remove actions focus a row summary.
+- Sale creation displays confirmation and a separate action to record payment, without implicit PAY.
+  Sale rows retain table/source, distinct number or short identifier/time, total, paid, remainder and
+  state. CREATE POST adds optional `createdSaleId`, persisted atomically in its actor/payload-bound
+  command receipt with sale/audit. Exact replay returns the same identity with the current report;
+  list differences/order/amount/name/table never identify the result. Nullable PostgreSQL V140 /
+  H2 V141 append this association without backfill or fingerprint changes. Legacy receipts without
+  a known identity offer explicit list selection. A missing/inaccessible identified sale is disclosed;
+  another sale is never substituted. GET/frozen reports omit this command-result field.
+  Unpaid/partial/paid/all filters retain records needing reconciliation in every view; canceled
+  and unknown records are never labeled paid. URLs preserve filter and shift/sale context on Back.
 - Free/manual gift lines require a reason. Gift value and discount value have separate totals.
   Canceling a sale preserves history and requires its active payment entries to be corrected first.
   Canceling an erroneous payment requires a reason, preserves the original entry and increases the

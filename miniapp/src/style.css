@@ -3876,3 +3876,18 @@ input[type="number"] {
 .accounting-mode-notice, .accounting-selected-item { font-size: .9rem; }
 .accounting-success { font-weight: 600; }
 .accounting-editor { width: 100%; max-width: 800px; box-sizing: border-box; }
+
+.venue-accounting [hidden] { display: none !important; }
+.accounting-payment-form { max-width: 800px; }
+.accounting-payment-form button, .accounting-payment-form select, .accounting-payment-form input:not([type="checkbox"]), .accounting-editor select, .accounting-editor input:not([type="checkbox"]) { min-height: 44px; }
+:is(.accounting-payment-form, .accounting-editor) .accounting-field:has([type="checkbox"]) { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+:is(.accounting-payment-form, .accounting-editor) .accounting-field:has([type="checkbox"]) label { flex: 1; }
+:is(.accounting-payment-form, .accounting-editor) .accounting-field:has([type="checkbox"]) input { flex: 0 0 24px; }
+.accounting-payment-form .accounting-field:has([type="checkbox"]) { flex-wrap: wrap; }
+.accounting-payment-form .accounting-field:has([type="checkbox"]) .accounting-field-error { flex-basis: 100%; }
+.accounting-payment-preview, .accounting-settled { font-weight: 650; }
+.accounting-sales-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.accounting-sales-filters [aria-pressed="true"] { outline: 2px solid var(--app-accent); outline-offset: -2px; }
+.accounting-payment-history > summary { cursor: pointer; min-height: 44px; padding-block: 12px; }
+.accounting-sale-balances { font-variant-numeric: tabular-nums; }
+.venue-accounting :is(button, input, select, summary):focus-visible { outline: 2px solid var(--app-accent); outline-offset: 2px; }

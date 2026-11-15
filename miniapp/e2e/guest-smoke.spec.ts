@@ -19173,8 +19173,9 @@ test('venue owner sees statistics section', async ({ page }) => {
   await openVenueSection(page, 'Статистика')
   await expect(page.getByRole('heading', { name: 'Статистика' })).toBeVisible()
   await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance')
-  await expect(page.getByRole('heading', { name: 'Финансовые итоги закрытых смен', exact: true })).toBeVisible()
-  await expect(page.locator('#stats-finance [data-kpi="averageAccruedSale"]').first()).toContainText('Средняя начисленная продажа')
+  await page.getByLabel('Финансовый период').selectOption('closed')
+  await expect(page.getByRole('heading', { name: 'Закрытые смены', exact: true })).toBeVisible()
+  await expect(page.locator('#stats-finance [data-kpi="averageAccruedSale"]').first()).toContainText('Средняя сумма продажи')
 })
 
 test('venue owner creates edits activates and pauses informational promotion', async ({ page }) => {

@@ -23,6 +23,8 @@ internal fun KpiCollector.finances(venueId: Long): Pair<List<FinancialKpis>, Lis
         ) { AccountingShiftHeader(it.getLong(1), "OPEN", it.getString(2), it.getTimestamp(3).toInstant().toString()) }
             .map { AccountingRepository(null).readOnlyReport(c, venueId, it) }
 
+    openShiftOpenedAt = open.singleOrNull()?.openedAt
+
     fun valid(r: AccountingReport?): Boolean =
         r != null && r.venueId == venueId &&
             runCatching {

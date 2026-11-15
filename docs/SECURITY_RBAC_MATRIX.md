@@ -444,6 +444,16 @@ confirmation source and reason are mandatory. It updates the existing accounting
 no guest order/bill/payment authority is granted. Unknown detail remains disputed and requires
 normal close acknowledgment; unknown monetary amounts cannot bypass close.
 
+`PAY_SPLIT` retains the same current-shift financial authority as PAY; STAFF gains no text
+reconciliation or historical-statistics authority. One command validates all two/three distinct
+positive CASH/CARD/TRANSFER components before persisting them together, applies expectedVersion
+once, and binds durable replay to actor and payload. Partial combined settlement requires explicit
+acknowledgment. Component receipt identities remain stable; VOID_PAYMENT affects only its receipt.
+CREATE command receipts additionally retain nullable created_sale_id in the same transaction.
+Only a freshly authorized actor/payload/venue replay exposes this result identity. It conveys no
+payment authority: PAY still checks own-venue shift/sale, current state, version and balance.
+Legacy NULL receipts are not inferred from event order or report contents.
+
 Payment/correction/close writes, actor/time/old/new/reason history, semantic audit and idempotency
 record share one transaction. Audit failure leaves no partial success. Version/hash conflicts,
 overpayment, negative values and closed-period writes are rejected. Correction of a payment is

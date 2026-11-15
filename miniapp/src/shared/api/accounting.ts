@@ -20,7 +20,7 @@ export type AccountingBreakdown = { label: string; qty: number; accruedMinor: nu
 export type AccountingReport = {
   shiftId: number; venueId: number; status: string; timezone: string; openedAt: string; closedAt: string | null; currency: string
   sales: AccountingSale[]; totals: AccountingTotals; byTable: AccountingBreakdown[]; byItem: AccountingBreakdown[]
-  bySource: AccountingBreakdown[]; unpaidSaleIds: string[]; disputedSaleIds: string[]; reportHash: string
+  bySource: AccountingBreakdown[]; unpaidSaleIds: string[]; disputedSaleIds: string[]; reportHash: string; createdSaleId?: string | null
 }
 export type AccountingShiftHeader = { id: number; status: string; timezone: string; openedAt: string; closedAt: string | null }
 export type AccountingState = { current: AccountingReport | null; history: AccountingShiftHeader[]; nextHistoryBeforeId?: number | null }
@@ -29,6 +29,7 @@ export type AccountingCommand = {
   requestId: string; action: string; shiftId?: number; saleId?: string; expectedVersion?: number; tableId?: number
   lines?: AccountingLineInput[]; reason?: string; paymentMethod?: string; amountMinor?: number; paymentId?: string
   expectedReportHash?: string; acknowledgeUnpaid?: boolean; confirmationSource?: string
+  paymentComponents?: { method: string; amountMinor: number }[]; acknowledgePartial?: boolean
 }
 export function accountingState(url: string, venueId: number, deps: RequestDependencies, signal: AbortSignal, beforeShiftId?: number) {
   return requestApi<AccountingState>(url, `/api/venue/${venueId}/accounting${beforeShiftId ? `?beforeShiftId=${beforeShiftId}` : ''}`, { signal }, deps)

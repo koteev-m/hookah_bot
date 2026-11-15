@@ -2,6 +2,7 @@ package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.accounting.AccountingCommand
+import com.hookah.platform.backend.miniapp.venue.accounting.AccountingPaymentInput
 import com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepository
 import com.hookah.platform.backend.miniapp.venue.accounting.AccountingSale
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
@@ -721,6 +722,39 @@ abstract class LoyaltyLifecycleContract(private val postgres: Boolean) {
                 )
                 AccountingRepository(ds).execute(venue, 9001001, cmd)
                 assertEquals(2L, number("SELECT count(*) FROM guest_loyalty_ledger"))
+                assertEquals(2000L, sale(o.order).paid)
+            }
+        }
+
+    @Test
+    fun `atomic split reconciles loyalty only after full result and exact replay earns nothing twice`() =
+        runBlocking {
+            fixture {
+                val o = order(2)
+                val before = sale(o.order)
+                val cmd =
+                    AccountingCommand(
+                        UUID.randomUUID().toString(),
+                        "PAY_SPLIT",
+                        shiftId = shift,
+                        saleId = before.id,
+                        expectedVersion = before.version,
+                        paymentComponents =
+                            listOf(
+                                AccountingPaymentInput("CASH", 400),
+                                AccountingPaymentInput("CARD", 600),
+                            ),
+                        acknowledgePartial = true,
+                    )
+                AccountingRepository(ds).execute(venue, 9001001, cmd)
+                assertEquals(0L, number("SELECT count(*) FROM guest_loyalty_ledger"))
+                val partial = sale(o.order)
+                val final = cmd.copy(requestId = UUID.randomUUID().toString(), expectedVersion = partial.version)
+                AccountingRepository(ds).execute(venue, 9001001, final)
+                assertEquals(2L, number("SELECT count(*) FROM guest_loyalty_ledger WHERE event_type='EARN'"))
+                AccountingRepository(ds).execute(venue, 9001001, final)
+                assertEquals(2L, number("SELECT count(*) FROM guest_loyalty_ledger"))
+                assertEquals(4, sale(o.order).payments.size)
                 assertEquals(2000L, sale(o.order).paid)
             }
         }
