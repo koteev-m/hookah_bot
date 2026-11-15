@@ -33,6 +33,7 @@ export type VenueKpiSnapshot = {
   breakdowns: Record<string, KpiBucket[]>
   closedShiftFinances: FinancialKpis[]
   openShiftFinances: FinancialKpis[]
+  openShiftOpenedAt?: string | null
   invoiceFinances: Record<string, FinancialKpis[]>
   products?: {
     rows: ProductRow[]
@@ -68,6 +69,7 @@ export async function venueGetStatsV1(
       !Array.isArray(data.closedShiftFinances) || !Array.isArray(data.openShiftFinances) || !Array.isArray(data.limitations)) {
       throw new Error('incompatible')
     }
+    if (data.openShiftOpenedAt != null && !Number.isFinite(Date.parse(data.openShiftOpenedAt))) throw new Error('incompatible shift')
     const calendar = new Intl.DateTimeFormat('en-CA', { timeZone: data.period.timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
     const date = (instant: string) => {
       const parts = calendar.formatToParts(new Date(instant))

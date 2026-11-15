@@ -138,6 +138,8 @@ data class KpiSnapshot(
     val breakdowns: Map<String, List<KpiBucket>> = emptyMap(),
     val closedShiftFinances: List<FinancialKpis> = emptyList(),
     val openShiftFinances: List<FinancialKpis> = emptyList(),
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val openShiftOpenedAt: String? = null,
     val invoiceFinances: Map<String, List<FinancialKpis>> = emptyMap(),
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     val products: ProductReport? = null,

@@ -123,7 +123,9 @@ class AccountingCheckoutConcurrencyPostgresTest {
                 }
                 val repo = AccountingRepository(ds)
                 val current = assertNotNull(repo.state(1, 101).current)
-                assertEquals(current, repo.execute(1, 103, sale))
+                val replay = repo.execute(1, 103, sale)
+                assertEquals(current.sales.single { it.source == "MANUAL" }.id, replay.createdSaleId)
+                assertEquals(current, replay.copy(createdSaleId = null))
                 assertTrue(assertNotNull(checkout(ds, false, orderKey, chat)).idempotencyReplay)
                 assertEquals(if (chat) 10000 else 20000, current.totals.accruedMinor)
                 assertEquals(0, current.totals.paidMinor)

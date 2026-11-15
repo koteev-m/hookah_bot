@@ -1,3 +1,4 @@
+import { accountingPaymentEditor, paymentNames, type PaymentDraft } from './accountingPaymentEditor'
 import { accountingTextReconciliation } from './accountingTextReconciliation'
 import { accountingSaleEditor, accountingDecimal as decimal, accountingMinor as minor, type LineDraft } from './accountingSaleEditor'
 import { accountingCommand, accountingReport, accountingState, linePayable, salePaid, salePayable, type AccountingCommand, type AccountingReport, type AccountingSale, type AccountingShiftHeader } from '../shared/api/accounting'
@@ -15,7 +16,6 @@ type StoredCopy = { key: string; value: string }
 type StoredDraft = { draft: Draft; key: string; copies: StoredCopy[] }
 type PendingCommand = { body: AccountingCommand; draftCopies?: StoredCopy[]; draftKey?: string }
 const sourceNames: Record<string, string> = { MANUAL: 'Вручную', MINIAPP: 'Mini App', CHAT: 'Telegram', STAFF: 'Заказ персонала', MIXED: 'Telegram / Mini App', SERVICE_CHARGE: 'Услуга в счёте' }
-const paymentNames: Record<string, string> = { CASH: 'Наличные', CARD: 'Карта', TRANSFER: 'Перевод' }
 const money = (value: number) => formatPrice(value, 'RUB')
 function storageRead<T>(key: string): T | null { try { return JSON.parse(sessionStorage.getItem(key) ?? 'null') as T | null } catch { return null } }
 function storageWrite(key: string, value: unknown): boolean { try { sessionStorage.setItem(key, JSON.stringify(value)); return true } catch { return false } }
@@ -62,7 +62,7 @@ export function renderVenueAccountingScreen(options: Options) {
   let nextHistoryBeforeId: number | null = null
   let tables: VenueTableDto[] = []
   let categories: VenueMenuCategoryDto[] = []
-  let editor: ReturnType<typeof accountingSaleEditor> | null = null
+  let editor: ReturnType<typeof accountingSaleEditor> | ReturnType<typeof accountingPaymentEditor> | null = null
   let denied = false
   let saving = false
   const identity = options.userId ?? getTelegramContext().telegramUserId ?? 'unknown'
@@ -70,6 +70,7 @@ export function renderVenueAccountingScreen(options: Options) {
   const pendingKey = `${scope}:pending`
   const noticeKey = `${scope}:notice`
   let successNotice = storageRead<string>(noticeKey); storageRemove(noticeKey)
+  let savedSaleId = storageRead<string>(`${scope}:saved-sale`); storageRemove(`${scope}:saved-sale`)
   const firstDraftKey = `${scope}:draft:first:new`
   const adoptFirstDraft = (shiftId: number): StoredDraft | null => {
     const key = `${scope}:draft:${shiftId}:new`
@@ -90,6 +91,7 @@ export function renderVenueAccountingScreen(options: Options) {
   const requestedShift = sameVenue ? Number(query.get('shift')) || null : null
   const selectedSale = sameVenue ? query.get('sale') : null
   const view = sameVenue ? query.get('view') : null
+  const salesFilter = sameVenue ? query.get('filter') ?? 'all' : 'all'
   const wrapper = el('section', { className: 'venue-accounting' })
   const error = el('p', { className: 'error-card' }); error.setAttribute('role', 'alert'); error.hidden = true
   const content = el('div')
@@ -97,7 +99,7 @@ export function renderVenueAccountingScreen(options: Options) {
   root.replaceChildren(wrapper)
   const date = (value: string, zone: string) => new Intl.DateTimeFormat('ru-RU', { timeZone: zone, dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
   const navigate = (params: Record<string, string> = {}) => {
-    const q = new URLSearchParams({ av: String(venueId), ...(report ? { shift: String(report.shiftId) } : {}), ...params })
+    const q = new URLSearchParams({ av: String(venueId), ...(report ? { shift: String(report.shiftId) } : {}), filter: salesFilter, ...params })
     location.hash = `#/accounting?${q}`
   }
   const currentActor = () => (getTelegramContext().telegramUserId ?? identity) === identity
@@ -140,7 +142,14 @@ export function renderVenueAccountingScreen(options: Options) {
       if (disposed) return
       report = result.data
       if (body.action === 'RECONCILE_TEXT') { storageWrite(noticeKey, 'Сверка записана. Полученные деньги подтверждаются отдельной оплатой.'); navigate({ sale: body.saleId! }) }
-      else if (body.action === 'CREATE') { storageWrite(noticeKey, 'Продажа сохранена. Полученные деньги запишите отдельной оплатой.'); navigate() }
+      else if (body.action === 'CREATE') {
+        storageWrite(noticeKey, 'Продажа сохранена. Полученные деньги запишите отдельной оплатой.'); storageWrite(`${scope}:saved-sale`, result.data.createdSaleId ?? 'choose'); navigate()
+      }
+      else if (body.action === 'PAY' || body.action === 'PAY_SPLIT') {
+        const sale = result.data.sales.find(s => s.id === body.saleId)
+        const added = sale?.payments.filter(p => p.id === body.requestId || p.id.startsWith(`${body.requestId}:`)) ?? []
+        successNotice = `Оплата записана: ${added.map(p => `${money(p.amountMinor)} · ${paymentNames[p.method] ?? p.method}`).join(' + ')}. ${sale ? `Осталось оплатить ${money(Math.max(0, salePayable(sale) - salePaid(sale)))}.` : 'Обновите запись для проверки остатка.'}`; render()
+      }
       else { successNotice = 'Изменения сохранены.'; render() }
     } else {
       if ([400, 401, 403, 404, 409, 422].includes(result.error.status)) removeUnchanged(pendingCopy)
@@ -209,7 +218,15 @@ export function renderVenueAccountingScreen(options: Options) {
   const detail = (sale: AccountingSale) => {
     const box = el('section', { className: 'card' })
     append(box, el('h3', { text: `${sale.tableLabel} · ${sourceNames[sale.source] ?? sale.source}` }),
-      el('p', { text: sale.issue ? 'Расчётная сумма недоступна и не включена в итог.' : `Начислено ${money(salePayable(sale))} · Оплачено ${money(salePaid(sale))} · Остаток ${money(Math.max(0, salePayable(sale) - salePaid(sale)))}` }))
+      el('p', { text: `Запись ${sale.displayNumber ? `№${sale.displayNumber}` : sale.id.slice(-8)} · ${date(sale.createdAt, report!.timezone)}` }))
+    const remaining = Math.max(0, salePayable(sale) - salePaid(sale))
+    if (sale.issue || sale.sourceWarning) box.append(el('p', { text: 'Расчётная сумма недоступна или неполна. Требуется сверка.' }))
+    else {
+      const totals = el('dl', { className: 'accounting-totals accounting-sale-balances' })
+      for (const [label, value] of [['Сумма продажи', salePayable(sale)], ['Уже оплачено', salePaid(sale)], ['Осталось оплатить', remaining]] as const) append(totals, el('dt', { text: label }), el('dd', { text: money(value) }))
+      box.append(totals)
+      if (!sale.cancelReason && remaining === 0) box.append(el('p', { className: 'accounting-settled', text: salePayable(sale) === 0 && salePaid(sale) === 0 ? 'Оплата не требуется' : 'Оплачено полностью' }))
+    }
     if (sale.orderId) {
       const link = el('a', { text: `Открыть заказ №${sale.displayNumber ?? sale.orderId}` }); link.href = `#/order/${sale.orderId}`; box.appendChild(link)
       append(box, el('p', { text: `${sale.originalPayableMinor == null ? 'Исходная расчётная сумма не подтверждена.' : `${sale.sourceWarning || sale.textReconciliation?.originalSourceWarning ? 'Известная часть исходного счёта' : 'Исходный счёт'}: ${money(sale.originalPayableMinor)}.`} Изменения журнала не меняют счёт гостя.` }))
@@ -223,20 +240,28 @@ export function renderVenueAccountingScreen(options: Options) {
     content.appendChild(box)
     const editable = report!.status === 'OPEN' && sale.orderClosed && !sale.issue && !sale.sourceWarning
     if (!sale.orderClosed) append(box, el('p', { text: 'Сначала завершите заказ в разделе «Заказы», затем запишите оплату. Завершение заказа само по себе не подтверждает поступление денег.' }))
+    const paymentHistory = el('details', { className: 'card accounting-payment-history' }); paymentHistory.append(el('summary', { text: `История оплат · ${sale.payments.length}` }))
     sale.payments.forEach((payment) => {
       const row = el('div', { className: 'accounting-payment' })
       append(row, el('p', { text: `${paymentNames[payment.method]} · ${money(payment.amountMinor)} · ${date(payment.recordedAt, report!.timezone)}${payment.voidReason ? ` · Исправлено: ${payment.voidReason}` : ''}` }))
       if (editable && !payment.voidReason) row.appendChild(button('Исправить запись оплаты', () => reasonAction(sale, 'VOID_PAYMENT', 'Отменить запись оплаты', 'Это отменит только учётную запись и увеличит остаток. Реальные деньги не возвращаются. Для верной суммы затем запишите новую оплату.', { paymentId: payment.id })))
-      content.appendChild(row)
+      paymentHistory.appendChild(row)
     })
+    if (sale.payments.length) content.append(paymentHistory)
     if (editable && !sale.cancelReason) {
-      const form = el('form', { className: 'card accounting-payment-form' })
-      const amount = el('input'); amount.inputMode = 'decimal'; amount.value = decimal(Math.max(0, salePayable(sale) - salePaid(sale)))
-      const method = el('select'); Object.entries(paymentNames).forEach(([value, label]) => method.appendChild(new Option(label, value)))
-      const submitButton = el('button', { text: 'Подтвердить внешнюю оплату' }); submitButton.type = 'submit'
-      append(form, el('h3', { text: 'Записать оплату' }), el('p', { text: 'Укажите только уже полученные деньги. Для комбинированной оплаты сохраните каждую часть отдельно.' }), field('Способ оплаты', method), field('Получено, ₽', amount), submitButton)
-      form.addEventListener('submit', (event) => { event.preventDefault(); try { saleCommand(sale, 'PAY', { amountMinor: minor(amount.value), paymentMethod: method.value }) } catch (e) { showError(e as Error) } })
-      content.appendChild(form)
+      if (remaining > 0) {
+        const key = `${scope}:draft:${report!.shiftId}:payment:${sale.id}`
+        const saved = storageRead<PaymentDraft>(key)
+        if (saved && saved.version !== sale.version) {
+          content.append(el('p', { text: 'Продажа изменилась. Черновик оплаты сохранён. Проверьте актуальный остаток перед новой записью.' }), button('Начать оплату актуального остатка', () => { storageRemove(key); render() }))
+        } else {
+          const draft: PaymentDraft = saved ?? { version: sale.version, method: 'CASH', partial: false, amount: decimal(remaining), components: {}, acknowledge: false }
+          let copies: StoredCopy[] = saved ? [{ key, value: JSON.stringify(saved) }] : []
+          const save = () => { if (storageWrite(key, draft)) copies = [{ key, value: JSON.stringify(draft) }] }
+          editor = accountingPaymentEditor({ remaining, draft, save, submit: extra => submit({ action: 'PAY', shiftId: report!.shiftId, saleId: sale.id, expectedVersion: sale.version, ...extra }, copies) })
+          content.append(editor.form)
+        }
+      }
       if (!sale.textReconciliation) append(content, button('Исправить продажу', () => navigate({ sale: sale.id, view: 'edit' })), button('Отменить продажу', () => reasonAction(sale, 'CANCEL', 'Отменить продажу', 'Сумма записи станет нулевой; история сохранится. Сначала необходимо исправить её активные оплаты.')))
     }
     if (editable && sale.textReconciliation && !sale.cancelReason) content.append(button('Отменить продажу', () => reasonAction(sale, 'CANCEL', 'Отменить продажу', 'Отменяется только учётная запись; исходный заказ и реальные деньги не меняются.')))
@@ -248,10 +273,13 @@ export function renderVenueAccountingScreen(options: Options) {
     if (!currentActor()) { loseAccess(); return }
     editor = null; content.replaceChildren()
     if (successNotice) { const notice = el('p', { className: 'accounting-success', text: successNotice }); notice.setAttribute('role', 'status'); content.append(notice) }
+    if (savedSaleId && report && !selectedSale) content.append(savedSaleId !== 'choose'
+      ? button('Перейти к записи оплаты', () => navigate({ sale: savedSaleId! }), false)
+      : button('Выбрать продажу для оплаты', () => content.querySelector('.accounting-sales')?.scrollIntoView({ block: 'start' }), false))
     const pending = storageRead<PendingCommand>(pendingKey)
     if (pending) {
       const box = el('section', { className: 'card accounting-pending' }); box.setAttribute('role', 'alert')
-      append(box, el('p', { text: 'Результат предыдущей операции ещё не подтверждён. Повтор безопасен: сохранён тот же ключ и те же данные.' }), el('p', { text: 'Продажа могла сохраниться. Черновик сохранён; не создавайте новую операцию до проверки результата.' }), button('Проверить и повторить операцию', () => void run(pending)))
+      append(box, el('p', { text: 'Результат предыдущей операции ещё не подтверждён. Повтор безопасен: сохранён тот же ключ и те же данные.' }), el('p', { text: ['PAY', 'PAY_SPLIT'].includes(pending.body.action) ? 'Оплата могла быть записана. Результат не подтверждён; сохранены прежний запрос и черновик. Не записывайте новую оплату до проверки.' : 'Продажа могла сохраниться. Черновик сохранён; не создавайте новую операцию до проверки результата.' }), button('Проверить и повторить операцию', () => void run(pending)))
       content.append(box)
       return
     }
@@ -270,6 +298,7 @@ export function renderVenueAccountingScreen(options: Options) {
       if (report.status === 'OPEN' && view === 'reconcile' && sale && access.role !== 'STAFF' && !sale.cancelReason && (sale.textReconciliationAvailable || sale.textReconciliation)) { reconciliationEditor(sale); return }
       if (report.status === 'OPEN' && (view === 'new' || (view === 'edit' && sale && sale.orderClosed && !sale.issue && !sale.sourceWarning && !sale.cancelReason && !sale.textReconciliation))) { lineEditor(sale); return }
       if (sale) { detail(sale); return }
+      if (selectedSale) { append(content, el('p', { text: 'Продажа недоступна в этом отчёте. Обновите данные или выберите запись в списке.' }), button('Обновить отчёт', () => void load()), button('К списку продаж', () => navigate())); return }
       const t = report.totals
       const unknown = report.sales.filter((s) => s.issue).length
       if (unknown) append(content, el('p', { text: `${unknown} записей без достоверного снимка: суммы не включены в итог. Нужна сверка перед закрытием.` }))
@@ -277,9 +306,9 @@ export function renderVenueAccountingScreen(options: Options) {
       if (report.status === 'OPEN') append(content, button('Добавить продажу', () => navigate({ view: 'new' }), false), button('Обновить отчёт', () => void load()))
       append(content, el('p', { text: `Продаж: ${t.salesCount} · Цифровых заказов: ${t.ordersCount}` }), el('h3', { text: 'Расчётные суммы' }))
       const metrics = el('dl', { className: 'accounting-totals' })
-      for (const [label, value] of [['Стоимость позиций', t.grossMinor], ['Скидки', t.discountMinor], ['Подарки / бесплатно', t.giftMinor], ['Начислено к оплате', t.accruedMinor], ['Подтверждено оператором', t.paidMinor], ['Неоплаченный остаток', t.unpaidMinor], ['Наличные', t.cashMinor], ['Карты', t.cardMinor], ['Переводы', t.transferMinor]] as const) append(metrics, el('dt', { text: label }), el('dd', { text: money(value) }))
+      for (const [label, value] of [['Стоимость позиций', t.grossMinor], ['Скидки', t.discountMinor], ['Подарки / бесплатно', t.giftMinor], ['Сумма продаж', t.accruedMinor], ['Получено по учёту', t.paidMinor], ['Неоплаченный остаток', t.unpaidMinor], ['Наличные', t.cashMinor], ['Карты', t.cardMinor], ['Переводы', t.transferMinor]] as const) append(metrics, el('dt', { text: label }), el('dd', { text: money(value) }))
       if (t.financialDetailIncomplete) { append(metrics, el('dt', { text: 'Сверено без товарной расшифровки' }), el('dd', { text: money(t.unallocatedAccruedMinor ?? 0) })); content.append(el('p', { text: 'Начисления включают подтверждённые неразнесённые итоги. Стоимость позиций, скидки и подарки показаны только по известным данным; полнота детализации не подтверждена.' })) }
-      append(content, metrics, el('p', { text: 'Начислено — сумма учётных записей. Подтверждено оператором — записанные внешние поступления; это не банковская сверка.' }))
+      append(content, metrics, el('p', { text: 'Сумма продаж — после скидок и подарков. Получено по учёту — записи сотрудника, не банковская сверка.' }))
 
       for (const [label, rows] of [['По столам', report.byTable], ['По позициям', report.byItem], ['По источникам', report.bySource]] as const) {
         const section = el('details', { className: 'card' }); section.appendChild(el('summary', { text: label }))
@@ -288,8 +317,24 @@ export function renderVenueAccountingScreen(options: Options) {
       }
       const list = el('section', { className: 'accounting-sales' }); list.appendChild(el('h3', { text: 'Продажи и сверка' }))
       if (!report.sales.length) list.appendChild(el('p', { text: 'В этой смене пока нет продаж.' }))
-      for (const item of report.sales) {
-        const row = button(`${item.tableLabel} · ${sourceNames[item.source] ?? item.source} · ${money(salePayable(item))}${report.unpaidSaleIds.includes(item.id) ? ' · Не оплачено полностью' : ''}${report.disputedSaleIds.includes(item.id) ? ' · Требует сверки' : ''}${item.cancelReason ? ' · Отменено' : ''}`, () => navigate({ sale: item.id }))
+      const filters = el('div', { className: 'accounting-sales-filters' }); filters.setAttribute('aria-label', 'Состояние оплаты')
+      for (const [value, label] of [['unpaid', 'Не оплачены'], ['partial', 'Частично'], ['paid', 'Оплачены'], ['all', 'Все']]) {
+        const control = button(label, () => navigate({ filter: value })); control.setAttribute('aria-pressed', String(value === salesFilter)); filters.append(control)
+      }
+      list.append(filters, el('p', { className: 'muted', text: 'Требующие сверки записи видны при любом фильтре.' }))
+      const visible = report.sales.filter(item => {
+        if (item.issue || item.sourceWarning || item.disputeReason) return true
+        if (salesFilter === 'all') return true
+        if (item.cancelReason) return false
+        const total = salePayable(item), paid = salePaid(item)
+        return salesFilter === 'paid' ? total > 0 && paid >= total : salesFilter === 'partial' ? paid > 0 && paid < total : paid === 0 && total > 0
+      })
+      if (report.sales.length && !visible.length) list.append(el('p', { text: 'Нет продаж с выбранным состоянием.' }))
+      for (const item of visible) {
+        const total = salePayable(item), paid = salePaid(item)
+        const unknown = item.issue || item.sourceWarning
+        const state = item.cancelReason ? 'Отменено' : unknown ? 'Сумма не подтверждена · Требует сверки' : item.disputeReason ? 'Требует сверки' : total === 0 && paid === 0 ? 'Оплата не требуется' : paid >= total ? 'Оплачено' : paid > 0 ? 'Частично' : 'Не оплачено'
+        const row = button(`${item.tableLabel} · ${sourceNames[item.source] ?? item.source} · ${item.displayNumber ? `№${item.displayNumber}` : item.id.slice(-8)} · ${date(item.createdAt, report.timezone)} · ${unknown ? 'Сумма неизвестна' : money(total)} · Оплачено ${money(paid)} · Остаток ${unknown ? 'неизвестен' : money(Math.max(0, total - paid))} · ${state}`, () => navigate({ sale: item.id }))
         list.appendChild(row)
       }
       content.appendChild(list)

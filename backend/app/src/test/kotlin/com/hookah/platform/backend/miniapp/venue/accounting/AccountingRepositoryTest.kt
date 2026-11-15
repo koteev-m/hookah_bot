@@ -396,7 +396,9 @@ abstract class AccountingRepositoryContract {
                 val two = repo.execute(1, 103, percent.copy(requestId = UUID.randomUUID().toString()))
                 assertEquals(2, two.sales.size)
                 assertEquals(18000, two.totals.accruedMinor)
-                assertEquals(two, repo.execute(1, 103, percent))
+                val replay = repo.execute(1, 103, percent)
+                assertEquals(one.createdSaleId, replay.createdSaleId)
+                assertEquals(two.copy(createdSaleId = one.createdSaleId), replay)
                 seedDigitalOrder(ds, 31, closed = true)
                 ds.connection.use {
                     it.exec("UPDATE order_batch_items SET discount_percent=10 WHERE id=61")

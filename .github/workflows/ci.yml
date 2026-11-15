@@ -99,6 +99,22 @@ jobs:
         run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_analytics_billing_ci.py
       - name: Verify Docker availability (required for Testcontainers)
         run: docker info
+      - name: Set up Node for accounting HTTP browser proof
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+      - name: Install accounting browser proof dependencies
+        run: |
+          npm --prefix miniapp ci
+          cd miniapp
+          npx playwright install --with-deps chromium webkit
+      - name: Verify accounting UI through PostgreSQL and restart
+        env:
+          JAVA_TOOL_OPTIONS: -Dapi.version=1.44
+        run: |
+          python3 scripts/test-accounting-payment-live.py
+          python3 scripts/test-accounting-create-replay-live.py build/accounting-create-live-chromium chromium
+          python3 scripts/test-accounting-create-replay-live.py build/accounting-create-live-webkit webkit
       - name: Prepare fresh analytics billing evidence
         run: |
           python3 - <<'PY'
@@ -146,6 +162,12 @@ jobs:
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test" \
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresHttpTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultH2Test" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateReplayPostgresHttpTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingMediaTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingRepositoryTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingLifecycleTest" \
@@ -247,6 +269,7 @@ jobs:
               "com.hookah.platform.backend.analytics.PlatformBillingKpiPostgresTest",
           }
           strict_classes = billing_classes | {"com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest", "com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest", "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest"}
+          strict_classes |= {"com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultH2Test", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultPostgresTest", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateReplayPostgresHttpTest", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentH2Test", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresTest", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresHttpTest"}
           report_dir = Path("backend/app/build/test-results/test")
           expected_classes = [
               "com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest",
@@ -274,6 +297,12 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test",
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest",
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentH2Test",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresHttpTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultH2Test",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateReplayPostgresHttpTest",
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingMediaTest",
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingRepositoryTest",
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingLifecycleTest",
@@ -367,7 +396,7 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCheckoutConcurrencyPostgresTest": 8,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingExtensionConcurrencyPostgresTest": 7,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingHttpContractTest": 1,
-              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest": 2,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest": 4,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingOrderProjectionTest": 1,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationH2Test": 4,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationPostgresTest": 5,
@@ -376,6 +405,12 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryH2Test": 18,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepositoryPostgresTest": 19,
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingRoutesTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentH2Test": 5,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresTest": 7,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresHttpTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultH2Test": 4,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultPostgresTest": 5,
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateReplayPostgresHttpTest": 1,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingMediaTest": 2,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingRepositoryTest": 5,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingLifecycleTest": 6,
@@ -414,8 +449,8 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.menu.MenuContentH2Test": 15,
               "com.hookah.platform.backend.miniapp.venue.menu.MenuContentPostgresTest": 15,
               "com.hookah.platform.backend.miniapp.venue.VenueOrderRoutesTest": 29,
-              "com.hookah.platform.backend.telegram.db.LoyaltyLifecycleH2Test": 43,
-              "com.hookah.platform.backend.telegram.db.LoyaltyLifecyclePostgresTest": 44,
+              "com.hookah.platform.backend.telegram.db.LoyaltyLifecycleH2Test": 44,
+              "com.hookah.platform.backend.telegram.db.LoyaltyLifecyclePostgresTest": 45,
               "com.hookah.platform.backend.telegram.db.LoyaltyPaidMigrationTest": 4,
               "com.hookah.platform.backend.telegram.MenuPresentationTest": 2,
               "com.hookah.platform.backend.miniapp.venue.VenueMenuRoutesTest": 48,
@@ -435,6 +470,47 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           required_test_names = {
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultH2Test": {
+                  "CREATE identity survives reload and identical concurrent sale",
+                  "CREATE receipt is actor payload and venue bound with fresh access check and no duplicate",
+                  "legacy identity stays unknown and receipt preserves frozen report and fingerprint",
+                  "CREATE audit failure rolls back identity sale shift and history",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultPostgresTest": {
+                  "concurrent CREATE receipts remain distinct and ledger failure rolls back",
+                  "CREATE identity survives reload and identical concurrent sale",
+                  "CREATE receipt is actor payload and venue bound with fresh access check and no duplicate",
+                  "legacy identity stays unknown and receipt preserves frozen report and fingerprint",
+                  "CREATE audit failure rolls back identity sale shift and history",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateReplayPostgresHttpTest": {
+                  "CREATE across separate JVMs pays original and preserves identical concurrent sale",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest": {
+                  "H2 forward migration preserves old history and order snapshots",
+                  "PostgreSQL forward migration preserves old history and order snapshots",
+                  "H2 CREATE receipt upgrade preserves legacy rows without backfill",
+                  "PostgreSQL CREATE receipt upgrade preserves legacy rows without backfill",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentH2Test": {
+                  "atomic split pays 990 once stable component identities durable replay and single correction",
+                  "split validates every component and explicit partial acknowledgment before any write",
+                  "split audit failure rolls back both receipts and retry commits exactly one operation",
+                  "split cannot cross tenant revoked closed canceled active or unknown sale boundaries",
+                  "financial totals denominator ignores payment components and GET writes nothing",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresTest": {
+                  "split versus PAY EDIT CLOSE and replay serialize with actual PostgreSQL blocking",
+                  "failure after writing both split components restores snapshot event command and audit",
+                  "atomic split pays 990 once stable component identities durable replay and single correction",
+                  "split validates every component and explicit partial acknowledgment before any write",
+                  "split audit failure rolls back both receipts and retry commits exactly one operation",
+                  "split cannot cross tenant revoked closed canceled active or unknown sale boundaries",
+                  "financial totals denominator ignores payment components and GET writes nothing",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresHttpTest": {
+                  "payment UI HTTP PostgreSQL restart replay list and KPI share authoritative totals",
+              },
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationH2Test": {
                   "completed text reconciliation confirms only unallocated net and permits acknowledged frozen close",
                   "unknown zero unverified currency corrupt snapshots active and foreign sources cannot reconcile",
@@ -559,9 +635,11 @@ jobs:
                   "product admission supports platform owner to new venue owner to external staff and manager",
               },
               "com.hookah.platform.backend.telegram.db.LoyaltyLifecycleH2Test": {
+                  "atomic split reconciles loyalty only after full result and exact replay earns nothing twice",
                   "confirm history original sequence is exactly CONFIRM CORRECT CANCEL",
               },
               "com.hookah.platform.backend.telegram.db.LoyaltyLifecyclePostgresTest": {
+                  "atomic split reconciles loyalty only after full result and exact replay earns nothing twice",
                   "confirm history original sequence is exactly CONFIRM CORRECT CANCEL",
               },
               "com.hookah.platform.backend.telegram.TelegramBotRouterTableTokenTest": {
@@ -635,6 +713,15 @@ jobs:
                   (case.attrib.get("name") or "").removesuffix("()")
                   for case in suite.iter("testcase")
               ]
+              if ".accounting.AccountingSplitPayment" in class_name:
+                  cases = suite.findall("testcase")
+                  if len(cases) != counts["tests"] or len(cases) != len(list(suite.iter("testcase"))):
+                      problems.append(f"incomplete split-payment cases: {class_name}")
+                  for case in cases:
+                      if any(case.find(f".//{state}") is not None for state in ("skipped", "failure", "error")):
+                          problems.append(f"non-passing split-payment testcase: {class_name}")
+                      if case.attrib.get("status", "run") not in ("run", "passed"):
+                          problems.append(f"unexecuted split-payment testcase: {class_name}")
               for required_name in required_test_names.get(class_name, set()):
                   occurrences = actual_names.count(required_name)
                   if occurrences != 1:
@@ -959,6 +1046,28 @@ jobs:
               ),
           ]
           required_test_names = {
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultH2Test": {
+                  "CREATE identity survives reload and identical concurrent sale",
+                  "CREATE receipt is actor payload and venue bound with fresh access check and no duplicate",
+                  "legacy identity stays unknown and receipt preserves frozen report and fingerprint",
+                  "CREATE audit failure rolls back identity sale shift and history",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultPostgresTest": {
+                  "concurrent CREATE receipts remain distinct and ledger failure rolls back",
+                  "CREATE identity survives reload and identical concurrent sale",
+                  "CREATE receipt is actor payload and venue bound with fresh access check and no duplicate",
+                  "legacy identity stays unknown and receipt preserves frozen report and fingerprint",
+                  "CREATE audit failure rolls back identity sale shift and history",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateReplayPostgresHttpTest": {
+                  "CREATE across separate JVMs pays original and preserves identical concurrent sale",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest": {
+                  "H2 forward migration preserves old history and order snapshots",
+                  "PostgreSQL forward migration preserves old history and order snapshots",
+                  "H2 CREATE receipt upgrade preserves legacy rows without backfill",
+                  "PostgreSQL CREATE receipt upgrade preserves legacy rows without backfill",
+              },
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationH2Test": {
                   "completed text reconciliation confirms only unallocated net and permits acknowledged frozen close",
                   "unknown zero unverified currency corrupt snapshots active and foreign sources cannot reconcile",
@@ -1122,6 +1231,28 @@ jobs:
               "com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackRepositoryTest": 11,
           }
           required_test_names = {
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultH2Test": {
+                  "CREATE identity survives reload and identical concurrent sale",
+                  "CREATE receipt is actor payload and venue bound with fresh access check and no duplicate",
+                  "legacy identity stays unknown and receipt preserves frozen report and fingerprint",
+                  "CREATE audit failure rolls back identity sale shift and history",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultPostgresTest": {
+                  "concurrent CREATE receipts remain distinct and ledger failure rolls back",
+                  "CREATE identity survives reload and identical concurrent sale",
+                  "CREATE receipt is actor payload and venue bound with fresh access check and no duplicate",
+                  "legacy identity stays unknown and receipt preserves frozen report and fingerprint",
+                  "CREATE audit failure rolls back identity sale shift and history",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateReplayPostgresHttpTest": {
+                  "CREATE across separate JVMs pays original and preserves identical concurrent sale",
+              },
+              "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest": {
+                  "H2 forward migration preserves old history and order snapshots",
+                  "PostgreSQL forward migration preserves old history and order snapshots",
+                  "H2 CREATE receipt upgrade preserves legacy rows without backfill",
+                  "PostgreSQL CREATE receipt upgrade preserves legacy rows without backfill",
+              },
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingChatReconciliationH2Test": {
                   "completed text reconciliation confirms only unallocated net and permits acknowledged frozen close",
                   "unknown zero unverified currency corrupt snapshots active and foreign sources cannot reconcile",
@@ -2002,7 +2133,7 @@ jobs:
           from pathlib import Path
 
           report_path = Path("playwright-results.json")
-          minimum_executed = 932
+          minimum_executed = 956
           if not report_path.is_file():
               raise SystemExit(f"missing Playwright JSON report: {report_path}")
 
@@ -2040,6 +2171,28 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("accounting-payments-finalize.spec.ts", "payment total validation follows every component and submits once 390"): 1,
+              ("accounting-payments-finalize.spec.ts", "payment total validation preserves independent errors draft and pending 390"): 1,
+              ("accounting-payments-finalize.spec.ts", "payment total validation follows every component and submits once 1440"): 1,
+              ("accounting-payments-finalize.spec.ts", "payment total validation preserves independent errors draft and pending 1440"): 1,
+              ("accounting-payments-finalize.spec.ts", "review F1 CREATE replay identifies its original sale among identical concurrent sales and payment targets it"): 1,
+              ("accounting-payments-finalize.spec.ts", "review F3 partial acknowledgment owns and clears only its validation error without submitting"): 1,
+              ("accounting-payments-finalize.spec.ts", "review F3 acknowledgment preserves amount and server errors through drafts and payment modes"): 1,
+              ("accounting-payments-finalize.spec.ts", "review F1 legacy and missing limited result never substitute a different sale"): 1,
+              ("venue-stats.spec.ts", "review F2 current shift loads and refreshes independently of invalid closed draft and preserves it on return"): 1,
+              ("venue-stats.spec.ts", "review F2 empty invalid and oversized drafts never gate current refresh and apply only after correction"): 1,
+              ("venue-stats.spec.ts", "review F2 late closed response cannot replace current refresh and failed refresh exposes no old KPI"): 1,
+              ("accounting-payments-finalize.spec.ts", "native item controls retain identity without focus restoration through selection discount gift and second row"): 1,
+              ("accounting-payments-finalize.spec.ts", "ordinary partial split payment explicit states and accessible result 390 dark"): 1,
+              ("accounting-payments-finalize.spec.ts", "ordinary partial split payment explicit states and accessible result 360 dark"): 1,
+              ("accounting-payments-finalize.spec.ts", "ordinary partial split payment explicit states and accessible result 1440 light"): 1,
+              ("accounting-payments-finalize.spec.ts", "payment refusal or uncertain outcome 400 preserves draft and original request"): 1,
+              ("accounting-payments-finalize.spec.ts", "payment refusal or uncertain outcome 409 preserves draft and original request"): 1,
+              ("accounting-payments-finalize.spec.ts", "payment refusal or uncertain outcome 408 preserves draft and original request"): 1,
+              ("accounting-payments-finalize.spec.ts", "payment refusal or uncertain outcome 500 preserves draft and original request"): 1,
+              ("accounting-payments-finalize.spec.ts", "payment refusal or uncertain outcome -1 preserves draft and original request"): 1,
+              ("accounting-payments-finalize.spec.ts", "free canceled unknown and reconciliation remain honest in every sales filter"): 1,
+              ("accounting-payments-finalize.spec.ts", "payment PostgreSQL UI POST restart exact replay accounting list current and closed finance DOM"): 1,
               ("accounting-chat-reconciliation.spec.ts", "closed text order reconciliation validation success and honest totals 360 light"): 1,
               ("accounting-chat-reconciliation.spec.ts", "closed text order reconciliation validation success and honest totals 360 dark"): 1,
               ("accounting-chat-reconciliation.spec.ts", "closed text order reconciliation validation success and honest totals 390 light"): 1,

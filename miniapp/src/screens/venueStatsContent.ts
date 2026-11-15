@@ -42,12 +42,12 @@ const calls: Definition[] = [
   ['calls.legacyUnknown', 'Без достоверной истории времени', 'Вызовы, созданные в выбранные даты, для которых старая история времени неполна. Это ограничение данных, а не оценка работы сотрудников.']
 ]
 const money: Definition[] = [
-  ['accrued', 'Начислено', 'Начисленная сумма продаж, включая ручные продажи, после скидок и подарков по правилам учёта.'],
-  ['operatorConfirmed', 'Подтверждено оператором', 'Оплаты наличными, картой и переводом, внесённые сотрудником. Аннулированные записи оплат не учитываются. Это не банковская сверка и не реальные возвраты.'],
+  ['accrued', 'Сумма продаж', 'Сумма ручных и цифровых продаж после действующих скидок и подарков.'],
+  ['operatorConfirmed', 'Получено по учёту', 'Оплаты наличными, картой и переводом, внесённые сотрудником. Аннулированные записи оплат не учитываются. Это не банковская сверка и не реальные возвраты.'],
   ['discounts', 'Скидки', 'Зафиксированная в учёте сумма скидок.'],
   ['gifts', 'Подарки', 'Зафиксированная в учёте стоимость подарков. Это не денежное поступление.'],
   ['unpaid', 'Зафиксированный неоплаченный остаток', 'Начисленная, но не отмеченная оплаченной сумма по отчёту. Остаток закрытой смены не является текущим долгом клиента.'],
-  ['averageAccruedSale', 'Средняя начисленная продажа', 'Начислено ÷ количество продаж, включая ручные продажи. При отсутствии продаж среднее недоступно.'],
+  ['averageAccruedSale', 'Средняя сумма продажи', 'Сумма продаж ÷ количество учётных продаж. Несколько оплат одной продажи не увеличивают количество. При отсутствии продаж среднее недоступно.'],
   ['sales', 'Количество продаж', 'Количество продаж по правилам учёта, включая ручные продажи. Это не количество заказов или гостей.']
 ]
 const statuses: Record<string, string> = {
@@ -149,7 +149,7 @@ function section(title: string, id: string, intro: string) {
   return block
 }
 
-function financeGroups(groups: FinancialKpis[], provisional: boolean) {
+function financeGroups(groups: FinancialKpis[], provisional: boolean, compact = false) {
   const root = el('div')
   const basis = provisional ? 'Текущее состояние открытой смены на время обновления; выбранный период её не ограничивает.'
     : 'Сумма замороженных отчётов смен, закрытых в выбранные даты. Валюты не складываются.'
@@ -158,9 +158,11 @@ function financeGroups(groups: FinancialKpis[], provisional: boolean) {
     block.dataset.currency = group.currency
     block.append(el('h3', { text: `Валюта: ${/^[A-Z]{3}$/.test(group.currency) ? group.currency : 'не определена'}` }))
     const grid = el('div', { className: 'venue-stats-grid' })
-    grid.append(...money.map(definition => metric(definition, group.metrics[definition[0]], group.currency, basis)))
+    const definitions = compact ? ['accrued', 'operatorConfirmed', 'unpaid', 'sales', 'averageAccruedSale'].map(key => money.find(d => d[0] === key)!) : money
+    grid.append(...definitions.map(definition => metric(definition, group.metrics[definition[0]], group.currency, basis)))
     if (group.metrics.unallocatedAccrued) grid.append(metric(['unallocatedAccrued', 'Сверено без товарной расшифровки', 'Подтверждённый итог текстовых заказов; состав, скидки и подарки не восстановлены. Это не полученная оплата.'], group.metrics.unallocatedAccrued, group.currency, basis))
     block.append(grid)
+    if (compact) { root.append(block); return }
     const payments: Definition[] = [['cash', 'Наличными', 'Оплаты, внесённые сотрудником наличными.'],
       ['card', 'Картой', 'Оплаты, внесённые сотрудником как оплата картой.'], ['transfer', 'Переводом', 'Оплаты, внесённые сотрудником как перевод.']]
     const paymentDetails = el('details', { className: 'stats-payment-details' })
@@ -172,18 +174,34 @@ function financeGroups(groups: FinancialKpis[], provisional: boolean) {
   return root
 }
 
-export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview' | 'products' | 'additions' | 'finance' | 'service', productsView?: ProductsView): HTMLElement {
+function financialContent(snapshot: VenueKpiSnapshot, mode: 'current' | 'closed', compact = false) {
+  const current = mode === 'current'
+  const root = section(current ? 'Текущая смена' : 'Закрытые смены', 'finance', current
+    ? 'Предварительные суммы всей открытой смены. Календарный период их не ограничивает.'
+    : 'По датам закрытия смен за выбранный период. Текущая смена сюда не входит.')
+  root.classList.add('stats-financial-content')
+  const stamp = (v: string) => new Intl.DateTimeFormat('ru-RU', { timeZone: snapshot.period.timezone, dateStyle: 'short', timeStyle: 'short' }).format(new Date(v))
+  const coverage = snapshot.metrics[current ? 'finance.openReportCoverage' : 'finance.closedReports']
+  const empty = current ? snapshot.metrics['finance.openShifts']?.value === '0' : coverage?.value === '0' && coverage.availability === 'AVAILABLE'
+  if (current && !empty) root.append(el('p', { text: snapshot.openShiftOpenedAt ? `Открыта ${stamp(snapshot.openShiftOpenedAt)} · Данные на ${stamp(snapshot.asOf)}` : 'Время открытия не передано. Обновите приложение и сервер для точной границы смены.' }))
+  if (empty) root.append(el('p', { text: current ? 'Сейчас открытой смены нет. Она появится после первой сохранённой продажи или заказа.' : 'За выбранный период закрытых смен нет.' }))
+  else {
+    if (!coverage || coverage.availability !== 'AVAILABLE') root.append(el('p', { className: 'stats-warning', text: coverageText(coverage) }))
+    if (!current) root.append(el('p', { text: coverage ? `Смен в расчёте: ${exactCount(coverage.samples)}.` : 'Число смен недоступно.' }))
+    root.append(financeGroups(current ? snapshot.openShiftFinances : snapshot.closedShiftFinances, current, compact))
+  }
+  root.append(el('p', { className: 'stats-note', text: 'Сумма продаж — после скидок и подарков. Получено по учёту — записи сотрудника, не банковская сверка. Средняя сумма — сумма продаж / количество учётных продаж.' }))
+  if (!current) root.append(el('p', { className: 'stats-note', text: 'Аннулирование записи оплаты не является реальным возвратом. Остаток закрытой смены не означает текущий долг клиента.' }))
+  return root
+}
+
+export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview' | 'products' | 'additions' | 'finance' | 'service', productsView?: ProductsView, financeMode: 'current' | 'closed' = 'closed'): HTMLElement {
   const root = el('div', { className: 'stats-sections' })
   const m = snapshot.metrics
   if (view === 'overview') {
     root.classList.add('card', 'stats-section', 'stats-overview')
-    root.append(group('Обзор заведения', 'Основные результаты за выбранный период. Подробности доступны в тематических разделах.', [
-      ['orders.created', 'Созданные заказы', 'Заказы по времени создания. Дозаказы не создают новый заказ.'],
-      ['orders.firstAccepted', 'Впервые принятые заказы', 'Первое фактическое принятие отправки заказа.'],
-      ['seatings.registeredSessions', 'Посадки', 'Зарегистрированные физические посадки, включая гостей без бронирования; перемещение внутри сессии не добавляет посадку.'],
-      ['bookings.attendance', 'Доля пришедших', 'Пришли / (пришли + не пришли) по запланированным датам.'],
-      ['calls.firstResponse', 'Среднее время ответа', 'От создания вызова до первого подтверждённого ответа сотрудника.']
-    ], m))
+    root.append(financialContent(snapshot, financeMode, true))
+    const operations = el('details', { className: 'stats-service-details' }); operations.append(el('summary', { text: 'Обслуживание за выбранный период' }), group('Операционные показатели', 'Ручные продажи не создают заказы или посадки. Даты обслуживания сохраняют выбранный период.', [['orders.created', 'Созданные заказы', 'По времени создания.'], ['seatings.registeredSessions', 'Посадки', 'Физические сессии.'], ['calls.created', 'Вызовы', 'По времени создания.']], m)); root.append(operations)
     return root
   }
   if (view === 'products') return renderVenueProducts(snapshot, productsView)
@@ -224,23 +242,7 @@ export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview'
     orders.append(top); root.append(orders)
   }
   if (chosen === 'all' || chosen === 'finance') {
-    const finances = section('Финансовые итоги закрытых смен', 'finance',
-      'Показатели закрытых смен относятся к датам их закрытия. Подтверждённые оплаты внесены сотрудником и не означают банковскую сверку.')
-    const coverage = m['finance.closedReports']
-    if (!coverage || coverage.availability !== 'AVAILABLE') finances.append(el('p', { className: 'stats-warning', text: coverageText(coverage) }))
-    if (coverage?.value === '0' && coverage.availability === 'AVAILABLE') finances.append(el('p', { text: 'За выбранный период закрытых смен нет.' }))
-    else finances.append(el('p', { className: 'stats-note', text: coverage ? `Смен в расчёте: ${exactCount(coverage.samples)}.` : 'Число смен недоступно.' }))
-    finances.append(financeGroups(snapshot.closedShiftFinances, false))
-    finances.append(el('p', { className: 'stats-note', text: 'Аннулирование записи оплаты не является реальным возвратом. Остаток закрытой смены не означает текущий долг клиента.' }))
-    const open = el('section', { className: 'stats-provisional' })
-    append(open, el('h3', { text: 'Текущая смена — предварительные данные' }),
-      el('p', { className: 'stats-note', text: 'Отдельное текущее состояние на время обновления. Эти суммы не добавлены к итогам закрытых смен и не ограничены выбранными датами.' }))
-    if (m['finance.openShifts']?.value === '0') open.append(el('p', { text: 'Сейчас открытой смены нет.' }))
-    else {
-      if (m['finance.openReportCoverage']?.availability !== 'AVAILABLE') open.append(el('p', { className: 'stats-warning', text: coverageText(m['finance.openReportCoverage']) }))
-      open.append(financeGroups(snapshot.openShiftFinances, true))
-    }
-    finances.append(open); root.append(finances)
+    root.append(financialContent(snapshot, financeMode))
   }
   if (['all', 'bookings', 'seatings'].includes(chosen)) {
     const bookings = section('Бронирования и посадки', 'bookings', 'Создание заявки, запланированное посещение и физическая посадка — разные показатели.')

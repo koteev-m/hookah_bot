@@ -2555,6 +2555,70 @@ passed. Historical guards remain unchanged; hosted Docker/JVM integration was no
 Commands, logs, XML counts, source hashes and screenshot:
 `/private/tmp/HT-VENUE-SHIFT-SALES-MVP-01/REPORT.txt`. This is local review evidence, not release approval.
 
+### Accounting payment UX finalization local gate
+
+`AccountingSplitPaymentH2Test` / `AccountingSplitPaymentPostgresTest` cover atomic components,
+positive/unique/allowed methods, partial acknowledgment, actor/payload replay, stable receipt IDs,
+component-only VOID_PAYMENT, rollback and denominator/GET purity. PostgreSQL additionally observes
+actual independent backend PIDs and `pg_blocking_pids` for PAY_SPLIT versus PAY/EDIT/CLOSE/replay in
+both lock orders, plus failure after the full snapshot write. Loyalty lifecycle tests cover no
+intermediate earning, one full-result accrual and exact replay. These suites and the HTTP suite
+belong to mandatory PR/main selectors with nonzero XML/minimum counts and zero skips/failures/errors.
+
+`python3 scripts/test-accounting-payment-live.py [fresh-ignored-output-directory]` starts loopback
+Ktor with a disposable PostgreSQL Testcontainer and the real browser adapter. Configure only the
+fixture's exact Vite Origin. Reject an unlisted Origin (OPTIONS and POST, empty 403/no sale), require
+allowed preflight headers, and retain browser Network status plus native server evidence. Browser
+CREATEs 1905 and 990 RUB, records CASH400+CARD590 in one POST, loses the committed response, restarts
+Ktor, repeats the unchanged request, and verifies accounting DOM/list, current KPI1447.50 and closed
+KPI1447.50. The receipt/audit/sales counts and GET business-state invariance are asserted in PostgreSQL.
+No mock response substitutes for this live gate; the normal standalone UI fixture is a separate test.
+
+`accounting-payments-finalize.spec.ts` retains native select identity/no programmatic SELECT focus
+across selection/switch/discount/gift/second row, ordinary/partial/combined states, double submit,
+unknown/refused outcomes and honest free/canceled/unknown filters. Retain percentage/reason/draft,
+RECONCILE_TEXT, revoke/account/venue and legacy-pending regressions. Verify Chromium and available
+WebKit, 360/390 dark plus desktop1440/light, keyboard/focus/errors/results and safe-area behavior.
+Screenshots are browser output, not generated mockups. Local WebKit/iPhone emulation does not prove
+native picker or real Telegram iOS behavior; physical-device smoke stays explicitly open. The final
+local full backend/Chromium, compile/ktlint, TypeScript/build and applicable CI/portable/migration
+result gates remain required. Staging is separate authorized release work.
+
+### Accounting targeted review fixes — HT-ACCOUNTING-PAYMENTS-STATS-REVIEW-FIX-01
+
+`AccountingCreateResultH2Test` / `AccountingCreateResultPostgresTest` require stable CREATE identity
+with identical concurrent sales, actor/payload/venue/revoke denial, legacy NULL fallback, unchanged
+fingerprints/frozen reports and audit/ledger rollback. PostgreSQL additionally runs parallel creates.
+`AccountingMigrationTest` upgrades PostgreSQL139→140 and H2140→141 without backfill, preserving legacy
+receipt rows and historical Flyway checksums. Historical SQL is immutable.
+`AccountingCreateReplayPostgresHttpTest` terminates one loopback server JVM and starts a different
+PID on the same disposable PostgreSQL and port. Replay identifies A, while equal-valued B remains
+unpaid; actual HTTP PAY and KPI GET purity are checked. Its normal test is mandatory, not skipped.
+
+Run `python3 scripts/test-accounting-create-replay-live.py <fresh-ignored-dir> chromium` and the same
+command with a different directory and `webkit`. Actual UI CREATE loses a committed response,
+reload GET includes A, manager creates identical B, a separate JVM serves exact replay, and the
+real payment click POST targets A. While invalid closed dates remain in the draft, a real CREATE
+changes current KPI and Refresh must render the new API values. No fulfilled mock replaces HTTP.
+Both native runs and the three finding browser regressions remain fresh review gates.
+
+The accounting/stats browser inventories require F1 stable-ID navigation and explicit legacy/missing
+selection, F2 empty/invalid/reversed/oversized draft correction, late-mode/500 behavior and F3 field
+focus/ARIA clearing, keyboard, draft and preservation of amount/server errors. Existing timeout,
+identity/venue/revoke, picker, split, financial and legacy suites remain mandatory. Missing/skipped
+new cases fail the PR/main result gates and parser-negative tests. A server receipt change requires
+one fresh full backend run; preserve native XML/JSON provenance separately from historical reuse.
+
+
+Payment-total validation follow-up (`HT-ACCOUNTING-PAYMENT-TOTAL-VALIDATION-FIX-01`): the four
+`payment total validation ... 390|1440` cases in accounting-payments-finalize.spec.ts are mandatory
+in the full browser inventory. Run both Chromium/WebKit for cross-component total correction,
+remaining overpayment, new partial acknowledgment, invalid intermediate amounts, TRANSFER/mode/draft,
+server refusal/pending exact replay and one click/Enter logical submit. Assert DOM/ARIA/focus and
+shared total-message links. Recompute previously shown local errors, preserving independent server
+state; no auto-submit or form replacement. A frontend-only validation fix reuses verified unchanged
+backend inputs; it does not require a new full backend solely for this change.
+
 ## QA Levels
 
 | Level | Purpose | Current / target |

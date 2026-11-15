@@ -166,14 +166,16 @@ test('stats invalid custom dates do not issue API queries and clear old results'
 })
 
 test('stats closed frozen finances retain exact currencies and never combine the provisional open shift', async ({ page }) => {
-  await fixture(page); await ready(page); await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
+  await fixture(page); await ready(page); await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
   const closed = page.locator('#stats-finance > div > .stats-currency')
   await expect(closed).toHaveCount(2)
   await expect(closed.filter({ hasText: 'Валюта: RUB' }).locator('[data-kpi="accrued"] .stats-value')).toHaveText(exactMoney('900719925474099312', 'RUB'))
   await expect(closed.filter({ hasText: 'Валюта: USD' }).locator('[data-kpi="accrued"] .stats-value')).toHaveText(exactMoney('12345', 'USD'))
-  await expect(page.locator('.stats-provisional [data-kpi="accrued"] .stats-value')).toHaveText(exactMoney('0', 'RUB'))
-  await expect(page.getByText('Показатели закрытых смен относятся к датам их закрытия. Подтверждённые оплаты внесены сотрудником и не означают банковскую сверку.')).toBeVisible()
-  await expect(page.locator('.stats-provisional')).toContainText('не ограничены выбранными датами')
+  await expect(page.locator('#stats-finance')).toContainText('Текущая смена сюда не входит.')
+  await page.getByLabel('Финансовый период').selectOption('current')
+  await expect(page.locator('#stats-finance [data-kpi="accrued"] .stats-value')).toHaveText(exactMoney('0', 'RUB'))
+  await expect(page.getByRole('button', { name: 'Последние 7 дней' })).toBeHidden()
+  await expect(page.locator('#stats-finance')).toContainText('Календарный период их не ограничивает.')
   await expect(page.getByLabel('Текущий стол')).toBeHidden()
 })
 
@@ -183,20 +185,24 @@ test('stats complete empty counters differ from unavailable attendance and mean 
   await expect(metric(page, 'orders.created')).toContainText('За выбранный период событий нет.')
   await expect(metric(page, 'bookings.attendance').locator('.stats-value')).toHaveText('Недостаточно данных')
   await expect(metric(page, 'calls.firstResponse').locator('.stats-value')).toHaveText('Недостаточно данных')
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
   await expect(page.getByText('За выбранный период закрытых смен нет.')).toBeVisible()
   await expect(page.locator('.stats-currency')).toHaveCount(0)
 })
 
-test('stats partial history exposes observed subset samples and unknown without displaying raw technical codes', async ({ page }) => {
+test('stats partial history exposes observed subset samples and unknown without displaying raw technical codes', async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ colorScheme: 'dark' })
   await fixture(page, { variant: 'partial' }); await ready(page)
   await expect(metric(page, 'orders.firstAccepted').locator('.stats-value')).toHaveText('Частичные данные')
   await expect(metric(page, 'batches.accepted')).toContainText('По известным данным: 3')
   await expect(metric(page, 'batches.accepted')).toContainText('Без полной истории: 3')
   await expect(page.locator('.stats-coverage')).toContainText('Часть старых операций не содержит точного времени.')
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
   await expect(page.locator('#stats-finance')).toContainText('Не все отчёты смен доступны или полны.')
   await expect(page.locator('.venue-stats')).not.toContainText(/LEGACY_HISTORY_UNKNOWN|SHIFT_CLOSED_AT|BATCH_CREATED|SQL_SECRET/)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+  await expect(page.locator('#stats-finance')).toContainText('Не все отчёты смен доступны или полны.')
+  await page.screenshot({ path: info.outputPath('partial-finances-390-dark.png'), fullPage: true })
 })
 
 test('stats API error clears previously visible money and supports a safe retry', async ({ page }) => {
@@ -265,8 +271,8 @@ for (const code of [401, 403]) test(`stats access loss ${code} clears data and d
 
 for (const role of ['OWNER', 'MANAGER']) test(`stats ${role} can read management data without mutations`, async ({ page }) => {
   const api = await fixture(page, { role }); await ready(page)
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
-  await expect(page.getByRole('heading', { name: 'Финансовые итоги закрытых смен', exact: true })).toBeVisible()
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+  await expect(page.getByRole('heading', { name: 'Закрытые смены', exact: true })).toBeVisible()
   expect(api.mutations()).toBe(0)
 })
 
@@ -284,7 +290,7 @@ test('stats filters apply table only within an operational section and preserve 
   expect(api.requests.at(-1)?.searchParams.get('section')).toBe('orders'); expect(api.requests.at(-1)?.searchParams.get('tableId')).toBe('2')
   await expect(page.getByText(/Прошлые перемещения не восстанавливаются/)).toBeVisible()
   await expect(page.locator('#stats-finance')).toHaveCount(0)
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
   expect(api.requests.at(-1)?.searchParams.has('tableId')).toBe(false)
   await expect(page.getByLabel('Текущий стол')).toBeHidden()
 })
@@ -346,7 +352,7 @@ test('stats Telegram deactivate hides private data and activated reloads a curre
 for (const [currency, expected] of [['IQD', '12,345'], ['MGA', '123,45']]) {
   test(`stats money real Ktor H2 ${currency} response passes adapter and renders ISO minor units`, async ({ page }) => {
     await fixture(page, { variant: 'money' }); await ready(page)
-    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
     const response = page.waitForResponse(value => value.url().includes('from=2026-03-28') && value.url().includes('/stats/v1'))
     await custom(page, '2026-03-28', '2026-03-30'); await ready(page)
     const actualResponse = await response
@@ -360,11 +366,11 @@ for (const [currency, expected] of [['IQD', '12,345'], ['MGA', '123,45']]) {
   })
 }
 
-for (const [width, theme] of [[1440, 'light'], [360, 'dark']] as const) {
+for (const [width, theme] of [[1440, 'light'], [360, 'dark'], [390, 'dark']] as const) {
   test(`stats money mixed ISO currencies and Long maximum fit ${width}px ${theme}`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 900 }); await page.emulateMedia({ colorScheme: theme })
     await fixture(page, { variant: 'money' }); await ready(page)
-    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
     const expected: Record<string, string> = { IQD: '12,345', MGA: '123,45', RUB: '9007199254740993,12',
       EUR: '92233720368547758,07', USD: '0,01', JPY: '12345', KRW: '0', KWD: '12,345', BHD: '12,345', CLF: '1,2345' }
     for (const [currency, amount] of Object.entries(expected)) {
@@ -373,7 +379,7 @@ for (const [width, theme] of [[1440, 'light'], [360, 'dark']] as const) {
       await expect(card.getByText('Как считается', { exact: true })).toBeVisible()
     }
     await expect(page.locator('#stats-finance [data-currency="XXX"] [data-kpi="accrued"] .stats-value')).toHaveText('Недостаточно данных')
-    await expect(page.locator('.stats-provisional')).toContainText('Сейчас открытой смены нет.')
+    await page.getByLabel('Финансовый период').selectOption('current'); await expect(page.locator('#stats-finance')).toContainText('Сейчас открытой смены нет.'); await page.getByLabel('Финансовый период').selectOption('closed')
     await page.locator('#stats-finance [data-currency="EUR"]').evaluate(node => node.scrollIntoView({ block: 'start' }))
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     const screenshot = info.outputPath(`venue-money-${width}-${theme}.png`)
@@ -381,14 +387,14 @@ for (const [width, theme] of [[1440, 'light'], [360, 'dark']] as const) {
   })
 }
 
-for (const [width, theme] of [[1440, 'light'], [360, 'dark']] as const) {
+for (const [width, theme] of [[1440, 'light'], [360, 'dark'], [390, 'dark']] as const) {
   test(`stats ${width}px ${theme} layout is readable without horizontal overflow`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 900 }); await page.emulateMedia({ colorScheme: theme }); await fixture(page); await ready(page)
     await expect(page.locator('html')).toHaveAttribute('data-color-scheme', theme)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     const overview = info.outputPath(`venue-stats-${width}-${theme}.png`)
     await page.screenshot({ path: overview }); await info.attach('overview', { path: overview, contentType: 'image/png' })
-    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
     await page.locator('#stats-finance').evaluate(node => node.scrollIntoView({ block: 'start' }))
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     const unit = page.locator('#stats-finance [data-kpi="accrued"] .stats-currency-unit').first()
@@ -407,10 +413,12 @@ for (const width of [360, 390, 1440]) for (const theme of ['light', 'dark']) {
     await ready(page)
     await expect(page.locator('html')).toHaveAttribute('data-color-scheme', theme)
     await expect(page.getByRole('combobox', { name: 'Показатели', exact: true })).toHaveValue('overview')
-    await expect(page.locator('.stats-content [data-kpi]')).toHaveCount(5)
-    await expect(page.locator('#stats-finance')).toHaveCount(0)
+    await expect(page.locator('#stats-finance [data-kpi]')).toHaveCount(5)
+    await expect(page.locator('#stats-finance')).toContainText('Текущая смена')
+    await expect(page.locator('.stats-service-details [data-kpi]')).toHaveCount(3)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`overview-${width}-${theme}.png`), fullPage: true })
+    await page.getByLabel('Финансовый период').selectOption('closed')
     await page.getByRole('button', { name: 'Последние 7 дней' }).click(); await ready(page)
     const from = api.requests.at(-1)!.searchParams.get('from')
     await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('products')
@@ -493,4 +501,51 @@ test('operations PostgreSQL HTTP response passes the real adapter and merchandis
     await expect(page.locator('.venue-alert-list a')).toHaveAttribute('href', '#/messages?threadId=1')
     await expect(page.locator('.venue-alert-list')).not.toContainText('Private guest text')
   } finally { writeFileSync(join(directory, 'done'), 'browser completed') }
+})
+
+
+test('review F2 current shift loads and refreshes independently of invalid closed draft and preserves it on return', async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ colorScheme: 'dark' })
+  const api = await fixture(page, { overview: true }); await ready(page)
+  const mode = page.getByLabel('Финансовый период')
+  await mode.selectOption('closed'); await page.getByRole('button', { name: 'Произвольный период' }).click()
+  await page.getByLabel('Начало периода').fill('2026-11-14'); await page.getByLabel('Окончание периода (включительно)').fill('2026-11-01')
+  await page.getByRole('button', { name: 'Показать период' }).click(); await expect(page.locator('.stats-validation')).toContainText('не раньше')
+  const before = api.requests.length; await mode.selectOption('current'); await refresh(page)
+  await expect.poll(() => api.requests.length).toBeGreaterThan(before); await ready(page)
+  await expect(page.locator('.stats-validation')).toBeHidden(); await expect(page.getByLabel('Начало периода')).toBeHidden()
+  await page.screenshot({ path: info.outputPath('review-F2-current-invalid-draft.png'), fullPage: true })
+  await mode.selectOption('closed'); await expect(page.getByLabel('Начало периода')).toHaveValue('2026-11-14'); await expect(page.getByLabel('Окончание периода (включительно)')).toHaveValue('2026-11-01')
+  await expect(page.locator('.stats-validation')).toContainText('не раньше')
+})
+
+test('review F2 empty invalid and oversized drafts never gate current refresh and apply only after correction', async ({ page }) => {
+  const api = await fixture(page, { overview: true, timezone: 'Europe/Berlin', asOf: '2026-03-29T10:00:00Z' }); await ready(page)
+  const mode = page.getByLabel('Финансовый период'), start = page.getByLabel('Начало периода'), end = page.getByLabel('Окончание периода (включительно)')
+  for (const bad of ['', '2026-02-30', '2024-01-01']) {
+    await mode.selectOption('closed'); await page.getByRole('button', { name: 'Произвольный период' }).click()
+    await start.evaluate((node, value) => { (node as HTMLInputElement).value = value; node.dispatchEvent(new Event('input', { bubbles: true })) }, bad)
+    await end.fill('2026-03-29'); const draft = await start.inputValue()
+    await page.getByRole('button', { name: 'Показать период' }).click(); await expect(page.locator('.stats-validation')).not.toBeEmpty()
+    api.corrupt(body => { const group = body.openShiftFinances[0]; if (group) group.metrics.accrued.value = '123400' })
+    const count = api.requests.length; await mode.selectOption('current'); await ready(page); await refresh(page); await ready(page)
+    expect(api.requests.length).toBeGreaterThan(count); await expect(page.locator('#stats-finance [data-kpi=accrued] .stats-value')).toContainText('1 234,00')
+    await expect(page.locator('.stats-validation')).toBeHidden(); await mode.selectOption('closed'); await expect(start).toHaveValue(draft); await expect(page.locator('.stats-validation')).not.toBeEmpty()
+    await start.fill('2026-03-29'); await page.getByRole('button', { name: 'Показать период' }).click(); await ready(page)
+    expect(api.requests.at(-1)?.searchParams.get('from')).toBe('2026-03-29'); expect(api.requests.at(-1)?.searchParams.get('to')).toBe('2026-03-30')
+    await expect(page.getByText('Даты не применены.', { exact: false })).toBeHidden()
+  }
+})
+
+test('review F2 late closed response cannot replace current refresh and failed refresh exposes no old KPI', async ({ page }) => {
+  const api = await fixture(page, { overview: true, ignoreAbort: true }); await ready(page)
+  let release!: () => void; api.hold(new Promise<void>(resolve => { release = resolve }))
+  const count = api.requests.length; await page.getByLabel('Финансовый период').selectOption('closed'); await expect.poll(() => api.requests.length).toBeGreaterThan(count)
+  const old = api.requests.at(-1)!; api.hold(null)
+  api.corrupt(body => { if (body.openShiftFinances[0]) body.openShiftFinances[0].metrics.accrued.value = '543200' })
+  await page.getByLabel('Финансовый период').selectOption('current'); await ready(page)
+  await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('5 432,00'); await deliverLate(page, old, release)
+  await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('5 432,00')
+  api.fail(500); await refresh(page); await expect(page.getByRole('heading', { name: 'Статистика не загружена' })).toBeVisible(); await expect(page.locator('.stats-content')).toBeEmpty()
+  api.fail(0); await page.getByRole('button', { name: 'Повторить', exact: true }).click(); await ready(page); await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('5 432,00')
 })

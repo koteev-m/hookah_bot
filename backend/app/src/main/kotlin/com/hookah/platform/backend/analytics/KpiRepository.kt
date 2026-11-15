@@ -61,6 +61,7 @@ internal class KpiRepository(private val dataSource: DataSource?, private val cl
                 tableId = request.tableId, metrics = collector.metrics,
                 breakdowns = collector.breakdowns, products = products,
                 closedShiftFinances = financials.first, openShiftFinances = financials.second,
+                openShiftOpenedAt = collector.openShiftOpenedAt,
                 limitations =
                     listOf(
                         "RECORDED_DOMAIN_FACTS_ONLY", "STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS",

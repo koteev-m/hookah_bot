@@ -108,6 +108,7 @@ data class AccountingBreakdown(
     val accruedMinor: Long,
 )
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class AccountingReport(
     val shiftId: Long,
@@ -125,6 +126,8 @@ data class AccountingReport(
     val unpaidSaleIds: List<String>,
     val disputedSaleIds: List<String>,
     val reportHash: String = "",
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val createdSaleId: String? = null,
 )
 
 @Serializable
@@ -157,6 +160,9 @@ data class AccountingLineInput(
     val discountPercent: String? = null,
 )
 
+@Serializable
+data class AccountingPaymentInput(val method: String, val amountMinor: Long)
+
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class AccountingCommand(
@@ -175,6 +181,10 @@ data class AccountingCommand(
     val acknowledgeUnpaid: Boolean = false,
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val confirmationSource: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val paymentComponents: List<AccountingPaymentInput> = emptyList(),
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val acknowledgePartial: Boolean = false,
 )
 
 internal fun accountingTotals(sales: List<AccountingSale>): AccountingTotals {

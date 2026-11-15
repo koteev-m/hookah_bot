@@ -107,7 +107,8 @@ class AccountingHttpContractTest {
                 assertEquals(JsonPrimitive(10000), wireLine.getValue("unitPriceMinor"))
                 captured["current"] = read("")
                 captured["detail"] = read("/${shift.shiftId}")
-                assertEquals(captured["created"], captured["detail"])
+                assertEquals(sale.id, created.createdSaleId)
+                assertEquals(JsonObject(captured.getValue("created").jsonObject - "createdSaleId"), captured["detail"])
                 val pay =
                     command("PAY", shift.shiftId, sale).copy(
                         requestId = "contract-payment-01",

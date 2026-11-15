@@ -79,39 +79,45 @@ export function accountingSaleEditor(options: Options) {
   const updateReason = () => { reasonBox.hidden = !requiresReason(); if (reasonLabel) reasonLabel.textContent = sale ? 'Причина исправления · обязательно' : 'Причина скидки · обязательно' }
   const updateTotal = () => { try { total.textContent = `Итого продажи: ${money(draft.lines.reduce((sum, l) => sum + amounts(l, original(l)).total, 0n))}` } catch { total.textContent = 'Итого продажи: проверьте поля позиций.' }; updateReason() }
   const draw = (openIndex: number) => {
-    const focused = [...fields].find(([, field]) => field.node === document.activeElement)?.[0]
     for (const key of fields.keys()) if (key.startsWith('line:')) fields.delete(key)
     rows.replaceChildren();
     draft.lines.forEach((line, index) => {
       const row = el('details', { className: 'accounting-line' }); row.open = index === openIndex;
       const summary = el('summary'); const preview = el('p', { className: 'accounting-line-preview' }); preview.setAttribute('aria-live', 'polite')
+      summary.setAttribute('aria-expanded', String(row.open))
+      row.ontoggle = () => { summary.setAttribute('aria-expanded', String(row.open)); if (row.open) Array.from(rows.children).forEach(other => { if (other !== row) (other as HTMLDetailsElement).open = false }) }
       row.append(summary); const body = el('div', { className: 'accounting-line-fields' }); row.append(body)
       const update = () => {
         try { const a = amounts(line, original(line)); preview.textContent = `${line.qty} × ${money(a.price)} = ${money(a.gross)} · Скидка${a.basis != null ? ` ${line.discount.trim() || '0'}%` : ''}: ${money(a.discount)} · Итог: ${money(a.total)}`; summary.textContent = `${line.name || `Позиция ${index + 1}`} × ${line.qty} · ${money(a.total)}` }
         catch { preview.textContent = 'Проверьте количество, цену и скидку.'; summary.textContent = line.name || `Позиция ${index + 1}` }
         updateTotal()
       }
+      let refreshSelection = () => {}
+      let custom: HTMLButtonElement | undefined
+      let selected: HTMLParagraphElement | undefined
+      let updateSelected = () => {}
       if (!line.id) {
         const category = el('select'); category.append(new Option('Выберите категорию', ''))
         options.categories.filter(c => c.isActive !== false).forEach(c => category.append(new Option(c.name, String(c.id))))
         category.value = line.categoryKey ?? ''
         const search = el('input'); search.type = 'search'; search.placeholder = 'Поиск по всему меню'; search.value = line.search ?? ''
-        const items = el('select'); const selected = el('p', { className: 'accounting-selected-item' })
+        const items = el('select'); selected = el('p', { className: 'accounting-selected-item' })
         const available = options.categories.filter(c => c.isActive !== false).flatMap(c => c.items.filter(i => i.isAvailable && i.currency === 'RUB').map(i => ({ ...i, categoryId: c.id, categoryName: c.name })))
+        updateSelected = () => { selected!.textContent = line.menuItemId ? `Выбрано: ${line.name}. ${available.some(i => i.id === line.menuItemId) ? '' : 'Позиция больше недоступна. Выберите другую.'}` : 'Позиция не из меню' }
         const choices = () => {
           items.replaceChildren(new Option(line.menuItemId ? 'Выберите другой товар' : 'Позиция не из меню', ''))
           const query = search.value.trim().toLocaleLowerCase('ru')
           available.filter(i => query ? i.name.toLocaleLowerCase('ru').includes(query) : category.value === String(i.categoryId)).forEach(i => items.append(new Option(`${i.name} · ${i.categoryName} · ${money(i.priceMinor)}`, String(i.id))))
           items.value = line.menuItemId && Array.from(items.options).some(o => o.value === String(line.menuItemId)) ? String(line.menuItemId) : ''
-          selected.textContent = line.menuItemId ? `Выбрано: ${line.name}. ${available.some(i => i.id === line.menuItemId) ? '' : 'Позиция больше недоступна. Выберите другую.'}` : 'Позиция не из меню'
+          updateSelected()
         }
         category.onchange = () => { line.categoryKey = category.value; line.search = ''; search.value = ''; options.save(); choices() }
         search.oninput = () => { line.search = search.value; options.save(); choices() }
-        items.onchange = () => { const item = available.find(i => i.id === Number(items.value)); line.menuItemId = item?.id; line.name = item?.name ?? ''; line.price = item ? accountingDecimal(item.priceMinor) : ''; options.save(); draw(index) }
+        items.onchange = () => { const item = available.find(i => i.id === Number(items.value)); line.menuItemId = item?.id; line.name = item?.name ?? ''; line.price = item ? accountingDecimal(item.priceMinor) : ''; edited(`line:${index}:item`); edited(`line:${index}:name`); edited(`line:${index}:price`); options.save(); refreshSelection(); update() }
         addField(body, `line:${index}:category`, 'Категория меню', category, row)
         addField(body, `line:${index}:search`, 'Поиск товара по всему меню', search, row)
         addField(body, `line:${index}:item`, 'Товар', items, row); body.append(selected); choices()
-        if (line.menuItemId) body.append(makeButton('Позиция не из меню', () => { line.menuItemId = undefined; line.name = ''; line.price = ''; options.save(); draw(index) }))
+        custom = makeButton('Позиция не из меню', () => { line.menuItemId = undefined; line.name = ''; line.price = ''; items.value = ''; options.save(); refreshSelection(); update(); name.focus() }); body.append(custom)
       }
       const textInput = (key: string, value: string, label: string, change: (value: string) => void, inputMode?: 'decimal' | 'numeric') => {
         const node = el('input'); node.value = value; if (inputMode) node.inputMode = inputMode
@@ -120,25 +126,30 @@ export function accountingSaleEditor(options: Options) {
       const name = textInput('name', line.name, 'Название', v => { line.name = v }); name.maxLength = 200
       const qty = textInput('qty', line.qty, 'Количество', v => { line.qty = v }, 'numeric')
       const price = textInput('price', line.price, 'Цена за единицу, ₽', v => { line.price = v }, 'decimal')
-      name.disabled = !!line.menuItemId || !!sale?.orderId; price.disabled = name.disabled; qty.disabled = !!sale?.orderId
+      refreshSelection = () => {
+        name.value = line.name; price.value = line.price
+        name.disabled = !!line.menuItemId || !!sale?.orderId; price.disabled = name.disabled; qty.disabled = !!sale?.orderId
+        if (custom) custom.hidden = !line.menuItemId
+        updateSelected()
+      }; refreshSelection()
       const restriction = (original(line)?.baseDiscountMinor ?? 0) > 0 || (original(line)?.baseGiftMinor ?? 0) > 0
       const discountMode = el('select'); discountMode.append(new Option('Скидка, %', 'percent'), new Option('Скидка, ₽', 'amount')); discountMode.value = mode(line)
       if (restriction) { discountMode.options[0].disabled = true; body.append(el('p', { className: 'muted', text: 'Процент недоступен: в исходном заказе уже есть скидка или подарок. Условия исходного счёта сохраняются.' })) }
       addField(body, `line:${index}:discountMode`, 'Режим скидки', discountMode, row)
       const modeNotice = el('p', { className: 'accounting-mode-notice' }); modeNotice.hidden = true
       const discount = textInput('discount', line.discount, mode(line) === 'percent' ? 'Скидка, %' : 'Скидка на всю позицию, ₽', v => { line.discount = v }, 'decimal'); discount.placeholder = '0'; discount.onfocus = () => discount.select()
-      discountMode.onchange = () => { line.discountMode = discountMode.value as 'percent' | 'amount'; line.discount = ''; options.save(); draw(index); const notice = rows.querySelectorAll<HTMLElement>('.accounting-mode-notice')[index]; notice.hidden = false; notice.textContent = 'Режим изменён. Введите скидку в выбранных единицах заново.' }
+      discountMode.onchange = () => { line.discountMode = discountMode.value as 'percent' | 'amount'; line.discount = ''; discount.value = ''; discount.labels![0].textContent = mode(line) === 'percent' ? 'Скидка, %' : 'Скидка на всю позицию, ₽'; edited(`line:${index}:discount`); options.save(); update(); modeNotice.hidden = false; modeNotice.textContent = 'Режим изменён. Введите скидку в выбранных единицах заново.' }
       body.append(modeNotice)
       const gift = el('input'); gift.type = 'checkbox'; gift.checked = line.gift
-      gift.onchange = () => { line.gift = gift.checked; options.save(); draw(index) }; addField(body, `line:${index}:gift`, 'Подарок / бесплатно', gift, row)
-      if (line.gift) textInput('giftReason', line.giftReason, 'Причина подарка', v => { line.giftReason = v }).maxLength = 500
+      addField(body, `line:${index}:gift`, 'Подарок / бесплатно', gift, row)
+      const giftReason = textInput('giftReason', line.giftReason, 'Причина подарка', v => { line.giftReason = v }); giftReason.maxLength = 500; giftReason.parentElement!.hidden = !line.gift
+      gift.onchange = () => { line.gift = gift.checked; giftReason.parentElement!.hidden = !line.gift; edited(`line:${index}:giftReason`); options.save(); update() }
       body.append(preview)
-      if (!sale?.orderId && draft.lines.length > 1) body.append(makeButton('Убрать позицию', () => { draft.lines.splice(index, 1); options.save(); draw(Math.max(0, index - 1)) }))
+      if (!sale?.orderId && draft.lines.length > 1) body.append(makeButton('Убрать позицию', () => { draft.lines.splice(index, 1); options.save(); draw(Math.max(0, index - 1)); rows.querySelectorAll<HTMLElement>('summary')[Math.max(0, index - 1)]?.focus() }))
       rows.append(row); update()
     })
-    if (focused) fields.get(focused)?.node.focus({ preventScroll: true })
   }
-  if (!sale?.orderId) form.append(makeButton('Ещё позиция', () => { draft.lines.push({ name: '', qty: '1', price: '', discount: '', discountMode: 'percent', gift: false, giftReason: '' }); options.save(); draw(draft.lines.length - 1) }))
+  if (!sale?.orderId) form.append(makeButton('Ещё позиция', () => { draft.lines.push({ name: '', qty: '1', price: '', discount: '', discountMode: 'percent', gift: false, giftReason: '' }); options.save(); draw(draft.lines.length - 1); rows.lastElementChild?.querySelector<HTMLElement>('summary')?.focus() }))
   reason.value = draft.reason; reason.oninput = () => { draft.reason = reason.value; edited('reason'); options.save() }
   reasonLabel = addField(reasonBox, 'reason', sale ? 'Причина исправления · обязательно' : 'Причина скидки · обязательно', reason)
   const send = el('button', { text: sale ? 'Сохранить исправление' : 'Сохранить продажу' }); send.type = 'submit'

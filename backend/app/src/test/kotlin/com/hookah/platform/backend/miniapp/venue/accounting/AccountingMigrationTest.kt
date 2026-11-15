@@ -29,6 +29,68 @@ class AccountingMigrationTest {
         }
     }
 
+    @Test fun `H2 CREATE receipt upgrade preserves legacy rows without backfill`() {
+        HikariDataSource(
+            HikariConfig().apply {
+                jdbcUrl = "jdbc:h2:mem:receipt_upgrade_${UUID.randomUUID()};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE"
+                username = "sa"
+                password = ""
+            },
+        ).use { verifyReceiptUpgrade(it, "h2", "140", "141") }
+    }
+
+    @Test fun `PostgreSQL CREATE receipt upgrade preserves legacy rows without backfill`() {
+        PostgresTestEnv.createDataSource(PostgresTestEnv.createDatabase(), migrate = false).use {
+            verifyReceiptUpgrade(it, "postgresql", "139", "140")
+        }
+    }
+
+    private fun verifyReceiptUpgrade(
+        ds: HikariDataSource,
+        dialect: String,
+        previous: String,
+        next: String,
+    ) {
+        Flyway.configure().dataSource(ds).locations("classpath:db/migration/$dialect").target(previous).load().migrate()
+        seedAccounting(ds)
+        ds.connection.use { c ->
+            c.exec(
+                "INSERT INTO venue_accounting_shifts (venue_id,status,open_slot,timezone,opened_at) " +
+                    "VALUES (1,'OPEN',1,'Europe/Moscow',CURRENT_TIMESTAMP)",
+            )
+            val shift =
+                c.createStatement().executeQuery("SELECT id FROM venue_accounting_shifts").use {
+                    it.next()
+                    it.getLong(1)
+                }
+            c.prepareStatement(
+                "INSERT INTO venue_accounting_commands (venue_id,request_id,actor_user_id,fingerprint,shift_id) " +
+                    "VALUES (1,?,101,?,?)",
+            ).use { statement ->
+                statement.setString(1, "legacy-create-key-1234")
+                statement.setString(2, "a".repeat(64))
+                statement.setLong(3, shift)
+                statement.executeUpdate()
+            }
+            val oldHistory = history(c)
+            val forward = Flyway.configure().dataSource(ds).locations("classpath:db/migration/$dialect").load()
+            assertEquals(1, forward.migrate().migrationsExecuted)
+            assertEquals(next, forward.info().current().version.version)
+            forward.validate()
+            assertEquals(oldHistory, history(c).dropLast(1))
+            assertEquals(1, c.count("venue_accounting_commands"))
+            c.createStatement().executeQuery(
+                "SELECT request_id,fingerprint,created_sale_id FROM venue_accounting_commands",
+            ).use {
+                it.next()
+                assertEquals("legacy-create-key-1234", it.getString(1))
+                assertEquals("a".repeat(64), it.getString(2))
+                kotlin.test.assertNull(it.getString(3))
+            }
+            assertEquals(0, forward.migrate().migrationsExecuted)
+        }
+    }
+
     private fun verifyForward(
         ds: HikariDataSource,
         dialect: String,

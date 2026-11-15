@@ -102,3 +102,7 @@
 .stats-products-view .stats-metadata { font-size: .75rem; padding-top: .3rem; }
 .stats-products-view .stats-metadata p { margin: .2rem 0; }
 .stats-products-view .stats-validation:empty { display: none; }
+
+.stats-finance-mode { display: grid; gap: .35rem; }
+.stats-finance-mode select { min-height: 44px; }
+@media (max-width: 480px) { .venue-stats .stats-overview .venue-stats-grid { grid-template-columns: 1fr; } }

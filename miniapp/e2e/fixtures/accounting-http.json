@@ -84,7 +84,8 @@
             "manual:http-contract"
         ],
         "disputedSaleIds": [],
-        "reportHash": "http-contract-hash"
+        "reportHash": "http-contract-hash",
+        "createdSaleId": "manual:http-contract"
     },
     "current": {
         "current": {

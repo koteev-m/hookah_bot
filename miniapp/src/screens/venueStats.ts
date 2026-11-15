@@ -41,6 +41,9 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
   append(header, el('h2', { text: 'Статистика' }),
     el('p', { className: 'stats-venue-name', text: access.venueName?.trim() || 'Текущее заведение' }))
   const controls = el('div', { className: 'stats-controls' })
+  const financeMode = el('select'); financeMode.id = 'stats-finance-mode'; financeMode.add(new Option('Текущая смена', 'current')); financeMode.add(new Option('Закрытые смены', 'closed'))
+  const modeLabel = el('label', { className: 'stats-finance-mode', text: 'Финансовый период' }); modeLabel.htmlFor = financeMode.id; modeLabel.append(financeMode)
+  const currentFinance = () => ['overview', 'finance'].includes(section.value) && financeMode.value === 'current'
   const periodRow = el('div', { className: 'venue-stats-periods' }); periodRow.setAttribute('aria-label', 'Период статистики')
   const buttons = periods.map(([key, title]) => {
     const button = el('button', { className: 'button-secondary', text: title }); button.type = 'button'
@@ -56,6 +59,7 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
   from.setAttribute('aria-describedby', validation.id); to.setAttribute('aria-describedby', validation.id)
   append(form, fromLabel, toLabel, apply, validation,
     el('p', { className: 'stats-note', text: 'Обе выбранные даты включаются. До 370 календарных дней по часовому поясу заведения.' }))
+  const draftNotice = el('p', { className: 'stats-note' }); draftNotice.hidden = true
   const filterRow = el('div', { className: 'stats-filter-row' })
   const section = el('select'); section.id = 'stats-section'
   sections.forEach(([value, label]) => section.add(new Option(label, value)))
@@ -95,7 +99,7 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
   const refresh = el('button', { className: 'button-secondary', text: 'Обновить статистику' }); refresh.type = 'button'
   append(filterRow, sectionLabel, serviceLabel, tableLabel, refresh)
   const tableNotice = el('p', { className: 'stats-note' }); tableNotice.hidden = true
-  append(controls, periodRow, form, filterRow, productControls, tableNotice, validation)
+  append(controls, filterRow, modeLabel, periodRow, form, productControls, tableNotice, validation, draftNotice)
   const metadata = el('div', { className: 'stats-metadata' }); append(header, controls, metadata)
   const status = el('p', { className: 'status stats-load-status' }); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
   const skeleton = el('div', { className: 'stats-skeleton' }); skeleton.setAttribute('aria-hidden', 'true'); skeleton.hidden = true
@@ -113,6 +117,7 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
   let tableController: AbortController | null = null
   let tablesLoaded = false
   let preset: StatsPreset = 'today'
+  let appliedPeriod: { from: string; to: string } | null = null
   let timezone: string | null = null
   let serverAnchor: { ms: number; received: number } | null = null
   const currentActor = () => getTelegramContext().telegramUserId === actor
@@ -164,14 +169,24 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
         renderContent(data); restorePosition(position)
       },
       onPage: selected => { page = selected; expandedItem = null; void load(0, true) }
-    }))
+    }, financeMode.value as 'current' | 'closed'))
+  }
+  const syncPeriods = () => {
+    modeLabel.hidden = !['overview', 'finance'].includes(section.value)
+    periodRow.hidden = currentFinance(); buttons.forEach(b => { b.disabled = currentFinance() })
+    form.hidden = currentFinance() || preset !== 'custom'
+    validation.hidden = currentFinance()
+    draftNotice.hidden = currentFinance() || preset !== 'custom' || Boolean(appliedPeriod && appliedPeriod.from === from.value && appliedPeriod.to === to.value)
+    draftNotice.textContent = appliedPeriod ? `Даты не применены. Последний применённый период: ${formatCalendarDate(appliedPeriod.from)} — ${formatCalendarDate(appliedPeriod.to)}.` : 'Даты не применены. Выберите корректный период и нажмите «Показать период».'
   }
   const show = (data: VenueKpiSnapshot) => {
+    syncPeriods()
     wrapper.classList.toggle('stats-products-view', section.value === 'products')
     const start = calendarDateAt(data.period.from, data.period.timezone)
     const end = shiftCalendarDate(calendarDateAt(data.period.to, data.period.timezone), -1)
     const refreshed = new Intl.DateTimeFormat('ru-RU', { timeZone: data.period.timezone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(data.asOf))
-    metadata.replaceChildren(el('p', { text: `Период: ${formatCalendarDate(start)} — ${formatCalendarDate(end)} включительно` }),
+    const periodText = currentFinance() && section.value === 'finance' ? 'Вся текущая смена с момента открытия' : `${currentFinance() ? 'Обслуживание за период (финансы — вся текущая смена)' : ['overview', 'finance'].includes(section.value) ? 'Закрытые смены по дате закрытия' : 'Период'}: ${formatCalendarDate(start)} — ${formatCalendarDate(end)} включительно`
+    metadata.replaceChildren(el('p', { text: periodText }),
       el('p', { text: `Часовой пояс: ${data.period.timezone}` }), el('p', { text: `Данные на ${refreshed}` }))
     const metrics = [...Object.values(data.metrics), ...data.closedShiftFinances.flatMap(group => Object.values(group.metrics)),
       ...data.openShiftFinances.flatMap(group => Object.values(group.metrics)), ...(data.products ? [data.products.coverage] : [])]
@@ -221,14 +236,18 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
         if (!initial.ok) { if (initial.error.code !== REQUEST_ABORTED_CODE || timedOut) fail(initial.error, timedOut); return }
         timezone = initial.data.period.timezone; serverAnchor = { ms: Date.parse(initial.data.asOf), received: Date.now() }
       }
-      if (preset !== 'custom') {
+      const currentMode = currentFinance()
+      const queryPreset = currentMode ? (appliedPeriod ? null : 'today') : preset === 'custom' ? null : preset
+      let dates = currentMode && appliedPeriod ? appliedPeriod : { from: from.value, to: to.value }
+      if (queryPreset) {
         const now = new Date(serverAnchor ? serverAnchor.ms + Date.now() - serverAnchor.received : Date.now()).toISOString()
-        const dates = presetDates(preset, now, timezone); from.value = dates.from; to.value = dates.to
+        dates = presetDates(queryPreset, now, timezone)
+        if (!currentMode) { from.value = dates.from; to.value = dates.to }
       }
-      const invalid = periodValidation(from.value, to.value)
-      from.setAttribute('aria-invalid', String(Boolean(invalid))); to.setAttribute('aria-invalid', String(Boolean(invalid)))
-      if (invalid) { validation.textContent = invalid; stopLoading(); status.textContent = ''; return }
-      const query = { venueId, from: from.value, to: shiftCalendarDate(to.value, 1), section: selectedSection(),
+      const invalid = periodValidation(dates.from, dates.to)
+      if (!currentMode) { from.setAttribute('aria-invalid', String(Boolean(invalid))); to.setAttribute('aria-invalid', String(Boolean(invalid))) }
+      if (invalid) { validation.textContent = invalid; syncPeriods(); stopLoading(); status.textContent = ''; return }
+      const query = { venueId, from: dates.from, to: shiftCalendarDate(dates.to, 1), section: selectedSection(),
         ...(section.value === 'products' ? { ...(productsFilter ?? appliedProducts), page: productsFilter ? 1 : page, ...(expandedCategory ? { expandedCategoryKey: expandedCategory } : {}) } : {}),
         ...(operational(selectedSection()) && table.value ? { tableId: Number(table.value) } : {}) }
       const result = await venueGetStatsV1(backendUrl, query, deps, request.signal)
@@ -236,11 +255,12 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
       if (!result.ok) { if (result.error.code !== REQUEST_ABORTED_CODE || timedOut) fail(result.error, timedOut, preserve && productsFilter != null, () => void load(0, preserveProducts, productsFilter)); return }
       timezone = result.data.period.timezone; serverAnchor = { ms: Date.parse(result.data.asOf), received: Date.now() }
       // Correct a midnight crossing or a venue timezone change without treating a day as 24 hours.
-      if (preset !== 'custom' && correction === 0) {
-        const expected = presetDates(preset, result.data.asOf, timezone)
+      if (queryPreset && correction === 0) {
+        const expected = presetDates(queryPreset, result.data.asOf, timezone)
         if (expected.from !== query.from || shiftCalendarDate(expected.to, 1) !== query.to) { await load(1, preserveProducts, productsFilter); return }
       }
       if (productsFilter) { appliedProducts = productsFilter; page = 1 }
+      if (!currentMode) appliedPeriod = { ...dates }
       show(result.data)
       if (preserve) restorePosition(position)
     } catch {
@@ -269,16 +289,16 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
     if (preset === 'custom') { abort(); clearView(); error.hidden = true; status.textContent = 'Выберите даты и нажмите «Показать период».'; from.focus() }
     else void load()
   }))
-  disposables.push(on(productFilters, 'submit', event => { event.preventDefault(); if (sort.value === 'amount' && !currency.value) { validation.textContent = 'Выберите одну валюту для сортировки по стоимости.'; return }; void load(0, true, { search: search.value.trim(), categoryKey: category.value, currency: currency.value, sort: sort.value }) }), on(form, 'submit', event => { event.preventDefault(); resetProducts(); void load() }), on(refresh, 'click', () => void load(0, section.value === 'products')),
+  disposables.push(on(financeMode, 'change', () => { syncPeriods(); void load() }), on(productFilters, 'submit', event => { event.preventDefault(); if (sort.value === 'amount' && !currency.value) { validation.textContent = 'Выберите одну валюту для сортировки по стоимости.'; return }; void load(0, true, { search: search.value.trim(), categoryKey: category.value, currency: currency.value, sort: sort.value }) }), on(form, 'submit', event => { event.preventDefault(); resetProducts(); void load() }), on(refresh, 'click', () => void load(0, section.value === 'products')),
     on(section, 'change', () => {
       wrapper.classList.toggle('stats-products-view', section.value === 'products')
-      resetProducts(); productControls.hidden = section.value !== 'products'; serviceLabel.hidden = section.value !== 'service'
+      syncPeriods(); resetProducts(); productControls.hidden = section.value !== 'products'; serviceLabel.hidden = section.value !== 'service'
       table.value = ''; tableLabel.hidden = !operational(selectedSection()); tableNotice.hidden = tableLabel.hidden
       tableNotice.textContent = 'Фильтр относится только к выбранным показателям и текущему столу. Прошлые перемещения не восстанавливаются.'
       if (!tableLabel.hidden) void loadTables()
       void load()
     }), on(serviceKind, 'change', () => { table.value = ''; tableLabel.hidden = !operational(selectedSection()); tableNotice.hidden = tableLabel.hidden; if (!tableLabel.hidden) void loadTables(); void load() }), on(table, 'change', () => void load()), ...[from, to].map(input => on(input, 'input', () => {
-      abort(); clearView(); error.hidden = true; validation.textContent = ''; status.textContent = 'Нажмите «Показать период», чтобы применить даты.'
+      abort(); clearView(); error.hidden = true; validation.textContent = ''; status.textContent = 'Нажмите «Показать период», чтобы применить даты.'; syncPeriods()
     })))
   const resume = () => {
     if (!currentActor()) { loseAccess('changed'); return }
@@ -290,7 +310,7 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
   document.addEventListener('visibilitychange', resume); window.addEventListener('focus', resume)
   webApp?.onEvent?.('activated', activated); webApp?.onEvent?.('deactivated', deactivated)
   const identityWatch = window.setInterval(() => { if (!currentActor()) loseAccess('changed') }, 1000)
-  activePeriod(); void load()
+  syncPeriods(); activePeriod(); void load()
   return () => {
     disposed = true; abort(); tableController?.abort(); window.clearInterval(identityWatch)
     document.removeEventListener('visibilitychange', resume); window.removeEventListener('focus', resume)

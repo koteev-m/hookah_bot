@@ -36,6 +36,7 @@ internal fun Connection.milliseconds(
     }
 
 internal class KpiCollector(val c: Connection, val window: KpiWindow) {
+    var openShiftOpenedAt: String? = null
     val invoiceFinances = linkedMapOf<String, List<FinancialKpis>>()
     val metrics = linkedMapOf<String, KpiValue>()
     val breakdowns = linkedMapOf<String, List<KpiBucket>>()
