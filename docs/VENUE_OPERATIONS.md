@@ -1229,15 +1229,39 @@ transactional venue lock allow only one open accounting shift per venue.
   no select focus is restored after a completed choice. Category/global search and exact item IDs
   remain. Only the active row exposes details; structural add/remove actions focus a row summary.
 - Sale creation displays confirmation and a separate action to record payment, without implicit PAY.
-  Sale rows retain table/source, distinct number or short identifier/time, total, paid, remainder and
-  state. CREATE POST adds optional `createdSaleId`, persisted atomically in its actor/payload-bound
+  Sale rows are a presentation-only copy sorted by createdAt descending and ID ascending for ties,
+  grouped by venue-local date. They show table/source, a distinct within-report record number/time,
+  total and explicit state; only partial payments add the remainder. Unknown/disputed/canceled
+  records retain warnings. Full sale/payment IDs are available under technical details, not the
+  primary heading. Presentation never reorders the server report or changes its hash/frozen data.
+  CREATE POST adds optional `createdSaleId`, persisted atomically in its actor/payload-bound
   command receipt with sale/audit. Exact replay returns the same identity with the current report;
   list differences/order/amount/name/table never identify the result. Nullable PostgreSQL V140 /
   H2 V141 append this association without backfill or fingerprint changes. Legacy receipts without
   a known identity offer explicit list selection. A missing/inaccessible identified sale is disclosed;
   another sale is never substituted. GET/frozen reports omit this command-result field.
   Unpaid/partial/paid/all filters retain records needing reconciliation in every view; canceled
-  and unknown records are never labeled paid. URLs preserve filter and shift/sale context on Back.
+  and unknown records are never labeled paid. URLs preserve filter, sales/payment list and
+  shift/sale context on Back.
+- The shift header gives the exact venue-local opening time, authoritative whole-shift sales count
+  and a separate count of non-canceled sales created today in that same shift. It uses the report's
+  venue timezone, never the phone timezone. Missing dates/timezones are disclosed, not guessed.
+  While mounted, a minute-boundary check and visibility/pageshow/Telegram activation refresh only
+  day-dependent DOM labels/counts/warnings. They use the current report timezone and actual instant,
+  not previous-day +24h. No report fetch or financial command is sent; editor nodes, focus, scroll,
+  drafts and pending request payloads remain intact. Dispose removes the timer/lifecycle listeners.
+  A shift opened before today warns that new sales continue in it until manual closure; midnight
+  does not close/open a shift. OWNER/MANAGER have the existing preview/close action near the top,
+  with the same hash, unpaid/disputed acknowledgment and server restrictions.
+- «Оплаты смены» lists all current-report payment operations, including corrected receipts, with
+  an exact sale link. «Оплаты по этой продаже» scopes the detail history explicitly. PAY_SPLIT is
+  grouped only within its sale using the server's requestId:METHOD receipt identity (requestIds
+  exclude colons), complete distinct CASH/CARD/TRANSFER components and consistent recordedAt.
+  Components and individual correction actions remain visible. Ambiguous/incomplete legacy
+  receipts are separate entries; equal time/amount/table never establishes a group.
+- Empty closed-period finance explains that no shifts closed in the selected period. A known open
+  shift is outside that report even when it contains sales/payments; navigation uses the existing
+  current-shift mode without applying an invalid closed-period draft.
 - Free/manual gift lines require a reason. Gift value and discount value have separate totals.
   Canceling a sale preserves history and requires its active payment entries to be corrected first.
   Canceling an erroneous payment requires a reason, preserves the original entry and increases the

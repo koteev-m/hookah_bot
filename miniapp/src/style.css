@@ -3891,3 +3891,29 @@ input[type="number"] {
 .accounting-payment-history > summary { cursor: pointer; min-height: 44px; padding-block: 12px; }
 .accounting-sale-balances { font-variant-numeric: tabular-nums; }
 .venue-accounting :is(button, input, select, summary):focus-visible { outline: 2px solid var(--app-accent); outline-offset: 2px; }
+
+/* Accounting presentation: venue dates and one logical payment operation per card. */
+.venue-accounting { width: 100%; max-width: 960px; margin-inline: auto; }
+.accounting-shift-summary :is(h3, p), .accounting-shift-totals h3 { margin-block: 0 8px; }
+.accounting-shift-summary [data-shift-count], .accounting-shift-summary [data-today-count] { font-weight: 650; }
+.accounting-shift-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.accounting-shift-actions > button:first-child { grid-column: 1 / -1; }
+.accounting-list-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.accounting-list-modes [aria-pressed="true"] { outline: 2px solid var(--app-accent); outline-offset: -2px; }
+.accounting-sales > button { display: grid; gap: 5px; padding: 12px; }
+.accounting-row-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.accounting-row-title { flex: 1; min-width: 0; }
+.accounting-row-amount { max-width: 50%; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.accounting-row-meta { color: var(--app-muted); font-size: .875rem; font-weight: 400; }
+.accounting-row-warning, .accounting-payment-corrected { color: var(--app-danger); font-weight: 600; }
+.accounting-row-remainder { font-weight: 600; }
+.accounting-day-heading { margin: 14px 0 0; }
+.accounting-shift-breakdown > summary, .accounting-sale-technical > summary { cursor: pointer; min-height: 44px; padding-block: 10px; box-sizing: border-box; }
+.accounting-sale-technical { overflow-wrap: anywhere; }
+.accounting-shift-payments { display: grid; gap: 12px; min-width: 0; }
+.accounting-payment-operation { min-width: 0; overflow-wrap: anywhere; border: 1px solid var(--app-border); }
+.accounting-payment-operation :is(h4, p) { margin-block: 0 8px; }
+.accounting-payment { padding-block: 8px; border-top: 1px solid var(--app-border); }
+.accounting-close-preview h3:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 3px; }
+.accounting-close-preview .accounting-field:has([type="checkbox"]) { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.accounting-close-preview .accounting-field:has([type="checkbox"]) label { flex: 1; }

@@ -174,7 +174,7 @@ function financeGroups(groups: FinancialKpis[], provisional: boolean, compact = 
   return root
 }
 
-function financialContent(snapshot: VenueKpiSnapshot, mode: 'current' | 'closed', compact = false) {
+function financialContent(snapshot: VenueKpiSnapshot, mode: 'current' | 'closed', compact = false, onCurrentShift?: () => void) {
   const current = mode === 'current'
   const root = section(current ? 'Текущая смена' : 'Закрытые смены', 'finance', current
     ? 'Предварительные суммы всей открытой смены. Календарный период их не ограничивает.'
@@ -184,7 +184,13 @@ function financialContent(snapshot: VenueKpiSnapshot, mode: 'current' | 'closed'
   const coverage = snapshot.metrics[current ? 'finance.openReportCoverage' : 'finance.closedReports']
   const empty = current ? snapshot.metrics['finance.openShifts']?.value === '0' : coverage?.value === '0' && coverage.availability === 'AVAILABLE'
   if (current && !empty) root.append(el('p', { text: snapshot.openShiftOpenedAt ? `Открыта ${stamp(snapshot.openShiftOpenedAt)} · Данные на ${stamp(snapshot.asOf)}` : 'Время открытия не передано. Обновите приложение и сервер для точной границы смены.' }))
-  if (empty) root.append(el('p', { text: current ? 'Сейчас открытой смены нет. Она появится после первой сохранённой продажи или заказа.' : 'За выбранный период закрытых смен нет.' }))
+  if (empty) {
+    root.append(el('p', { text: current ? 'Сейчас открытой смены нет. Она появится после первой сохранённой продажи или заказа.' : 'Нет смен, закрытых в выбранный период. Учитывается дата закрытия по времени заведения, а не дата отдельных продаж.' }))
+    if (!current && (snapshot.openShiftOpenedAt || snapshot.metrics['finance.openShifts']?.value === '1')) {
+      root.append(el('p', { text: `Текущая смена открыта${snapshot.openShiftOpenedAt ? ` с ${stamp(snapshot.openShiftOpenedAt)}` : ''} и ещё продолжается. Она не входит в отчёт закрытых смен, даже если в ней уже есть продажи и оплаты.` }))
+      if (onCurrentShift) { const open = el('button', { text: 'Показать текущую смену' }); open.type = 'button'; open.addEventListener('click', onCurrentShift); root.append(open) }
+    }
+  }
   else {
     if (!coverage || coverage.availability !== 'AVAILABLE') root.append(el('p', { className: 'stats-warning', text: coverageText(coverage) }))
     if (!current) root.append(el('p', { text: coverage ? `Смен в расчёте: ${exactCount(coverage.samples)}.` : 'Число смен недоступно.' }))
@@ -195,12 +201,12 @@ function financialContent(snapshot: VenueKpiSnapshot, mode: 'current' | 'closed'
   return root
 }
 
-export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview' | 'products' | 'additions' | 'finance' | 'service', productsView?: ProductsView, financeMode: 'current' | 'closed' = 'closed'): HTMLElement {
+export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview' | 'products' | 'additions' | 'finance' | 'service', productsView?: ProductsView, financeMode: 'current' | 'closed' = 'closed', onCurrentShift?: () => void): HTMLElement {
   const root = el('div', { className: 'stats-sections' })
   const m = snapshot.metrics
   if (view === 'overview') {
     root.classList.add('card', 'stats-section', 'stats-overview')
-    root.append(financialContent(snapshot, financeMode, true))
+    root.append(financialContent(snapshot, financeMode, true, onCurrentShift))
     const operations = el('details', { className: 'stats-service-details' }); operations.append(el('summary', { text: 'Обслуживание за выбранный период' }), group('Операционные показатели', 'Ручные продажи не создают заказы или посадки. Даты обслуживания сохраняют выбранный период.', [['orders.created', 'Созданные заказы', 'По времени создания.'], ['seatings.registeredSessions', 'Посадки', 'Физические сессии.'], ['calls.created', 'Вызовы', 'По времени создания.']], m)); root.append(operations)
     return root
   }
@@ -242,7 +248,7 @@ export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview'
     orders.append(top); root.append(orders)
   }
   if (chosen === 'all' || chosen === 'finance') {
-    root.append(financialContent(snapshot, financeMode))
+    root.append(financialContent(snapshot, financeMode, false, onCurrentShift))
   }
   if (['all', 'bookings', 'seatings'].includes(chosen)) {
     const bookings = section('Бронирования и посадки', 'bookings', 'Создание заявки, запланированное посещение и физическая посадка — разные показатели.')

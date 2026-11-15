@@ -264,9 +264,9 @@ for (const role of ['STAFF', 'MANAGER', 'OWNER']) test(`first sale creates shift
 test('old open shift warns before entry and midnight does not send a close or open command', async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-11-12T01:00:00Z'))
   const api = await fixture(page)
-  await expect(page.getByText('Новые продажи войдут в эту же смену.', { exact: false })).toBeVisible()
+  await expect(page.getByText('Новые продажи продолжают попадать в неё', { exact: false })).toBeVisible()
   await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
-  await expect(page.getByText('Полночь её не закрывает.', { exact: false })).toBeVisible()
+  await expect(page.getByText('полночь смену не закрывает.', { exact: false })).toBeVisible()
   expect(api.commands).toHaveLength(0)
 })
 
