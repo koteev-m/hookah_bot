@@ -1,3 +1,4 @@
+import { openAccountingSale } from './accounting-navigation'
 import { expect, test, type Page } from '@playwright/test'
 import httpContract from './fixtures/accounting-http.json' with { type: 'json' }
 import draftCommands from './fixtures/accounting-first-draft-commands.json' with { type: 'json' }
@@ -32,6 +33,8 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
   let failBeforeCommit = false
   let responseBarrier: Promise<void> | undefined
   let deny = false
+  let identifyCreate = false
+  const createdResults = new Map<string, string>()
   await page.addInitScript(() => {
     const user = Number(sessionStorage.getItem('accounting-test-actor') ?? 103)
     Object.assign(window, { Telegram: { WebApp: { initDataUnsafe: { user: { id: user } }, ready() {}, expand() {} } } })
@@ -75,6 +78,7 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
         }
         const added = sale()
         added.id = `manual:${body.requestId}`
+        createdResults.set(body.requestId, added.id)
         added.lines = body.lines!.map((line, index) => ({ ...added.lines[0], ...line, id: `new-${index}`, menuItemId: line.menuItemId ?? null,
           name: line.menuItemId ? 'Чай из меню' : line.name!, unitPriceMinor: line.unitPriceMinor!, discountMinor: line.discountMinor ?? 0, giftReason: line.giftReason ?? null }))
         current = { ...report(venue, [...current.sales, added]), shiftId: current.shiftId }; reports.set(venue, current)
@@ -90,12 +94,12 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
     if (loseResponse) { loseResponse = false; return route.abort('failed') }
     if (timeoutResponse) { timeoutResponse = false; return route.fulfill({ status: 408, json: { error: { code: 'REQUEST_TIMEOUT', message: 'Request timed out' } } }) }
     if (responseBarrier) { const barrier = responseBarrier; responseBarrier = undefined; await barrier }
-    return route.fulfill({ json: current })
+    return route.fulfill({ json: body.action === 'CREATE' && identifyCreate ? { ...current, createdSaleId: createdResults.get(body.requestId) } : current })
   })
   await page.goto('accounting-test?venueId=1#/accounting?av=1')
   await expect(page.getByRole('heading', { name: 'Учёт смены' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Добавить продажу', exact: true })).toBeVisible()
-  return { commands, reports, loseNextResponse() { loseResponse = true }, deny() { deny = true },
+  return { commands, reports, identifyCreate() { identifyCreate = true }, loseNextResponse() { loseResponse = true }, deny() { deny = true },
     timeoutNextResponse() { timeoutResponse = true }, conflictNextSave() { conflict = true },
     failNextBeforeCommit() { failBeforeCommit = true },
     holdNextResponse() { let release!: () => void; responseBarrier = new Promise<void>(resolve => { release = resolve }); return () => release() },
@@ -105,7 +109,7 @@ async function fixture(page: Page, role = 'STAFF', initialSales: AccountingSale[
 
 test('mobile staff preserves draft through Telegram Back reload and venue switch then retries exact lost response', async ({ page }, testInfo) => {
   const api = await fixture(page)
-  await expect(page.getByRole('button', { name: 'Предварительный итог и закрытие' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Сверить и закрыть смену' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
   await page.getByLabel('Стол', { exact: true }).selectOption('11')
   await page.getByLabel('Название', { exact: true }).fill('Сок вне Telegram')
@@ -154,7 +158,7 @@ test('gift requires reason and menu amount is sent in integer minor units', asyn
 
 test('manager records mixed payments and confirms frozen report hash before close', async ({ page }) => {
   const api = await fixture(page, 'MANAGER', [sale()])
-  await page.getByRole('button', { name: /Стол 1 · Вручную/ }).click()
+  await openAccountingSale(page.locator('.accounting-sales [data-sale-id]').filter({ hasText: /Стол 1 · Вручную/ }))
   await page.getByLabel('Частичная оплата', { exact: true }).check()
   await page.getByLabel('Получено, ₽').fill('40.00')
   await page.getByLabel('Подтверждаю частичную оплату:', { exact: false }).check()
@@ -166,7 +170,7 @@ test('manager records mixed payments and confirms frozen report hash before clos
   await expect(page.locator('.accounting-payment-form')).toHaveCount(0)
   expect(api.commands.map(c => [c.action, c.paymentMethod, c.amountMinor])).toEqual([['PAY', 'CASH', 4000], ['PAY', 'TRANSFER', 6000]])
   await page.evaluate(() => window.dispatchEvent(new Event('hookah:e2e-telegram-back')))
-  await page.getByRole('button', { name: 'Предварительный итог и закрытие' }).click()
+  await page.getByRole('button', { name: 'Сверить и закрыть смену' }).click()
   await expect(page.getByText(/дальнейшее исправление и запись оплат/)).toBeVisible()
   await page.getByLabel('Проверил неоплаченные', { exact: false }).check()
   await page.getByRole('button', { name: 'Подтвердить закрытие смены' }).click()
@@ -177,7 +181,7 @@ test('manager records mixed payments and confirms frozen report hash before clos
 
 test('unfinished digital order explains prerequisite and cannot record an assumed payment', async ({ page }) => {
   await fixture(page, 'STAFF', [{ ...sale(), id: 'order:31', orderId: 31, displayNumber: 7, source: 'MINIAPP', orderClosed: false, originalPayableMinor: 10000 }])
-  await page.getByRole('button', { name: /Стол 1 · Mini App/ }).click()
+  await openAccountingSale(page.locator('.accounting-sales [data-sale-id]').filter({ hasText: /Стол 1 · Mini App/ }))
   await expect(page.getByText(/Завершение заказа само по себе не подтверждает/)).toBeVisible()
   await expect(page.getByRole('button', { name: /^Записать .* (наличными|картой|переводом)$/ })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Открыть заказ №7' })).toHaveAttribute('href', '#/order/31')
@@ -185,7 +189,7 @@ test('unfinished digital order explains prerequisite and cannot record an assume
 
 test('revoked access reports denial and does not claim successful payment', async ({ page }) => {
   const api = await fixture(page, 'STAFF', [sale()])
-  await page.getByRole('button', { name: /Стол 1 · Вручную/ }).click()
+  await openAccountingSale(page.locator('.accounting-sales [data-sale-id]').filter({ hasText: /Стол 1 · Вручную/ }))
   await expect(page.getByRole('button', { name: /^Записать .* (наличными|картой|переводом)$/ })).toBeVisible()
   api.deny()
   await page.getByRole('button', { name: /^Записать .* (наличными|картой|переводом)$/ }).click()
@@ -195,7 +199,7 @@ test('revoked access reports denial and does not claim successful payment', asyn
 
 test('stale persisted editor cannot silently overwrite another operator correction', async ({ page }) => {
   const api = await fixture(page, 'STAFF', [sale()])
-  await page.getByRole('button', { name: /Стол 1 · Вручную/ }).click()
+  await openAccountingSale(page.locator('.accounting-sales [data-sale-id]').filter({ hasText: /Стол 1 · Вручную/ }))
   await page.getByRole('button', { name: 'Исправить продажу', exact: true }).click()
   await page.getByLabel('Название', { exact: true }).fill('Старый черновик')
   api.reports.get(1)!.sales[0].version = 2
@@ -212,10 +216,10 @@ test('real serialized HTTP contract displays 100 rubles and records partial and 
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   const api = await fixture(page, 'STAFF', [], true)
-  const saleButton = page.getByRole('button', { name: /Стол 1 · Вручную/ })
+  const saleButton = page.locator('.accounting-sales [data-sale-id]').filter({ hasText: /Стол 1 · Вручную/ })
   await expect(saleButton).toContainText('100,00')
   await page.screenshot({ path: info.outputPath('sales-list.png'), fullPage: true })
-  await saleButton.click()
+  await openAccountingSale(saleButton)
   await page.screenshot({ path: info.outputPath('payment.png'), fullPage: true })
   await expect(page.getByLabel('Получено, ₽')).toHaveValue('100.00')
   await page.getByLabel('Частичная оплата', { exact: true }).check()
@@ -258,7 +262,7 @@ for (const role of ['STAFF', 'MANAGER', 'OWNER']) test(`first sale creates shift
   expect(api.commands[0].action).toBe('CREATE')
   expect(api.commands[0].shiftId).toBeUndefined()
   expect(api.reports.get(1)!.sales).toHaveLength(1)
-  if (role === 'STAFF') await expect(page.getByRole('button', { name: 'Предварительный итог и закрытие' })).toHaveCount(0)
+  if (role === 'STAFF') await expect(page.getByRole('button', { name: 'Сверить и закрыть смену' })).toHaveCount(0)
 })
 
 test('old open shift warns before entry and midnight does not send a close or open command', async ({ page }) => {
@@ -272,7 +276,7 @@ test('old open shift warns before entry and midnight does not send a close or op
 
 test('confirmed close leads to first-sale entry without reopening the frozen shift', async ({ page }) => {
   const api = await fixture(page, 'MANAGER')
-  await page.getByRole('button', { name: 'Предварительный итог и закрытие' }).click()
+  await page.getByRole('button', { name: 'Сверить и закрыть смену' }).click()
   await page.getByRole('button', { name: 'Подтвердить закрытие смены', exact: true }).click()
   await page.getByRole('button', { name: 'К текущей смене' }).click()
   await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
@@ -673,4 +677,116 @@ for (const newer of [false, true]) test(`legacy pending replay preserves its req
   expect(await stored(page, bound)).toBe(newer ? preserved : null)
   await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
   await expect(page.getByLabel('Название', { exact: true })).toHaveValue(newer ? draftCommands[0].lines[0].name : '')
+})
+
+const legacySearch = (page: Page) => page.getByLabel('Поиск по столу или номеру записи', { exact: true })
+const legacyMode = (page: Page, name: string) => page.getByRole('button', { name, exact: true })
+async function legacyCreate(page: Page) {
+  await legacyMode(page, 'Добавить продажу').click()
+  await page.getByLabel('Стол', { exact: true }).selectOption('11')
+  await page.getByLabel('Название', { exact: true }).fill('Чай')
+  await page.getByLabel('Цена за единицу, ₽').fill('100')
+  await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
+}
+async function legacyFixture(page: Page) {
+  await page.clock.setFixedTime(new Date('2026-11-07T20:59:00Z'))
+  const paid = sale(); paid.payments = [{ id: 'paid-operation-00001', method: 'CASH', amountMinor: 10000, recordedAt: paid.createdAt, voidReason: null }]
+  return fixture(page, 'OWNER', [paid])
+}
+async function expectExplicitSales(page: Page) {
+  await expect(page).toHaveURL(/list=sales/)
+  await expect(legacyMode(page, 'Продажи')).toHaveAttribute('aria-pressed', 'true')
+  await expect(legacyMode(page, 'Оплаты смены')).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('.accounting-sales')).toBeVisible()
+  await expect(page.locator('.accounting-shift-payments')).toHaveCount(0)
+  await expect(legacySearch(page)).toHaveValue('')
+  await expect(legacyMode(page, 'Все')).toHaveAttribute('aria-pressed', 'true')
+}
+
+test('legacy CREATE explicit sales choice overrides restored payments and hidden filters', async ({ page }, info) => {
+  const api = await legacyFixture(page)
+  await legacyMode(page, 'Оплачены').click(); await legacySearch(page).fill('Нет совпадений'); await legacyMode(page, 'Оплаты смены').click()
+  await legacyCreate(page); await expect(legacyMode(page, 'Выбрать продажу для оплаты')).toBeVisible()
+  const created = `manual:${api.commands[0].requestId}`
+  await expect(legacyMode(page, 'Оплаты смены')).toHaveAttribute('aria-pressed', 'true')
+  await page.screenshot({ path: info.outputPath('legacy-before-choice.png'), fullPage: true })
+  await legacyMode(page, 'Выбрать продажу для оплаты').click(); await expectExplicitSales(page)
+  await expect(page).toHaveURL(/filter=all/)
+  await expect(page.locator('.accounting-sales [data-sale-id]')).toHaveCount(2)
+  const row = page.locator(`.accounting-sales [data-sale-id="${created}"]`); await expect(row).toBeVisible()
+  await expect(page.locator('.accounting-payment-form')).toHaveCount(0)
+  await page.screenshot({ path: info.outputPath('legacy-after-choice.png'), fullPage: true })
+  await openAccountingSale(row); await expect(page).toHaveURL(new RegExp(`sale=${encodeURIComponent(created)}`))
+  await expect(page.locator('.accounting-sale-technical')).toContainText(created)
+  expect(api.commands.map(c => c.action)).toEqual(['CREATE']); expect(api.reports.get(1)!.sales).toHaveLength(2)
+  expect(api.reports.get(1)!.sales.every(s => s.payments.length === (s.id === 'manual:one' ? 1 : 0))).toBe(true)
+})
+
+test('legacy sales choice survives history Telegram Back reload and resume', async ({ page }) => {
+  const api = await legacyFixture(page); await legacyMode(page, 'Оплаты смены').click(); await legacyCreate(page)
+  await legacyMode(page, 'Выбрать продажу для оплаты').click(); await expectExplicitSales(page)
+  await page.goBack(); await expect(page).toHaveURL(/list=payments/); await expect(legacyMode(page, 'Оплаты смены')).toHaveAttribute('aria-pressed', 'true')
+  await page.goForward(); await expectExplicitSales(page); await page.reload(); await expectExplicitSales(page)
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' }); document.dispatchEvent(new Event('visibilitychange'))
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); document.dispatchEvent(new Event('visibilitychange'))
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+  })
+  await expectExplicitSales(page)
+  const created = `manual:${api.commands[0].requestId}`
+  await openAccountingSale(page.locator(`.accounting-sales [data-sale-id="${created}"]`))
+  await page.evaluate(() => window.dispatchEvent(new Event('hookah:e2e-telegram-back'))); await expectExplicitSales(page)
+  await page.reload(); await expectExplicitSales(page); expect(api.commands.map(c => c.action)).toEqual(['CREATE'])
+})
+
+test('legacy sales choice clears hidden search when URL already targets sales', async ({ page }) => {
+  const api = await legacyFixture(page); await legacySearch(page).fill('Нет совпадений'); await legacyCreate(page)
+  await expect(legacyMode(page, 'Выбрать продажу для оплаты')).toBeVisible()
+  await expect(page.locator('.accounting-editor')).toHaveCount(0)
+  await expect(page).toHaveURL(/list=sales/); const url = page.url()
+  await legacyMode(page, 'Выбрать продажу для оплаты').click(); await expectExplicitSales(page)
+  expect(page.url()).toBe(url); await expect(page.locator('.accounting-sales [data-sale-id]')).toHaveCount(2)
+  expect(api.commands.map(c => c.action)).toEqual(['CREATE'])
+})
+
+test('ordinary CREATE authoritative identity bypasses restored list without guessing', async ({ page }) => {
+  const api = await legacyFixture(page); api.identifyCreate()
+  await legacySearch(page).fill('Нет совпадений'); await legacyMode(page, 'Оплаты смены').click(); await legacyCreate(page)
+  await expect(legacyMode(page, 'Перейти к записи оплаты')).toBeVisible()
+  const created = `manual:${api.commands[0].requestId}`
+  // Same table, amount and name; only the server result identity identifies this sale.
+  await legacyMode(page, 'Перейти к записи оплаты').click()
+  await expect(page).toHaveURL(new RegExp(`sale=${encodeURIComponent(created)}`)); await expect(page.locator('.accounting-sale-technical')).toContainText(created)
+  await expect(page.locator('.accounting-sale-technical')).not.toContainText('manual:one')
+  await expect(page.locator('.accounting-payment-form')).toBeVisible(); expect(api.commands.map(c => c.action)).toEqual(['CREATE'])
+  await legacyMode(page, 'К отчёту').click(); await expect(legacyMode(page, 'Оплаты смены')).toHaveAttribute('aria-pressed', 'true'); await expect(legacySearch(page)).toHaveValue('Нет совпадений')
+})
+
+test('legacy choice scope and ordinary tab restoration remain isolated', async ({ page }) => {
+  const api = await legacyFixture(page)
+  await legacyMode(page, 'Частично').click(); await legacySearch(page).fill('Приватный поиск'); await legacyMode(page, 'Оплаты смены').click()
+  await page.evaluate(() => {
+    const key = Object.keys(sessionStorage).find(k => k.includes(':103:1:view:'))!
+    const old = JSON.parse(sessionStorage.getItem(key)!); delete old.route; sessionStorage.setItem(key, JSON.stringify(old))
+  })
+  await page.reload(); await expect(legacyMode(page, 'Оплаты смены')).toHaveAttribute('aria-pressed', 'true'); await expect(legacySearch(page)).toHaveValue('Приватный поиск')
+  await legacyCreate(page); await legacyMode(page, 'Выбрать продажу для оплаты').click(); await expectExplicitSales(page)
+  await legacySearch(page).fill('Только 103'); await legacyMode(page, 'Оплаты смены').click()
+  const saved = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([k]) => k.includes(':103:1:view:'))))
+  await page.getByLabel('Выбрать заведение').selectOption('2'); await expect(legacySearch(page)).toHaveValue(''); await expect(legacyMode(page, 'Продажи')).toHaveAttribute('aria-pressed', 'true')
+  await api.switchAccount(104); await expect(legacySearch(page)).toHaveValue(''); await expect(legacyMode(page, 'Продажи')).toHaveAttribute('aria-pressed', 'true')
+  expect(await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([k]) => k.includes(':103:1:view:'))))).toEqual(saved)
+  expect(api.commands.map(c => c.action)).toEqual(['CREATE'])
+})
+
+test('legacy choice after uncertain CREATE preserves exact pending replay and no payment', async ({ page }) => {
+  const api = await legacyFixture(page); await legacyMode(page, 'Оплаты смены').click(); api.loseNextResponse(); await legacyCreate(page)
+  await expect(page.locator('.accounting-pending')).toBeVisible()
+  const pending = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([k]) => k.includes('hookah:accounting:') && /:(pending|draft:.*)$/.test(k))))
+  await page.reload(); await expect(page.locator('.accounting-pending')).toBeVisible()
+  expect(await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([k]) => k.includes('hookah:accounting:') && /:(pending|draft:.*)$/.test(k))))).toEqual(pending)
+  expect(api.commands).toHaveLength(1)
+  await legacyMode(page, 'Проверить и повторить операцию').click(); await legacyMode(page, 'Выбрать продажу для оплаты').click(); await expectExplicitSales(page)
+  expect(api.commands).toHaveLength(2); expect(api.commands[1]).toEqual(api.commands[0]); expect(api.commands.every(c => c.action === 'CREATE')).toBe(true)
+  expect(api.reports.get(1)!.sales).toHaveLength(2)
 })

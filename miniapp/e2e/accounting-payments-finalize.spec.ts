@@ -1,3 +1,4 @@
+import { openAccountingSale } from './accounting-navigation'
 import { test, expect, type Page } from '@playwright/test'
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -95,7 +96,7 @@ async function setup(page: Page, sales: AccountingSale[] = [], liveDir?: string)
   return { commands, legacyResult() { legacyResult = true }, loseCreate() { loseCreate = true }, addSale(sale: AccountingSale) { state = report([sale, ...state.sales]) }, concurrentCreate() { concurrentCreate = true }, fail(value: number) { failure = value }, state: () => state, hold() { let release!: () => void; held = new Promise<void>(r => { release = r }); return release } }
 }
 const pay = (page: Page) => page.locator('.accounting-payment-form button[type=submit]')
-const open = async (page: Page) => page.locator('.accounting-sales > button').first().click()
+const open = async (page: Page) => openAccountingSale(page.locator('.accounting-sales button[data-sale-id]').first())
 const screenshot = (page: Page, info: { outputPath: (name: string) => string }, name: string) => page.screenshot({ path: info.outputPath(`${name}.png`), fullPage: true })
 
 test('native item controls retain identity without focus restoration through selection discount gift and second row', async ({ page }) => {
@@ -120,19 +121,19 @@ for (const [width, theme] of [[390, 'dark'], [360, 'dark'], [1440, 'light']] as 
   test(`ordinary partial split payment explicit states and accessible result ${width} ${theme}`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 844 }); await page.emulateMedia({ colorScheme: theme })
     const api = await setup(page, [makeSale('manual:ordinary'), makeSale('manual:split'), makeSale('manual:partial')])
-    await page.locator('.accounting-sales > [data-sale-id="manual:ordinary"]').click(); await expect(pay(page)).toContainText('Записать 990,00 ₽ наличными'); await screenshot(page, info, 'ordinary-payment')
+    await openAccountingSale(page.locator('.accounting-sales [data-sale-id="manual:ordinary"]')); await expect(pay(page)).toContainText('Записать 990,00 ₽ наличными'); await screenshot(page, info, 'ordinary-payment')
     const release = api.hold(); await pay(page).click(); await expect(pay(page)).toBeDisabled(); await page.locator('.accounting-payment-form').evaluate(f => f.dispatchEvent(new Event('submit', { cancelable: true }))); release()
     await expect(page.getByText('Оплачено полностью', { exact: true })).toBeVisible(); await expect(page.locator('.accounting-payment-form')).toHaveCount(0); expect(api.commands).toHaveLength(1); await screenshot(page, info, 'fully-paid')
-    await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await page.locator('.accounting-sales > [data-sale-id="manual:split"]').click()
+    await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await openAccountingSale(page.locator('.accounting-sales [data-sale-id="manual:split"]'))
     await page.getByLabel('Способ оплаты').selectOption('SPLIT'); await page.getByLabel('Наличные, ₽').fill('400'); await page.getByLabel('Карта, ₽').fill('590'); await screenshot(page, info, 'combined-payment'); await pay(page).click()
     await expect(page.getByText('Оплачено полностью', { exact: true })).toBeVisible(); expect(api.commands[1]).toMatchObject({ action: 'PAY_SPLIT', paymentComponents: [{ method: 'CASH', amountMinor: 40000 }, { method: 'CARD', amountMinor: 59000 }] })
-    await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await page.locator('.accounting-sales > [data-sale-id="manual:partial"]').click()
+    await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await openAccountingSale(page.locator('.accounting-sales [data-sale-id="manual:partial"]'))
     await page.getByLabel('Частичная оплата', { exact: true }).check(); await page.getByLabel('Получено, ₽').fill('400'); await pay(page).click(); await expect(page.getByRole('alert')).toContainText('подтвердите')
     await page.getByLabel('Подтверждаю частичную оплату:', { exact: false }).check(); await screenshot(page, info, 'partial-payment'); await pay(page).click()
     await expect(page.locator('.accounting-sale-balances')).toContainText('590,00'); await expect(pay(page)).toContainText('590,00'); await expect(page.locator('.accounting-success')).toContainText('400,00'); await screenshot(page, info, 'partial-result')
-    await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await expect(page.locator('.accounting-sales > button')).toHaveCount(3); await screenshot(page, info, 'sales-states')
-    await page.getByRole('button', { name: 'Частично', exact: true }).click(); await expect(page.locator('.accounting-sales > button')).toHaveCount(1)
-    await page.locator('.accounting-sales > button').click(); await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await expect(page.getByRole('button', { name: 'Частично', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await expect(page.locator('.accounting-sales button[data-sale-id]')).toHaveCount(3); await screenshot(page, info, 'sales-states')
+    await page.getByRole('button', { name: 'Частично', exact: true }).click(); await expect(page.locator('.accounting-sales button[data-sale-id]')).toHaveCount(1)
+    await openAccountingSale(page.locator('.accounting-sales button[data-sale-id]')); await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await expect(page.getByRole('button', { name: 'Частично', exact: true })).toHaveAttribute('aria-pressed', 'true')
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   })
 }
@@ -147,18 +148,18 @@ test('free canceled unknown and reconciliation remain honest in every sales filt
   const free = makeSale('manual:free', 0); free.lines[0].giftReason = 'Подарок'
   const unknown = makeSale('manual:unknown', 0); unknown.issue = 'UNKNOWN'
   const canceled = makeSale('manual:canceled'); canceled.cancelReason = 'Отмена'
-  const api = await setup(page, [free, unknown, canceled, makeSale('manual:same-a'), makeSale('manual:same-b')]); await page.locator('.accounting-sales > [data-sale-id="manual:free"]').click()
+  const api = await setup(page, [free, unknown, canceled, makeSale('manual:same-a'), makeSale('manual:same-b')]); await openAccountingSale(page.locator('.accounting-sales [data-sale-id="manual:free"]'))
   await expect(page.getByText('Оплата не требуется', { exact: true })).toBeVisible(); await expect(pay(page)).toHaveCount(0)
   await page.getByRole('button', { name: 'К отчёту', exact: true }).click()
-  for (const filter of ['Не оплачены', 'Частично', 'Оплачены', 'Все']) { await page.getByRole('button', { name: filter, exact: true }).click(); await expect(page.locator('.accounting-sales > button').filter({ hasText: 'Сумма неизвестна' })).toHaveCount(1) }
-  await expect(page.locator('.accounting-sales > button')).toHaveCount(5)
+  for (const filter of ['Не оплачены', 'Частично', 'Оплачены', 'Все']) { await page.getByRole('button', { name: filter, exact: true }).click(); await expect(page.locator('.accounting-sales button[data-sale-id]').filter({ hasText: 'Сумма неизвестна' })).toHaveCount(1) }
+  await expect(page.locator('.accounting-sales button[data-sale-id]')).toHaveCount(5)
   api.legacyResult(); api.concurrentCreate(); await page.getByRole('button', { name: 'Добавить продажу', exact: true }).click()
   await page.getByLabel('Стол', { exact: true }).selectOption('11'); await page.getByLabel('Название', { exact: true }).fill('Чай'); await page.getByLabel('Цена за единицу, ₽').fill('990')
   await page.getByRole('button', { name: 'Сохранить продажу', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Выбрать продажу для оплаты', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Перейти к записи оплаты', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: 'Выбрать продажу для оплаты', exact: true }).click()
-  await expect(page.locator('.accounting-sales > button')).toHaveCount(7)
+  await expect(page.locator('.accounting-sales button[data-sale-id]')).toHaveCount(7)
   await expect(page.locator('.accounting-payment-form')).toHaveCount(0)
 })
 test('payment PostgreSQL UI POST restart exact replay accounting list current and closed finance DOM', async ({ page }, info) => {
@@ -176,10 +177,10 @@ test('payment PostgreSQL UI POST restart exact replay accounting list current an
     await page.reload(); await page.getByRole('button', { name: 'Проверить и повторить операцию' }).click(); expect(api.commands[3]).toEqual(api.commands[2])
   }
   await expect(page.getByText('Оплачено полностью', { exact: true })).toBeVisible(); await expect(pay(page)).toHaveCount(0); await screenshot(page, info, 'live-paid')
-  await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await expect(page.locator('.accounting-sales > button')).toHaveCount(2); await screenshot(page, info, 'live-sales')
+  await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await expect(page.locator('.accounting-sales button[data-sale-id]')).toHaveCount(2); await screenshot(page, info, 'live-sales')
   await page.evaluate(() => (window as any).showStats()); await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('2 895,00')
   await expect(page.locator('#stats-finance [data-kpi=sales] .stats-value')).toHaveText('2'); await expect(page.locator('#stats-finance [data-kpi=averageAccruedSale]')).toContainText('1 447,50'); await screenshot(page, info, 'current-overview')
-  await page.goto('payment-finalize-test#/accounting?av=1'); await page.getByRole('button', { name: 'Предварительный итог и закрытие' }).click(); await page.getByLabel('Проверил неоплаченные', { exact: false }).check(); await page.getByRole('button', { name: 'Подтвердить закрытие смены', exact: true }).click(); await expect(page.getByText('Сохранённый итог.', { exact: false })).toBeVisible()
+  await page.goto('payment-finalize-test#/accounting?av=1'); await page.getByRole('button', { name: 'Сверить и закрыть смену' }).click(); await page.getByLabel('Проверил неоплаченные', { exact: false }).check(); await page.getByRole('button', { name: 'Подтвердить закрытие смены', exact: true }).click(); await expect(page.getByText('Сохранённый итог.', { exact: false })).toBeVisible()
   await page.evaluate(() => (window as any).showStats()); await expect(page.locator('#stats-finance')).toContainText('Сейчас открытой смены нет.'); await screenshot(page, info, 'empty-current-shift')
   await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await page.getByRole('button', { name: 'Последние 7 дней', exact: true }).click()
   await expect(page.locator('#stats-finance [data-kpi=averageAccruedSale]')).toContainText('1 447,50'); await screenshot(page, info, 'closed-finances')
@@ -263,7 +264,7 @@ test('review F1 legacy and missing limited result never substitute a different s
   await page.evaluate(() => { sessionStorage.setItem(`hookah:accounting:${location.host}:101:1:saved-sale`, JSON.stringify('manual:outside-page')) }); await page.reload()
   await page.getByRole('button', { name: 'Перейти к записи оплаты', exact: true }).click(); await expect(page.getByText('Продажа недоступна в этом отчёте.', { exact: false })).toBeVisible(); await expect(pay(page)).toHaveCount(0)
   expect(api.commands).toHaveLength(1)
-  await page.getByRole('button', { name: 'К списку продаж', exact: true }).click(); await expect(page.locator('.accounting-sales > button')).toHaveCount(2)
+  await page.getByRole('button', { name: 'К списку продаж', exact: true }).click(); await expect(page.locator('.accounting-sales button[data-sale-id]')).toHaveCount(2)
 })
 
 for (const width of [390, 1440]) {
