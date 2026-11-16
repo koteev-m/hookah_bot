@@ -2133,7 +2133,7 @@ jobs:
           from pathlib import Path
 
           report_path = Path("playwright-results.json")
-          minimum_executed = 978
+          minimum_executed = 1001
           if not report_path.is_file():
               raise SystemExit(f"missing Playwright JSON report: {report_path}")
 
@@ -2171,6 +2171,29 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("venue-accounting.spec.ts", "legacy CREATE explicit sales choice overrides restored payments and hidden filters"): 1,
+              ("venue-accounting.spec.ts", "legacy sales choice survives history Telegram Back reload and resume"): 1,
+              ("venue-accounting.spec.ts", "legacy sales choice clears hidden search when URL already targets sales"): 1,
+              ("venue-accounting.spec.ts", "ordinary CREATE authoritative identity bypasses restored list without guessing"): 1,
+              ("venue-accounting.spec.ts", "legacy choice scope and ordinary tab restoration remain isolated"): 1,
+              ("venue-accounting.spec.ts", "legacy choice after uncertain CREATE preserves exact pending replay and no payment"): 1,
+              ("accounting-sections.spec.ts", "shift sections ordered disclosures and zero mutation on keyboard toggles"): 1,
+              ("accounting-sections.spec.ts", "shift sections bounded DOM and full report 0"): 1,
+              ("accounting-sections.spec.ts", "shift sections bounded DOM and full report 1"): 1,
+              ("accounting-sections.spec.ts", "shift sections bounded DOM and full report 20"): 1,
+              ("accounting-sections.spec.ts", "shift sections bounded DOM and full report 21"): 1,
+              ("accounting-sections.spec.ts", "shift sections bounded DOM and full report 100"): 1,
+              ("accounting-sections.spec.ts", "shift sections bounded DOM and full report 500"): 1,
+              ("accounting-sections.spec.ts", "shift sections date groups full search filter and Back 360"): 1,
+              ("accounting-sections.spec.ts", "shift sections date groups full search filter and Back 390"): 1,
+              ("accounting-sections.spec.ts", "shift sections old dates collapsed but review filter exposes records"): 1,
+              ("accounting-sections.spec.ts", "shift sections split operations bounded independent of sales and preserved corrections"): 1,
+              ("accounting-sections.spec.ts", "shift sections archive pages preserve current UI and open exact frozen report"): 1,
+              ("accounting-sections.spec.ts", "shift sections scope revoke and private filters remain isolated"): 1,
+              ("accounting-sections.spec.ts", "shift sections failed refresh discloses stale data without false success"): 1,
+              ("accounting-sections.spec.ts", "shift sections STAFF has current entries without archive or close"): 1,
+              ("accounting-sections.spec.ts", "shift sections desktop light layout and empty shift guidance"): 1,
+              ("accounting-sections.spec.ts", "shift sections search caret disclosures and scroll survive non destructive actions"): 1,
               ("accounting-midnight.spec.ts", "midnight full mountVenueApp updates counters labels and old shift without requests"): 1,
               ("accounting-midnight.spec.ts", "midnight background return via visibilitychange updates without refresh"): 1,
               ("accounting-midnight.spec.ts", "midnight background return via pageshow updates without refresh"): 1,

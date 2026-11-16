@@ -2646,6 +2646,27 @@ late old-venue responses and disposed listeners/DOM. Missing/skipped cases fail 
 A focused follow-up may reuse the verified prior full browser result for unaffected scopes;
 report that result as historical, not a fresh complete run of the enlarged inventory.
 
+Three-section follow-up: `accounting-sections.spec.ts` is mandatory in the PR/main browser
+inventory (17 named cases; missing/skipped rejected by the actual CI parser negatives).
+Use real `mountVenueApp` in Chromium/WebKit: section order, native keyboard disclosures without
+GET/POST, 0/1/20/21/100/500 sales, full-report search/filter before 20-record DOM portions,
+older dates and visible review/debt counts, 500 distinct split operations/1000 components,
+corrected entries, exact sale links and Back, history pages/frozen IDs, STAFF denial, scoped
+search after venue switch/revoke, stale-refresh warning and search caret/keyboard/scroll.
+Keep the existing midnight/DST/background, financial validation, pending/replay and CLOSE tests;
+adapt row selectors through actual date disclosures without removing their assertions. Capture
+full mobile and desktop/light screens. The API still supplies a full report; this gate proves
+bounded initial card rendering, not server pagination or a live financial-writer change.
+
+Legacy navigation follow-up: six named `legacy CREATE explicit` / `legacy sales choice` /
+`legacy choice` / `ordinary CREATE authoritative` cases in `venue-accounting.spec.ts` are mandatory
+in PR/main, including missing/skipped parser negatives. Run full mountVenueApp in Chromium/WebKit:
+payments → actual UI CREATE without createdSaleId → explicit Sales choice, stale search/paid
+filter reset, same-URL choice, Back/Forward/Telegram Back/reload/background, old cached view,
+account/venue isolation, exact uncertain CREATE replay and zero automatic PAY. Also retain direct
+authoritative sale-ID navigation and ordinary tab/filter restoration. A focused follow-up reuses
+verified full-browser evidence for unchanged surfaces; it must not claim a new full 1001-case run.
+
 ## QA Levels
 
 | Level | Purpose | Current / target |

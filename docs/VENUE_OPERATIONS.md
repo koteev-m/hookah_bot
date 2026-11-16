@@ -1259,6 +1259,29 @@ transactional venue lock allow only one open accounting shift per venue.
   exclude colons), complete distinct CASH/CARD/TRANSFER components and consistent recordedAt.
   Components and individual correction actions remain visible. Ambiguous/incomplete legacy
   receipts are separate entries; equal time/amount/table never establishes a group.
+- The accounting screen has three sections, in order: «Подробный итог текущей смены» (collapsed),
+  «Продажи и оплаты текущей смены», «Архив закрытых смен» (collapsed, OWNER/MANAGER only).
+  A frozen report uses «Итог закрытой смены» and exposes no creation/close actions. Primary net
+  sales/received/remainder stay in the header; detailed gross/discount/gift/method/table/item/source
+  breakdowns appear once inside the first section. Disclosure itself sends no request.
+  The middle section renders one list at a time, «Продажи» or «Оплаты смены». Search by table label,
+  available table number or visible record number and payment filters apply to the entire received
+  report before the first 20 matches are rendered; «Показать ещё» adds 20. Counts disclose matches
+  and records in the list. This is a DOM limit, not server pagination; financial KPIs always use
+  authoritative complete report totals. Today's venue-local date is initially expanded, previous
+  dates in the same shift collapsed. Search/payment filters expand matching dates; review counts
+  on date summaries and whole-shift debt/dispute/incomplete counts remain visible. Prior dates
+  are not closed shifts. PAY_SPLIT pagination counts logical operations, preserving all components.
+  Tab, search, filters, portions, disclosures and list return position are session/account/venue/shift
+  scoped. List changes update only the list region, without remounting the screen or fetching data;
+  explicit navigation to a different list/filter takes precedence over the restored view. The
+  stored view remembers its list/filter URL context so reload restores local tab choices while
+  Back/Forward follows changed route values. Legacy CREATE without createdSaleId offers explicit
+  sale selection: that action opens Sales with All, clears search and restarts its 20-row portion;
+  it never infers a sale ID or sends a payment. Authoritative CREATE identity keeps its direct link.
+  editors, pending commands and calendar lifecycle retain their existing contracts. Archive uses
+  the existing server history pages and exact frozen-report IDs. A failed refresh explicitly marks
+  retained data as stale; it does not present the old report as a successful new snapshot.
 - Empty closed-period finance explains that no shifts closed in the selected period. A known open
   shift is outside that report even when it contains sales/payments; navigation uses the existing
   current-shift mode without applying an invalid closed-period draft.

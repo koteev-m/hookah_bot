@@ -1,3 +1,4 @@
+import { openAccountingSale } from './accounting-navigation'
 import { test, expect, type Page } from '@playwright/test'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -193,8 +194,8 @@ test('manual accounting mixed text source retains known totals warns and blocks 
   await page.route('**/api/venue/1/accounting**', route => { expect(route.request().method()).toBe('GET'); return route.fulfill({ json: state }) })
   await page.goto('accounting-percent-test#/accounting?av=1')
   await expect(page.getByText('Итоги содержат известную часть', { exact: false })).toBeVisible()
-  await expect(page.locator('.accounting-shift-totals > .accounting-totals')).toContainText('2 700')
-  await page.getByRole('button', { name: /Стол.*Mini App/ }).click()
+  await expect(page.locator('.accounting-primary-totals')).toContainText('2 700')
+  await openAccountingSale(page.locator('.accounting-sales [data-sale-id]').filter({ hasText: /Стол.*Mini App/ }))
   await expect(page.getByText('Есть текстовая часть без товарного состава', { exact: false })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Исправить продажу', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Подтвердить внешнюю оплату', exact: true })).toHaveCount(0)
@@ -216,10 +217,10 @@ test('real Bot Mini App PostgreSQL HTTP accounting and product adapters render d
     return route.fulfill({ json: body })
   })
   await page.goto('accounting-percent-test#/accounting?av=1')
-  await expect(page.locator('.accounting-shift-totals > .accounting-totals')).toContainText('5 400'); await page.locator('.accounting-shift-breakdown > summary').click(); await expect(page.locator('.accounting-shift-breakdown > .accounting-totals')).toContainText('600')
+  await expect(page.locator('.accounting-primary-totals')).toContainText('5 400'); await page.locator('.accounting-shift-breakdown > summary').click(); await expect(page.locator('.accounting-shift-breakdown > .accounting-totals')).toContainText('600')
   await expect(page.getByText('2 записей', { exact: false })).toHaveCount(0)
   await expect(page.getByText('1 записей без достоверного снимка', { exact: false })).toBeVisible()
-  await page.getByRole('button', { name: /Стол.*Вручную/ }).click(); await page.getByRole('button', { name: 'Исправить продажу', exact: true }).click()
+  await openAccountingSale(page.locator('.accounting-sales [data-sale-id]').filter({ hasText: /Стол.*Вручную/ })); await page.getByRole('button', { name: 'Исправить продажу', exact: true }).click()
   await expect(page.getByLabel('Скидка, %', { exact: true })).toHaveValue('10')
   await expect(page.getByLabel('Причина исправления · обязательно')).toBeVisible()
   await page.screenshot({ path: info.outputPath('real-pg-accounting.png'), fullPage: true })

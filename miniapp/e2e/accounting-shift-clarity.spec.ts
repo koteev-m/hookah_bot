@@ -1,3 +1,4 @@
+import { revealAccountingSale } from './accounting-navigation'
 import { test, expect, type Page } from '@playwright/test'
 import { statsResponse } from './fixtures/venue-stats'
 import { salePaid, salePayable, type AccountingCommand, type AccountingReport, type AccountingSale } from '../src/shared/api/accounting'
@@ -58,10 +59,10 @@ async function setup(page: Page, options: { sales?: AccountingSale[]; timezone?:
     return route.fulfill({ json: {} })
   })
   await page.goto('shift-clarity-test#/accounting?av=1')
-  await expect(page.locator('.accounting-sales > button')).toHaveCount(current.sales.length)
+  await expect(page.locator('.accounting-sales button[data-sale-id]')).toHaveCount(current.sales.length)
   return { commands, state: () => current }
 }
-const rows = (page: Page) => page.locator('.accounting-sales > button')
+const rows = (page: Page) => page.locator('.accounting-sales button[data-sale-id]')
 const shot = (page: Page, info: { outputPath: (s: string) => string }, name: string) => page.screenshot({ path: info.outputPath(`${name}.png`), fullPage: true })
 
 for (const width of [360, 390]) {
@@ -77,7 +78,7 @@ for (const width of [360, 390]) {
     expect(api.state().sales.map(s => s.id)).toEqual(salesFixture().map(s => s.id))
     await page.getByRole('button', { name: 'Оплачены', exact: true }).click(); await expect(page.locator('.accounting-sales [data-sale-id="order:unknown"]')).toBeVisible(); await expect(page.locator('[data-shift-count]')).toContainText('5')
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-    await page.locator('.accounting-sales > button').last().focus(); await page.keyboard.press('Enter'); await expect(page.getByRole('button', { name: 'К отчёту', exact: true })).toBeVisible()
+    await (await revealAccountingSale(page.locator('.accounting-sales button[data-sale-id]').last())).focus(); await page.keyboard.press('Enter'); await expect(page.getByRole('button', { name: 'К отчёту', exact: true })).toBeVisible()
     await page.getByText('Технические сведения', { exact: true }).click(); await expect(page.locator('.accounting-sale-technical')).toContainText('manual:c-middle')
   })
 
@@ -100,7 +101,7 @@ for (const width of [360, 390]) {
 
   test(`shift clarity close preview and keyboard access ${width}`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 844 }); const api = await setup(page, { role: 'MANAGER' })
-    const close = page.getByRole('button', { name: 'Предварительный итог и закрытие', exact: true })
+    const close = page.getByRole('button', { name: 'Сверить и закрыть смену', exact: true })
     expect(await close.evaluate(n => n.getBoundingClientRect().top)).toBeLessThan(await rows(page).first().evaluate(n => n.getBoundingClientRect().top))
     await close.focus(); await page.keyboard.press('Enter'); await expect(page.getByRole('heading', { name: 'Подтверждение закрытия смены' })).toBeFocused()
     await expect(page.getByLabel('Проверил неоплаченные и спорные записи;', { exact: false })).not.toBeChecked(); expect(api.commands).toHaveLength(0)
@@ -128,8 +129,8 @@ for (const width of [360, 390]) {
 }
 
 test('shift clarity STAFF cannot close or read closed history', async ({ page }) => {
-  await setup(page, { role: 'STAFF' }); await expect(page.getByRole('button', { name: 'Предварительный итог и закрытие' })).toHaveCount(0)
-  await expect(page.getByText('История закрытых смен', { exact: true })).toHaveCount(0); await page.getByRole('button', { name: 'Оплаты смены', exact: true }).click(); await expect(page.locator('.accounting-shift-payments [data-payment-operation]')).toHaveCount(5)
+  await setup(page, { role: 'STAFF' }); await expect(page.getByRole('button', { name: 'Сверить и закрыть смену' })).toHaveCount(0)
+  await expect(page.getByText('Архив закрытых смен', { exact: true })).toHaveCount(0); await page.getByRole('button', { name: 'Оплаты смены', exact: true }).click(); await expect(page.locator('.accounting-shift-payments [data-payment-operation]')).toHaveCount(5)
 })
 
 test('shift clarity presentation never mutates reports or guesses legacy payment groups', async ({ page }) => {
