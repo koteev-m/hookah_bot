@@ -103,6 +103,76 @@
 .stats-products-view .stats-metadata p { margin: .2rem 0; }
 .stats-products-view .stats-validation:empty { display: none; }
 
-.stats-finance-mode { display: grid; gap: .35rem; }
-.stats-finance-mode select { min-height: 44px; }
-@media (max-width: 480px) { .venue-stats .stats-overview .venue-stats-grid { grid-template-columns: 1fr; } }
+.venue-stats { gap: .75rem; }
+.venue-stats:not(.stats-products-view) .stats-header { padding: .85rem; gap: .25rem; }
+.venue-stats:not(.stats-products-view) .stats-header h2 { font-size: 1.35rem; }
+.venue-stats:not(.stats-products-view) .stats-header p { margin: .15rem 0; }
+.venue-stats:not(.stats-products-view) .stats-venue-name { font-size: 1rem; }
+.venue-stats:not(.stats-products-view) .stats-controls { gap: .55rem; margin-top: .3rem; }
+.venue-stats:not(.stats-products-view) .stats-filter-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; }
+.venue-stats:not(.stats-products-view) .stats-filter-row label { font-size: .8rem; }
+.venue-stats .stats-filter-row > button { width: auto; font-size: .85rem; padding: .5rem .7rem; min-height: 44px; }
+.venue-stats .venue-stats-periods { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .3rem; }
+.venue-stats .venue-stats-periods button { font-size: .8rem; min-height: 44px; padding: .35rem; }
+.venue-stats .stats-metadata { font-size: .72rem; line-height: 1.4; padding-top: .4rem; }
+.venue-stats .stats-venue-name { font-size: .95rem; margin: .15rem 0; }
+.stats-controls { gap: .65rem; }
+.stats-filter-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; }
+.stats-filter-row > label { font-size: .8rem; }
+.stats-filter-row > button { font-size: .8rem; padding: .5rem .65rem; min-height: 44px; }
+.stats-finance-mode { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; margin: 0; padding: 0; border: 0; min-width: 0; }
+.stats-finance-mode legend { font-size: .8rem; color: var(--app-muted); padding: 0 0 .35rem; }
+.stats-finance-mode label { display: flex; align-items: center; justify-content: center; gap: .4rem; min-height: 44px; min-width: 0; border: 1px solid var(--app-border); border-radius: .65rem; padding: .35rem; cursor: pointer; font-size: .85rem; }
+.stats-finance-mode input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--app-accent); flex: 0 0 auto; }
+.stats-finance-mode label:has(:checked) { border-color: var(--app-accent); background: var(--app-soft); box-shadow: inset 0 0 0 1px var(--app-accent); }
+.stats-finance-mode label:has(:focus-visible) { outline: 2px solid var(--app-accent); outline-offset: 3px; }
+.venue-stats .venue-stats-periods { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .3rem; }
+.venue-stats-periods button { min-height: 44px; padding: .35rem; font-size: .8rem; min-width: 0; }
+.stats-metadata { display: block; font-size: .75rem; padding-top: .45rem; }
+.venue-stats .stats-metadata p { margin: .15rem 0; }
+.stats-financial-content { padding: .85rem; }
+.stats-financial-content > h2 { font-size: 1.15rem; }
+.stats-financial-content > .stats-intro, .stats-shift-context { font-size: .8rem; color: var(--app-muted); }
+.stats-finance-currencies { display: grid; gap: 1rem; }
+.stats-financial-content .stats-currency { margin-top: .4rem; min-width: 0; }
+.stats-financial-content .stats-currency > h3 { font-size: .8rem; margin: .25rem 0 .45rem; color: var(--app-muted); }
+.stats-currency + .stats-currency { padding-top: .7rem; border-top: 1px solid var(--app-border); }
+.stats-received { background: var(--app-soft); border: 1px solid var(--app-border); border-inline-start: 3px solid var(--app-accent); border-radius: .65rem; padding: .75rem; }
+.stats-financial-content { padding: .85rem; }
+.stats-financial-content > h2 { font-size: 1.1rem; }
+.stats-financial-content > .stats-intro, .stats-financial-content > .stats-shift-context { font-size: .8rem; line-height: 1.4; margin: .3rem 0; }
+.stats-financial-content .stats-currency { margin-top: .65rem; }
+.stats-financial-content .stats-currency > h3 { font-size: .75rem; color: var(--app-muted); margin: 0 0 .45rem; }
+.stats-received { padding: .7rem; }
+.venue-stats .stats-financial-content .venue-stats-metric { padding: 0; border: 0; border-radius: 0; background: transparent; min-width: 0; gap: .25rem; }
+.stats-financial-content .venue-stats-metric h4 { font-size: .8rem; line-height: 1.3; }
+.stats-received > .venue-stats-metric .stats-value { font-size: clamp(1.4rem, 3vw, 2rem); }
+.stats-receipt-methods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; border-top: 1px solid var(--app-border); margin-top: .65rem; padding-top: .65rem; }
+.stats-receipt-methods .stats-value { font-size: .95rem; }
+.stats-receipt-methods .stats-value[data-long="true"] { font-size: .85rem; }
+.stats-finance-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem .7rem; margin-top: .85rem; }
+.stats-finance-kpis .stats-value { font-size: 1.1rem; }
+.stats-financial-content .stats-note, .stats-financial-content .stats-observed { font-size: .78rem; }
+.stats-finance-details, .stats-financial-content > .stats-explanation { border-top: 1px solid var(--app-border); margin-top: .75rem; }
+.stats-finance-details > summary, .stats-service-details > summary { min-height: 44px; padding: .65rem 0; cursor: pointer; font-size: .9rem; }
+.stats-overview > .stats-service-details { padding: .25rem .85rem; border: 1px solid var(--app-border); border-radius: .65rem; }
+.stats-financial-view .stats-title-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .15rem .7rem; }
+.venue-stats.stats-financial-view { gap: .5rem; }
+.venue-stats.stats-financial-view :is(.stats-header, .stats-financial-content) { margin-top: 0; padding: .75rem; }
+.venue-stats.stats-financial-view .stats-header { padding: .5rem; }
+.stats-financial-view .stats-finance-mode label { padding-inline: .15rem; gap: .3rem; }
+.stats-financial-view .stats-title-row > * { min-width: 0; overflow-wrap: anywhere; }
+.stats-financial-view .stats-section-label, .stats-financial-view .stats-finance-mode legend { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.venue-stats.stats-financial-view .stats-controls { gap: .4rem; margin-top: .2rem; }
+.stats-financial-view .stats-filter-row > label { gap: 0; }
+.venue-stats.stats-financial-view .stats-period-caption { margin: .1rem 0 0; font-size: .8rem; color: var(--app-muted); }
+.stats-period-details { padding: 0 .85rem; color: var(--app-muted); }
+.stats-period-details > summary { min-height: 44px; padding: .65rem 0; cursor: pointer; font-size: .85rem; }
+.stats-period-details .stats-metadata { padding: .3rem 0 .65rem; }
+.stats-financial-view .stats-financial-content .stats-currency { margin-top: .4rem; }
+.stats-financial-view .stats-received { padding: .5rem; }
+@media (min-width: 900px) {
+  .stats-finance-currencies { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .stats-currency + .stats-currency { border: 0; padding-top: 0; }
+  .stats-finance-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

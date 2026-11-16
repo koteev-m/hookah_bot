@@ -4,7 +4,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { statsHttp, statsResponse, type StatsVariant } from './fixtures/venue-stats'
 import { calendarDateAt, exactMoney, formatRatio, periodValidation, presetDates, shiftCalendarDate, validCalendarDate } from '../src/shared/ui/venueStatsFormat'
 
-type Options = { role?: string; variant?: StatsVariant; timezone?: string; asOf?: string; shell?: boolean; ignoreAbort?: boolean; overview?: boolean; live?: { base: string; token: string } }
+type Options = { role?: string; variant?: StatsVariant; timezone?: string; asOf?: string; shell?: boolean; entry?: 'more'; ignoreAbort?: boolean; overview?: boolean; live?: { base: string; token: string } }
 async function fixture(page: Page, options: Options = {}) {
   let variant = options.variant ?? 'complete'
   let role = options.role ?? 'OWNER'
@@ -16,10 +16,11 @@ async function fixture(page: Page, options: Options = {}) {
   let mutations = 0
   await page.addInitScript(({ ignoreAbort }) => {
     const handlers = new Map<string, Set<() => void>>()
-    Object.assign(window, { Telegram: { WebApp: { initDataUnsafe: { user: { id: 7 } }, ready() {}, expand() {},
+    const backHandlers = new Set<() => void>()
+    Object.assign(window, { Telegram: { WebApp: { initDataUnsafe: { user: { id: 7 } }, ready() {}, expand() {}, BackButton: { show() {}, hide() {}, onClick(fn: () => void) { backHandlers.add(fn) }, offClick(fn: () => void) { backHandlers.delete(fn) } },
       onEvent(name: string, callback: () => void) { if (!handlers.has(name)) handlers.set(name, new Set()); handlers.get(name)!.add(callback) },
       offEvent(name: string, callback: () => void) { handlers.get(name)?.delete(callback) } } },
-    emitStatsEvent: (name: string) => handlers.get(name)?.forEach(callback => callback()) })
+    emitStatsEvent: (name: string) => handlers.get(name)?.forEach(callback => callback()), emitStatsBack: () => backHandlers.forEach(callback => callback()) })
     sessionStorage.setItem(`hookah_session_token:${location.host}:user:7`, JSON.stringify({ token: 'test-stats', expiresAtEpochSeconds: 4102444800 }))
     if (ignoreAbort) {
       const Original = window.AbortController
@@ -59,9 +60,10 @@ async function fixture(page: Page, options: Options = {}) {
     }
     return route.fulfill({ json: { items: [], unreadCount: 0 } })
   })
-  await page.goto(`stats-test?venueId=1${options.shell ? '#/stats' : ''}`)
+  await page.goto(`stats-test?venueId=1${options.shell ? options.entry === 'more' ? '#/more' : '#/stats' : ''}`)
   if (!options.overview && !options.shell && ['OWNER', 'MANAGER'].includes(role)) {
     await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('service')
+    await page.getByRole('button', { name: 'Сегодня', exact: true }).click()
     await expect(page.locator('.stats-service-details').first()).toBeAttached()
     await page.locator('.stats-service-details').evaluateAll(nodes => nodes.forEach(node => { (node as HTMLDetailsElement).open = true }))
   }
@@ -70,7 +72,7 @@ async function fixture(page: Page, options: Options = {}) {
     corrupt(value: typeof corrupt) { corrupt = value } }
 }
 const metric = (page: Page, key: string) => page.locator(`[data-kpi="${key}"]`)
-const ready = async (page: Page) => { await expect(page.locator('.stats-content .stats-section').first()).toBeAttached(); await page.locator('.stats-service-details').evaluateAll(nodes => nodes.forEach(node => { (node as HTMLDetailsElement).open = true })); await expect(page.locator('.stats-content .stats-section').first()).toBeVisible() }
+const ready = async (page: Page) => { await expect(page.locator('.stats-content .stats-section').first()).toBeAttached(); if (await page.getByRole('combobox', { name: 'Показатели', exact: true }).inputValue() === 'service') await page.locator('.stats-service-details').evaluateAll(nodes => nodes.forEach(node => { (node as HTMLDetailsElement).open = true })); await expect(page.locator('.stats-content .stats-section').first()).toBeVisible() }
 const moneyNumber = (value: string) => value.replace(/[^\d,−-]/g, '').replace('−', '-')
 const refresh = (page: Page) => page.getByRole('button', { name: 'Обновить статистику', exact: true }).click()
 async function deliverLate(page: Page, url: URL, release: () => void) {
@@ -166,13 +168,13 @@ test('stats invalid custom dates do not issue API queries and clear old results'
 })
 
 test('stats closed frozen finances retain exact currencies and never combine the provisional open shift', async ({ page }) => {
-  await fixture(page); await ready(page); await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+  await fixture(page); await ready(page); await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await ready(page)
   const closed = page.locator('#stats-finance > div > .stats-currency')
   await expect(closed).toHaveCount(2)
   await expect(closed.filter({ hasText: 'Валюта: RUB' }).locator('[data-kpi="accrued"] .stats-value')).toHaveText(exactMoney('900719925474099312', 'RUB'))
   await expect(closed.filter({ hasText: 'Валюта: USD' }).locator('[data-kpi="accrued"] .stats-value')).toHaveText(exactMoney('12345', 'USD'))
   await expect(page.locator('#stats-finance')).toContainText('Текущая смена сюда не входит.')
-  await page.getByLabel('Финансовый период').selectOption('current')
+  await page.getByRole('radio', { name: 'Текущая смена', exact: true }).check()
   await expect(page.locator('#stats-finance [data-kpi="accrued"] .stats-value')).toHaveText(exactMoney('0', 'RUB'))
   await expect(page.getByRole('button', { name: 'Последние 7 дней' })).toBeHidden()
   await expect(page.locator('#stats-finance')).toContainText('Календарный период их не ограничивает.')
@@ -185,7 +187,7 @@ test('stats complete empty counters differ from unavailable attendance and mean 
   await expect(metric(page, 'orders.created')).toContainText('За выбранный период событий нет.')
   await expect(metric(page, 'bookings.attendance').locator('.stats-value')).toHaveText('Недостаточно данных')
   await expect(metric(page, 'calls.firstResponse').locator('.stats-value')).toHaveText('Недостаточно данных')
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await ready(page)
   await expect(page.getByText('Нет смен, закрытых в выбранный период.', { exact: false })).toBeVisible()
   await expect(page.locator('.stats-currency')).toHaveCount(0)
 })
@@ -197,10 +199,10 @@ test('stats partial history exposes observed subset samples and unknown without 
   await expect(metric(page, 'batches.accepted')).toContainText('По известным данным: 3')
   await expect(metric(page, 'batches.accepted')).toContainText('Без полной истории: 3')
   await expect(page.locator('.stats-coverage')).toContainText('Часть старых операций не содержит точного времени.')
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await ready(page)
   await expect(page.locator('#stats-finance')).toContainText('Не все отчёты смен доступны или полны.')
   await expect(page.locator('.venue-stats')).not.toContainText(/LEGACY_HISTORY_UNKNOWN|SHIFT_CLOSED_AT|BATCH_CREATED|SQL_SECRET/)
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await ready(page)
   await expect(page.locator('#stats-finance')).toContainText('Не все отчёты смен доступны или полны.')
   await page.screenshot({ path: info.outputPath('partial-finances-390-dark.png'), fullPage: true })
 })
@@ -271,7 +273,7 @@ for (const code of [401, 403]) test(`stats access loss ${code} clears data and d
 
 for (const role of ['OWNER', 'MANAGER']) test(`stats ${role} can read management data without mutations`, async ({ page }) => {
   const api = await fixture(page, { role }); await ready(page)
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await ready(page)
   await expect(page.getByRole('heading', { name: 'Закрытые смены', exact: true })).toBeVisible()
   expect(api.mutations()).toBe(0)
 })
@@ -290,7 +292,7 @@ test('stats filters apply table only within an operational section and preserve 
   expect(api.requests.at(-1)?.searchParams.get('section')).toBe('orders'); expect(api.requests.at(-1)?.searchParams.get('tableId')).toBe('2')
   await expect(page.getByText(/Прошлые перемещения не восстанавливаются/)).toBeVisible()
   await expect(page.locator('#stats-finance')).toHaveCount(0)
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await ready(page)
   expect(api.requests.at(-1)?.searchParams.has('tableId')).toBe(false)
   await expect(page.getByLabel('Текущий стол')).toBeHidden()
 })
@@ -352,7 +354,7 @@ test('stats Telegram deactivate hides private data and activated reloads a curre
 for (const [currency, expected] of [['IQD', '12,345'], ['MGA', '123,45']]) {
   test(`stats money real Ktor H2 ${currency} response passes adapter and renders ISO minor units`, async ({ page }) => {
     await fixture(page, { variant: 'money' }); await ready(page)
-    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await ready(page)
     const response = page.waitForResponse(value => value.url().includes('from=2026-03-28') && value.url().includes('/stats/v1'))
     await custom(page, '2026-03-28', '2026-03-30'); await ready(page)
     const actualResponse = await response
@@ -370,16 +372,16 @@ for (const [width, theme] of [[1440, 'light'], [360, 'dark'], [390, 'dark']] as 
   test(`stats money mixed ISO currencies and Long maximum fit ${width}px ${theme}`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 900 }); await page.emulateMedia({ colorScheme: theme })
     await fixture(page, { variant: 'money' }); await ready(page)
-    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await ready(page)
     const expected: Record<string, string> = { IQD: '12,345', MGA: '123,45', RUB: '9007199254740993,12',
       EUR: '92233720368547758,07', USD: '0,01', JPY: '12345', KRW: '0', KWD: '12,345', BHD: '12,345', CLF: '1,2345' }
     for (const [currency, amount] of Object.entries(expected)) {
       const card = page.locator(`#stats-finance [data-currency="${currency}"] [data-kpi="accrued"]`)
       expect(moneyNumber(await card.locator('.stats-value').innerText()), currency).toBe(amount)
-      await expect(card.getByText('Как считается', { exact: true })).toBeVisible()
+      await expect(page.locator('#stats-finance > .stats-explanation > summary')).toBeVisible()
     }
     await expect(page.locator('#stats-finance [data-currency="XXX"] [data-kpi="accrued"] .stats-value')).toHaveText('Недостаточно данных')
-    await page.getByLabel('Финансовый период').selectOption('current'); await expect(page.locator('#stats-finance')).toContainText('Сейчас открытой смены нет.'); await page.getByLabel('Финансовый период').selectOption('closed')
+    await page.getByRole('radio', { name: 'Текущая смена', exact: true }).check(); await expect(page.locator('#stats-finance')).toContainText('Сейчас открытой смены нет.'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check()
     await page.locator('#stats-finance [data-currency="EUR"]').evaluate(node => node.scrollIntoView({ block: 'start' }))
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     const screenshot = info.outputPath(`venue-money-${width}-${theme}.png`)
@@ -394,7 +396,7 @@ for (const [width, theme] of [[1440, 'light'], [360, 'dark'], [390, 'dark']] as 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     const overview = info.outputPath(`venue-stats-${width}-${theme}.png`)
     await page.screenshot({ path: overview }); await info.attach('overview', { path: overview, contentType: 'image/png' })
-    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await ready(page)
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await ready(page)
     await page.locator('#stats-finance').evaluate(node => node.scrollIntoView({ block: 'start' }))
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     const unit = page.locator('#stats-finance [data-kpi="accrued"] .stats-currency-unit').first()
@@ -413,12 +415,13 @@ for (const width of [360, 390, 1440]) for (const theme of ['light', 'dark']) {
     await ready(page)
     await expect(page.locator('html')).toHaveAttribute('data-color-scheme', theme)
     await expect(page.getByRole('combobox', { name: 'Показатели', exact: true })).toHaveValue('overview')
-    await expect(page.locator('#stats-finance [data-kpi]')).toHaveCount(5)
+    await chooseFinance(page, 'current'); await ready(page)
+    await expect(page.locator('#stats-finance [data-kpi]')).toHaveCount(8)
     await expect(page.locator('#stats-finance')).toContainText('Текущая смена')
     await expect(page.locator('.stats-service-details [data-kpi]')).toHaveCount(3)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`overview-${width}-${theme}.png`), fullPage: true })
-    await page.getByLabel('Финансовый период').selectOption('closed')
+    await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check()
     await page.getByRole('button', { name: 'Последние 7 дней' }).click(); await ready(page)
     const from = api.requests.at(-1)!.searchParams.get('from')
     await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('products')
@@ -507,7 +510,7 @@ test('operations PostgreSQL HTTP response passes the real adapter and merchandis
 test('review F2 current shift loads and refreshes independently of invalid closed draft and preserves it on return', async ({ page }, info) => {
   await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ colorScheme: 'dark' })
   const api = await fixture(page, { overview: true }); await ready(page)
-  const mode = page.getByLabel('Финансовый период')
+  const mode = { selectOption: (value: 'current' | 'closed') => chooseFinance(page, value) }
   await mode.selectOption('closed'); await page.getByRole('button', { name: 'Произвольный период' }).click()
   await page.getByLabel('Начало периода').fill('2026-11-14'); await page.getByLabel('Окончание периода (включительно)').fill('2026-11-01')
   await page.getByRole('button', { name: 'Показать период' }).click(); await expect(page.locator('.stats-validation')).toContainText('не раньше')
@@ -521,7 +524,7 @@ test('review F2 current shift loads and refreshes independently of invalid close
 
 test('review F2 empty invalid and oversized drafts never gate current refresh and apply only after correction', async ({ page }) => {
   const api = await fixture(page, { overview: true, timezone: 'Europe/Berlin', asOf: '2026-03-29T10:00:00Z' }); await ready(page)
-  const mode = page.getByLabel('Финансовый период'), start = page.getByLabel('Начало периода'), end = page.getByLabel('Окончание периода (включительно)')
+  const mode = { selectOption: (value: 'current' | 'closed') => chooseFinance(page, value) }, start = page.getByLabel('Начало периода'), end = page.getByLabel('Окончание периода (включительно)')
   for (const bad of ['', '2026-02-30', '2024-01-01']) {
     await mode.selectOption('closed'); await page.getByRole('button', { name: 'Произвольный период' }).click()
     await start.evaluate((node, value) => { (node as HTMLInputElement).value = value; node.dispatchEvent(new Event('input', { bubbles: true })) }, bad)
@@ -538,14 +541,313 @@ test('review F2 empty invalid and oversized drafts never gate current refresh an
 })
 
 test('review F2 late closed response cannot replace current refresh and failed refresh exposes no old KPI', async ({ page }) => {
-  const api = await fixture(page, { overview: true, ignoreAbort: true }); await ready(page)
+  const api = await fixture(page, { overview: true, ignoreAbort: true }); await ready(page); await chooseFinance(page, 'current'); await ready(page)
   let release!: () => void; api.hold(new Promise<void>(resolve => { release = resolve }))
-  const count = api.requests.length; await page.getByLabel('Финансовый период').selectOption('closed'); await expect.poll(() => api.requests.length).toBeGreaterThan(count)
+  const count = api.requests.length; await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await expect.poll(() => api.requests.length).toBeGreaterThan(count)
   const old = api.requests.at(-1)!; api.hold(null)
   api.corrupt(body => { if (body.openShiftFinances[0]) body.openShiftFinances[0].metrics.accrued.value = '543200' })
-  await page.getByLabel('Финансовый период').selectOption('current'); await ready(page)
+  await page.getByRole('radio', { name: 'Текущая смена', exact: true }).check(); await ready(page)
   await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('5 432,00'); await deliverLate(page, old, release)
   await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('5 432,00')
   api.fail(500); await refresh(page); await expect(page.getByRole('heading', { name: 'Статистика не загружена' })).toBeVisible(); await expect(page.locator('.stats-content')).toBeEmpty()
   api.fail(0); await page.getByRole('button', { name: 'Повторить', exact: true }).click(); await ready(page); await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('5 432,00')
 })
+
+function financialExample(body: ReturnType<typeof statsResponse>) {
+  body.openShiftOpenedAt = '2026-11-13T10:00:00Z'
+  for (const [kind, groups] of [['current', body.openShiftFinances], ['closed', body.closedShiftFinances]] as const) {
+    const values: Record<string, string> = kind === 'current'
+      ? { accrued: '99000', operatorConfirmed: '40000', cash: '40000', card: '0', transfer: '0', unpaid: '59000', sales: '1', averageAccruedSale: '99000' }
+      : { accrued: '289500', operatorConfirmed: '289500', cash: '40000', card: '190500', transfer: '59000', unpaid: '0', sales: '2', averageAccruedSale: '144750' }
+    for (const group of groups) for (const [key, value] of Object.entries(values)) {
+      if (!group.metrics[key]) continue
+      if (key === 'averageAccruedSale' && group.metrics[key].reason === 'NO_MEASURABLE_SAMPLE') {
+        Object.assign(group.metrics[key], { availability: 'AVAILABLE', coverage: 'COMPLETE_RECORDED_SOURCE', reason: null, samples: Number(values.sales) })
+      }
+      if (key === 'averageAccruedSale' && group.metrics[key].availability === 'PARTIAL' && group.metrics[key].observedValue == null) continue
+      group.metrics[key].observedValue = value
+      if (group.metrics[key].availability === 'AVAILABLE') group.metrics[key].value = value
+    }
+  }
+}
+const chooseFinance = (page: Page, mode: 'closed' | 'current') => page.getByRole('radio', { name: mode === 'current' ? 'Текущая смена' : 'Закрытые смены', exact: true }).check()
+
+// Full rendered screens from the production renderer; fixtures are synthetic read-only API envelopes.
+for (const [width, theme] of [[360, 'dark'], [390, 'dark'], [1440, 'light']] as const) {
+  test(`stats financial redesign full screens and context ${width} ${theme}`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: width === 1440 ? 960 : 844 }); await page.emulateMedia({ colorScheme: theme })
+    const api = await fixture(page, { overview: true, timezone: 'Europe/Moscow', asOf: '2026-11-16T12:00:00Z' }); await ready(page)
+    api.corrupt(body => { financialExample(body); body.closedShiftFinances = body.closedShiftFinances.slice(0, 1) })
+    for (const view of ['overview', 'finance']) for (const mode of ['current', 'closed'] as const) {
+      await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption(view); await chooseFinance(page, mode); await refresh(page); await ready(page)
+      await expect(page.locator('#stats-finance')).toContainText(mode === 'current' ? 'Текущая смена' : 'Закрытые смены')
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      if (width === 390) {
+        await page.evaluate(() => window.scrollTo(0, 0))
+        const last = await page.locator('#stats-finance [data-kpi=averageAccruedSale] .stats-value').boundingBox()
+        expect(last!.y + last!.height).toBeLessThanOrEqual(844)
+      }
+      if (width !== 360) await page.screenshot({ path: info.outputPath(`${view}-${mode}-${width}-${theme}.png`), fullPage: true })
+    }
+    api.setVariant('empty'); await refresh(page); await ready(page)
+    await expect(page.locator('#stats-finance')).toContainText('Нет смен, закрытых в выбранный период.')
+    if (width !== 360) await page.screenshot({ path: info.outputPath(`empty-${width}-${theme}.png`), fullPage: true })
+    api.setVariant('partial'); await refresh(page); await ready(page)
+    await expect(page.locator('.stats-coverage')).toContainText('Частичные данные')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    if (width !== 360) await page.screenshot({ path: info.outputPath(`partial-${width}-${theme}.png`), fullPage: true })
+    expect(api.mutations()).toBe(0)
+  })
+}
+
+test('stats financial redesign keeps receipt methods visible in overview and closed finance', async ({ page }) => {
+  const api = await fixture(page, { overview: true }); await ready(page); api.corrupt(financialExample)
+  for (const view of ['overview', 'finance']) for (const mode of ['current', 'closed'] as const) {
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption(view); await chooseFinance(page, mode); await refresh(page); await ready(page)
+    const rub = page.locator('.stats-currency[data-currency="RUB"]')
+    for (const key of ['operatorConfirmed', 'cash', 'card', 'transfer', 'accrued', 'unpaid', 'sales', 'averageAccruedSale']) {
+      await expect(rub.locator(`[data-kpi="${key}"]`)).toBeVisible()
+      expect(await rub.locator(`[data-kpi="${key}"]`).evaluate(n => n.closest('details:not([open])') === null)).toBe(true)
+    }
+    await expect(rub.locator('[data-kpi="sales"] .stats-value')).toHaveText(mode === 'closed' ? '2' : '1')
+    await expect(rub.locator('[data-kpi="averageAccruedSale"] .stats-value')).toHaveText(exactMoney(mode === 'closed' ? '144750' : '99000', 'RUB'))
+    await expect(rub.locator('[data-kpi="cash"] .stats-value')).toHaveText(exactMoney('40000', 'RUB'))
+    await expect(rub.locator('[data-kpi="card"] .stats-value')).toHaveText(exactMoney(mode === 'closed' ? '190500' : '0', 'RUB'))
+    await expect(rub.locator('[data-kpi="transfer"] .stats-value')).toHaveText(exactMoney(mode === 'closed' ? '59000' : '0', 'RUB'))
+    await expect(page.locator('.stats-content')).not.toContainText('Комбинированная')
+  }
+  expect(api.mutations()).toBe(0)
+})
+
+test('stats financial redesign defaults to closed week and keeps thirty days separate from the whole open shift', async ({ page }) => {
+  const api = await fixture(page, { overview: true, timezone: 'Asia/Tokyo', asOf: '2026-11-10T22:30:00Z' }); await ready(page)
+  await expect(page.getByRole('radio', { name: 'Закрытые смены', exact: true })).toBeChecked()
+  await expect(page.getByRole('button', { name: 'Последние 7 дней', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(api.requests.at(-1)?.searchParams.get('from')).toBe('2026-11-05')
+  api.corrupt(financialExample)
+  await page.getByRole('button', { name: 'Последние 30 дней', exact: true }).click(); await ready(page)
+  expect(api.requests.at(-1)?.searchParams.get('from')).toBe('2026-10-13')
+  expect(api.requests.at(-1)?.searchParams.get('to')).toBe('2026-11-12')
+  await expect(page.locator('.stats-metadata')).toContainText('по дате закрытия')
+  await expect(page.locator('#stats-finance')).toContainText('Смен в расчёте: 2')
+  await chooseFinance(page, 'current'); await ready(page)
+  await expect(page.getByRole('button', { name: 'Последние 30 дней', exact: true })).toBeHidden()
+  await expect(page.locator('.stats-metadata')).toContainText('Вся текущая смена с момента открытия')
+  await expect(page.locator('#stats-finance')).toContainText('Предварительные суммы всей открытой смены')
+  await expect(metric(page, 'operatorConfirmed').locator('.stats-value')).toHaveText(exactMoney('40000', 'RUB'))
+  await expect(metric(page, 'sales').locator('.stats-value')).toHaveText('1')
+  await chooseFinance(page, 'closed'); await ready(page)
+  expect(api.requests.at(-1)?.searchParams.get('from')).toBe('2026-10-13')
+  await expect(metric(page, 'sales').first().locator('.stats-value')).toHaveText('2')
+  expect(api.mutations()).toBe(0)
+})
+
+test('stats financial redesign keeps incomplete methods and hidden detail warnings visible without false zero', async ({ page }) => {
+  const api = await fixture(page, { overview: true, variant: 'partial' }); await ready(page)
+  const rub = page.locator('.stats-currency[data-currency="RUB"]')
+  await expect(page.locator('.stats-coverage')).toContainText('Частичные данные')
+  await expect(rub.locator('[data-kpi="cash"]')).toBeVisible()
+  await expect(rub.locator('[data-kpi="cash"]')).toContainText('По известным данным:')
+  await expect(rub.locator('.stats-warning').filter({ hasText: 'Скидки:' })).toBeVisible()
+  await expect(page.locator('.stats-currency')).toHaveCount(2)
+  await chooseFinance(page, 'current'); await ready(page)
+  await expect(page.locator('.stats-coverage')).toBeHidden() // Closed/operational partial history cannot taint the current finance source.
+  api.corrupt(body => { const group = body.openShiftFinances[0]; if (group) delete group.metrics.cash })
+  await refresh(page); await ready(page)
+  await expect(rub.locator('[data-kpi="cash"] .stats-value')).toHaveText('Недостаточно данных')
+  await expect(rub.locator('[data-kpi="card"] .stats-value')).toHaveText(exactMoney('0', 'RUB'))
+  await expect(rub.locator('[data-kpi="averageAccruedSale"] .stats-value')).toHaveText('Недостаточно данных')
+  expect(api.mutations()).toBe(0)
+})
+
+test('stats financial redesign explains empty closed period with open shift and disclosures make no requests', async ({ page }) => {
+  const api = await fixture(page, { overview: true }); await ready(page)
+  api.corrupt(body => {
+    body.closedShiftFinances = []; Object.assign(body.metrics['finance.closedReports'], { value: '0', observedValue: '0', samples: 0 })
+    body.openShiftOpenedAt = '2026-11-13T10:00:00Z'
+  })
+  await refresh(page); await ready(page)
+  await expect(page.locator('#stats-finance')).toContainText('Нет смен, закрытых в выбранный период.')
+  await expect(page.locator('#stats-finance')).toContainText('Она не входит в отчёт закрытых смен')
+  await expect(page.locator('.stats-currency')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Показать текущую смену', exact: true }).click(); await ready(page)
+  await expect(page.getByRole('radio', { name: 'Текущая смена', exact: true })).toBeChecked()
+  await expect(page.locator('#stats-finance')).toContainText(/13\.11\.(?:20)?26/)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
+  const before = api.requests.length
+  await page.locator('.stats-finance-details > summary').click()
+  await expect(metric(page, 'discounts')).toBeVisible()
+  await page.locator('#stats-finance > .stats-explanation > summary').click()
+  await expect(page.locator('#stats-finance > .stats-explanation')).toContainText('компоненты комбинированных оплат')
+  await page.locator('.stats-finance-details > summary').click()
+  expect(api.requests.length).toBe(before); expect(api.mutations()).toBe(0)
+})
+
+test('stats financial redesign native mode keyboard short viewport and focus stay usable', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 420 })
+  const api = await fixture(page, { overview: true }); await ready(page)
+  const current = page.getByRole('radio', { name: 'Текущая смена', exact: true })
+  await current.focus(); await current.press('Space'); await ready(page)
+  await expect(current).toBeChecked(); await expect(current).toBeFocused()
+  await current.press('ArrowRight'); await ready(page)
+  await expect(page.getByRole('radio', { name: 'Закрытые смены', exact: true })).toBeChecked()
+  await expect(page.getByRole('radio', { name: 'Закрытые смены', exact: true })).toBeFocused()
+  await page.getByRole('button', { name: 'Произвольный период', exact: true }).click()
+  const start = page.getByLabel('Начало периода'), end = page.getByLabel('Окончание периода (включительно)')
+  await start.fill('2026-03-29'); await end.fill('2026-03-29'); await end.press('Enter'); await ready(page)
+  await expect(end).toBeFocused(); expect(api.requests.at(-1)?.searchParams.get('to')).toBe('2026-03-30')
+  await page.locator('#stats-finance > .stats-explanation > summary').focus()
+  await page.keyboard.press('Enter'); await expect(page.locator('#stats-finance > .stats-explanation')).toHaveAttribute('open', '')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect(api.mutations()).toBe(0)
+})
+
+test('stats financial redesign selected coverage and unavailable methods remain visible without false zeros', async ({ page }) => {
+  const api = await fixture(page, { overview: true, variant: 'partial' }); await ready(page)
+  const rub = page.locator('.stats-currency[data-currency="RUB"]')
+  await expect(page.locator('.stats-coverage')).toContainText('Частичные данные')
+  await expect(rub.locator('[data-kpi=cash]')).toBeVisible()
+  await expect(rub.locator('[data-kpi=cash] .stats-value')).toHaveText('Частичные данные')
+  await expect(rub.locator('[data-kpi=cash] .stats-observed')).toContainText(exactMoney('200', 'RUB'))
+  await expect(rub.locator('[data-kpi=averageAccruedSale] .stats-observed')).toHaveCount(0)
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
+  await expect(page.locator('.stats-finance-details').first()).not.toHaveAttribute('open', '')
+  await expect(rub.locator('.stats-warning').filter({ hasText: 'Скидки:' })).toBeVisible()
+  await expect(page.locator('.stats-currency')).toHaveCount(2)
+  await chooseFinance(page, 'current'); await ready(page)
+  await expect(page.locator('.stats-coverage')).toBeHidden()
+  await expect(page.locator('#stats-finance')).not.toContainText('Частичные данные')
+  api.corrupt(body => {
+    const group = body.openShiftFinances[0]; delete group.metrics.cash
+    Object.assign(group.metrics.discounts, { value: null, observedValue: null, availability: 'UNAVAILABLE', reason: 'UNKNOWN_CAPABILITY' })
+  })
+  await refresh(page); await ready(page)
+  await expect(rub.locator('[data-kpi=cash] .stats-value')).toHaveText('Недостаточно данных')
+  await expect(rub.locator('.stats-warning').filter({ hasText: 'Скидки:' })).toBeVisible()
+  await expect(page.locator('#stats-finance')).not.toContainText('UNKNOWN_CAPABILITY')
+  expect(api.mutations()).toBe(0)
+})
+
+function viewportFinancials(body: ReturnType<typeof statsResponse>) {
+  financialExample(body)
+  body.closedShiftFinances = body.closedShiftFinances.slice(0, 1)
+  const values: Record<string, string> = { operatorConfirmed: '350000', cash: '100000', card: '200000', transfer: '50000', accrued: '400000', unpaid: '50000', sales: '2', averageAccruedSale: '200000' }
+  for (const group of body.closedShiftFinances) for (const [key, value] of Object.entries(values)) {
+    const kpi = group.metrics[key]; kpi.observedValue = value
+    if (kpi.availability === 'AVAILABLE') kpi.value = value
+  }
+}
+async function receiptViewport(page: Page, safeBottom = 0) {
+  return page.locator('#stats-finance [data-kpi]').evaluateAll((nodes, bottomInset) => {
+    const viewport = window.visualViewport
+    const frame = { top: viewport?.offsetTop ?? 0, bottom: (viewport?.offsetTop ?? 0) + (viewport?.height ?? innerHeight) - bottomInset, left: viewport?.offsetLeft ?? 0, right: (viewport?.offsetLeft ?? 0) + (viewport?.width ?? innerWidth) }
+    const keys = ['operatorConfirmed', 'cash', 'card', 'transfer']
+    return { scrollY, frame, cards: nodes.filter(n => keys.includes((n as HTMLElement).dataset.kpi!)).map(node => {
+      const r = node.getBoundingClientRect()
+      let top = frame.top, bottom = frame.bottom, left = frame.left, right = frame.right
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent), box = parent.getBoundingClientRect()
+        if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight) }
+        if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth) }
+      }
+      const inside = r.top >= top && r.bottom <= bottom && r.left >= left && r.right <= right
+      const unobscured = inside && [[r.left + 2, r.top + 2], [r.right - 2, r.bottom - 2], [(r.left + r.right) / 2, (r.top + r.bottom) / 2]].every(([x, y]) => {
+        const hit = document.elementFromPoint(x, y); return hit != null && (node === hit || node.contains(hit))
+      })
+      return { key: (node as HTMLElement).dataset.kpi!, top: r.top, bottom: r.bottom, left: r.left, right: r.right, inside, unobscured }
+    }) }
+  }, safeBottom)
+}
+
+for (const [width, height] of [[390, 844], [360, 780]]) for (const theme of ['light', 'dark'] as const) {
+  test(`stats shell first viewport receipts ${width}x${height} ${theme}`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height }); await page.emulateMedia({ colorScheme: theme })
+    const api = await fixture(page, { shell: true, entry: 'more', overview: true, timezone: 'Europe/Moscow', asOf: '2026-11-16T12:00:00Z' })
+    api.corrupt(viewportFinancials)
+    await page.getByRole('link', { name: 'Статистика', exact: true }).click(); await ready(page)
+    const measurements = []
+    for (const [view, mode] of [['finance', 'closed'], ['overview', 'closed'], ['overview', 'current'], ['finance', 'current']] as const) {
+      await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption(view); await chooseFinance(page, mode); await ready(page)
+      await expect(page.locator('.venue-shell .venue-header')).toBeVisible()
+      await expect(page.getByRole('combobox', { name: 'Выбрать заведение', exact: true })).toBeVisible()
+      await expect(page.getByRole('navigation', { name: 'Основная навигация' })).toBeVisible()
+      await expect(page.locator('.stats-header h2')).toHaveText('Статистика')
+      const context = await page.locator('.stats-header h2, .stats-finance-mode label:has(:checked), .stats-period-caption:not([hidden])').evaluateAll(nodes => nodes.map(n => {
+        const r = n.getBoundingClientRect(); return { text: n.textContent, top: r.top, bottom: r.bottom }
+      }))
+      const measurement = { view, mode, context, ...await receiptViewport(page) }; measurements.push(measurement)
+      if (view === 'finance' && mode === 'closed' || width === 390 && theme === 'dark') await page.screenshot({ path: info.outputPath(`shell-${view}-${mode}-${width}-${theme}.png`), fullPage: true })
+    }
+    await info.attach('viewport-coordinates', { body: JSON.stringify(measurements, null, 2), contentType: 'application/json' })
+    for (const m of measurements) {
+      expect(m.scrollY).toBe(0)
+      expect(m.cards).toHaveLength(4)
+      for (const item of m.context) { expect(item.top).toBeGreaterThanOrEqual(m.frame.top); expect(item.bottom).toBeLessThanOrEqual(m.frame.bottom) }
+      expect(m.context).toHaveLength(m.mode === 'closed' ? 3 : 2)
+      for (const card of m.cards) {
+        expect(card.top, `${m.view}/${m.mode}/${card.key} top`).toBeGreaterThanOrEqual(m.frame.top)
+        expect(card.bottom, `${m.view}/${m.mode}/${card.key} bottom`).toBeLessThanOrEqual(m.frame.bottom)
+        expect(card.inside, `${m.view}/${m.mode}/${card.key} ancestor clipping`).toBe(true)
+        expect(card.unobscured, `${m.view}/${m.mode}/${card.key} hit test`).toBe(true)
+      }
+    }
+    expect(api.mutations()).toBe(0)
+  })
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`stats shell short viewport scroll warnings currencies and navigation ${theme}`, async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 650 }); await page.emulateMedia({ colorScheme: theme })
+    const api = await fixture(page, { shell: true, entry: 'more', overview: true })
+    await page.getByRole('link', { name: 'Статистика', exact: true }).click(); await ready(page)
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty('--tg-safe-area-inset-bottom', '20px')
+      document.documentElement.style.setProperty('--tg-content-safe-area-inset-bottom', '12px')
+    })
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await ready(page)
+    await expect(page.locator('.stats-currency')).toHaveCount(2)
+    const rub = page.locator('.stats-currency[data-currency="RUB"]'), usd = page.locator('.stats-currency[data-currency="USD"]')
+    await expect(rub.locator('[data-kpi=accrued] .stats-value')).toHaveText(exactMoney('900719925474099312', 'RUB'))
+    await expect(usd.locator('[data-kpi=accrued] .stats-value')).toHaveText(exactMoney('12345', 'USD'))
+    for (const currency of ['RUB', 'USD']) {
+      await page.locator(`.stats-currency[data-currency="${currency}"] .stats-received`).evaluate(n => n.scrollIntoView({ block: 'center' }))
+      const m = await receiptViewport(page, 32)
+      for (const card of m.cards.filter(card => card.inside)) expect(card.unobscured).toBe(true)
+      const bounds = await page.locator(`.stats-currency[data-currency="${currency}"] .stats-received`).boundingBox()
+      expect(bounds!.y).toBeGreaterThanOrEqual(0); expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(618)
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    const details = page.locator('.stats-period-details'), disclosure = details.locator('summary')
+    const before = api.requests.length
+    await disclosure.focus(); await page.keyboard.press('Enter')
+    await expect(details).toHaveAttribute('open', ''); await expect(disclosure).toBeFocused()
+    await expect(details).toContainText('Часовой пояс: Europe/Berlin')
+    await page.keyboard.press('Enter'); await expect(details).not.toHaveAttribute('open', '')
+    expect(api.requests).toHaveLength(before)
+    api.setVariant('partial'); await refresh(page); await ready(page)
+    await expect(page.locator('.stats-coverage')).toContainText('Частичные данные')
+    await expect(rub.locator('[data-kpi=cash] .stats-value')).toHaveText('Частичные данные')
+    expect(await rub.locator('[data-kpi=cash]').evaluate(n => n.closest('details:not([open])') === null)).toBe(true)
+    await page.screenshot({ path: info.outputPath(`shell-partial-390x650-${theme}.png`), fullPage: true })
+    api.corrupt(body => { const g = body.closedShiftFinances[0]; if (g) { g.currency = 'UNKNOWN'; delete g.metrics.cash } })
+    await refresh(page); await ready(page)
+    const unknown = page.locator('.stats-currency[data-currency="UNKNOWN"]')
+    await expect(unknown).toContainText('Валюта: не определена')
+    await expect(unknown.locator('[data-kpi=cash] .stats-value')).toHaveText('Недостаточно данных')
+    api.corrupt(null); api.setVariant('empty'); await refresh(page); await ready(page)
+    await expect(page.locator('#stats-finance')).toContainText('Нет смен, закрытых в выбранный период.')
+    await page.getByRole('button', { name: 'Последние 30 дней', exact: true }).click(); await ready(page)
+    await expect(page.getByRole('button', { name: 'Последние 30 дней', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.locator('.stats-currency')).toHaveCount(0)
+    await page.screenshot({ path: info.outputPath(`shell-empty-390x650-${theme}.png`), fullPage: true })
+    api.setVariant('complete'); await page.getByRole('button', { name: 'Произвольный период', exact: true }).click()
+    const start = page.getByLabel('Начало периода'), end = page.getByLabel('Окончание периода (включительно)')
+    await start.fill('2026-03-29'); await end.fill('2026-03-29'); await end.press('Enter'); await ready(page)
+    await expect(end).toBeFocused(); expect(api.requests.at(-1)?.searchParams.get('to')).toBe('2026-03-30')
+    await page.evaluate(() => (window as unknown as { emitStatsBack: () => void }).emitStatsBack())
+    await expect(page).toHaveURL(/#\/more$/)
+    await page.getByRole('link', { name: 'Статистика', exact: true }).click(); await ready(page)
+    await expect(page.locator('.stats-header h2')).toBeVisible()
+    expect(api.mutations()).toBe(0)
+  })
+}

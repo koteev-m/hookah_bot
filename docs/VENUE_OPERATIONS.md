@@ -27,12 +27,27 @@ Existing order/call/booking mutations остаются authority.
 Успешный HTTP poll или прошедшее время сами ошибку не снимают. Полная громкость не включается автоматически. Сохраняются lease, группировка и два
 напоминания с интервалом от минуты. Успех playback и ACK/DONE — разные факты.
 
-Статистика: Обзор (пять основных KPI), Товары, Дозаказы, Финансы, Обслуживание. Выбран один раздел;
+Статистика: Обзор, Финансы, Товары, Дозаказы, Обслуживание. Выбран один раздел;
 период сохраняется, подробности обслуживания раскрываются по четырём темам. Фильтр стола относится
 только к явно выбранному операционному подразделу. Товары имеют отдельные серверные поиск,
 категорию, валюту, popular/rare/amount и страницы по 50. Для amount нужна одна валюта.
 Значения не вычисляются из top-20 или загруженных страниц. Определения и ограничения — ниже и в
 ANALYTICS_EVENTS.md. D1–D4, frozen shift reports, open shift и ISO money не изменены.
+
+HT-VENUE-STATISTICS-UX-REDESIGN-01: локальный финансовый UX, REVIEW PENDING. Обзор и Финансы
+открываются в режиме закрытых смен за 7 дней. Оба показывают «Получено по учёту» с видимыми
+Наличными/Картой/Переводом, сумму продаж, остаток, количество и среднюю сумму продажи по каждой
+валюте отдельно. Это записи сотрудника, не банковская выписка. Текущая смена выбирается отдельно:
+все данные с открытия, предварительные итоги, без активного календаря. Закрытые — по дате закрытия
+и frozen reports, с числом смен и понятным пустым состоянием. Методика общая, вторичные суммы
+Финансов и обслуживание Обзора по умолчанию свёрнуты; ограничения полноты остаются видимыми.
+Календарные определения и отдельные фильтры Товаров/Дозаказов/Обслуживания сохраняются.
+
+HT-VENUE-STATISTICS-FIRST-VIEWPORT-FIX-01: в Обзоре и Финансах компактная шапка сохраняет
+название, раздел, режим и применённые даты. Основной итог и все три способа оплаты расположены
+перед пояснениями. Полные границы периода, серверная актуальность и timezone доступны ниже итогов
+в «Период и актуальность данных»; предупреждения неполноты остаются открытыми. Критерий первого
+экрана проверяется в полном Venue shell, включая выбор заведения и глобальную навигацию.
 
 ### Товары: итог → категории → товар
 
@@ -81,7 +96,8 @@ Old today/7d/30d API is preserved. Stage 2 is **LOCAL IMPLEMENTED / INDEPENDENT 
 Unpublished; existing «Статистика» entry remains OWNER/MANAGER-only. Stage 4 Platform UI is
 **LOCAL IMPLEMENTED / REVIEW PENDING**; the overall block is **LOCAL / FINAL INTEGRATION REVIEW PENDING**.
 
-- Header shows venue, inclusive calendar dates, server timezone and snapshot update time.
+- Header shows venue and inclusive calendar dates; server timezone and snapshot update time
+  are in the financial period disclosure below the totals (in the header for other sections).
   «Сегодня», «Последние 7 дней», «Последние 30 дней» include today in that timezone.
   Custom start/end use native date controls; both dates are included. The end becomes the next
   calendar date for exclusive API `to`, with a 1–370 calendar-day bound. DST is resolved by the
@@ -97,7 +113,7 @@ Unpublished; existing «Статистика» entry remains OWNER/MANAGER-only.
 - «Финансовые итоги закрытых смен» displays frozen closed reports by currency; accrued,
   operator-confirmed, discounts, gifts, recorded unpaid, average accrued sale and sales count.
   Exact decimal strings are formatted via BigInt with ISO minor digits. Available recorded
-  CASH/CARD/TRANSFER amounts are expandable details, not a filter applied to unrelated KPIs.
+  CASH/CARD/TRANSFER amounts are immediately visible, not a filter applied to unrelated KPIs.
   «Текущая смена — предварительные данные» is separated and not limited to chosen dates.
   Always visible: «Показатели закрытых смен относятся к датам их закрытия. Подтверждённые
   оплаты внесены сотрудником и не означают банковскую сверку». Voiding a payment is not a

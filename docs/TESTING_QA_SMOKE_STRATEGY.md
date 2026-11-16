@@ -1,5 +1,28 @@
 # Testing / QA Smoke Strategy
 
+## HT-VENUE-STATISTICS-UX-REDESIGN-01 — financial presentation
+
+Local implementation; independent review, hosted CI and Telegram iOS acceptance remain separate.
+The nine `stats financial redesign` cases in venue-stats.spec.ts are mandatory in the existing
+PR/main full-browser inventory. Parser negatives reject each missing/skipped case.
+Run the affected statistics/product/navigation/payment-statistics contracts in Chromium/WebKit,
+TypeScript/Vite, full final Chromium and current CI parsers. Keep existing context/revoke/late-response,
+invalid draft/current refresh, timezone/DST and exact ISO/Long money assertions. Capture full mobile
+and desktop before/after Overview/Finance current/closed/empty/partial screens. Receipt methods must
+be visible without disclosure; secondary coverage warnings remain visible with details closed.
+Check radio keyboard/focus at short viewport and no requests from disclosures. Backend/API/SQL and
+financial writers are unchanged: backend evidence may be reused only after exact input/XML hashes
+are checked; this frontend task does not require a fresh backend run for an unchanged dependency set.
+
+HT-VENUE-STATISTICS-FIRST-VIEWPORT-FIX-01 adds six mandatory `stats shell` cases (floor1016).
+Enter through mountVenueApp → More → Statistics, preserving the real header, venue selector,
+navigation and parent styles. Chromium/WebKit at390×844 and360×780, light/dark, check bounding
+rectangles against visualViewport, clipping ancestors and hit tests, with scrollY=0. Statistics,
+selected financial mode/period, received total and CASH/CARD/TRANSFER must fit. Isolated renderer
+tests cannot prove this criterion. At390×650 preserve scrolling, readable amounts, separate
+currencies, visible partial/UNKNOWN warnings, keyboard focus, date submission and Telegram Back;
+period disclosure must not issue requests. Physical Telegram iOS remains separate acceptance.
+
 ## HT-VENUE-PRODUCTS-CATEGORY-UX-01 — category report validation
 
 LOCAL IMPLEMENTED / REVIEW PENDING. Summary and category totals must precede pagination, merge only

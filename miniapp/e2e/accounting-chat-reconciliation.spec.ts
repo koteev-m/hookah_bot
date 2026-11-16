@@ -95,7 +95,7 @@ for (const width of [360, 390, 1440]) for (const theme of ['light', 'dark'] as c
     expect(api.commands.map(c => c.action)).toEqual(['RECONCILE_TEXT', 'CLOSE'])
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: info.outputPath(`reconciliation-closed-${width}-${theme}.png`), fullPage: true })
-    await page.evaluate(() => (window as any).showFinance()); await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed')
+    await page.evaluate(() => (window as any).showFinance()); await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check()
     await expect(page.getByText('Сверено без товарной расшифровки', { exact: true })).toBeVisible()
     await expect(page.getByText('Суммы текстовых заказов сверены.', { exact: false })).toHaveCount(2)
   })
