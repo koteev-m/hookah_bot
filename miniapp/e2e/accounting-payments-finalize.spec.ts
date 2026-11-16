@@ -178,11 +178,11 @@ test('payment PostgreSQL UI POST restart exact replay accounting list current an
   }
   await expect(page.getByText('Оплачено полностью', { exact: true })).toBeVisible(); await expect(pay(page)).toHaveCount(0); await screenshot(page, info, 'live-paid')
   await page.getByRole('button', { name: 'К отчёту', exact: true }).click(); await expect(page.locator('.accounting-sales button[data-sale-id]')).toHaveCount(2); await screenshot(page, info, 'live-sales')
-  await page.evaluate(() => (window as any).showStats()); await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('2 895,00')
+  await page.evaluate(() => (window as any).showStats()); await page.getByRole('radio', { name: 'Текущая смена', exact: true }).check(); await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('2 895,00')
   await expect(page.locator('#stats-finance [data-kpi=sales] .stats-value')).toHaveText('2'); await expect(page.locator('#stats-finance [data-kpi=averageAccruedSale]')).toContainText('1 447,50'); await screenshot(page, info, 'current-overview')
   await page.goto('payment-finalize-test#/accounting?av=1'); await page.getByRole('button', { name: 'Сверить и закрыть смену' }).click(); await page.getByLabel('Проверил неоплаченные', { exact: false }).check(); await page.getByRole('button', { name: 'Подтвердить закрытие смены', exact: true }).click(); await expect(page.getByText('Сохранённый итог.', { exact: false })).toBeVisible()
-  await page.evaluate(() => (window as any).showStats()); await expect(page.locator('#stats-finance')).toContainText('Сейчас открытой смены нет.'); await screenshot(page, info, 'empty-current-shift')
-  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await page.getByRole('button', { name: 'Последние 7 дней', exact: true }).click()
+  await page.evaluate(() => (window as any).showStats()); await page.getByRole('radio', { name: 'Текущая смена', exact: true }).check(); await expect(page.locator('#stats-finance')).toContainText('Сейчас открытой смены нет.'); await screenshot(page, info, 'empty-current-shift')
+  await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await page.getByRole('button', { name: 'Последние 7 дней', exact: true }).click()
   await expect(page.locator('#stats-finance [data-kpi=averageAccruedSale]')).toContainText('1 447,50'); await screenshot(page, info, 'closed-finances')
   if (dir) writeFileSync(join(dir, 'done'), 'PASS')
 })
@@ -214,10 +214,10 @@ test('review F1 CREATE replay identifies its original sale among identical concu
     const other = JSON.parse(readFileSync(join(dir, 'restarted'), 'utf8')).otherSaleId
     const state = await page.request.get(`${session.base}/api/venue/1/accounting`, { headers: { Authorization: `Bearer ${session.token}` } }); expect(state.status()).toBe(200)
     expect(salePaid((await state.json()).current.sales.find((s: AccountingSale) => s.id === other))).toBe(0)
-    await page.evaluate(() => (window as any).showStats()); await expect(page.locator('#stats-finance [data-kpi=operatorConfirmed]')).toContainText('990,00')
-    await page.getByLabel('Финансовый период').selectOption('closed'); await page.getByRole('button', { name: 'Произвольный период' }).click()
+    await page.evaluate(() => (window as any).showStats()); await page.getByRole('radio', { name: 'Текущая смена', exact: true }).check(); await expect(page.locator('#stats-finance [data-kpi=operatorConfirmed]')).toContainText('990,00')
+    await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await page.getByRole('button', { name: 'Произвольный период' }).click()
     await page.getByLabel('Начало периода').fill('2026-11-14'); await page.getByLabel('Окончание периода (включительно)').fill('2026-11-01'); await page.getByRole('button', { name: 'Показать период' }).click()
-    await page.getByLabel('Финансовый период').selectOption('current'); await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('1 980,00')
+    await page.getByRole('radio', { name: 'Текущая смена', exact: true }).check(); await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('1 980,00')
     const extra = { requestId: crypto.randomUUID(), action: 'CREATE', tableId: 11, lines: [{ name: 'Tea', qty: 1, unitPriceMinor: 190500 }] }
     const response = await page.request.post(`${session.base}/api/venue/1/accounting/commands`, { headers: { Authorization: `Bearer ${session.token}` }, data: extra }); expect(response.status()).toBe(200)
     await page.getByRole('button', { name: 'Обновить статистику' }).click(); await expect(page.locator('#stats-finance [data-kpi=accrued]')).toContainText('3 885,00')

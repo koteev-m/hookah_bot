@@ -21,7 +21,7 @@ type VenueStatsOptions = {
 const periods: [StatsPreset, string][] = [['today', 'Сегодня'], ['7d', 'Последние 7 дней'],
   ['30d', 'Последние 30 дней'], ['custom', 'Произвольный период']]
 type StatsView = 'overview' | 'products' | 'additions' | 'finance' | 'service'
-const sections: [StatsView, string][] = [['overview', 'Обзор'], ['products', 'Товары'], ['additions', 'Дозаказы'], ['finance', 'Финансы'], ['service', 'Обслуживание']]
+const sections: [StatsView, string][] = [['overview', 'Обзор'], ['finance', 'Финансы'], ['products', 'Товары'], ['additions', 'Дозаказы'], ['service', 'Обслуживание']]
 const serverSection = (view: string): StatsSection => view === 'overview' || view === 'service' ? 'all' : view as StatsSection
 
 const operational = (section: StatsSection) => ['orders', 'bookings', 'seatings', 'calls'].includes(section)
@@ -38,15 +38,24 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
   const deps = { isDebug, getAccessToken, clearSession }
   const wrapper = el('div', { className: 'venue-stats' })
   const header = el('section', { className: 'card stats-header' })
-  append(header, el('h2', { text: 'Статистика' }),
+  const title = el('div', { className: 'stats-title-row' })
+  append(title, el('h2', { text: 'Статистика' }),
     el('p', { className: 'stats-venue-name', text: access.venueName?.trim() || 'Текущее заведение' }))
+  header.append(title)
   const controls = el('div', { className: 'stats-controls' })
-  const financeMode = el('select'); financeMode.id = 'stats-finance-mode'; financeMode.add(new Option('Текущая смена', 'current')); financeMode.add(new Option('Закрытые смены', 'closed'))
-  const modeLabel = el('label', { className: 'stats-finance-mode', text: 'Финансовый период' }); modeLabel.htmlFor = financeMode.id; modeLabel.append(financeMode)
-  const currentFinance = () => ['overview', 'finance'].includes(section.value) && financeMode.value === 'current'
+  const modeLabel = el('fieldset', { className: 'stats-finance-mode' })
+  modeLabel.append(el('legend', { text: 'Финансовый период' }))
+  const financeModes = (['current', 'closed'] as const).map(value => {
+    const label = el('label'); const input = el('input'); input.type = 'radio'; input.name = 'stats-finance-mode'; input.value = value; input.checked = value === 'closed'
+    append(label, input, el('span', { text: value === 'current' ? 'Текущая смена' : 'Закрытые смены' })); modeLabel.append(label); return input
+  })
+  const financeMode = () => financeModes[0].checked ? 'current' : 'closed'
+  const currentFinance = () => ['overview', 'finance'].includes(section.value) && financeMode() === 'current'
   const periodRow = el('div', { className: 'venue-stats-periods' }); periodRow.setAttribute('aria-label', 'Период статистики')
   const buttons = periods.map(([key, title]) => {
     const button = el('button', { className: 'button-secondary', text: title }); button.type = 'button'
+    button.setAttribute('aria-label', title)
+    button.textContent = key === '7d' ? '7 дней' : key === '30d' ? '30 дней' : key === 'custom' ? 'Свой период' : title
     button.dataset.period = key; periodRow.append(button); return button
   })
   const form = el('form', { className: 'stats-custom-period' }); form.noValidate = true; form.hidden = true
@@ -63,7 +72,8 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
   const filterRow = el('div', { className: 'stats-filter-row' })
   const section = el('select'); section.id = 'stats-section'
   sections.forEach(([value, label]) => section.add(new Option(label, value)))
-  const sectionLabel = el('label', { text: 'Показатели' }); sectionLabel.htmlFor = section.id; sectionLabel.append(section)
+  const sectionLabel = el('label'); sectionLabel.htmlFor = section.id
+  append(sectionLabel, el('span', { className: 'stats-section-label', text: 'Показатели' }), section)
   const serviceKind = el('select'); serviceKind.id = 'stats-service-kind'
   for (const [value, label] of [['all', 'Все подробности'], ['orders', 'Заказы'], ['bookings', 'Бронирования'], ['seatings', 'Посадки'], ['calls', 'Вызовы']]) serviceKind.add(new Option(label, value))
   const serviceLabel = el('label', { text: 'Показатели обслуживания' }); serviceLabel.htmlFor = serviceKind.id; serviceLabel.append(serviceKind); serviceLabel.hidden = true
@@ -96,18 +106,22 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
     if (node && position.key) { node.focus({ preventScroll: true }); window.scrollTo(0, position.y + node.getBoundingClientRect().top - position.top) }
     else window.scrollTo(0, position.y)
   }
-  const refresh = el('button', { className: 'button-secondary', text: 'Обновить статистику' }); refresh.type = 'button'
+  const refresh = el('button', { className: 'button-secondary', text: 'Обновить' }); refresh.type = 'button'; refresh.setAttribute('aria-label', 'Обновить статистику')
   append(filterRow, sectionLabel, serviceLabel, tableLabel, refresh)
   const tableNotice = el('p', { className: 'stats-note' }); tableNotice.hidden = true
   append(controls, filterRow, modeLabel, periodRow, form, productControls, tableNotice, validation, draftNotice)
-  const metadata = el('div', { className: 'stats-metadata' }); append(header, controls, metadata)
+  const periodCaption = el('p', { className: 'stats-period-caption' }); periodCaption.hidden = true
+  const metadata = el('div', { className: 'stats-metadata' })
+  const metadataDetails = el('details', { className: 'stats-period-details' }); metadataDetails.hidden = true
+  metadataDetails.append(el('summary', { text: 'Период и актуальность данных' }))
+  append(header, controls, periodCaption, metadata)
   const status = el('p', { className: 'status stats-load-status' }); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
   const skeleton = el('div', { className: 'stats-skeleton' }); skeleton.setAttribute('aria-hidden', 'true'); skeleton.hidden = true
   for (let i = 0; i < 6; i++) skeleton.append(el('div'))
   const error = el('section', { className: 'error-card' }); error.setAttribute('role', 'alert'); error.hidden = true
   const summary = el('div', { className: 'stats-coverage' }); summary.hidden = true
   const content = el('div', { className: 'stats-content' })
-  append(wrapper, header, status, skeleton, error, summary, content); root.replaceChildren(wrapper)
+  append(wrapper, header, status, skeleton, error, summary, content, metadataDetails); root.replaceChildren(wrapper)
 
   let disposed = false
   let denied = false
@@ -116,13 +130,13 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
   let controller: AbortController | null = null
   let tableController: AbortController | null = null
   let tablesLoaded = false
-  let preset: StatsPreset = 'today'
+  let preset: StatsPreset = '7d'
   let appliedPeriod: { from: string; to: string } | null = null
   let timezone: string | null = null
   let serverAnchor: { ms: number; received: number } | null = null
   const currentActor = () => getTelegramContext().telegramUserId === actor
   const current = (seq: number) => !disposed && !denied && sequence === seq && currentActor()
-  const clearView = () => { content.replaceChildren(); lastSnapshot = null; metadata.replaceChildren(); summary.replaceChildren(); summary.hidden = true }
+  const clearView = () => { content.replaceChildren(); lastSnapshot = null; metadata.replaceChildren(); metadataDetails.hidden = true; periodCaption.hidden = true; summary.replaceChildren(); summary.hidden = true }
   const stopLoading = () => { skeleton.hidden = true; content.removeAttribute('aria-busy') }
   const abort = () => { sequence++; controller?.abort(); controller = null; stopLoading() }
   const loseAccess = (reason: 'denied' | 'changed') => {
@@ -169,13 +183,19 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
         renderContent(data); restorePosition(position)
       },
       onPage: selected => { page = selected; expandedItem = null; void load(0, true) }
-    }, financeMode.value as 'current' | 'closed', () => {
+    }, financeMode(), () => {
       if (!currentActor() || denied || disposed) return
-      financeMode.value = 'current'; syncPeriods(); void load()
+      financeModes[0].checked = true; syncPeriods(); void load()
     }))
   }
   const syncPeriods = () => {
-    modeLabel.hidden = !['overview', 'finance'].includes(section.value)
+    const financial = ['overview', 'finance'].includes(section.value)
+    wrapper.classList.toggle('stats-financial-view', financial)
+    modeLabel.hidden = !financial
+    const metadataParent = financial ? metadataDetails : header
+    metadataParent.append(metadata)
+    metadataDetails.hidden = !financial || !metadata.childElementCount
+    periodCaption.hidden = !financial || currentFinance() || !metadata.childElementCount
     periodRow.hidden = currentFinance(); buttons.forEach(b => { b.disabled = currentFinance() })
     form.hidden = currentFinance() || preset !== 'custom'
     validation.hidden = currentFinance()
@@ -188,11 +208,16 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
     const start = calendarDateAt(data.period.from, data.period.timezone)
     const end = shiftCalendarDate(calendarDateAt(data.period.to, data.period.timezone), -1)
     const refreshed = new Intl.DateTimeFormat('ru-RU', { timeZone: data.period.timezone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(data.asOf))
-    const periodText = currentFinance() && section.value === 'finance' ? 'Вся текущая смена с момента открытия' : `${currentFinance() ? 'Обслуживание за период (финансы — вся текущая смена)' : ['overview', 'finance'].includes(section.value) ? 'Закрытые смены по дате закрытия' : 'Период'}: ${formatCalendarDate(start)} — ${formatCalendarDate(end)} включительно`
+    const periodText = currentFinance() ? 'Вся текущая смена с момента открытия' : `${['overview', 'finance'].includes(section.value) ? 'Закрытые смены по дате закрытия' : 'Период'}: ${formatCalendarDate(start)} — ${formatCalendarDate(end)} включительно`
     metadata.replaceChildren(el('p', { text: periodText }),
-      el('p', { text: `Часовой пояс: ${data.period.timezone}` }), el('p', { text: `Данные на ${refreshed}` }))
-    const metrics = [...Object.values(data.metrics), ...data.closedShiftFinances.flatMap(group => Object.values(group.metrics)),
-      ...data.openShiftFinances.flatMap(group => Object.values(group.metrics)), ...(data.products ? [data.products.coverage] : [])]
+      el('p', { text: `Данные на ${refreshed} · Часовой пояс: ${data.period.timezone}` }))
+    periodCaption.textContent = `${start.split('-').reverse().join('.')} — ${end.split('-').reverse().join('.')}`
+    metadataDetails.hidden = !['overview', 'finance'].includes(section.value)
+    periodCaption.hidden = metadataDetails.hidden || currentFinance()
+    const financial = ['overview', 'finance'].includes(section.value)
+    const metrics = financial ? [data.metrics[currentFinance() ? 'finance.openReportCoverage' : 'finance.closedReports'],
+      ...(currentFinance() ? data.openShiftFinances : data.closedShiftFinances).flatMap(group => Object.values(group.metrics))].filter(value => value != null)
+      : [...Object.values(data.metrics), ...(data.products ? [data.products.coverage] : [])]
     const partial = metrics.some(value => value.availability === 'PARTIAL' || value.coverage === 'PARTIAL')
     summary.dataset.coverage = partial ? 'partial' : 'complete'
     summary.replaceChildren(...(partial ? [el('strong', { text: 'Частичные данные' }), el('p', { text: 'Не все операции можно учесть полностью. Ограничения указаны у показателей.' })]
@@ -202,7 +227,7 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
     const known = ['RECORDED_DOMAIN_FACTS_ONLY', 'STATE_BREAKDOWNS_ARE_SNAPSHOT_NOT_TRANSITIONS', 'CLOSED_SHIFTS_NOT_CALENDAR_CASH_FLOW',
       'VOID_PAYMENT_NOT_REFUND', 'SEATINGS_NOT_UNIQUE_PEOPLE', 'VENUE_TIMEZONE_FALLBACK']
     if (data.limitations.some(value => !known.includes(value))) summary.append(el('p', { text: 'Сервер сообщил дополнительные ограничения расчёта. Полноту данных пока нельзя подтвердить.' }))
-    summary.hidden = section.value === 'products' && !data.limitations.some(v => !known.includes(v) || v === 'VENUE_TIMEZONE_FALLBACK')
+    summary.hidden = (financial && !partial || section.value === 'products') && !data.limitations.some(v => !known.includes(v) || v === 'VENUE_TIMEZONE_FALLBACK')
     lastSnapshot = data
     if (expandedCategory && !data.products?.categoryTotals?.some(g => g.category.key === expandedCategory)) { expandedCategory = null; expandedItem = null; page = 1 }
     renderContent(data)
@@ -292,7 +317,7 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
     if (preset === 'custom') { abort(); clearView(); error.hidden = true; status.textContent = 'Выберите даты и нажмите «Показать период».'; from.focus() }
     else void load()
   }))
-  disposables.push(on(financeMode, 'change', () => { syncPeriods(); void load() }), on(productFilters, 'submit', event => { event.preventDefault(); if (sort.value === 'amount' && !currency.value) { validation.textContent = 'Выберите одну валюту для сортировки по стоимости.'; return }; void load(0, true, { search: search.value.trim(), categoryKey: category.value, currency: currency.value, sort: sort.value }) }), on(form, 'submit', event => { event.preventDefault(); resetProducts(); void load() }), on(refresh, 'click', () => void load(0, section.value === 'products')),
+  disposables.push(on(modeLabel, 'change', () => { syncPeriods(); void load() }), on(productFilters, 'submit', event => { event.preventDefault(); if (sort.value === 'amount' && !currency.value) { validation.textContent = 'Выберите одну валюту для сортировки по стоимости.'; return }; void load(0, true, { search: search.value.trim(), categoryKey: category.value, currency: currency.value, sort: sort.value }) }), on(form, 'submit', event => { event.preventDefault(); resetProducts(); void load() }), on(refresh, 'click', () => void load(0, section.value === 'products')),
     on(section, 'change', () => {
       wrapper.classList.toggle('stats-products-view', section.value === 'products')
       syncPeriods(); resetProducts(); productControls.hidden = section.value !== 'products'; serviceLabel.hidden = section.value !== 'service'

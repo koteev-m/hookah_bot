@@ -2,6 +2,17 @@
 
 ## Финансовый обзор и границы смен
 
+HT-VENUE-STATISTICS-UX-REDESIGN-01 (local implementation; independent review/device acceptance open):
+Обзор и Финансы используют одну финансовую сводку. Начальный режим — закрытые смены за последние
+7 календарных дней; переключатель явно отделяет всю текущую смену от закрытых. «Получено по учёту»
+и серверные CASH/CARD/TRANSFER всегда раскрыты в обоих представлениях, ниже — сумма продаж,
+неоплаченный остаток, количество и средняя сумма продажи. Компоненты PAY_SPLIT не создают новую
+категорию денег или дополнительную продажу. В Финансах скидки/подарки и методика раскрываются
+отдельно; их неполнота остаётся видимой при закрытых деталях. Обзор не дублирует полную сводку.
+Нет завершённых смен — явный empty state без придуманных сумм; открытая смена объясняется отдельно.
+Даты обслуживания в нижнем блоке Обзора указаны независимо от финансового режима. Это изменение
+представления существующих authoritative KPI, без новых формул, API, SQL или финансовых writers.
+
 HT-ACCOUNTING-PAYMENTS-STATS-UX-FINALIZE-01: local implementation; release/device acceptance separate.
 Overview starts with the existing authoritative financial aggregates: net accrued sales, operator
 recorded receipts, unpaid remainder, sales count and accrued/count average. UI labels are «Сумма

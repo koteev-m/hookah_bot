@@ -2133,7 +2133,7 @@ jobs:
           from pathlib import Path
 
           report_path = Path("playwright-results.json")
-          minimum_executed = 1001
+          minimum_executed = 1016
           if not report_path.is_file():
               raise SystemExit(f"missing Playwright JSON report: {report_path}")
 
@@ -2171,6 +2171,21 @@ jobs:
                   yield from iter_specs(child, suite_file)
 
           required_specs = {
+              ("venue-stats.spec.ts", "stats shell first viewport receipts 390x844 light"): 1,
+              ("venue-stats.spec.ts", "stats shell first viewport receipts 390x844 dark"): 1,
+              ("venue-stats.spec.ts", "stats shell first viewport receipts 360x780 light"): 1,
+              ("venue-stats.spec.ts", "stats shell first viewport receipts 360x780 dark"): 1,
+              ("venue-stats.spec.ts", "stats shell short viewport scroll warnings currencies and navigation light"): 1,
+              ("venue-stats.spec.ts", "stats shell short viewport scroll warnings currencies and navigation dark"): 1,
+              ("venue-stats.spec.ts", "stats financial redesign full screens and context 360 dark"): 1,
+              ("venue-stats.spec.ts", "stats financial redesign full screens and context 390 dark"): 1,
+              ("venue-stats.spec.ts", "stats financial redesign full screens and context 1440 light"): 1,
+              ("venue-stats.spec.ts", "stats financial redesign keeps receipt methods visible in overview and closed finance"): 1,
+              ("venue-stats.spec.ts", "stats financial redesign defaults to closed week and keeps thirty days separate from the whole open shift"): 1,
+              ("venue-stats.spec.ts", "stats financial redesign selected coverage and unavailable methods remain visible without false zeros"): 1,
+              ("venue-stats.spec.ts", "stats financial redesign keeps incomplete methods and hidden detail warnings visible without false zero"): 1,
+              ("venue-stats.spec.ts", "stats financial redesign explains empty closed period with open shift and disclosures make no requests"): 1,
+              ("venue-stats.spec.ts", "stats financial redesign native mode keyboard short viewport and focus stay usable"): 1,
               ("venue-accounting.spec.ts", "legacy CREATE explicit sales choice overrides restored payments and hidden filters"): 1,
               ("venue-accounting.spec.ts", "legacy sales choice survives history Telegram Back reload and resume"): 1,
               ("venue-accounting.spec.ts", "legacy sales choice clears hidden search when URL already targets sales"): 1,

@@ -1,7 +1,7 @@
 import { renderVenueProducts, type ProductsView } from './venueProducts'
 import type { FinancialKpis, KpiBucket, KpiValue, VenueKpiSnapshot } from '../shared/api/venueStatsApi'
 import { append, el } from '../shared/ui/dom'
-import { exactCount, exactMoney, formatDuration, formatRatio } from '../shared/ui/venueStatsFormat'
+import { calendarDateAt, exactCount, exactMoney, formatCalendarDate, formatDuration, formatRatio, shiftCalendarDate } from '../shared/ui/venueStatsFormat'
 
 type Definition = [key: string, label: string, explanation: string]
 const createdOrders: Definition[] = [
@@ -81,7 +81,7 @@ function formatted(kpi: KpiValue, value: string, currency?: string): string {
   return 'Недостаточно данных'
 }
 
-export function metric(definition: Definition, kpi?: KpiValue, currency?: string, periodBasis = '') {
+export function metric(definition: Definition, kpi?: KpiValue, currency?: string, periodBasis = '', explain = true, showCoverageNote = true) {
   const [key, label, explanation] = definition
   const card = el('article', { className: 'venue-stats-metric' })
   card.dataset.kpi = key
@@ -98,7 +98,7 @@ export function metric(definition: Definition, kpi?: KpiValue, currency?: string
   append(card, el('h4', { text: label }), value)
   if (!available) {
     card.dataset.coverage = partial ? 'partial' : 'unavailable'
-    card.append(el('p', { className: 'stats-note', text: coverageText(kpi) }))
+    if (showCoverageNote) card.append(el('p', { className: 'stats-note', text: coverageText(kpi) }))
     if (partial && kpi?.observedValue != null) {
       card.append(el('p', { className: 'stats-observed', text: `По известным данным: ${formatted(kpi, kpi.observedValue, currency)}` }))
     }
@@ -109,7 +109,7 @@ export function metric(definition: Definition, kpi?: KpiValue, currency?: string
     card.append(el('p', { className: 'stats-note', text:
       `Случаев в расчёте: ${exactCount(kpi.samples)}.${kpi.unknown > 0 ? ` Без полной истории: ${exactCount(kpi.unknown)}.` : ''}` }))
   }
-  card.append(calculation(`${explanation}${periodBasis ? ` ${periodBasis}` : ''}`))
+  if (explain) card.append(calculation(`${explanation}${periodBasis ? ` ${periodBasis}` : ''}`))
   return card
 }
 
@@ -150,26 +150,43 @@ function section(title: string, id: string, intro: string) {
 }
 
 function financeGroups(groups: FinancialKpis[], provisional: boolean, compact = false) {
-  const root = el('div')
+  const root = el('div', { className: 'stats-finance-currencies' })
   const basis = provisional ? 'Текущее состояние открытой смены на время обновления; выбранный период её не ограничивает.'
     : 'Сумма замороженных отчётов смен, закрытых в выбранные даты. Валюты не складываются.'
   groups.forEach(group => {
     const block = el('section', { className: 'stats-currency' })
     block.dataset.currency = group.currency
     block.append(el('h3', { text: `Валюта: ${/^[A-Z]{3}$/.test(group.currency) ? group.currency : 'не определена'}` }))
-    const grid = el('div', { className: 'venue-stats-grid' })
-    const definitions = compact ? ['accrued', 'operatorConfirmed', 'unpaid', 'sales', 'averageAccruedSale'].map(key => money.find(d => d[0] === key)!) : money
-    grid.append(...definitions.map(definition => metric(definition, group.metrics[definition[0]], group.currency, basis)))
-    if (group.metrics.unallocatedAccrued) grid.append(metric(['unallocatedAccrued', 'Сверено без товарной расшифровки', 'Подтверждённый итог текстовых заказов; состав, скидки и подарки не восстановлены. Это не полученная оплата.'], group.metrics.unallocatedAccrued, group.currency, basis))
-    block.append(grid)
-    if (compact) { root.append(block); return }
+    const financialMetric = (definition: Definition) => metric(definition, group.metrics[definition[0]], group.currency, basis, false)
+    const received = el('div', { className: 'stats-received' })
+    received.append(financialMetric(money.find(d => d[0] === 'operatorConfirmed')!))
     const payments: Definition[] = [['cash', 'Наличными', 'Оплаты, внесённые сотрудником наличными.'],
       ['card', 'Картой', 'Оплаты, внесённые сотрудником как оплата картой.'], ['transfer', 'Переводом', 'Оплаты, внесённые сотрудником как перевод.']]
-    const paymentDetails = el('details', { className: 'stats-payment-details' })
-    paymentDetails.append(el('summary', { text: 'Способы подтверждённой оплаты' }))
-    const paymentGrid = el('div', { className: 'venue-stats-grid' })
-    paymentGrid.append(...payments.map(definition => metric(definition, group.metrics[definition[0]], group.currency, basis)))
-    paymentDetails.append(paymentGrid); block.append(paymentDetails); root.append(block)
+    const paymentGrid = el('div', { className: 'stats-receipt-methods' })
+    paymentGrid.setAttribute('role', 'group'); paymentGrid.setAttribute('aria-label', `Способы оплаты · ${group.currency}`)
+    paymentGrid.append(...payments.map(financialMetric)); received.append(paymentGrid); block.append(received)
+    const grid = el('div', { className: 'stats-finance-kpis' })
+    for (const key of ['accrued', 'unpaid', 'sales', 'averageAccruedSale']) {
+      const definition = money.find(d => d[0] === key)!
+      grid.append(financialMetric(key === 'unpaid' ? [key, 'Неоплаченный остаток', definition[2]] : definition))
+    }
+    block.append(grid)
+    if (group.metrics.unallocatedAccrued) block.append(financialMetric(['unallocatedAccrued', 'Сверено без товарной расшифровки', 'Подтверждённый итог текстовых заказов; состав, скидки и подарки не восстановлены. Это не полученная оплата.']))
+    const additional: Definition[] = money.filter(d => ['discounts', 'gifts'].includes(d[0]))
+    // Detail coverage stays visible even while the secondary amounts are collapsed.
+    for (const [key, label] of additional) {
+      const value = group.metrics[key]
+      if (!value || value.availability !== 'AVAILABLE' || value.coverage !== 'COMPLETE_RECORDED_SOURCE' || value.value == null) {
+        block.append(el('p', { className: 'stats-warning', text: `${label}: ${coverageText(value)}` }))
+      }
+    }
+    if (!compact) {
+      const details = el('details', { className: 'stats-finance-details' })
+      const amounts = el('div', { className: 'stats-finance-kpis' })
+      amounts.append(...additional.map(definition => metric(definition, group.metrics[definition[0]], group.currency, basis, false, false)))
+      append(details, el('summary', { text: 'Скидки, подарки и дополнительные суммы' }), amounts); block.append(details)
+    }
+    root.append(block)
   })
   return root
 }
@@ -180,10 +197,14 @@ function financialContent(snapshot: VenueKpiSnapshot, mode: 'current' | 'closed'
     ? 'Предварительные суммы всей открытой смены. Календарный период их не ограничивает.'
     : 'По датам закрытия смен за выбранный период. Текущая смена сюда не входит.')
   root.classList.add('stats-financial-content')
+  const intro = root.querySelector('.stats-intro')!
+  intro.remove()
+  if (current) root.append(el('p', { className: 'stats-shift-context', text: 'Предварительный итог · вся открытая смена' }))
   const stamp = (v: string) => new Intl.DateTimeFormat('ru-RU', { timeZone: snapshot.period.timezone, dateStyle: 'short', timeStyle: 'short' }).format(new Date(v))
   const coverage = snapshot.metrics[current ? 'finance.openReportCoverage' : 'finance.closedReports']
-  const empty = current ? snapshot.metrics['finance.openShifts']?.value === '0' : coverage?.value === '0' && coverage.availability === 'AVAILABLE'
-  if (current && !empty) root.append(el('p', { text: snapshot.openShiftOpenedAt ? `Открыта ${stamp(snapshot.openShiftOpenedAt)} · Данные на ${stamp(snapshot.asOf)}` : 'Время открытия не передано. Обновите приложение и сервер для точной границы смены.' }))
+  const count = snapshot.metrics[current ? 'finance.openShifts' : 'finance.closedReports']
+  const empty = count?.value === '0' && count.availability === 'AVAILABLE' && count.coverage === 'COMPLETE_RECORDED_SOURCE'
+  if (current && !empty) root.append(el('p', { className: 'stats-shift-context', text: snapshot.openShiftOpenedAt ? `Открыта ${stamp(snapshot.openShiftOpenedAt)}` : 'Время открытия не передано. Обновите приложение и сервер для точной границы смены.' }))
   if (empty) {
     root.append(el('p', { text: current ? 'Сейчас открытой смены нет. Она появится после первой сохранённой продажи или заказа.' : 'Нет смен, закрытых в выбранный период. Учитывается дата закрытия по времени заведения, а не дата отдельных продаж.' }))
     if (!current && (snapshot.openShiftOpenedAt || snapshot.metrics['finance.openShifts']?.value === '1')) {
@@ -193,11 +214,14 @@ function financialContent(snapshot: VenueKpiSnapshot, mode: 'current' | 'closed'
   }
   else {
     if (!coverage || coverage.availability !== 'AVAILABLE') root.append(el('p', { className: 'stats-warning', text: coverageText(coverage) }))
-    if (!current) root.append(el('p', { text: coverage ? `Смен в расчёте: ${exactCount(coverage.samples)}.` : 'Число смен недоступно.' }))
-    root.append(financeGroups(current ? snapshot.openShiftFinances : snapshot.closedShiftFinances, current, compact))
+    if (!current) root.append(el('p', { className: 'stats-shift-context', text: coverage ? `Смен в расчёте: ${exactCount(coverage.samples)}.${coverage.unknown ? ` Без полного отчёта: ${exactCount(coverage.unknown)}.` : ''}` : 'Число смен недоступно.' }))
+    const groups = current ? snapshot.openShiftFinances : snapshot.closedShiftFinances
+    if (!groups.length) root.append(el('p', { className: 'stats-warning', text: 'Недостаточно финансовых данных. Итоговые суммы недоступны.' }))
+    root.append(financeGroups(groups, current, compact))
   }
-  root.append(el('p', { className: 'stats-note', text: 'Сумма продаж — после скидок и подарков. Получено по учёту — записи сотрудника, не банковская сверка. Средняя сумма — сумма продаж / количество учётных продаж.' }))
+  root.append(intro, el('p', { className: 'stats-note stats-receipt-note', text: 'Получено по учёту — записи сотрудника, не банковская сверка.' }))
   if (!current) root.append(el('p', { className: 'stats-note', text: 'Аннулирование записи оплаты не является реальным возвратом. Остаток закрытой смены не означает текущий долг клиента.' }))
+  root.append(calculation(`${money.map(d => `${d[1]}: ${d[2]}`).join(' ')} ${current ? 'Учитывается вся открытая смена на время обновления.' : 'Учитываются сохранённые отчёты по дате закрытия смены в часовом поясе заведения.'} CASH/CARD/TRANSFER уже включают компоненты комбинированных оплат. Валюты не складываются.`))
   return root
 }
 
@@ -205,9 +229,14 @@ export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview'
   const root = el('div', { className: 'stats-sections' })
   const m = snapshot.metrics
   if (view === 'overview') {
-    root.classList.add('card', 'stats-section', 'stats-overview')
+    root.classList.add('stats-overview')
     root.append(financialContent(snapshot, financeMode, true, onCurrentShift))
-    const operations = el('details', { className: 'stats-service-details' }); operations.append(el('summary', { text: 'Обслуживание за выбранный период' }), group('Операционные показатели', 'Ручные продажи не создают заказы или посадки. Даты обслуживания сохраняют выбранный период.', [['orders.created', 'Созданные заказы', 'По времени создания.'], ['seatings.registeredSessions', 'Посадки', 'Физические сессии.'], ['calls.created', 'Вызовы', 'По времени создания.']], m)); root.append(operations)
+    const start = formatCalendarDate(calendarDateAt(snapshot.period.from, snapshot.period.timezone))
+    const end = formatCalendarDate(shiftCalendarDate(calendarDateAt(snapshot.period.to, snapshot.period.timezone), -1))
+    if (Object.entries(m).some(([key, value]) => /^(orders|batches|items|bookings|seatings|calls)\./.test(key) && (value.availability === 'PARTIAL' || value.coverage === 'PARTIAL'))) {
+      root.append(el('p', { className: 'stats-warning stats-service-warning', text: 'Часть данных обслуживания неполна. Подробности — в операционных показателях ниже; финансовые итоги указаны отдельно.' }))
+    }
+    const operations = el('details', { className: 'stats-service-details' }); operations.append(el('summary', { text: 'Обслуживание за выбранный период' }), group('Операционные показатели', `Ручные продажи не создают заказы или посадки. Период обслуживания: ${start} — ${end} включительно (${snapshot.period.timezone}).`, [['orders.created', 'Созданные заказы', 'По времени создания.'], ['seatings.registeredSessions', 'Посадки', 'Физические сессии.'], ['calls.created', 'Вызовы', 'По времени создания.']], m)); root.append(operations)
     return root
   }
   if (view === 'products') return renderVenueProducts(snapshot, productsView)

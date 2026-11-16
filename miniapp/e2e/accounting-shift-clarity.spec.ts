@@ -112,10 +112,10 @@ for (const width of [360, 390]) {
 
   test(`shift clarity closed empty report explains current shift ${width}`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 844 }); await setup(page); await page.evaluate(() => (window as any).showStats())
-    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByLabel('Финансовый период').selectOption('closed'); await expect(page.locator('#stats-finance')).toBeVisible(); await shot(page, info, 'closed-empty')
+    await page.getByRole('combobox', { name: 'Показатели', exact: true }).selectOption('finance'); await page.getByRole('radio', { name: 'Закрытые смены', exact: true }).check(); await expect(page.locator('#stats-finance')).toBeVisible(); await shot(page, info, 'closed-empty')
     await expect(page.locator('#stats-finance')).toContainText('Нет смен, закрытых в выбранный период')
     await expect(page.locator('#stats-finance')).toContainText('Текущая смена открыта')
-    await page.getByRole('button', { name: 'Показать текущую смену', exact: true }).click(); await expect(page.getByLabel('Финансовый период')).toHaveValue('current'); await expect(page.locator('#stats-finance')).toContainText(/13\.11\.(?:20)?26/)
+    await page.getByRole('button', { name: 'Показать текущую смену', exact: true }).click(); await expect(page.getByRole('radio', { name: 'Текущая смена', exact: true })).toBeChecked(); await expect(page.locator('#stats-finance')).toContainText(/13\.11\.(?:20)?26/)
   })
 
   test(`shift clarity venue timezone DST and unknown dates ${width}`, async ({ browser }, info) => {
