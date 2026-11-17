@@ -171,6 +171,15 @@
 .stats-period-details .stats-metadata { padding: .3rem 0 .65rem; }
 .stats-financial-view .stats-financial-content .stats-currency { margin-top: .4rem; }
 .stats-financial-view .stats-received { padding: .5rem; }
+.stats-overview-summary > h2, .stats-overview-currency { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.venue-stats .stats-overview-period { font-size: .8rem; line-height: 1.4; margin: 0 0 .3rem; }
+.stats-overview-operations { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; }
+.venue-stats .stats-overview-operations .stats-value { font-size: 1.2rem; }
+.stats-overview-summary .stats-currency > .stats-overview-currency { margin: -1px; }
+.stats-overview-summary .stats-finance-kpis { display: block; margin-top: .4rem; }
+.venue-stats .stats-overview-summary .stats-finance-kpis > .venue-stats-metric { display: flex; flex-wrap: wrap; flex-direction: row; align-items: baseline; justify-content: space-between; gap: .3rem .6rem; }
+.stats-overview-links { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
+.stats-overview-links > button { min-height: 44px; flex: 1 1 160px; font-size: .9rem; }
 @media (min-width: 900px) {
   .stats-finance-currencies { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
   .stats-currency + .stats-currency { border: 0; padding-top: 0; }

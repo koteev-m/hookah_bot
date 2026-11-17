@@ -14,7 +14,7 @@ Check radio keyboard/focus at short viewport and no requests from disclosures. B
 financial writers are unchanged: backend evidence may be reused only after exact input/XML hashes
 are checked; this frontend task does not require a fresh backend run for an unchanged dependency set.
 
-HT-VENUE-STATISTICS-FIRST-VIEWPORT-FIX-01 adds six mandatory `stats shell` cases (floor1016).
+HT-VENUE-STATISTICS-FIRST-VIEWPORT-FIX-01 adds six mandatory `stats shell` cases (retained; current floor1025).
 Enter through mountVenueApp → More → Statistics, preserving the real header, venue selector,
 navigation and parent styles. Chromium/WebKit at390×844 and360×780, light/dark, check bounding
 rectangles against visualViewport, clipping ancestors and hit tests, with scrollY=0. Statistics,
@@ -22,6 +22,17 @@ selected financial mode/period, received total and CASH/CARD/TRANSFER must fit. 
 tests cannot prove this criterion. At390×650 preserve scrolling, readable amounts, separate
 currencies, visible partial/UNKNOWN warnings, keyboard focus, date submission and Telegram Back;
 period disclosure must not issue requests. Physical Telegram iOS remains separate acceptance.
+
+HT-VENUE-STATS-OVERVIEW-DIFFERENTIATION-01 adds nine mandatory `stats overview panel` cases:
+six full-shell viewport/theme combinations plus independent periods/navigation, truthful empty/partial/
+unknown/multicurrency and background/late/denied contracts. PR/main inventory floor1025 rejects
+missing/skipped results. At390×844 an operational label and its authoritative value must be inside
+visualViewport without disclosure; all three counts are outside details. Received/methods stay visible,
+one copy per currency. Keep the full Finance composition, exact amount/mean tests and its existing
+shell bounds/clipping/hit-test assertions. Older full-financial assertions explicitly select Finance;
+they must not disappear when those fields leave Overview. Capture full before/after Overview and
+Finance separately in both engines. Operational dates come from the same all snapshot and retain
+calendar/DST definitions when current finance spans an older shift. No new server request for counters.
 
 ## HT-VENUE-PRODUCTS-CATEGORY-UX-01 — category report validation
 

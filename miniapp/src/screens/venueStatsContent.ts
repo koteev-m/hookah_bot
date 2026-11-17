@@ -151,12 +151,13 @@ function section(title: string, id: string, intro: string) {
 
 function financeGroups(groups: FinancialKpis[], provisional: boolean, compact = false) {
   const root = el('div', { className: 'stats-finance-currencies' })
+  if (compact) { root.setAttribute('role', 'group'); root.setAttribute('aria-label', provisional ? 'Оплаты за всю текущую смену — предварительно' : 'Оплаты закрытых смен по дате закрытия') }
   const basis = provisional ? 'Текущее состояние открытой смены на время обновления; выбранный период её не ограничивает.'
     : 'Сумма замороженных отчётов смен, закрытых в выбранные даты. Валюты не складываются.'
   groups.forEach(group => {
     const block = el('section', { className: 'stats-currency' })
     block.dataset.currency = group.currency
-    block.append(el('h3', { text: `Валюта: ${/^[A-Z]{3}$/.test(group.currency) ? group.currency : 'не определена'}` }))
+    block.append(el('h3', { className: compact && /^[A-Z]{3}$/.test(group.currency) ? 'stats-overview-currency' : '', text: `Валюта: ${/^[A-Z]{3}$/.test(group.currency) ? group.currency : 'не определена'}` }))
     const financialMetric = (definition: Definition) => metric(definition, group.metrics[definition[0]], group.currency, basis, false)
     const received = el('div', { className: 'stats-received' })
     received.append(financialMetric(money.find(d => d[0] === 'operatorConfirmed')!))
@@ -166,12 +167,17 @@ function financeGroups(groups: FinancialKpis[], provisional: boolean, compact = 
     paymentGrid.setAttribute('role', 'group'); paymentGrid.setAttribute('aria-label', `Способы оплаты · ${group.currency}`)
     paymentGrid.append(...payments.map(financialMetric)); received.append(paymentGrid); block.append(received)
     const grid = el('div', { className: 'stats-finance-kpis' })
-    for (const key of ['accrued', 'unpaid', 'sales', 'averageAccruedSale']) {
+    for (const key of compact ? ['sales'] : ['accrued', 'unpaid', 'sales', 'averageAccruedSale']) {
       const definition = money.find(d => d[0] === key)!
       grid.append(financialMetric(key === 'unpaid' ? [key, 'Неоплаченный остаток', definition[2]] : definition))
     }
     block.append(grid)
-    if (group.metrics.unallocatedAccrued) block.append(financialMetric(['unallocatedAccrued', 'Сверено без товарной расшифровки', 'Подтверждённый итог текстовых заказов; состав, скидки и подарки не восстановлены. Это не полученная оплата.']))
+    if (group.metrics.unallocatedAccrued) {
+      if (!compact) block.append(financialMetric(['unallocatedAccrued', 'Сверено без товарной расшифровки', 'Подтверждённый итог текстовых заказов; состав, скидки и подарки не восстановлены. Это не полученная оплата.']))
+      else if (group.metrics.unallocatedAccrued.value !== '0' || group.metrics.unallocatedAccrued.availability !== 'AVAILABLE' || group.metrics.unallocatedAccrued.coverage !== 'COMPLETE_RECORDED_SOURCE') {
+        block.append(el('p', { className: 'stats-warning', text: 'Есть сверенные суммы без полной товарной расшифровки. Подробности — в Финансах.' }))
+      }
+    }
     const additional: Definition[] = money.filter(d => ['discounts', 'gifts'].includes(d[0]))
     // Detail coverage stays visible even while the secondary amounts are collapsed.
     for (const [key, label] of additional) {
@@ -193,18 +199,20 @@ function financeGroups(groups: FinancialKpis[], provisional: boolean, compact = 
 
 function financialContent(snapshot: VenueKpiSnapshot, mode: 'current' | 'closed', compact = false, onCurrentShift?: () => void) {
   const current = mode === 'current'
-  const root = section(current ? 'Текущая смена' : 'Закрытые смены', 'finance', current
+  const root = section(compact ? 'Обзор работы заведения' : current ? 'Текущая смена' : 'Закрытые смены', 'finance', current
     ? 'Предварительные суммы всей открытой смены. Календарный период их не ограничивает.'
     : 'По датам закрытия смен за выбранный период. Текущая смена сюда не входит.')
   root.classList.add('stats-financial-content')
   const intro = root.querySelector('.stats-intro')!
   intro.remove()
-  if (current) root.append(el('p', { className: 'stats-shift-context', text: 'Предварительный итог · вся открытая смена' }))
+  if (current && !compact) root.append(el('p', { className: 'stats-shift-context', text: 'Предварительный итог · вся открытая смена' }))
   const stamp = (v: string) => new Intl.DateTimeFormat('ru-RU', { timeZone: snapshot.period.timezone, dateStyle: 'short', timeStyle: 'short' }).format(new Date(v))
   const coverage = snapshot.metrics[current ? 'finance.openReportCoverage' : 'finance.closedReports']
   const count = snapshot.metrics[current ? 'finance.openShifts' : 'finance.closedReports']
   const empty = count?.value === '0' && count.availability === 'AVAILABLE' && count.coverage === 'COMPLETE_RECORDED_SOURCE'
-  if (current && !empty) root.append(el('p', { className: 'stats-shift-context', text: snapshot.openShiftOpenedAt ? `Открыта ${stamp(snapshot.openShiftOpenedAt)}` : 'Время открытия не передано. Обновите приложение и сервер для точной границы смены.' }))
+  if (current && !empty) root.append(el('p', { className: 'stats-shift-context', text: snapshot.openShiftOpenedAt
+    ? compact ? `Вся смена с ${stamp(snapshot.openShiftOpenedAt)} · предварительно` : `Открыта ${stamp(snapshot.openShiftOpenedAt)}`
+    : 'Время открытия не передано. Обновите приложение и сервер для точной границы смены.' }))
   if (empty) {
     root.append(el('p', { text: current ? 'Сейчас открытой смены нет. Она появится после первой сохранённой продажи или заказа.' : 'Нет смен, закрытых в выбранный период. Учитывается дата закрытия по времени заведения, а не дата отдельных продаж.' }))
     if (!current && (snapshot.openShiftOpenedAt || snapshot.metrics['finance.openShifts']?.value === '1')) {
@@ -214,29 +222,51 @@ function financialContent(snapshot: VenueKpiSnapshot, mode: 'current' | 'closed'
   }
   else {
     if (!coverage || coverage.availability !== 'AVAILABLE') root.append(el('p', { className: 'stats-warning', text: coverageText(coverage) }))
-    if (!current) root.append(el('p', { className: 'stats-shift-context', text: coverage ? `Смен в расчёте: ${exactCount(coverage.samples)}.${coverage.unknown ? ` Без полного отчёта: ${exactCount(coverage.unknown)}.` : ''}` : 'Число смен недоступно.' }))
+    if (!current && (!compact || !coverage || coverage.unknown > 0)) root.append(el('p', { className: 'stats-shift-context', text: coverage ? `Смен в расчёте: ${exactCount(coverage.samples)}.${coverage.unknown ? ` Без полного отчёта: ${exactCount(coverage.unknown)}.` : ''}` : 'Число смен недоступно.' }))
     const groups = current ? snapshot.openShiftFinances : snapshot.closedShiftFinances
     if (!groups.length) root.append(el('p', { className: 'stats-warning', text: 'Недостаточно финансовых данных. Итоговые суммы недоступны.' }))
     root.append(financeGroups(groups, current, compact))
   }
   root.append(intro, el('p', { className: 'stats-note stats-receipt-note', text: 'Получено по учёту — записи сотрудника, не банковская сверка.' }))
-  if (!current) root.append(el('p', { className: 'stats-note', text: 'Аннулирование записи оплаты не является реальным возвратом. Остаток закрытой смены не означает текущий долг клиента.' }))
-  root.append(calculation(`${money.map(d => `${d[1]}: ${d[2]}`).join(' ')} ${current ? 'Учитывается вся открытая смена на время обновления.' : 'Учитываются сохранённые отчёты по дате закрытия смены в часовом поясе заведения.'} CASH/CARD/TRANSFER уже включают компоненты комбинированных оплат. Валюты не складываются.`))
+  if (!current && !compact) root.append(el('p', { className: 'stats-note', text: 'Аннулирование записи оплаты не является реальным возвратом. Остаток закрытой смены не означает текущий долг клиента.' }))
+  const definitions = compact ? money.filter(d => ['operatorConfirmed', 'sales'].includes(d[0])) : money
+  root.append(calculation(`${definitions.map(d => `${d[1]}: ${d[2]}`).join(' ')} ${current ? 'Учитывается вся открытая смена на время обновления.' : 'Учитываются сохранённые отчёты по дате закрытия смены в часовом поясе заведения.'} CASH/CARD/TRANSFER уже включают компоненты комбинированных оплат. Валюты не складываются.`))
   return root
 }
 
-export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview' | 'products' | 'additions' | 'finance' | 'service', productsView?: ProductsView, financeMode: 'current' | 'closed' = 'closed', onCurrentShift?: () => void): HTMLElement {
+export function renderStatsContent(snapshot: VenueKpiSnapshot, view?: 'overview' | 'products' | 'additions' | 'finance' | 'service', productsView?: ProductsView, financeMode: 'current' | 'closed' = 'closed', onCurrentShift?: () => void, onSection?: (view: 'finance' | 'service') => void): HTMLElement {
   const root = el('div', { className: 'stats-sections' })
   const m = snapshot.metrics
   if (view === 'overview') {
     root.classList.add('stats-overview')
-    root.append(financialContent(snapshot, financeMode, true, onCurrentShift))
-    const start = formatCalendarDate(calendarDateAt(snapshot.period.from, snapshot.period.timezone))
-    const end = formatCalendarDate(shiftCalendarDate(calendarDateAt(snapshot.period.to, snapshot.period.timezone), -1))
+    const overview = financialContent(snapshot, financeMode, true, onCurrentShift)
+    overview.classList.add('stats-overview-summary')
+    const start = calendarDateAt(snapshot.period.from, snapshot.period.timezone)
+    const end = shiftCalendarDate(calendarDateAt(snapshot.period.to, snapshot.period.timezone), -1)
+    const operations = el('div', { className: 'stats-overview-work' })
+    const period = el('p', { className: 'stats-overview-period', text: `Обслуживание: ${start.split('-').reverse().join('.')} — ${end.split('-').reverse().join('.')}` })
+    const grid = el('div', { className: 'stats-overview-operations' })
+    grid.setAttribute('role', 'group'); grid.setAttribute('aria-label', 'Работа заведения за календарный период')
+    grid.append(...([
+      ['orders.created', 'Заказы', 'Созданные заказы.'],
+      ['seatings.registeredSessions', 'Посадки', 'Зарегистрированные физические сессии.'],
+      ['calls.created', 'Вызовы', 'Созданные вызовы персонала.']
+    ] as Definition[]).map(d => metric(d, m[d[0]], undefined, '', false)))
+    append(operations, period, grid)
     if (Object.entries(m).some(([key, value]) => /^(orders|batches|items|bookings|seatings|calls)\./.test(key) && (value.availability === 'PARTIAL' || value.coverage === 'PARTIAL'))) {
-      root.append(el('p', { className: 'stats-warning stats-service-warning', text: 'Часть данных обслуживания неполна. Подробности — в операционных показателях ниже; финансовые итоги указаны отдельно.' }))
+      operations.append(el('p', { className: 'stats-warning stats-service-warning', text: 'Часть данных обслуживания неполна. Ограничения указаны у показателей; финансовые итоги указаны отдельно.' }))
     }
-    const operations = el('details', { className: 'stats-service-details' }); operations.append(el('summary', { text: 'Обслуживание за выбранный период' }), group('Операционные показатели', `Ручные продажи не создают заказы или посадки. Период обслуживания: ${start} — ${end} включительно (${snapshot.period.timezone}).`, [['orders.created', 'Созданные заказы', 'По времени создания.'], ['seatings.registeredSessions', 'Посадки', 'Физические сессии.'], ['calls.created', 'Вызовы', 'По времени создания.']], m)); root.append(operations)
+    overview.insertBefore(operations, overview.children[1] ?? null)
+    overview.append(el('p', { className: 'stats-note', text: `Обслуживание — календарный период по ${snapshot.period.timezone}. Ручные продажи не создают заказы или посадки.` }))
+    overview.querySelector('.stats-explanation p')?.append(document.createTextNode(' Заказы и вызовы считаются по созданию, посадки — по регистрации физических сессий, не по числу гостей.'))
+    if (onSection) {
+      const links = el('div', { className: 'stats-overview-links' })
+      for (const [view, title] of [['finance', 'Подробные финансы'], ['service', 'Подробное обслуживание']] as const) {
+        const button = el('button', { className: 'button-secondary', text: title }); button.type = 'button'; button.onclick = () => onSection(view); links.append(button)
+      }
+      overview.append(links)
+    }
+    root.append(overview)
     return root
   }
   if (view === 'products') return renderVenueProducts(snapshot, productsView)
