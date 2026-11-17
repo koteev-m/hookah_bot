@@ -40,7 +40,7 @@ export async function requestApi<T>(
     }
 
     try {
-      const response = await fetch(`${backendUrl}${path}`, init)
+      const response = await fetch(`${backendUrl}${path}`, { ...init, redirect: 'error' })
       if (response.ok) {
         return { ok: true, data: (maxResponseBytes ? await boundedJson(response, maxResponseBytes) : await response.json()) as T }
       }
@@ -142,7 +142,7 @@ export async function requestBinary(
     }
 
     try {
-      const response = await fetch(`${backendUrl}${path}`, init)
+      const response = await fetch(`${backendUrl}${path}`, { ...init, redirect: 'error' })
       if (response.ok) {
         const blob = await response.blob()
         const contentType = response.headers.get('Content-Type')

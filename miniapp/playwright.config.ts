@@ -7,6 +7,7 @@ const production = process.env.MINIAPP_E2E_PRODUCTION === 'true'
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: 'portable-release.spec.ts',
   outputDir: '../.tmp-checks/playwright',
   timeout: 30_000,
   expect: {

@@ -642,7 +642,6 @@ def verify_metadata(
     epoch: str,
     revision: str,
     source: str,
-    public_url: str,
     expected_manifest_digest: str,
 ) -> None:
     try:
@@ -659,7 +658,6 @@ def verify_metadata(
     args = parameters.get("args", {})
     expected_args = {
         "build-arg:SOURCE_DATE_EPOCH": epoch,
-        "build-arg:VITE_BACKEND_PUBLIC_URL": public_url,
         "label:org.opencontainers.image.revision": revision,
         "label:org.opencontainers.image.source": source,
     }
@@ -668,6 +666,8 @@ def verify_metadata(
             raise ReproducibilityError(
                 f"Buildx metadata argument mismatch for {key}: {args.get(key)!r}"
             )
+    if "build-arg:VITE_BACKEND_PUBLIC_URL" in args:
+        raise ReproducibilityError("Environment-specific Mini App API build argument is forbidden")
     if "no-cache" not in args:
         raise ReproducibilityError("Buildx metadata does not prove --no-cache")
     descriptor_platform = metadata.get("containerimage.descriptor", {}).get("platform", {})
@@ -890,7 +890,35 @@ def self_test() -> None:
         mapping = base["filesystem_history"]
         if [entry["history_index"] for entry in mapping] != [1, 3]:
             raise AssertionError(f"empty-layer history alignment failed: {mapping}")
-    print(f"backend image comparator self-test passed: {len(cases) + 2} fixture groups")
+
+        metadata_path = root / "metadata.json"
+        metadata = {
+            "containerimage.digest": "sha256:" + "d" * 64,
+            "containerimage.descriptor": {"platform": {"os": "linux", "architecture": "amd64"}},
+            "buildx.build.provenance": {"invocation": {"parameters": {"args": {
+                "build-arg:SOURCE_DATE_EPOCH": "100",
+                "label:org.opencontainers.image.revision": revision,
+                "label:org.opencontainers.image.source": source,
+                "no-cache": True,
+            }}}, "materials": []},
+        }
+        metadata_path.write_text(json.dumps(metadata))
+        verify_metadata(metadata_path, [], "100", revision, source, "sha256:" + "d" * 64)
+        arguments = metadata["buildx.build.provenance"]["invocation"]["parameters"]["args"]
+        for key, value in (("build-arg:VITE_BACKEND_PUBLIC_URL", "https://staging.invalid"),
+                           ("label:org.opencontainers.image.revision", "b" * 40)):
+            previous = dict(arguments)
+            arguments[key] = value
+            metadata_path.write_text(json.dumps(metadata))
+            try:
+                verify_metadata(metadata_path, [], "100", revision, source, "sha256:" + "d" * 64)
+            except ReproducibilityError:
+                pass
+            else:
+                raise AssertionError(f"unsafe build metadata accepted: {key}")
+            arguments.clear()
+            arguments.update(previous)
+    print(f"backend image comparator self-test passed: {len(cases) + 3} fixture groups")
 
 
 def command_compare(args: argparse.Namespace) -> None:
@@ -985,7 +1013,6 @@ def build_parser() -> argparse.ArgumentParser:
     metadata.add_argument("epoch")
     metadata.add_argument("revision")
     metadata.add_argument("source")
-    metadata.add_argument("public_url")
     metadata.add_argument("expected_manifest_digest")
 
     self_test_parser = subparsers.add_parser("self-test")
@@ -1013,7 +1040,6 @@ def main() -> None:
             args.epoch,
             args.revision,
             args.source,
-            args.public_url,
             args.expected_manifest_digest,
         )
         return
