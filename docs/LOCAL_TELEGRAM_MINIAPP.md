@@ -85,7 +85,7 @@ Do not change the existing `staging.hookahtootah.club` block.
 | `MINIAPP_ENTRY_ENABLED` | enables Telegram Mini App entry/buttons | `true` |
 | `MINIAPP_DEV_SERVER_URL` | backend `/miniapp/` proxy | `http://localhost:5173` |
 | `MINIAPP_STATIC_DIR` | backend static Mini App mode | empty |
-| `VITE_BACKEND_PUBLIC_URL` | Vite bundle API base URL | `https://dev.hookahtootah.club` |
+| `VITE_BACKEND_PUBLIC_URL` | Vite dev-server API override; release bundles ignore it | `https://dev.hookahtootah.club` |
 | `CORS_ALLOWED_HOSTS` | backend CORS allowlist | `https://dev.hookahtootah.club` |
 | `TELEGRAM_BOT_MODE` | backend Telegram bot mode | `long_polling` |
 | `DB_JDBC_URL` | backend DB connection | `jdbc:postgresql://localhost:5433/hookah` |
@@ -259,7 +259,9 @@ curl -I https://staging.hookahtootah.club/miniapp/
 
 - Telegram button opens staging: local backend is not the active bot poller, or `TELEGRAM_WEBAPP_PUBLIC_URL` was not overridden to `https://dev.hookahtootah.club/miniapp/`.
 - `https://dev.hookahtootah.club/health` fails: Caddy, DNS, or SSH reverse tunnel is not ready.
-- Mini App opens but API calls hit staging: Vite was started without `VITE_BACKEND_PUBLIC_URL=https://dev.hookahtootah.club`.
+- Dev API calls use the wrong origin: check the explicit dev-server `VITE_BACKEND_PUBLIC_URL` and
+  the opened page origin. Without an override, a public HTTPS dev page uses its own origin;
+  a local dev page defaults to `http://localhost:8080`. Release bundles always use their page origin.
 - Mini App opens but API calls fail CORS: backend was started without `CORS_ALLOWED_HOSTS=https://dev.hookahtootah.club`.
 - `/miniapp/` returns diagnostic text: backend was started without `MINIAPP_DEV_SERVER_URL=http://localhost:5173`, or Vite is not running.
 - Bot does not respond: staging backend may still be polling with the same token, or local backend lacks the bot token in environment.

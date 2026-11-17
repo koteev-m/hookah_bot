@@ -79,8 +79,10 @@ GitHub-hosted runner использует автоматически предо�
 job, `contents: read` сохраняется. Личный PAT и дополнительные repository secrets
 для публикации не нужны. Actions закреплены полными commit SHA.
 Образ собирается из checkout точного `github.sha`, `backend/Dockerfile`,
-для `linux/amd64`, с `VITE_BACKEND_PUBLIC_URL=https://staging.hookahtootah.club`
-и OCI source/revision labels. Имя: `ghcr.io/koteev-m/hookah_bot/backend:<полный-SHA>`.
+для `linux/amd64`, с same-origin Mini App и OCI source/revision labels.
+API origin не является build argument: auth/API/media используют origin открытой страницы.
+Это сохраняет HT70 URL и main-only publication; production runtime/bot/domain/secrets требуют
+отдельной подготовки и допуска. Имя: `ghcr.io/koteev-m/hookah_bot/backend:<полный-SHA>`.
 
 После push job читает manifest из registry, сверяет его digest с output сборки,
 затем читает config по immutable digest и проверяет platform/source/revision.

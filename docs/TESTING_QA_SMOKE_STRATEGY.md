@@ -1,5 +1,31 @@
 # Testing / QA Smoke Strategy
 
+## Portable Mini App release — HT-PORTABLE-RELEASE-SAME-ORIGIN-01
+
+Release auth/API/media resolve against `window.location.origin`; launch/query parameters and
+`VITE_BACKEND_PUBLIC_URL` cannot select another backend. Vite dev retains an explicit HTTPS or
+loopback HTTP override (origin only, no credentials/path/query/fragment); local default remains
+`http://localhost:8080`. Server RBAC/initData validation, CORS, bot URLs and tenant rules are unchanged.
+
+```bash
+VITE_BACKEND_PUBLIC_URL=https://unexpected-api.invalid NODE_ENV=production npm --prefix miniapp run build
+npm --prefix miniapp run e2e:portable -- --reporter=list,json
+python3 -B scripts/check_portable_release_results.py miniapp/playwright-portable-results.json
+```
+
+Set `PLAYWRIGHT_JSON_OUTPUT_FILE=playwright-portable-results.json` for that browser run. The existing
+`miniapp-e2e-smoke` CI job builds once with a deliberately wrong dev override, then runs the separate
+portable suite in Chromium/WebKit and rejects missing/duplicate/skipped/flaky/retried cases. The
+unchanged full Chromium inventory runs separately; portable tests are excluded from that inventory.
+The portable suite serves identical `dist` bytes at two synthetic HTTPS browser origins and mocks
+API/Telegram transport without contacting staging/production. Redirect cases use an ephemeral
+local TLS server/proxy and an OpenSSL-generated certificate (no system trust changes); installed
+Playwright browsers and `openssl` are required. It covers all three entry modes,
+session expiry/re-auth/account isolation, scoped image/PDF loading, foreign-media denial and
+auth/API/binary redirect rejection (no forwarding of launch credentials to another origin),
+invalid/missing launch/configuration and local dev ports. This does not verify public TLS, server auth/RBAC,
+Telegram iPhone smoke, a Docker runtime proof or production admission. Those remain later gates.
+
 ## HT-VENUE-STATISTICS-UX-REDESIGN-01 — financial presentation
 
 Local implementation; independent review, hosted CI and Telegram iOS acceptance remain separate.
@@ -5948,7 +5974,7 @@ Optional production/WebKit local gate (same synthetic API routes, no staging cal
 
 ```bash
 miniapp/node_modules/.bin/tsc -p miniapp/tsconfig.json --noEmit
-VITE_BACKEND_PUBLIC_URL=http://127.0.0.1:5174 npm --prefix miniapp run build
+npm --prefix miniapp run build
 MINIAPP_E2E_PORT=5174 MINIAPP_E2E_PRODUCTION=true MINIAPP_E2E_WEBKIT=true npm --prefix miniapp run e2e:smoke -- --grep 'PDF inline|direct venue info media|venue card media' --workers=1
 MINIAPP_E2E_PORT=5174 npm --prefix miniapp run e2e:smoke
 ```

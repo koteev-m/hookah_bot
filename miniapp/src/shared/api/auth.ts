@@ -134,6 +134,7 @@ export async function authenticate(initData: string): Promise<SessionToken> {
   try {
     const response = await fetch(`${backendUrl}/api/auth/telegram`, {
       method: 'POST',
+      redirect: 'error',
       headers: {
         'Content-Type': 'application/json'
       },

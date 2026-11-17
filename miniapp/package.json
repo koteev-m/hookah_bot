@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "e2e:smoke": "playwright test"
+    "e2e:smoke": "playwright test",
+    "e2e:portable": "playwright test --config playwright.portable.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",

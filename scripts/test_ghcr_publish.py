@@ -141,10 +141,12 @@ class PublicationTests(unittest.TestCase):
             'context': '.', 'file': 'backend/Dockerfile', 'platforms': 'linux/amd64',
             'push': 'true', 'provenance': 'false', 'sbom': 'false',
             'tags': '${{ env.IMAGE_NAME }}:${{ github.sha }}',
-            'build-args': 'VITE_BACKEND_PUBLIC_URL=https://staging.hookahtootah.club',
             'labels': 'org.opencontainers.image.source=' + SOURCE + '\n'
                       'org.opencontainers.image.revision=${{ github.sha }}\n'})
         self.assertEqual(JOB['env']['DOCKER_BUILD_RECORD_UPLOAD'], 'false')
+        self.assertNotIn('VITE_BACKEND_PUBLIC_URL', (ROOT / 'backend/Dockerfile').read_text())
+        self.assertNotIn('VITE_BACKEND_PUBLIC_URL', (ROOT / 'scripts/build-simple-staging-image.sh').read_text())
+        self.assertIn('RUN NODE_ENV=production npm run build', (ROOT / 'backend/Dockerfile').read_text())
         self.assertEqual(STEPS['candidate']['env']['BUILD_DIGEST'], '${{ steps.build.outputs.digest }}')
         upload = JOB['steps'][-1]['with']
         self.assertEqual(upload['name'], 'ghcr-candidate-${{ github.sha }}-${{ github.run_attempt }}')

@@ -5,14 +5,11 @@ ARG PACKAGED_VERSION=0.1.0
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS miniapp-build
 WORKDIR /workspace/miniapp
 
-ARG VITE_BACKEND_PUBLIC_URL=http://localhost:8080
-ENV VITE_BACKEND_PUBLIC_URL=$VITE_BACKEND_PUBLIC_URL
-
 COPY miniapp/package.json miniapp/package-lock.json ./
 RUN npm ci
 
 COPY miniapp ./
-RUN npm run build
+RUN NODE_ENV=production npm run build
 
 # Backend build stage
 # reproducibility-base: stage=build tag=eclipse-temurin:21-jdk index=sha256:85f00967bcc624fc19fa9c2cf124ea426a5363898e267141726f31f358c2e14b linux-amd64=sha256:a16bfc04b28f66c1d27218ffeefc8ae6a2621de423e01597156ba813ca5fa668

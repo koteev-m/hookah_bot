@@ -26,7 +26,10 @@ Do not mix docs-only work with runtime releases. Runtime changes must pass local
 
 Current practice:
 - Staging is a one-VPS Docker Compose deployment documented in `docs/STAGING_DEPLOYMENT.md`.
-- The Mini App production bundle is built into the backend image for staging.
+- The Mini App release bundle is built into the backend image and uses the page's own origin
+  for auth/API/media. Docker, GHCR and reproducibility builds do not select an API hostname.
+  The same immutable image can serve independent HTTPS origins; this does not create or admit
+  a production environment. `VITE_BACKEND_PUBLIC_URL` is a Vite dev-server override only.
 - Current staging URL is `https://staging.hookahtootah.club`.
 - HT70 Staff Photos R2 is an optional validated private `config.json` runtime block; existing
   configurations stay disabled. Adding/changing/removing it requires `deploy --apply-config`

@@ -108,7 +108,7 @@ Required staging values:
 - `MINIAPP_ENTRY_ENABLED=true`
 - `MINIAPP_DEV_SERVER_URL=`
 - `MINIAPP_STATIC_DIR=/app/miniapp`
-- `VITE_BACKEND_PUBLIC_URL=https://staging.hookahtootah.club`
+- Release Mini App uses its own HTTPS origin; `VITE_BACKEND_PUBLIC_URL` is not a Docker/runtime setting.
 - `CORS_ALLOWED_HOSTS=https://staging.hookahtootah.club`
 
 Environment ownership matrix:
@@ -117,7 +117,7 @@ Environment ownership matrix:
 | --- | --- | --- | --- | --- |
 | Backend runtime env | Ktor application | `APP_ENV=dev`, `DB_JDBC_URL=jdbc:postgresql://localhost:5433/hookah`, `TELEGRAM_WEBAPP_PUBLIC_URL=https://staging.hookahtootah.club/miniapp/`, `MINIAPP_DEV_SERVER_URL=http://localhost:5173`, `MINIAPP_STATIC_DIR=` | `APP_ENV=staging`, `DB_JDBC_URL=jdbc:postgresql://postgres:5432/hookah`, `TELEGRAM_WEBAPP_PUBLIC_URL=https://staging.hookahtootah.club/miniapp/`, `MINIAPP_DEV_SERVER_URL=`, `MINIAPP_STATIC_DIR=/app/miniapp` | `APP_ENV=production`, production DB URL, production Web App URL, `MINIAPP_DEV_SERVER_URL=`, static Mini App directory |
 | Docker Compose / Postgres env | `docker-compose.yml` and `postgres` container | `POSTGRES_PORT=5433`, local test DB credentials from local `.env` | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, optional host port, service name `postgres:5432` inside Compose | Separate production secrets, backup policy, and stricter host exposure |
-| Vite build env | Mini App bundle build | `VITE_BACKEND_PUBLIC_URL=https://staging.hookahtootah.club` when opened through Telegram/staging tunnel; `http://localhost:8080` only for plain local browser smoke | `VITE_BACKEND_PUBLIC_URL=https://staging.hookahtootah.club` baked into Docker image build | Production public backend origin |
+| Mini App API origin | Release bundle / Vite dev server | Dev-only `VITE_BACKEND_PUBLIC_URL`: explicit HTTPS origin or loopback HTTP origin; local default `http://localhost:8080` | Release uses page origin; no API hostname baked into image | Same release bytes use the production page origin; separate runtime admission remains required |
 
 Mode differences:
 

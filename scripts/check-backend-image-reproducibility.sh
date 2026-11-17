@@ -9,7 +9,6 @@ ARCHIVE_TOOL="${SCRIPT_DIR}/docker-save-archive.py"
 RELEASE_HELPER="${SCRIPT_DIR}/backend-image-release-artifact.sh"
 DOCKERFILE="${REPO_ROOT}/backend/Dockerfile"
 EXPECTED_SOURCE="https://github.com/koteev-m/hookah_bot"
-PUBLIC_URL="${BACKEND_REPRO_PUBLIC_URL:-https://staging.hookahtootah.club}"
 GRADLE_JVM_ARGS="-Xmx2048m -XX:MaxMetaspaceSize=768m"
 PRESERVE_EVIDENCE="${PRESERVE_REPRO_EVIDENCE:-false}"
 RELEASE_TAG=''
@@ -165,7 +164,7 @@ echo "SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH}"
 echo "Platform: linux/amd64"
 echo "Exporter: type=docker,oci-mediatypes=true,rewrite-timestamp=true plus mode-0600 OCI evidence"
 echo "Provenance export: disabled"
-echo "Public URL build argument: ${PUBLIC_URL}"
+echo "Mini App API: same origin (no environment-specific build argument)"
 echo "Canonical release tag: ${RELEASE_TAG}"
 
 BASE_PINS_FILE="${EVIDENCE_DIR}/base-pins.tsv"
@@ -210,7 +209,6 @@ build_image() {
     --output "type=oci,dest=${archive},oci-mediatypes=true,rewrite-timestamp=true" \
     --tag "${tag}" \
     --metadata-file "${metadata}" \
-    --build-arg "VITE_BACKEND_PUBLIC_URL=${PUBLIC_URL}" \
     --build-arg "GRADLE_JVM_ARGS=${GRADLE_JVM_ARGS}" \
     --build-arg "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}" \
     --build-arg "PACKAGED_VERSION=${PACKAGED_VERSION}" \
@@ -242,10 +240,10 @@ MANIFEST_A="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["i
 MANIFEST_B="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image_b"]["manifest_digest"])' "${EVIDENCE_DIR}/comparison.json")"
 python3 "${COMPARATOR}" verify-metadata \
   "${EVIDENCE_DIR}/build-a.metadata.json" "${DOCKERFILE}" "${SOURCE_DATE_EPOCH}" \
-  "${HEAD_SHA}" "${EXPECTED_SOURCE}" "${PUBLIC_URL}" "${MANIFEST_A}"
+  "${HEAD_SHA}" "${EXPECTED_SOURCE}" "${MANIFEST_A}"
 python3 "${COMPARATOR}" verify-metadata \
   "${EVIDENCE_DIR}/build-b.metadata.json" "${DOCKERFILE}" "${SOURCE_DATE_EPOCH}" \
-  "${HEAD_SHA}" "${EXPECTED_SOURCE}" "${PUBLIC_URL}" "${MANIFEST_B}"
+  "${HEAD_SHA}" "${EXPECTED_SOURCE}" "${MANIFEST_B}"
 
 # The exact reproduced image must pass OS-enforced PDF isolation before release artifact admission.
 python3 -B scripts/test_pdf_worker_docker.py --image "${IMAGE_ID_A}" \

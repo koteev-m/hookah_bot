@@ -18,7 +18,6 @@ output="$(cd "$output" && pwd -P)"
 image="ghcr.io/koteev-m/hookah_bot/backend:$revision"
 docker buildx build --platform linux/amd64 --provenance=false \
   --file backend/Dockerfile \
-  --build-arg VITE_BACKEND_PUBLIC_URL=https://staging.hookahtootah.club \
   --label org.opencontainers.image.source=https://github.com/koteev-m/hookah_bot \
   --label "org.opencontainers.image.revision=$revision" \
   --tag "$image" --push --metadata-file "$output/build.json" .
