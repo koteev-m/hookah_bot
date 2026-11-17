@@ -186,6 +186,9 @@ export function renderVenueStatsScreen(options: VenueStatsOptions) {
     }, financeMode(), () => {
       if (!currentActor() || denied || disposed) return
       financeModes[0].checked = true; syncPeriods(); void load()
+    }, view => {
+      if (!currentActor() || denied || disposed) return
+      section.value = view; section.focus({ preventScroll: true }); section.dispatchEvent(new Event('change'))
     }))
   }
   const syncPeriods = () => {
