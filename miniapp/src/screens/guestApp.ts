@@ -17,6 +17,7 @@ import {
 import { getCartSnapshot, setCartTableToken, subscribeCart } from '../shared/state/cartStore'
 import { parsePositiveInt } from '../shared/parse'
 import { bindTelegramBackButton } from '../shared/telegramBackButton'
+import { createGuestNavigation, guestRouteHash } from '../shared/guestNavigation'
 import { getTelegramContext, getTelegramQrScanner } from '../shared/telegram'
 import { openBotChat } from '../shared/telegramActions'
 import { extractTableTokenFromScannedText, tableTokenQueryParamKeys } from '../shared/validation/tableToken'
@@ -122,10 +123,16 @@ function resolveRoute(): Route {
   return { name: route, venueId: null, threadId: null, openStaffCall: false, cartLineRef: null }
 }
 
-function clearTableContextSearchParams() {
-  const nextUrl = new URL(window.location.href)
-  tableContextQueryParamKeys.forEach((key) => nextUrl.searchParams.delete(key))
-  window.history.replaceState(window.history.state, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+function visitUrl(hash: string, token?: string | null, endedSessionId?: number | null) {
+  const url = new URL(window.location.href)
+  tableContextQueryParamKeys.forEach((key) => url.searchParams.delete(key))
+  if (token) {
+    url.searchParams.set('screen', 'menu')
+    url.searchParams.set('table_token', token)
+    if (endedSessionId && endedSessionId > 0) url.searchParams.set('tableSessionId', String(endedSessionId))
+  }
+  url.hash = hash
+  return url
 }
 
 function showTelegramAlert(message: string) {
@@ -195,7 +202,7 @@ function renderRouteContent(
   selectedVenueId: number | null,
   conversations: Record<'messages' | 'support', GuestConversationState>,
   onAskVenue: (venueId: number) => void,
-  navigate: (hash: string, options?: { replace?: boolean; focusVenue?: number }) => void,
+  navigate: (hash: string, options?: { replace?: boolean; focusVenue?: number; parent?: string }) => void,
   startVenueChat: boolean
 ): () => void {
   const screenRoot = document.createElement('div')
@@ -213,12 +220,13 @@ function renderRouteContent(
         focusHeading: window.history.state?.hookahFocusVenue === route.venueId,
         replaceCartLineRef: route.cartLineRef,
         onOpenCatalog: onNavigateCatalog,
-        onOpenHelp: (venueId) => { window.location.hash = `#/support?venueId=${venueId}` },
+        onOpenHelp: (venueId) => navigate(`#/support?venueId=${venueId}`),
         onBack,
         onBookVenue: (venueId) => {
-          window.location.hash = `#/bookings?venueId=${venueId}`
+          navigate(`#/bookings?venueId=${venueId}`)
         },
-        onAskVenue
+        onAskVenue,
+        navigate
       })
     case 'cart':
       return renderCartScreen({
@@ -230,7 +238,7 @@ function renderRouteContent(
         onNavigateMenu: (focusHeading) => onNavigateMenu(tableSnapshot.venueId, focusHeading),
         onNavigateOptionReplacement: (cartLineRef) => {
           if (!tableSnapshot.venueId) return
-          window.location.hash = `#/venue/${tableSnapshot.venueId}?cartLineRef=${encodeURIComponent(cartLineRef)}`
+          navigate(`#/venue/${tableSnapshot.venueId}?cartLineRef=${encodeURIComponent(cartLineRef)}`)
         }
       })
     case 'order':
@@ -241,7 +249,8 @@ function renderRouteContent(
         backendUrl,
         isDebug,
         venueId: route.venueId,
-        onBack
+        onBack,
+        navigate
       })
     case 'account':
       return renderGuestAccountScreen({
@@ -251,18 +260,19 @@ function renderRouteContent(
         profileDraft,
         tableContext: tableSnapshot,
         onBack,
-        onOpenHelp: () => { window.location.hash = '#/support' },
+        onOpenHelp: () => navigate('#/support'),
         onOpenBookings: () => {
-          window.location.hash = '#/bookings'
+          navigate('#/bookings')
         },
         onOpenVenue,
         onBookVenue: (venueId) => {
-          window.location.hash = `#/bookings?venueId=${venueId}`
+          navigate(`#/bookings?venueId=${venueId}`)
         },
         onAskVenue,
         selectedVenueId,
+        navigate,
         onNavigateCart: () => {
-          window.location.hash = '#/cart'
+          navigate('#/cart')
         }
       })
     case 'messages':
@@ -310,9 +320,10 @@ function renderRouteContent(
         isDebug,
         onOpenVenue,
         onBookVenue: (venueId) => {
-          window.location.hash = `#/bookings?venueId=${venueId}`
+          navigate(`#/bookings?venueId=${venueId}`)
         },
-        onAskVenue
+        onAskVenue,
+        navigate
       })
   }
 }
@@ -433,7 +444,6 @@ function mountGuestScreens(options: GuestAppOptions) {
   const refs = buildGuestShell(root)
   let tableSnapshot = getTableContext()
   let currentRoute: Route = resolveRoute()
-  let catalogChosen = window.history.state?.hookahGuestCatalog === true && window.location.hash.startsWith('#/catalog')
   let mounted = true
   let selectedVenue = currentRoute.venueId ?? getVenueBrowseId()
   const profileDraft: GuestProfileDraft = {}
@@ -553,6 +563,11 @@ function mountGuestScreens(options: GuestAppOptions) {
     })()
   }
 
+  const contentRoot = (): string => selectedVenue ? `#/venue/${selectedVenue}`
+    : !navigation.isCatalogChosen() && resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId
+      ? `#/venue/${tableSnapshot.venueId}` : '#/catalog'
+  const navigation = createGuestNavigation(onNavigationChange, () => fallbackBackHash(), contentRoot)
+  let lastResolvedTable = tableSnapshot.status === 'resolved' ? tableSnapshot : null
   let resolvingQr = false
   const tableSubscription = subscribeTable((snapshot) => {
     const previousCanOpenOrder = canOpenActiveOrder(tableSnapshot)
@@ -571,6 +586,26 @@ function mountGuestScreens(options: GuestAppOptions) {
     refs.app.dataset.tableSeverity = presentation.severity
     if (nextMode !== 'active-table') {
       staffCallActive = false
+    }
+    if (snapshot.status === 'resolved') {
+      const previous = lastResolvedTable
+      lastResolvedTable = snapshot
+      const changed = previous && (previous.tableToken !== snapshot.tableToken ||
+        previous.tableSessionId !== snapshot.tableSessionId || previous.tableSessionActive !== snapshot.tableSessionActive)
+      const firstEndedSession = !previous && nextMode === 'ended-table' && (snapshot.tableSessionId ?? 0) > 0
+      if (!resolvingQr && (changed || firstEndedSession)) {
+        const venueId = snapshot.tableSessionActive ? snapshot.venueId : null
+        const sessionId = snapshot.tableSessionId || (previous?.tableToken === snapshot.tableToken ? previous?.tableSessionId : null)
+        const url = visitUrl(venueId ? `#/venue/${venueId}` : '#/catalog', snapshot.tableToken,
+          snapshot.tableSessionActive ? null : sessionId)
+        if (changed || !navigation.hasEndedVisitRoot(url)) {
+          selectedVenue = venueId
+          navigation.resetVisit(url, { ended: !snapshot.tableSessionActive })
+          return
+        }
+      }
+    } else if (snapshot.status === 'missing') {
+      lastResolvedTable = null
     }
     renderShellActions()
     refreshVisitExitAvailability()
@@ -618,67 +653,55 @@ function mountGuestScreens(options: GuestAppOptions) {
   window.addEventListener('hookah:guest-staff-call-state', handleStaffCallState)
   disposables.push(() => window.removeEventListener('hookah:guest-staff-call-state', handleStaffCallState))
 
-  // Browser and Telegram use the same history entries, including old hash links.
-  const historyKey = 'hookahGuestDepth'
-  const historyDepth = () => Number(window.history.state?.[historyKey] ?? 0)
-  if (!Number.isInteger(window.history.state?.[historyKey])) {
-    window.history.replaceState({ ...window.history.state, [historyKey]: 0 }, '')
-  }
-  let currentDepth = historyDepth()
-  let currentHash = window.location.hash
-  const navigate = (hash: string, options?: { replace?: boolean; focusVenue?: number }) => {
-    if (window.location.hash === hash) return
-    const url = new URL(window.location.href)
-    url.hash = hash
-    const state = {
-      ...window.history.state,
-      [historyKey]: currentDepth + (options?.replace ? 0 : 1),
-      hookahFocusVenue: options?.focusVenue ?? null,
-      hookahGuestCatalog: hash.startsWith('#/catalog') && catalogChosen,
-      hookahGuestPrevious: options?.replace ? window.history.state?.hookahGuestPrevious : currentHash
-    }
-    if (options?.replace) window.history.replaceState(state, '', url)
-    else window.history.pushState(state, '', url)
-    window.dispatchEvent(new Event('hashchange'))
-  }
+  const { navigate } = navigation
   const askVenue = (venueId: number) => {
     pendingVenueChat = venueId
     navigate(`#/messages?venueId=${venueId}`)
   }
   const openCatalog = () => {
     if (getVenueBrowseId()) clearVenueBrowse()
-    catalogChosen = true
-    navigate('#/catalog')
+    navigate('#/catalog', { root: true, catalogChosen: true })
   }
   const openVisit = () => {
     if (!tableSnapshot.venueId) return
     selectedVenue = tableSnapshot.venueId
-    navigate(`#/venue/${tableSnapshot.venueId}`)
+    navigate(`#/venue/${tableSnapshot.venueId}`, { root: true })
   }
   visitReturn.addEventListener('click', openVisit)
 
   const routeListeners = new Set<() => void>()
   const notifyRouteChange = () => routeListeners.forEach((listener) => listener())
-  const fallbackBackHash = () => {
-    if (currentRoute.name === 'venue' && /[?&](browseMenu|media)=/.test(window.location.hash)) {
-      return `#/venue/${currentRoute.venueId}`
-    }
+  const fallbackBackHash = (): string | null => {
+    const hash = guestRouteHash()
+    if (hash === '#/catalog') return null
     if (currentRoute.name === 'catalog') return '#/catalog'
-    if (currentRoute.name === 'account' && window.location.hash !== '#/account') {
-      const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+    if (currentRoute.name === 'account' && hash !== '#/account') {
+      const params = new URLSearchParams(hash.split('?')[1] ?? '')
       if (params.has('visit')) {
         params.delete('visit')
         return `#/account/history${params.size ? `?${params}` : ''}`
       }
       return '#/account'
     }
-    if (currentRoute.name === 'support' || (currentRoute.name === 'bookings' && !currentRoute.venueId)) return '#/account'
     if (currentRoute.name === 'messages' && (currentRoute.threadId || currentRoute.venueId)) return '#/messages'
-    return selectedVenue && currentRoute.name !== 'venue' ? `#/venue/${selectedVenue}` : '#/catalog'
+    if (currentRoute.name === 'support' && currentRoute.threadId) {
+      const previous = navigation.previousHash()
+      if (previous?.startsWith('#/support') && !/[?&](threadId|thread_id)=/.test(previous)) return previous
+      return currentRoute.venueId ? `#/support?venueId=${currentRoute.venueId}` : '#/support'
+    }
+    const previous = navigation.previousHash()
+    if (previous) return previous
+    if (currentRoute.name === 'support' || (currentRoute.name === 'bookings' && !currentRoute.venueId)) return '#/account'
+    if (currentRoute.name === 'venue') {
+      if (/[?&]cartLineRef=/.test(hash)) return '#/cart'
+      const cardAlias = new URLSearchParams(hash.split('?')[1] ?? '').get('browseMenu') === '0'
+      const activeMenu = resolveTableMode(tableSnapshot) === 'active-table' &&
+        tableSnapshot.venueId === currentRoute.venueId && getVenueBrowseId() !== currentRoute.venueId
+      if (hash.includes('?') && (!cardAlias || activeMenu)) return `#/venue/${currentRoute.venueId}`
+      return currentRoute.venueId === (getVenueBrowseId() ?? tableSnapshot.venueId) ? null : '#/catalog'
+    }
+    return contentRoot()
   }
-  const canFallBack = () => window.location.hash !== '#/catalog' &&
-    !(currentRoute.name === 'venue' && currentRoute.venueId === (getVenueBrowseId() ?? tableSnapshot.venueId) &&
-      !window.location.hash.includes('?'))
 
   let cancelQrScan: (() => void) | null = null
   disposables.push(() => cancelQrScan?.())
@@ -736,14 +759,9 @@ function mountGuestScreens(options: GuestAppOptions) {
               return
             }
             if (getVenueBrowseId() !== null) clearVenueBrowse()
-            catalogChosen = false
-            const nextUrl = new URL(window.location.href)
-            tableContextQueryParamKeys.forEach((key) => nextUrl.searchParams.delete(key))
-            nextUrl.searchParams.set('table_token', token)
-            window.history.replaceState(window.history.state, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
             if (snapshot.status === 'resolved' && snapshot.venueId && snapshot.tableSessionActive) {
               selectedVenue = snapshot.venueId
-              navigate(`#/venue/${snapshot.venueId}`, { replace: true })
+              navigation.resetVisit(visitUrl(`#/venue/${snapshot.venueId}`, token))
             }
           })
           .catch(() => showTelegramAlert('Не удалось загрузить стол. Попробуйте позже.'))
@@ -757,6 +775,13 @@ function mountGuestScreens(options: GuestAppOptions) {
       webApp?.showAlert?.('Не удалось открыть QR-сканер.')
     }
   }
+  const leaveVisit = () => {
+    clearCurrentTableContext()
+    setCartTableToken(null)
+    staffCallActive = false
+    selectedVenue = null
+    navigation.resetVisit(visitUrl('#/catalog'))
+  }
   const endTableVisit = () => {
     if (visitExitPending) return
     const snapshot = tableSnapshot
@@ -766,11 +791,7 @@ function mountGuestScreens(options: GuestAppOptions) {
       !snapshot.tableSessionId ||
       snapshot.tableSessionId <= 0
     ) {
-      clearTableContextSearchParams()
-      clearCurrentTableContext()
-      setCartTableToken(null)
-      staffCallActive = false
-      navigate('#/catalog', { replace: true })
+      leaveVisit()
       return
     }
     if (!window.confirm(`Завершить визит: ${snapshot.venueName ?? 'заведение'}, стол №${snapshot.tableNumber ?? '—'}? Вы выйдете из текущей сессии стола и корзины. Для нового заказа понадобится снова отсканировать QR.`)) return
@@ -795,11 +816,7 @@ function mountGuestScreens(options: GuestAppOptions) {
             const message = 'Контекст стола уже недоступен. Отсканируйте QR заново.'
             refs.statusDetails.textContent = message
             showTelegramAlert(message)
-            clearTableContextSearchParams()
-            clearCurrentTableContext()
-            setCartTableToken(null)
-            staffCallActive = false
-            navigate('#/catalog', { replace: true })
+            leaveVisit()
             return
           }
           const message = result.error.message || 'Не удалось завершить визит. Попробуйте позже.'
@@ -816,11 +833,7 @@ function mountGuestScreens(options: GuestAppOptions) {
         const message = result.data.message || 'Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.'
         refs.statusDetails.textContent = message
         showTelegramAlert(message)
-        clearTableContextSearchParams()
-        clearCurrentTableContext()
-        setCartTableToken(null)
-        staffCallActive = false
-        navigate('#/catalog', { replace: true })
+        leaveVisit()
       })
       .catch(() => {
         const message = 'Не удалось завершить визит. Попробуйте позже.'
@@ -835,7 +848,7 @@ function mountGuestScreens(options: GuestAppOptions) {
         const venue = selectedVenue ?? (resolveTableMode(tableSnapshot) === 'active-table' ? tableSnapshot.venueId : null)
         if (venue) {
           const showingActiveMenu = tableSnapshot.venueId === venue && tableSnapshot.orderAllowed && getVenueBrowseId() !== venue
-          navigate(`#/venue/${venue}${showingActiveMenu ? '?browseMenu=0' : ''}`)
+          navigate(`#/venue/${venue}${showingActiveMenu ? '?browseMenu=0' : ''}`, { root: true })
         } else {
           openCatalog()
         }
@@ -861,10 +874,10 @@ function mountGuestScreens(options: GuestAppOptions) {
         endTableVisit()
         return
       case 'account':
-        navigate('#/account')
+        navigate('#/account', { root: true })
         return
       case 'messages':
-        navigate('#/messages')
+        navigate('#/messages', { root: true })
         return
       default:
         return
@@ -872,7 +885,7 @@ function mountGuestScreens(options: GuestAppOptions) {
   }
   renderShellActions()
   const refreshResolvedTableContext = () => {
-    if (!resolvingQr && !visitExitPending && tableSnapshot.status === 'resolved' && tableSnapshot.tableToken) {
+    if (!resolvingQr && !visitExitPending && tableSnapshot.status === 'resolved' && tableSnapshot.tableSessionActive) {
       void refreshTableContext()
     }
   }
@@ -892,11 +905,8 @@ function mountGuestScreens(options: GuestAppOptions) {
   const router = {
     getRouteName: () => currentRoute.name,
     navigate,
-    back: () => {
-      if (currentDepth > 0) window.history.back()
-      else if (canFallBack()) navigate(fallbackBackHash(), { replace: true })
-    },
-    canGoBack: () => currentDepth > 0 || canFallBack(),
+    back: navigation.back,
+    canGoBack: navigation.canGoBack,
     subscribe: (handler: () => void) => {
       routeListeners.add(handler)
       return () => routeListeners.delete(handler)
@@ -920,11 +930,11 @@ function mountGuestScreens(options: GuestAppOptions) {
       })
     }
     if (route.name === 'venue' && route.venueId) selectedVenue = route.venueId
-    if (route.name === 'catalog' && (catalogChosen || window.location.hash === '#/catalog/promotions')) selectedVenue = null
+    if (route.name === 'catalog') selectedVenue = null
     renderShellActions()
     refreshVisitExitAvailability()
     currentDispose?.()
-    if (route.name === 'catalog' && window.location.hash !== '#/catalog/promotions' && !catalogChosen && !getVenueBrowseId() && resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
+    if (route.name === 'catalog' && window.location.hash !== '#/catalog/promotions' && !navigation.isCatalogChosen() && !getVenueBrowseId() && resolveTableMode(tableSnapshot) === 'active-table' && tableSnapshot.venueId) {
       navigate(`#/venue/${tableSnapshot.venueId}`, { replace: true })
       return
     }
@@ -936,7 +946,8 @@ function mountGuestScreens(options: GuestAppOptions) {
         backendUrl,
         isDebug,
         onOpenVenue: (venueId) => navigate(`#/venue/${venueId}`),
-        onBookVenue: (venueId) => navigate(`#/bookings?venueId=${venueId}`)
+        onBookVenue: (venueId) => navigate(`#/bookings?venueId=${venueId}`),
+        navigate
       })
       return
     }
@@ -1007,26 +1018,18 @@ function mountGuestScreens(options: GuestAppOptions) {
   }
   rerenderForTableChange = render
 
-  const onHashChange = () => {
-    if (!Number.isInteger(window.history.state?.[historyKey])) {
-      window.history.replaceState({
-        ...window.history.state, [historyKey]: currentDepth + 1, hookahGuestPrevious: currentHash
-      }, '')
-    }
-    currentDepth = historyDepth()
-    currentHash = window.location.hash
-    refs.statusDetails.textContent = ''
+  function onNavigationChange() {
+    if (resolveTableMode(tableSnapshot) !== 'ended-table') refs.statusDetails.textContent = ''
     render()
     notifyRouteChange()
   }
 
-  window.addEventListener('hashchange', onHashChange)
   render()
   notifyRouteChange()
 
   return () => {
     mounted = false
-    window.removeEventListener('hashchange', onHashChange)
+    navigation.dispose()
     exitCheckAbort?.abort()
     currentDispose?.()
     unbindBackButton()

@@ -58,6 +58,7 @@ export type GuestAccountScreenOptions = {
   onAskVenue: (venueId: number) => void
   onNavigateCart: () => void
   selectedVenueId: number | null
+  navigate: (hash: string) => void
 }
 
 function requestDeps(isDebug: boolean) {
@@ -94,15 +95,16 @@ function errorText(error: ApiErrorInfo): string {
 function renderAccountHome(
   root: HTMLElement,
   onOpenBookings: () => void,
-  onOpenHelp: () => void
+  onOpenHelp: () => void,
+  navigate: (hash: string) => void
 ) {
   const section = el('section', { className: 'card guest-account-home' })
   const rows: Array<[string, () => void]> = [
-    ['Личные данные', () => { window.location.hash = '#/account/profile' }],
+    ['Личные данные', () => navigate('#/account/profile')],
     ['Мои брони', onOpenBookings],
-    ['История', () => { window.location.hash = '#/account/history' }],
-    ['Избранное', () => { window.location.hash = '#/account/favorites' }],
-    ['Лояльность', () => { window.location.hash = '#/account/loyalty' }],
+    ['История', () => navigate('#/account/history')],
+    ['Избранное', () => navigate('#/account/favorites')],
+    ['Лояльность', () => navigate('#/account/loyalty')],
     ['Помощь', onOpenHelp]
   ]
   section.appendChild(el('h1', { text: 'Профиль' }))
@@ -707,7 +709,8 @@ function renderHistorySection(
   isDebug: boolean,
   tableContext: TableContextSnapshot,
   onNavigateCart: () => void,
-  onBack: () => void
+  onBack: () => void,
+  navigate: (hash: string) => void
 ) {
   const controller = new AbortController()
   const deps = requestDeps(isDebug)
@@ -728,7 +731,7 @@ function renderHistorySection(
   for (const [id, label] of [['bookings', 'Бронирования'], ['visits', 'Посещения'], ['orders', 'Заказы']] as const) {
     const button = el('button', { text: label, className: 'button-secondary button-small' })
     button.setAttribute('aria-pressed', String(kind === id))
-    button.addEventListener('click', () => { window.location.hash = id === 'visits' ? '#/account/history' : `#/account/history?kind=${id}` })
+    button.addEventListener('click', () => navigate(id === 'visits' ? '#/account/history' : `#/account/history?kind=${id}`))
     tabs.appendChild(button)
   }
   const status = el('p', { className: 'status' })
@@ -778,7 +781,7 @@ function renderHistorySection(
       if (controller.signal.aborted) return
       if (result.ok) {
         for (const item of result.data.items) {
-          const summary = renderVisitSummary(item, (id) => { window.location.hash = historyHash(id) }, kind === 'orders')
+          const summary = renderVisitSummary(item, (id) => navigate(historyHash(id)), kind === 'orders')
           list.appendChild(summary.card)
         }
         cursor = result.data.items.at(-1)?.visitId ?? cursor
@@ -954,7 +957,7 @@ function renderFavoritesSection(
 export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
   const {
     root, backendUrl, isDebug, profileDraft, onOpenHelp, tableContext, onBack, onOpenBookings,
-    onOpenVenue, onBookVenue, onAskVenue, onNavigateCart, selectedVenueId
+    onOpenVenue, onBookVenue, onAskVenue, onNavigateCart, selectedVenueId, navigate
   } = options
   if (!root) return () => undefined
 
@@ -963,12 +966,12 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
     case 'profile':
       return renderGuestProfile(root, backendUrl, isDebug, profileDraft, onBack)
     case 'history':
-      return renderHistorySection(root, backendUrl, isDebug, tableContext, onNavigateCart, onBack)
+      return renderHistorySection(root, backendUrl, isDebug, tableContext, onNavigateCart, onBack, navigate)
     case 'favorites':
       return renderFavoritesSection(root, backendUrl, isDebug, onBack, onOpenVenue, onBookVenue, onAskVenue)
     case 'loyalty':
-      return renderGuestLoyalty(root, backendUrl, isDebug, selectedVenueId, tableContext, onBack, onOpenVenue)
+      return renderGuestLoyalty(root, backendUrl, isDebug, selectedVenueId, tableContext, onBack, onOpenVenue, navigate)
     default:
-      return renderAccountHome(root, onOpenBookings, onOpenHelp)
+      return renderAccountHome(root, onOpenBookings, onOpenHelp, navigate)
   }
 }

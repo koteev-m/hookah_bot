@@ -35,6 +35,7 @@ type GuestBookingsOptions = {
   isDebug: boolean
   venueId: number | null
   onBack: () => void
+  navigate: (hash: string) => void
 }
 
 type GuestBookingRefs = {
@@ -706,7 +707,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
     const reconciliation = bookingThreadReconciliation.get(booking.bookingId)
     if (!reconciliation || reconciliation.status === 'LOADING' || reconciliation.status === 'ERROR') return
     if (reconciliation.status === 'READY_WITH_THREAD') {
-      window.location.hash = `#/messages?threadId=${encodeURIComponent(String(reconciliation.thread.threadId))}`
+      options.navigate(`#/messages?threadId=${encodeURIComponent(String(reconciliation.thread.threadId))}`)
       return
     }
     abortController?.abort()
@@ -735,7 +736,7 @@ export function renderGuestBookingsScreen(options: GuestBookingsOptions) {
       thread: result.data.thread
     })
     status.textContent = ''
-    window.location.hash = `#/messages?threadId=${encodeURIComponent(String(result.data.thread.threadId))}`
+    options.navigate(`#/messages?threadId=${encodeURIComponent(String(result.data.thread.threadId))}`)
   }
 
   const submitBooking = async () => {

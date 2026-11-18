@@ -22726,8 +22726,8 @@ type ScannerWindow = Window & {
   __qrCancel?: () => void
 }
 
-async function installQrScanner(page: Page) {
-  await installTelegramWebApp(page, 123456789)
+async function installQrScanner(page: Page, startParam?: string) {
+  await installTelegramWebApp(page, 123456789, startParam)
   await page.addInitScript(() => {
     const scannerWindow = window as unknown as ScannerWindow
     scannerWindow.__qrAlerts = []
@@ -30175,4 +30175,1039 @@ for (const kind of ['earned', 'compensation'] as const) test(`loyalty review P2 
   await expect(page.getByText(`Доступно наград · ${program.rewardsAvailable}`)).toBeVisible()
   await expect(page.getByText('Зарезервировано в заказах · 0')).toBeVisible()
   await expect(page.getByText(/VENUE_COMPENSATION|СЛУЖЕБНАЯ ПРИЧИНА|actorUserId|loyaltyHistory/)).toHaveCount(0)
+})
+
+test('guest navigation repeated main tabs return directly to the content root', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest#/catalog')
+  const nav = page.getByRole('navigation', { name: 'Гостевая навигация' })
+  await expect(nav).toBeVisible()
+  const initialLength = await page.evaluate(() => history.length)
+  for (let i = 0; i < 4; i += 1) {
+    await nav.getByRole('button', { name: 'Чаты', exact: true }).click()
+    await expect(page).toHaveURL(/#\/messages$/)
+    await nav.getByRole('button', { name: 'Профиль', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Профиль', exact: true })).toBeVisible()
+  }
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await expectTelegramBackButtonHidden(page)
+  expect(await page.evaluate(() => history.length)).toBeLessThanOrEqual(initialLength + 1)
+  expect(await page.evaluate(() => (window as TestTelegramWindow).__e2eTelegramSendDataPayloads)).toEqual([])
+})
+
+test('guest navigation collapses abandoned child branches and preserves browser Back Forward', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest#/catalog')
+  const nav = page.getByRole('navigation', { name: 'Гостевая навигация' })
+  const initialLength = await page.evaluate(() => history.length)
+  for (let i = 0; i < 3; i += 1) {
+    await nav.getByRole('button', { name: 'Профиль', exact: true }).click()
+    await page.getByRole('button', { name: 'Личные данные' }).click()
+    await expect(page).toHaveURL(/#\/account\/profile$/)
+    await nav.getByRole('button', { name: 'Чаты', exact: true }).click()
+    await expect(page).toHaveURL(/#\/messages$/)
+    await page.goBack()
+    await expect(page).toHaveURL(/#\/catalog$/)
+    await expectTelegramBackButtonHidden(page)
+    await page.goForward()
+    await expect(page).toHaveURL(/#\/messages$/)
+    expect(await page.evaluate(() => history.length)).toBeLessThanOrEqual(initialLength + 1)
+  }
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await page.screenshot({ path: testInfo.outputPath('guest-navigation-root-390.png') })
+})
+
+test('guest navigation nested browser history retains profile draft and ignores duplicate route events', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  let reads = 0
+  await page.route('**/api/guest/profile', route => {
+    reads += 1
+    return route.fulfill(jsonResponse({ displayName: 'Сохранённое имя', birthday: null }))
+  })
+  const writes: string[] = []
+  page.on('request', request => {
+    if (new URL(request.url()).pathname.startsWith('/api/guest/profile/') && request.method() === 'PUT') writes.push(request.url())
+  })
+  await page.goto('?mode=guest#/catalog')
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Личные данные' }).click()
+  const input = page.getByRole('textbox', { name: 'Имя', exact: true })
+  await expect(input).toHaveValue('Сохранённое имя')
+  await input.fill('Несохранённый черновик')
+  const length = await page.evaluate(() => history.length)
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('hashchange'))
+    window.dispatchEvent(new PopStateEvent('popstate', { state: history.state }))
+  })
+  await expect(input).toHaveValue('Несохранённый черновик')
+  expect(reads).toBe(1)
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/account$/)
+  await page.goForward()
+  await expect(input).toHaveValue('Несохранённый черновик')
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/account$/)
+  expect(await page.evaluate(() => history.length)).toBe(length)
+  await page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'Чаты', exact: true }).click()
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Личные данные' }).click()
+  await expect(input).toHaveValue('Несохранённый черновик')
+  expect(writes).toEqual([])
+})
+
+for (const entry of [
+  { hash: '#/account/profile', parents: ['#/account', '#/catalog'] },
+  { hash: '#/account/history?kind=orders&visit=99', parents: ['#/account/history?kind=orders', '#/account', '#/catalog'] },
+  { hash: '#/messages?threadId=901', parents: ['#/messages', '#/catalog'] },
+  { hash: '#/support?threadId=902', parents: ['#/support', '#/account', '#/catalog'] },
+  { hash: '#/bookings?venueId=1', parents: ['#/venue/1', '#/catalog'] },
+  { hash: '#/catalog/promotions', parents: ['#/catalog'] },
+  { hash: '#/venue/1?browseMenu=1', parents: ['#/venue/1', '#/catalog'] }
+]) test(`guest navigation deep link ${entry.hash} uses parents without pushing Back entries`, async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto(`?mode=guest${entry.hash}`)
+  await expect(page.getByRole('navigation', { name: 'Гостевая навигация' })).toBeVisible()
+  await page.evaluate(() => {
+    ;(window as any).__guestNavigationCloseCalls = 0
+    ;(window as any).Telegram.WebApp.close = () => { (window as any).__guestNavigationCloseCalls += 1 }
+  })
+  const length = await page.evaluate(() => history.length)
+  for (const parent of entry.parents) {
+    await expect.poll(() => page.evaluate(() => (window as TestTelegramWindow).__e2eTelegramBackButtonVisible)).toBe(true)
+    await clickTelegramBackButton(page)
+    await expect.poll(() => page.evaluate(() => location.hash)).toBe(parent)
+    expect(await page.evaluate(() => history.length)).toBe(length)
+  }
+  await expectTelegramBackButtonHidden(page)
+  expect(await page.evaluate(() => (window as any).__guestNavigationCloseCalls)).toBe(0)
+})
+
+test('guest navigation legacy hash entry and reload keep logical Back inside Guest', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest#/catalog')
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Личные данные' }).click()
+  await expect(page).toHaveURL(/#\/account\/profile$/)
+  await page.evaluate(() => { window.location.hash = '#/account/history?kind=bookings' })
+  await expect(page.getByRole('heading', { name: 'История', exact: true })).toBeVisible()
+  const length = await page.evaluate(() => history.length)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/account$/)
+  expect(await page.evaluate(() => history.length)).toBe(length)
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/account\/profile$/)
+  await page.goForward()
+  await expect(page).toHaveURL(/#\/account$/)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Профиль', exact: true })).toBeVisible()
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+})
+
+test('guest navigation rapid Telegram Back and root changes have one logical destination', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest#/catalog')
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Личные данные' }).click()
+  await expect(page).toHaveURL(/#\/account\/profile$/)
+  await page.evaluate(() => {
+    const click = (window as any).__e2eTelegramBackClick
+    click(); click()
+  })
+  await expect(page).toHaveURL(/#\/account$/)
+  await page.getByRole('button', { name: 'Личные данные' }).click()
+  await expect(page).toHaveURL(/#\/account\/profile$/)
+  await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('.guest-nav button')]
+    for (const label of ['Чаты', 'Профиль']) buttons.find(button => button.textContent?.trim() === label)!.click()
+  })
+  await expect(page).toHaveURL(/#\/account$/)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await expectTelegramBackButtonHidden(page)
+})
+
+test('guest navigation active QR visit keeps cart and order without ending or submitting', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await page.getByRole('button', { name: 'Добавить', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await page.getByPlaceholder('Комментарий к заказу').fill('Черновик для текущего стола')
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  const nav = page.getByRole('navigation', { name: 'Гостевая навигация' })
+  for (let i = 0; i < 3; i += 1) {
+    await nav.getByRole('button', { name: 'Чаты', exact: true }).click()
+    await nav.getByRole('button', { name: 'Профиль', exact: true }).click()
+    await page.getByRole('button', { name: 'Личные данные' }).click()
+    await clickTelegramBackButton(page)
+    await expect(page).toHaveURL(/#\/account$/)
+    await clickTelegramBackButton(page)
+    await expect(page).toHaveURL(/#\/venue\/1$/)
+    await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+  }
+  await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await expect(page.getByText('Double Apple').first()).toBeVisible()
+  await expect(page.getByPlaceholder('Комментарий к заказу')).toHaveValue('Черновик для текущего стола')
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  expect(new URL(page.url()).searchParams.get('table_token')).toBe(tableToken)
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await expect(page.getByText('Счёт: Личный счёт')).toBeVisible()
+  await expect(page.locator('.order-item').filter({ hasText: 'Double Apple' })).toBeVisible()
+  expect(api.getAddBatchRequests()).toEqual([])
+  expect(api.getBillRequestRequests()).toEqual([])
+  expect(api.getTableSessionEndRequests()).toEqual([])
+})
+
+test('guest navigation venue menu return does not create alternating Back entries', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest#/catalog')
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  const length = await page.evaluate(() => history.length)
+  for (let i = 0; i < 4; i += 1) {
+    await page.getByRole('button', { name: 'Меню', exact: true }).click()
+    await expect(page).toHaveURL(/browseMenu=1$/)
+    await page.getByRole('button', { name: 'Карточка заведения', exact: true }).click()
+    await expect(page).toHaveURL(/#\/venue\/1\?browseMenu=0$/)
+    expect(await page.evaluate(() => history.length)).toBeLessThanOrEqual(length + 1)
+  }
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await expectTelegramBackButtonHidden(page)
+})
+
+test('guest navigation review discards Forward children of a replaced main tab', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest#/catalog')
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Личные данные' }).click()
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/account$/)
+  await page.getByRole('button', { name: 'Чаты', exact: true }).click()
+  await expect(page).toHaveURL(/#\/messages$/)
+  await page.goForward()
+  await expect(page).toHaveURL(/#\/messages$/)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+})
+
+test('guest navigation review synthetic parent leaves filtered history in two Back actions', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest#/account/history')
+  await page.getByRole('button', { name: 'Заказы', exact: true }).click()
+  await expect(page).toHaveURL(/kind=orders$/)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/account$/)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await expectTelegramBackButtonHidden(page)
+})
+
+test('guest navigation review catalog remains the parent after returning from a venue card', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest#/catalog')
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await expectTelegramBackButtonHidden(page)
+})
+
+test('guest navigation review Telegram launch data never enters route history', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto('?mode=guest#tgWebAppData=synthetic-launch-marker')
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+  await page.getByRole('button', { name: /Забронировать/ }).first().click()
+  await expect(page).toHaveURL(/#\/bookings/)
+  expect(await page.evaluate(() => JSON.stringify(history.state))).not.toMatch(/tgWebAppData|synthetic-launch-marker/)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await clickTelegramBackButton(page)
+  await expectTelegramBackButtonHidden(page)
+})
+
+test('guest navigation review staff dismissal and Telegram Back stay inside the visit', async ({ page }) => {
+  await installQrScanner(page)
+  await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+  await page.goto('?mode=guest')
+  const staff = page.getByRole('button', { name: 'Персонал', exact: true })
+  const overlay = page.locator('.staff-call-overlay')
+  await staff.click()
+  await overlay.getByRole('button', { name: 'Отмена' }).click()
+  await expect(overlay).toBeHidden()
+  await expectTelegramBackButtonHidden(page)
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await staff.click()
+  await overlay.getByRole('button', { name: 'Отмена' }).click()
+  await expect(overlay).toBeHidden()
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/cart$/)
+  await staff.click()
+  await expect(overlay).toBeVisible()
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/cart$/)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await expectTelegramBackButtonHidden(page)
+  expect(await page.evaluate(() => (window as unknown as ScannerWindow).__qrAppCloseCount)).toBe(0)
+})
+
+test('guest navigation review changed QR scopes catalog history, cart and visible active order', async ({ page }) => {
+  await installQrScanner(page)
+  const api = await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+  const other = buildRestoreContext({ tableToken: 'TABLE-SMOKE-B', tableSessionId: 177, tabId: 188, tableId: 8, tableNumber: '5' })
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}`)
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  const firstOrder = page.waitForResponse(response => response.ok() && response.url().includes('/api/guest/order/active?'))
+  const orders = page.getByRole('button', { name: 'Мои заказы', exact: true })
+  await orders.click()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  const first = (await (await firstOrder).json()).order
+  const scopes: string[][] = []
+  const resolutions: string[] = []
+  await page.route('**/api/guest/table/resolve?**', async route => {
+    const token = new URL(route.request().url()).searchParams.get('tableToken')!
+    resolutions.push(token)
+    await route.fulfill(jsonResponse(token === other.tableToken ? other : buildRestoreContext()))
+  })
+  api.setTabs([{ id: other.tabId, tableSessionId: other.tableSessionId, ownerUserId: 123456789, type: 'PERSONAL', status: 'ACTIVE' }])
+  await page.route('**/api/guest/order/active?**', async route => {
+    const params = new URL(route.request().url()).searchParams
+    scopes.push(['tableToken', 'tableSessionId', 'tabId'].map(key => params.get(key)!))
+    await route.fulfill(jsonResponse({ order: { ...first, orderId: 901, displayNumber: 456, tableId: other.tableId,
+      tableSessionId: other.tableSessionId, tabId: other.tabId, tableNumber: other.tableNumber } }))
+  })
+  await page.getByRole('button', { name: 'QR', exact: true }).click()
+  await scanQr(page, other.tableToken)
+  await expect(page.getByText('Вы за столом №5 · Микс')).toBeVisible()
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await expect(page).toHaveURL(/table_token=TABLE-SMOKE-B#\/cart$/)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/table_token=TABLE-SMOKE-B#\/venue\/1$/)
+  await page.goBack() // crossed the old A/B boundary
+  await expect(page).toHaveURL(/table_token=TABLE-SMOKE-B#\/venue\/1$/)
+  await page.goForward()
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await orders.click()
+  await expect(page.getByRole('heading', { name: 'Заказ №456' })).toBeVisible()
+  await expect(page.getByText('Счёт: Личный счёт')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toHaveCount(0)
+  expect(scopes.length).toBeGreaterThan(0)
+  expect(scopes.every(scope => scope.join('/') === 'TABLE-SMOKE-B/177/188')).toBe(true)
+  expect(resolutions).not.toContain(tableToken)
+  expect(api.getBillRequestRequests()).toEqual([])
+  expect(api.getAddBatchRequests()).toEqual([])
+})
+
+test('guest navigation review ended visit stays ended through browser history and explicit reentry', async ({ page }) => {
+  await installQrScanner(page)
+  const api = await mockGuestApi(page, { activeOrder: null })
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}`)
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Завершить визит' }).click()
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/catalog$/)
+  expect(new URL(page.url()).searchParams.has('table_token')).toBe(false)
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expectTelegramBackButtonHidden(page)
+  await expect(page.getByRole('button', { name: 'Мои заказы' })).toHaveCount(0)
+  await page.goForward()
+  await page.getByRole('button', { name: 'QR', exact: true }).click()
+  await scanQr(page, tableToken)
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await page.goBack()
+  await expect(page).toHaveURL(/table_token=TABLE-SMOKE-1#\/venue\/1$/)
+  await page.goForward()
+  await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+  expect(api.getTableSessionEndRequests()).toHaveLength(1)
+})
+
+test('guest navigation review focus refresh changes session at the same QR without restoring the old session URL', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}&tableSessionId=77`)
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await page.route('**/api/guest/table/resolve?**', route =>
+    route.fulfill(jsonResponse(buildRestoreContext({ tableSessionId: 177 }))))
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  expect(new URL(page.url()).searchParams.has('tableSessionId')).toBe(false)
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toHaveCount(0)
+  await expectTelegramBackButtonHidden(page)
+})
+
+test('guest navigation stabilization keeps mixed Telegram launch parameters out of route history', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  const auth = page.waitForResponse(response => response.url().endsWith('/api/auth/telegram') && response.ok())
+  const mixed = '?mode=guest#/venue/1?browseMenu=0&tgWebAppData=synthetic-launch-value&tgWebAppVersion=8&unknown=discard-me'
+  await page.goto(mixed)
+  expect((await auth).request().postDataJSON().initData === mockInitData).toBe(true)
+  const checkEntry = async () => {
+    const serialized = await page.evaluate(() => JSON.stringify(history.state))
+    expect(serialized).not.toMatch(/tgWebApp|synthetic-launch-value|discard-me/)
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await expect(page).toHaveURL(/#\/venue\/1\?browseMenu=0$/)
+    await checkEntry()
+    await page.getByRole('button', { name: /Забронировать/ }).first().click()
+    await expect(page).toHaveURL(/#\/bookings\?venueId=1$/)
+    await checkEntry()
+    await page.goBack()
+    await expect(page).toHaveURL(/#\/venue\/1\?browseMenu=0$/)
+    await checkEntry()
+    await page.goForward()
+    await expect(page).toHaveURL(/#\/bookings\?venueId=1$/)
+    await page.reload()
+    await expect(page.getByRole('navigation', { name: 'Гостевая навигация' })).toBeVisible()
+    await checkEntry()
+    if (attempt === 0) await page.goto(mixed)
+  }
+})
+
+for (const active of [false, true]) {
+  test('guest navigation stabilization reload preserves discarded Forward branch with ' + (active ? 'QR' : 'catalog'), async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    let profileReads = 0
+    await page.route('**/api/guest/profile', route => {
+      profileReads++
+      return route.fulfill(jsonResponse({ displayName: 'Гость', birthday: null }))
+    })
+    await page.goto(active ? `?mode=guest&screen=menu&table_token=${tableToken}` : '?mode=guest#/catalog')
+    if (active) await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+    await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+    await page.getByRole('button', { name: 'Личные данные' }).click()
+    await expect(page.getByRole('textbox', { name: 'Имя', exact: true })).toHaveValue('Гость')
+    await page.goBack()
+    await expect(page).toHaveURL(/#\/account$/)
+    const home = active ? '#/venue/1' : '#/catalog'
+    await page.getByRole('button', { name: active ? /К столу ·/ : 'Заведения' }).click()
+    await expect.poll(() => page.evaluate(() => location.hash)).toBe(home)
+    await page.reload()
+    await expect(page.getByRole('navigation', { name: 'Гостевая навигация' })).toBeVisible()
+    for (let i = 0; i < 2; i++) {
+      await page.goForward()
+      await expect.poll(() => page.evaluate(() => location.hash)).toBe(home)
+      await expectTelegramBackButtonHidden(page)
+    }
+    expect(profileReads).toBe(1)
+    if (active) {
+      const read = page.waitForResponse(response => response.ok() && response.url().includes('/api/guest/order/active?'))
+      await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
+      await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+      const scope = new URL((await read).url()).searchParams
+      expect([scope.get('tableToken'), scope.get('tableSessionId'), scope.get('tabId')]).toEqual([tableToken, '77', '88'])
+    }
+  })
+}
+
+test('guest navigation stabilization staff screen stops network polling after cancel, QR change and visit exit', async ({ page }) => {
+  await installQrScanner(page)
+  const api = await mockGuestApi(page, { activeOrder: null })
+  await page.clock.install()
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}`)
+  const staff = page.getByRole('button', { name: 'Персонал', exact: true })
+  // From cart, dismissing staff replaces the current route synchronously.
+  for (let i = 0; i < 2; i++) {
+    await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+    await staff.click()
+    await page.locator('.staff-call-overlay').getByRole('button', { name: 'Отмена' }).click()
+    await expect(page).toHaveURL(/#\/venue\/1$/)
+  }
+
+  const next = buildRestoreContext({ tableToken: 'QR-STABILIZATION-B', tableSessionId: 177, tabId: 188, tableNumber: '5' })
+  await page.route('**/api/guest/table/resolve?**', route => route.fulfill(jsonResponse(next)))
+  const statusRequests: string[] = []
+  let releasedAResponses = 0
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/guest/staff-call/status?**', async route => {
+    const params = new URL(route.request().url()).searchParams
+    const token = params.get('tableToken')
+    statusRequests.push(token + '/' + params.get('tableSessionId'))
+    if (token === tableToken) await held
+    await route.fulfill(jsonResponse({ items: token === tableToken ? [{
+      staffCallId: 901, status: 'ACK', statusLabel: 'Статус старого стола', reason: 'COALS',
+      reasonLabel: 'Только стол A', createdAtEpochSeconds: 1894302000
+    }] : [] }))
+    if (token === tableToken) releasedAResponses++
+  })
+  await page.clock.fastForward(10001)
+  await expect.poll(() => statusRequests.includes(tableToken + '/77')).toBe(true)
+  await page.getByRole('button', { name: 'QR', exact: true }).click()
+  await scanQr(page, next.tableToken)
+  await expect(page.getByText('Вы за столом №5 · Микс')).toBeVisible()
+  await expect.poll(() => statusRequests.includes(next.tableToken + '/177')).toBe(true)
+  release()
+  await expect.poll(() => releasedAResponses).toBeGreaterThan(0)
+  const start = statusRequests.length
+  const nextPoll = page.waitForResponse(response => response.ok() && response.url().includes('/staff-call/status?') &&
+    new URL(response.url()).searchParams.get('tableToken') === next.tableToken)
+  await page.clock.fastForward(20001)
+  await nextPoll
+  expect(statusRequests.slice(start)).not.toContain(tableToken + '/77')
+  expect(statusRequests.slice(start).every(v => v === next.tableToken + '/177')).toBe(true)
+  await expect(page.getByText('Только стол A')).toHaveCount(0)
+  await expect(staff).toBeVisible()
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await expect(page).toHaveURL(/#\/cart$/)
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Завершить визит' }).click()
+  await expect(page).toHaveURL(/#\/catalog$/)
+  const afterExit = statusRequests.length
+  await page.clock.fastForward(30001)
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+  expect(statusRequests).toHaveLength(afterExit)
+  expect(api.getTableSessionEndRequests()).toHaveLength(1)
+})
+
+test('guest navigation stabilization Telegram Back from shorthand account never reloads the document', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  let documents = 0
+  page.on('request', request => { if (request.isNavigationRequest() && request.frame() === page.mainFrame()) documents++ })
+  await page.goto('?mode=guest#account')
+  await expect(page.getByRole('heading', { name: 'Профиль', exact: true })).toBeVisible()
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await expectTelegramBackButtonHidden(page)
+  expect(documents).toBe(1)
+})
+
+test('guest navigation stabilization explains a server-expired visit on focus refresh', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page)
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}`)
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  const ended = buildRestoreContext({ tableSessionActive: false, tableSessionStatus: 'CLOSED' })
+  await page.route('**/api/guest/table/resolve?**', route => route.fulfill(jsonResponse(ended)))
+  const resolved = page.waitForResponse(response => response.ok() && response.url().includes('/api/guest/table/resolve?'))
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  const response = await resolved
+  expect(new URL(response.url()).searchParams.get('tableToken')).toBe(tableToken)
+  expect((await response.json()).tableSessionActive).toBe(false)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await expect(page.getByRole('status').filter({ hasText: 'Контекст стола устарел' })).toContainText('отсканируйте QR')
+  await expect(page.getByRole('button', { name: 'Мои заказы', exact: true })).toHaveCount(0)
+  expect(api.getTableSessionEndRequests()).toEqual([])
+})
+
+test('guest navigation stabilization authenticates a hash-only Telegram launch before opening nested routes', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await page.route('https://telegram.org/js/telegram-web-app.js', route =>
+    route.fulfill({ contentType: 'application/javascript', body: "window.Telegram.WebApp.initData = ''" }))
+  await mockGuestApi(page)
+  const authenticated = page.waitForResponse(response => response.ok() && response.url().endsWith('/api/auth/telegram'))
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  const sent = new URLSearchParams((await authenticated).request().postDataJSON().initData)
+  expect(sent.get('query_id')).toBe('e2e-smoke')
+  expect(JSON.parse(sent.get('user')!).id).toBe(123456789)
+  await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+  await expect(page).toHaveURL(/#\/venue\/1$/)
+  expect(await page.evaluate(() => JSON.stringify(history.state))).not.toMatch(/tgWebAppData|e2e-smoke/)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+})
+
+test('guest navigation stabilization discarded personal venue link stays dismissed on Forward', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await mockHomeRoles(page)
+  await mockPersonalVenue(page)
+  let resolutions = 0
+  page.on('response', response => {
+    if (response.ok() && response.url().endsWith('/api/guest/venue-entry/venue_2')) resolutions++
+  })
+  await page.goto('?mode=home&venue_entry=venue_2')
+  await page.getByRole('button', { name: 'Меню', exact: true }).click()
+  await expect(page).toHaveURL(/browseMenu=1$/)
+  await page.goBack()
+  await page.getByRole('button', { name: 'Другие заведения', exact: true }).click()
+  await expect(page).toHaveURL(/venue_browse=off#\/catalog$/)
+  await page.goForward()
+  await expect(page).toHaveURL(/venue_browse=off#\/catalog$/)
+  await page.reload()
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+  expect(resolutions).toBe(1)
+})
+
+test('guest navigation reload QR expired scan never resumes the SDK launch table', async ({ page }) => {
+  await installQrScanner(page, tableToken)
+  const api = await mockGuestApi(page)
+  const a = buildRestoreContext()
+  const b = buildRestoreContext({ tableToken: 'TABLE-SMOKE-B', tableId: 8, tableNumber: '5', tableSessionId: 177, tabId: 188 })
+  let expired = false
+  const reads: URL[] = []
+  const mutations: string[] = []
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (!url.pathname.startsWith('/api/guest/')) return
+    if (request.method() === 'GET') reads.push(url)
+    else if (!url.pathname.endsWith('/cart/preview')) mutations.push(url.pathname)
+  })
+  await page.route('**/api/guest/table/resolve?**', route => {
+    const params = new URL(route.request().url()).searchParams
+    const context = params.get('tableToken') === a.tableToken ? a : b
+    const inactive = expired && params.get('resolveMode') !== 'create'
+    return route.fulfill(jsonResponse(inactive ? { ...context, tableSessionActive: false, tableSessionStatus: 'CLOSED',
+      tableSessionId: context === a ? 0 : b.tableSessionId } : context))
+  })
+  await page.goto('?mode=guest')
+  const orders = page.getByRole('button', { name: 'Мои заказы', exact: true })
+  const original = page.waitForResponse(r => r.ok() && r.url().includes('/api/guest/order/active?'))
+  await orders.click()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await page.getByRole('button', { name: 'QR', exact: true }).click()
+  await scanQr(page, b.tableToken)
+  await expect(page.getByText('Вы за столом №5 · Микс')).toBeVisible()
+  const { order } = await (await original).json()
+  await page.route('**/api/guest/order/active?**', route => {
+    const isB = new URL(route.request().url()).searchParams.get('tableToken') === b.tableToken
+    return route.fulfill(jsonResponse({ order: isB ? { ...order, orderId: 901, displayNumber: 456,
+      tableId: b.tableId, tableSessionId: b.tableSessionId, tabId: b.tabId, tableNumber: b.tableNumber } : order }))
+  })
+  api.setTabs([{ id: b.tabId, tableSessionId: b.tableSessionId, ownerUserId: 123456789, type: 'PERSONAL', status: 'ACTIVE' }])
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  const bOrder = page.waitForResponse(r => r.ok() && r.url().includes('/api/guest/order/active?') &&
+    new URL(r.url()).searchParams.get('tabId') === String(b.tabId))
+  await orders.click()
+  const params = new URL((await bOrder).url()).searchParams
+  expect([params.get('tableToken'), params.get('tableSessionId')]).toEqual([b.tableToken, '177'])
+  await expect(page.getByRole('heading', { name: 'Заказ №456' })).toBeVisible()
+  await expect(page.getByText('Счёт: Личный счёт')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toHaveCount(0)
+  expired = true
+  reads.length = 0
+  const ended = page.waitForResponse(r => r.ok() && r.url().includes('/api/guest/table/resolve?'))
+  const focus = () => page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await focus()
+  expect((await (await ended).json()).tableSessionActive).toBe(false)
+  const notice = page.getByRole('status').filter({ hasText: 'Контекст стола устарел' })
+  await expect(notice).toContainText('отсканируйте QR')
+  await focus()
+  await page.waitForLoadState('networkidle')
+  expect(reads.filter(u => u.searchParams.get('tableToken') === a.tableToken)).toEqual([])
+  const reloadResolve = page.waitForResponse(r => r.ok() && r.url().includes('/api/guest/table/resolve?'))
+  await page.reload()
+  const checked = await reloadResolve
+  const binding = new URL(checked.url()).searchParams
+  expect([binding.get('tableToken'), binding.get('tableSessionId'), binding.get('resolveMode')]).toEqual([b.tableToken, '177', null])
+  expect((await checked.json()).tableSessionActive).toBe(false)
+  await expect(notice).toContainText('отсканируйте QR')
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await page.goForward()
+  await focus()
+  await page.waitForLoadState('networkidle')
+  await expect(notice).toContainText('отсканируйте QR')
+  await expect(orders).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Корзина', exact: true })).toHaveCount(0)
+  await expect(page.getByText(/Заказ №123|Счёт: Личный счёт/)).toHaveCount(0)
+  expect(reads.filter(u => u.searchParams.get('tableToken') === a.tableToken || u.searchParams.has('resolveMode') ||
+    /\/guest\/(order|tabs|cart|bill)\b/.test(u.pathname))).toEqual([])
+  expect(await page.evaluate(() => JSON.stringify(history.state))).not.toMatch(/TABLE-SMOKE|tgWebAppData/)
+  expect(mutations).toEqual([])
+  const scan = page.waitForResponse(r => r.ok() && new URL(r.url()).searchParams.get('resolveMode') === 'create')
+  await page.getByRole('button', { name: 'QR', exact: true }).click()
+  await scanQr(page, b.tableToken)
+  expect(new URL((await scan).url()).searchParams.get('tableToken')).toBe(b.tableToken)
+  await expect(page.getByText('Вы за столом №5 · Микс')).toBeVisible()
+})
+
+for (const nested of [false, true]) {
+  test('guest navigation reload QR profile preserves venue parent ' + (nested ? 'from personal details' : 'from profile'), async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    await page.route('**/api/guest/profile', route => route.fulfill(jsonResponse({ displayName: 'Гость', birthday: null })))
+    await page.goto('?mode=guest#/catalog')
+    await page.getByRole('button', { name: 'Открыть', exact: true }).click()
+    await expect(page).toHaveURL(/#\/venue\/1$/)
+    await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+    if (nested) await page.getByRole('button', { name: 'Личные данные' }).click()
+    const length = await page.evaluate(() => history.length)
+    await page.reload()
+    if (nested) {
+      await expect(page.getByRole('textbox', { name: 'Имя', exact: true })).toBeVisible()
+      await clickTelegramBackButton(page)
+    }
+    await expect(page.getByRole('heading', { name: 'Профиль', exact: true })).toBeVisible()
+    await clickTelegramBackButton(page)
+    await expect(page).toHaveURL(/#\/venue\/1$/)
+    await expect(page.getByRole('button', { name: /Забронировать/ }).first()).toBeVisible()
+    await clickTelegramBackButton(page)
+    await expect(page).toHaveURL(/#\/catalog$/)
+    await expectTelegramBackButtonHidden(page)
+    expect(await page.evaluate(() => history.length)).toBe(length)
+  })
+}
+
+test('guest navigation reload QR browser Back crossing old QR lands on current visit root', async ({ page }) => {
+  await installQrScanner(page)
+  await mockGuestApi(page)
+  const b = buildRestoreContext({ tableToken: 'TABLE-SMOKE-B', tableSessionId: 177, tableNumber: '5' })
+  await page.route('**/api/guest/table/resolve?**', route => route.fulfill(jsonResponse(
+    new URL(route.request().url()).searchParams.get('tableToken') === tableToken ? buildRestoreContext() : b)))
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}`)
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await page.getByRole('button', { name: 'QR', exact: true }).click()
+  await scanQr(page, b.tableToken)
+  await expect(page.getByText('Вы за столом №5 · Микс')).toBeVisible()
+  const tokens: string[] = []
+  page.on('request', request => {
+    const token = new URL(request.url()).searchParams.get('tableToken')
+    if (token) tokens.push(token)
+  })
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await page.reload()
+  await expect(page.getByText('Вы за столом №5 · Микс')).toBeVisible()
+  await expect(page).toHaveURL(/#\/cart$/)
+  for (let i = 0; i < 2; i++) {
+    await page.goBack()
+    await expect(page).toHaveURL(/table_token=TABLE-SMOKE-B#\/venue\/1$/)
+    await expect(page.getByText('Вы за столом №5 · Микс')).toBeVisible()
+    await expectTelegramBackButtonHidden(page)
+  }
+  expect(tokens).toContain(b.tableToken)
+  expect(tokens).not.toContain(tableToken)
+})
+
+test('guest navigation reload QR explicit catalog survives discarded Forward and reload', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}`)
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await page.goBack()
+  await page.getByRole('button', { name: 'Другие заведения', exact: true }).click()
+  const catalog = page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })
+  await expect(catalog).toBeVisible()
+  expect(await page.evaluate(() => history.state.hookahGuestCatalog)).toBe(true)
+  await page.goForward()
+  await expect(catalog).toBeVisible()
+  const resolved = page.waitForResponse(r => r.ok() && r.url().includes('/api/guest/table/resolve?'))
+  await page.reload()
+  expect((await (await resolved).json()).tableSessionActive).toBe(true)
+  await expect(catalog).toBeVisible()
+  await expect(page).toHaveURL(/#\/catalog$/)
+  expect(await page.evaluate(() => history.state.hookahGuestCatalog)).toBe(true)
+  await expectTelegramBackButtonHidden(page)
+})
+
+test('guest navigation final reload pins the first server confirmation of expiration', async ({ page }) => {
+  await installQrScanner(page, tableToken)
+  const api = await mockGuestApi(page)
+  const a = buildRestoreContext()
+  const b = buildRestoreContext({ tableToken: 'TABLE-SMOKE-B', tableId: 8, tableNumber: '5', tableSessionId: 177, tabId: 188 })
+  let expired = false
+  let endedReplyReceived = false
+  const requests: { url: URL; method: string; afterEnd: boolean }[] = []
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (expired && url.pathname.startsWith('/api/guest/')) {
+      requests.push({ url, method: request.method(), afterEnd: endedReplyReceived })
+    }
+  })
+  page.on('response', response => {
+    const { pathname, searchParams } = new URL(response.url())
+    // The mock returns ended-table for this binding once expired. Arm before the UI consumes the body.
+    if (expired && response.ok() && pathname === '/api/guest/table/resolve' &&
+      searchParams.get('tableToken') === b.tableToken &&
+      searchParams.get('tableSessionId') === String(b.tableSessionId) && !searchParams.has('resolveMode')) {
+      endedReplyReceived = true
+    }
+  })
+  await page.route('**/api/guest/table/resolve?**', route => {
+    const params = new URL(route.request().url()).searchParams
+    const context = params.get('tableToken') === b.tableToken ? b : a
+    const create = params.get('resolveMode') === 'create'
+    const sessionId = params.get('tableSessionId') === String(b.tableSessionId) ? b.tableSessionId : 0
+    return route.fulfill(jsonResponse(expired && !create ? { ...context, tableSessionActive: false,
+      tableSessionStatus: 'CLOSED', tableSessionId: sessionId } : context))
+  })
+  await page.goto('?mode=guest')
+  const orders = page.getByRole('button', { name: 'Мои заказы', exact: true })
+  const firstOrder = page.waitForResponse(r => r.ok() && new URL(r.url()).pathname === '/api/guest/order/active')
+  await orders.click()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  const { order } = await (await firstOrder).json()
+  const qr = page.getByRole('button', { name: 'QR', exact: true })
+  await qr.click()
+  await scanQr(page, b.tableToken)
+  await expect(page.getByText('Вы за столом №5 · Микс')).toBeVisible()
+  api.setTabs([{ id: b.tabId, tableSessionId: b.tableSessionId, ownerUserId: 123456789, type: 'PERSONAL', status: 'ACTIVE' }])
+  let captureRead!: (params: URLSearchParams) => void
+  const pendingRead = new Promise<URLSearchParams>(resolve => { captureRead = resolve })
+  let releaseLateReply!: () => void
+  const heldReply = new Promise<void>(resolve => { releaseLateReply = resolve })
+  let finishLateReply!: () => void
+  const lateReplyFinished = new Promise<void>(resolve => { finishLateReply = resolve })
+  let readHeld = false
+  await page.route('**/api/guest/order/active?**', async route => {
+    const request = route.request()
+    const params = new URL(request.url()).searchParams
+    if (readHeld || params.get('tableToken') !== b.tableToken) return route.fallback()
+    readHeld = true
+    captureRead(params)
+    await heldReply
+    try {
+      await route.fulfill(jsonResponse({ order: { ...order, orderId: 901, displayNumber: 456,
+        tableId: b.tableId, tableSessionId: b.tableSessionId, tabId: b.tabId, tableNumber: b.tableNumber } }))
+    } catch (error) {
+      // Reload can cancel the old document's pending read before the mock sends its reply.
+      if (!request.failure()) throw error
+    } finally {
+      finishLateReply()
+    }
+  })
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await expect(page).toHaveURL(/#\/cart$/)
+  const heldParams = await pendingRead
+  expect([heldParams.get('tableSessionId'), heldParams.get('tabId')]).toEqual(['177', '188'])
+  expired = true
+  const reloadAndResolve = async () => {
+    const resolved = page.waitForResponse(r => r.ok() && new URL(r.url()).pathname === '/api/guest/table/resolve')
+    await page.reload()
+    return await resolved
+  }
+  const notice = page.getByRole('status').filter({ hasText: 'Контекст стола устарел' })
+  const binding = (url: string) => {
+    const query = new URL(url).searchParams
+    return ['tableToken', 'tableSessionId', 'resolveMode'].map(key => query.get(key))
+  }
+  try {
+    const first = await reloadAndResolve()
+    expect(binding(first.url())).toEqual([b.tableToken, '177', null])
+    expect((await first.json()).tableSessionActive).toBe(false)
+    expect(endedReplyReceived).toBe(true)
+    await expect(notice).toContainText('отсканируйте QR')
+    await expect.soft(page).toHaveURL(/#\/catalog$/)
+  } finally {
+    releaseLateReply()
+  }
+  await lateReplyFinished
+  const expectEndedView = async () => {
+    await expect(page).toHaveURL(/#\/catalog$/)
+    await expect(notice).toContainText('отсканируйте QR')
+    await expect(orders).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Корзина', exact: true })).toHaveCount(0)
+    await expect(page.getByText(/Заказ №(?:123|456)|Счёт: Личный счёт/)).toHaveCount(0)
+    await expectTelegramBackButtonHidden(page)
+  }
+  await expectEndedView()
+
+  const second = await reloadAndResolve()
+  expect(binding(second.url())).toEqual([b.tableToken, '177', null])
+  await expect(notice).toContainText('отсканируйте QR')
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await page.goForward()
+  await expectEndedView()
+  expect(requests.filter(({ url, method, afterEnd }) => method !== 'GET' ||
+    url.searchParams.get('tableToken') === a.tableToken ||
+    (afterEnd && /\/guest\/(order|tabs|cart|bill)\b/.test(url.pathname)))).toEqual([])
+  const resolve = requests.filter(({ url }) => url.pathname === '/api/guest/table/resolve')
+  expect(resolve.map(({ url }) => binding(url.href))).toEqual([[b.tableToken, '177', null], [b.tableToken, '177', null]])
+  expect(await page.evaluate(() => JSON.stringify(history.state))).not.toMatch(/TABLE-SMOKE|tgWebAppData/)
+  const newVisit = page.waitForResponse(r => r.ok() && binding(r.url())[2] === 'create')
+  await qr.click()
+  await scanQr(page, b.tableToken)
+  expect(binding((await newVisit).url())).toEqual([b.tableToken, null, 'create'])
+  await expect(page.getByText('Вы за столом №5 · Микс')).toBeVisible()
+})
+
+test('guest navigation final reload returns from nested profile to explicitly chosen catalog', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  await page.route('**/api/guest/profile', route => route.fulfill(jsonResponse({ displayName: 'Гость', birthday: null })))
+  const mutations: string[] = []
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname
+    if (path.startsWith('/api/guest/') && request.method() !== 'GET') mutations.push(path)
+  })
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}`)
+  await page.getByRole('button', { name: 'Другие заведения', exact: true }).click()
+  const catalog = page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })
+  const returnToTable = page.getByRole('button', { name: 'К столу · Микс' })
+  await expect(catalog).toBeVisible()
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await page.getByRole('button', { name: 'Личные данные' }).click()
+  const details = page.getByRole('textbox', { name: 'Имя', exact: true })
+  await expect(details).toHaveValue('Гость')
+  const length = await page.evaluate(() => history.length)
+  const reloadProfile = async () => {
+    const resolved = page.waitForResponse(r => r.ok() && new URL(r.url()).pathname === '/api/guest/table/resolve')
+    await page.reload()
+    const response = await resolved
+    const query = new URL(response.url()).searchParams
+    expect(['tableToken', 'tableSessionId', 'resolveMode'].map(key => query.get(key))).toEqual([tableToken, '77', null])
+    expect((await response.json()).tableSessionActive).toBe(true)
+    await expect(details).toHaveValue('Гость')
+  }
+  await reloadProfile()
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/account$/)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await expect(catalog).toBeVisible()
+  await expect(returnToTable).toBeVisible()
+  await expectTelegramBackButtonHidden(page)
+  await page.goForward()
+  await expect(page).toHaveURL(/#\/account$/)
+  await page.goForward()
+  await expect(details).toHaveValue('Гость')
+  await reloadProfile()
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/account$/)
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await expect(catalog).toBeVisible()
+  await expectTelegramBackButtonHidden(page)
+  expect(await page.evaluate(() => history.length)).toBe(length)
+
+  await returnToTable.click()
+  const order = page.waitForResponse(r => r.ok() && new URL(r.url()).pathname === '/api/guest/order/active')
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
+  const query = new URL((await order).url()).searchParams
+  expect(['tableToken', 'tableSessionId', 'tabId'].map(key => query.get(key))).toEqual([tableToken, '77', '88'])
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await expect(page.getByText('Счёт: Личный счёт')).toBeVisible()
+  expect(mutations).toEqual([])
+})
+
+test('guest navigation invalidates expired history on reload of a pinned session link', async ({ page }) => {
+  await installQrScanner(page)
+  await mockGuestApi(page)
+  const active = buildRestoreContext()
+  let expired = false
+  const requests: { method: string; path: string; query: URLSearchParams }[] = []
+  page.on('request', request => {
+    const url = new URL(request.url())
+    if (url.pathname.startsWith('/api/guest/')) {
+      requests.push({ method: request.method(), path: url.pathname, query: url.searchParams })
+    }
+  })
+  await page.route('**/api/guest/table/resolve?**', route => {
+    const query = new URL(route.request().url()).searchParams
+    const response = query.get('resolveMode') === 'create'
+      ? { ...active, tableSessionId: 177 }
+      : expired ? { ...active, tableSessionActive: false, tableSessionStatus: 'CLOSED' } : active
+    return route.fulfill(jsonResponse(response))
+  })
+  const state = () => page.evaluate(() => {
+    const { visit, visitHome, trail } = history.state.hookahGuestNavigation
+    return { visit, visitHome, trail, length: history.length }
+  })
+  const binding = (query: URLSearchParams) => ['tableToken', 'tableSessionId', 'resolveMode'].map(key => query.get(key))
+  const resolve = () => page.waitForResponse(r => r.ok() && new URL(r.url()).pathname === '/api/guest/table/resolve')
+  const reload = async (isActive: boolean) => {
+    const resolving = resolve()
+    await page.reload()
+    const response = await resolving
+    expect(binding(new URL(response.url()).searchParams)).toEqual([tableToken, '77', null])
+    expect((await response.json()).tableSessionActive).toBe(isActive)
+  }
+
+  await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}&tableSessionId=77`)
+  const cart = page.getByRole('button', { name: 'Корзина', exact: true })
+  const orders = page.getByRole('button', { name: 'Мои заказы', exact: true })
+  const table = page.getByText('Вы за столом №4 · Микс')
+  await expect(table).toBeVisible()
+  await cart.click()
+  await expect(page).toHaveURL(/#\/cart$/)
+  const before = await state()
+  expect(before).toMatchObject({ visitHome: '#/catalog', trail: ['#/venue/1', '#/cart'] })
+  await reload(true)
+  await expect(table).toBeVisible()
+  expect(await state()).toEqual(before)
+  await orders.click()
+  await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+  await expect(page.getByText('Счёт: Личный счёт')).toBeVisible()
+  await page.goBack()
+  await expect(page).toHaveURL(/#\/cart$/)
+  // Let the active visit finish its reads before the first response reporting expiration.
+  await page.waitForLoadState('networkidle')
+  expired = true
+  requests.length = 0
+
+  const notice = page.getByRole('status').filter({ hasText: 'Контекст стола устарел' })
+  await reload(false)
+  await expect(notice).toContainText('отсканируйте QR')
+  await expect.soft(page).toHaveURL(/#\/catalog$/, { timeout: 1_000 })
+  expect.soft((await state()).visit).not.toBe(before.visit)
+  expect.soft((await state()).trail).toEqual(['#/catalog'])
+  await page.goBack()
+  await expect.soft(page).toHaveURL(/#\/catalog$/, { timeout: 1_000 })
+  for (let i = 0; i < 2; i++) {
+    await page.goForward()
+    await expect.soft(page).toHaveURL(/#\/catalog$/, { timeout: 1_000 })
+  }
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click()
+  await expect(page).toHaveURL(/#\/account$/)
+  const after = await state()
+  await reload(false)
+  await expect(notice).toContainText('отсканируйте QR')
+  expect(await state()).toEqual(after)
+  await clickTelegramBackButton(page)
+  await expect(page).toHaveURL(/#\/catalog$/)
+  await expectTelegramBackButtonHidden(page)
+  await expect(notice).toContainText('отсканируйте QR')
+  await expect(cart).toHaveCount(0)
+  await expect(orders).toHaveCount(0)
+  await expect(page.getByText(/Заказ №123|Счёт: Личный счёт/)).toHaveCount(0)
+  expect(await page.evaluate(() => (window as unknown as ScannerWindow).__qrAppCloseCount)).toBe(0)
+  expect(await page.evaluate(() => JSON.stringify(history.state))).not.toMatch(/TABLE-SMOKE|tgWebAppData/)
+
+  expect(requests.filter(({ method, path, query }) => method !== 'GET' ||
+    /^\/api\/guest\/(order|tabs|cart|bill)\b/.test(path) ||
+    (query.has('tableToken') && query.get('tableToken') !== tableToken))).toEqual([])
+  expect(requests.filter(({ path }) => path === '/api/guest/table/resolve').map(({ query }) => binding(query)))
+    .toEqual([[tableToken, '77', null], [tableToken, '77', null]])
+  const rescanning = resolve()
+  await page.getByRole('button', { name: 'QR', exact: true }).click()
+  await scanQr(page, tableToken)
+  const scanned = await rescanning
+  expect(binding(new URL(scanned.url()).searchParams)).toEqual([tableToken, null, 'create'])
+  expect((await scanned.json()).tableSessionId).toBe(177)
+  await expect(table).toBeVisible()
+  expect((await state()).visit).not.toBe(after.visit)
 })
