@@ -76,6 +76,7 @@ type VenueScreenOptions = {
   onOpenCatalog?: () => void
   onOpenHelp?: (venueId: number) => void
   onBack?: () => void
+  navigate?: (hash: string, options?: { replace?: boolean; parent?: string }) => void
   readOnlyPreview?: boolean
   onPreviewLoaded?: (
     preview: Pick<VenueGuestPreviewResponse, 'mode' | 'venueAvailabilityLabel'>
@@ -794,6 +795,7 @@ function updateItemControls(refs: MenuItemRefs, qty: number, canOrder: boolean) 
 
 export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const { root, backendUrl, isDebug, venueId, onBookVenue, onAskVenue } = options
+  const navigate: NonNullable<VenueScreenOptions['navigate']> = options.navigate ?? ((hash: string) => { window.location.hash = hash })
   if (!root) return () => undefined
 
   const readOnlyPreview = options.readOnlyPreview === true
@@ -1045,9 +1047,10 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
 
   const clearStaffRouteFlag = () => {
     if (typeof window === 'undefined' || !venueId) return
-    const nextUrl = new URL(window.location.href)
-    nextUrl.hash = `#/venue/${venueId}`
-    window.history.replaceState(window.history.state, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`)
+    if (!new URLSearchParams(window.location.hash.split('?')[1]).has('staff')) return
+    const menu = `#/venue/${venueId}`
+    if (options.navigate) options.navigate(menu, { replace: true })
+    else window.history.replaceState(window.history.state, '', menu)
   }
 
   const dispatchStaffActionState = () => {
@@ -1063,6 +1066,9 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const stopStaffStatusPolling = () => {
+    staffStatusAbort?.abort()
+    staffStatusAbort = null
+    staffStatusLoadedForKey = null
     if (staffStatusTimer != null) {
       window.clearInterval(staffStatusTimer)
       staffStatusTimer = null
@@ -1129,6 +1135,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const loadStaffCallStatus = async (silent = true) => {
+    if (disposed) return
     const params = currentStaffStatusParams()
     if (!params) {
       latestStaffCall = null
@@ -1147,6 +1154,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     )
     if (disposed || controller.signal.aborted || staffStatusAbort !== controller) return
     staffStatusAbort = null
+    if (currentStaffStatusParams()?.key !== params.key) return
     if (!result.ok) {
       if (!silent && result.error.code !== REQUEST_ABORTED_CODE) {
         setMessage('Не удалось обновить статус вызова.')
@@ -1185,7 +1193,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
 
   const updateStaffState = () => {
-    if (readOnlyPreview) return
+    if (disposed || readOnlyPreview) return
     updateBookingButtonVisibility()
     const canStaff = canCallStaff()
     if (!canStaff) {
@@ -1253,7 +1261,13 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     menuButton.textContent = menuOpen ? 'Карточка заведения' : 'Меню'
     menuButton.classList.toggle('button-secondary', menuOpen)
     menuButton.onclick = () => {
-      window.location.hash = `#/venue/${venueId}?browseMenu=${menuOpen ? '0' : '1'}`
+      const previous = window.history.state?.hookahGuestPrevious
+      const previousCard = previous === `#/venue/${venueId}?browseMenu=0` ||
+        ((!canPlaceOrders() || getVenueBrowseId() === venueId) && previous === `#/venue/${venueId}`)
+      if (menuOpen && previousCard) navigate(`#/venue/${venueId}?browseMenu=0`, { parent: previous })
+      else navigate(`#/venue/${venueId}?browseMenu=${menuOpen ? '0' : '1'}`, {
+        replace: menuOpen && routeParams.get('browseMenu') === '1'
+      })
     }
     refs.favoriteButton.hidden = menuOpen
     const fallbackParts = [venue.city, venue.address].filter(Boolean)
@@ -1494,7 +1508,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
           return
         }
         if (replaceCartLineRef && 'lineKey' in result) {
-          window.location.hash = `#/cart?focusLineRef=${encodeURIComponent(result.lineKey)}`
+          navigate(`#/cart?focusLineRef=${encodeURIComponent(result.lineKey)}`)
           return
         }
         selectedOptionItemId = null
@@ -1769,7 +1783,6 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     closeStaffCompose(true)
     staffStatusLoadedForKey = null
     updateStaffState()
-    void loadStaffCallStatus(true)
     showToast('Вызов отправлен')
   }
 
@@ -2003,6 +2016,11 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   const tableSubscription = readOnlyPreview
     ? () => undefined
     : subscribeTable((snapshot) => {
+        if (snapshot.tableToken !== tableSnapshot.tableToken || snapshot.tableSessionId !== tableSnapshot.tableSessionId) {
+          stopStaffStatusPolling()
+          latestStaffCall = null
+          staffAbort?.abort()
+        }
         tableSnapshot = snapshot
         updateStaffState()
         updateMenuOrderState()
@@ -2064,7 +2082,6 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     menuAbort?.abort()
     favoriteAbort?.abort()
     staffAbort?.abort()
-    staffStatusAbort?.abort()
     stopStaffStatusPolling()
     extensionDispose()
     if (messageTimer) {

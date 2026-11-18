@@ -396,6 +396,25 @@ SHOULD:
 - Current staging-smoked behavior: pre-visit venue card keeps address, route/copy address and booking actions; active table context hides those pre-visit actions and shows `Завершить визит`. Exiting does not close the shared physical `table_sessions` row for other guests.
 - Adaptive booking reminders are implemented as M7c code/test-backed behavior and passed one controlled real Telegram staging smoke; runtime remains disabled by default and requires explicit opt-in. MVP sends at most one transactional reminder for `CONFIRMED`/`CHANGED` bookings, calculated in venue-local time with a 24h preferred target, 3h fallback, quiet window 10:00-22:00, and actions `Да, буду`, `Перенести`, `Отменить`. Legacy reminder rows are preserved but isolated by policy version; legacy unsent rows are reconciled to canceled by migration and cannot be claimed by the M7c worker. Outbox enqueue means `QUEUED`, not Telegram-delivered. `Да, буду` / `Я приду` records guest attendance intent separately from venue-controlled booking status, edits the guest reminder state, and exposes the response in Bot `/my`, Guest Mini App `Мои брони` and Venue Mini App booking queue. The latest enriched staff-chat attendance copy is code/test-backed but has not been manually re-smoked with a new booking.
 
+Guest Mini App Back (`HT-GUEST-NAVIGATION-BACK-FIX-01`) is **LOCAL IMPLEMENTED / REVIEW PENDING**.
+Main tabs share one replaceable history entry above the current content root; leaving a nested
+branch discards that branch before opening another tab. Back follows logical parents, traverses
+only entries on the current Guest trail, and replaces a direct deep link when its parent
+has no browser entry. Back never pushes a new entry or ends a visit. Profile/chat drafts and the
+table/cart context remain owned by their existing stores. Browser Back/Forward remain supported;
+switching tabs after browser Back discards the previous Forward branch, including after reload. A confirmed change of
+table/session or visit exit starts a fresh navigation boundary. Older entries cannot restore the
+previous table URL. Reload preserves the profile's logical parent, the visit root and an explicit
+catalog choice, including when reloading inside the profile. An expired session returns the guest
+to the catalog with QR re-entry instructions. The first server response reporting expiration
+invalidates the old history branch even when the entry URL already contained the session ID.
+Subsequent reloads check that same table/session with the server and keep the new browsing branch.
+A fresh scan can start a visit.
+Guest history retains only supported route parameters, including on mixed
+Telegram deep links. Dismissing the staff form updates the route and Telegram BackButton together.
+Staff status polling belongs to the mounted venue screen and its current table session. Physical Telegram iPhone acceptance
+requires a separately authorized release.
+
 ## Block 5 — Orders (one active order per table_session + batches)
 MUST:
 - Follow `docs/ORDER_SESSION_TAB_CORE.md` for canonical order/session/tab behavior and current-vs-target notes.

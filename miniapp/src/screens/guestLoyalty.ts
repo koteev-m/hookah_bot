@@ -32,7 +32,7 @@ function targetText(targets: LoyaltyTarget[]) {
 
 export function renderGuestLoyalty(
   root: HTMLElement, backendUrl: string, isDebug: boolean, venueId: number | null, table: TableContextSnapshot,
-  onBack: () => void, onOpenVenue: (venueId: number) => void
+  onBack: () => void, onOpenVenue: (venueId: number) => void, navigate: (hash: string) => void
 ) {
   const controller = new AbortController()
   const deps = { isDebug, getAccessToken, clearSession }
@@ -90,7 +90,7 @@ export function renderGuestLoyalty(
     }
     const open = el('button', { className: 'button-secondary', text: activeHere ? 'К меню' : 'Открыть заведение' })
     open.addEventListener('click', () => {
-      if (activeHere) window.location.hash = `#/venue/${program.venueId}?browseMenu=1`
+      if (activeHere) navigate(`#/venue/${program.venueId}?browseMenu=1`)
       else onOpenVenue(program.venueId)
     })
     card.appendChild(open)

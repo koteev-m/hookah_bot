@@ -17,6 +17,7 @@ type CatalogScreenOptions = {
   onOpenVenue: (venueId: number) => void
   onBookVenue?: (venueId: number) => void
   onAskVenue?: (venueId: number) => void
+  navigate?: (hash: string) => void
 }
 
 type CatalogRefs = {
@@ -57,27 +58,27 @@ function renderErrorActions(container: HTMLElement, actions: ApiErrorAction[]) {
   })
 }
 
-function catalogHeader(promotions: boolean) {
+function catalogHeader(promotions: boolean, navigate = (hash: string) => { window.location.hash = hash }) {
   const header = el('section', { className: 'card guest-catalog-header' })
   const tabs = el('div', { className: 'venue-inline-actions guest-section-tabs' })
   for (const [label, showPromotions] of [['Заведения', false], ['Акции', true]] as const) {
     const tab = el('button', { className: 'button-secondary button-small', text: label })
     tab.setAttribute('aria-pressed', String(promotions === showPromotions))
-    tab.addEventListener('click', () => { window.location.hash = showPromotions ? '#/catalog/promotions' : '#/catalog' })
+    tab.addEventListener('click', () => navigate(showPromotions ? '#/catalog/promotions' : '#/catalog'))
     tabs.appendChild(tab)
   }
   append(header, el('h1', { text: promotions ? 'Акции' : 'Заведения' }), tabs)
   return header
 }
 
-function renderCatalogPromotions(root: HTMLDivElement, { backendUrl, isDebug, onOpenVenue }: CatalogScreenOptions) {
+function renderCatalogPromotions(root: HTMLDivElement, { backendUrl, isDebug, onOpenVenue, navigate }: CatalogScreenOptions) {
   const controller = new AbortController()
   const wrapper = el('div', { className: 'catalog-screen' })
   const status = el('p', { className: 'status' })
   status.setAttribute('role', 'status')
   const retry = el('button', { className: 'button-secondary button-small', text: 'Повторить' })
   const list = el('div', { className: 'guest-promotion-feed' })
-  append(wrapper, catalogHeader(true), status, retry, list)
+  append(wrapper, catalogHeader(true, navigate), status, retry, list)
   root.replaceChildren(wrapper)
   const load = async () => {
     retry.hidden = true
@@ -105,7 +106,7 @@ function renderCatalogPromotions(root: HTMLDivElement, { backendUrl, isDebug, on
   return () => controller.abort()
 }
 
-function buildCatalogDom(root: HTMLDivElement): CatalogRefs {
+function buildCatalogDom(root: HTMLDivElement, navigate?: (hash: string) => void): CatalogRefs {
   const wrapper = el('div', { className: 'catalog-screen' })
   const controls = el('div', { className: 'catalog-controls' })
   const searchLabel = el('label', { text: 'Поиск по названию, городу или адресу', className: 'field-label' })
@@ -144,7 +145,7 @@ function buildCatalogDom(root: HTMLDivElement): CatalogRefs {
 
   const list = el('ul', { className: 'catalog-list' })
 
-  append(wrapper, catalogHeader(false), controls, status, error, list)
+  append(wrapper, catalogHeader(false, navigate), controls, status, error, list)
   root.replaceChildren(wrapper)
 
   return {
@@ -252,7 +253,7 @@ export function renderCatalogScreen(options: CatalogScreenOptions) {
   if (!root) return () => undefined
 
   if (window.location.hash === '#/catalog/promotions') return renderCatalogPromotions(root, options)
-  const refs = buildCatalogDom(root)
+  const refs = buildCatalogDom(root, options.navigate)
   let disposed = false
   let catalogAbort: AbortController | null = null
   let loadSeq = 0
