@@ -241,9 +241,24 @@ body:has(.guest-shell) .toast { bottom: calc(4.5rem + max(env(safe-area-inset-bo
   .guest-nav button { font-size: .75rem; }
 }
 
-.guest-business-card { display: grid; gap: .4rem; }
-.guest-business-card h2, .guest-business-card p { margin: 0; }
-.guest-business-card h2 { font-size: 1.1rem; }
+.guest-business-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: .25rem .5rem;
+  margin-top: 1rem;
+  padding-top: .75rem;
+  border-top: 1px solid var(--guest-border);
+  font-size: .875rem;
+}
+.guest-business-card h2, .guest-business-card p { grid-column: 1 / -1; margin: 0; }
+.guest-shell .guest-business-card h2 { font-size: 1rem; }
+.guest-business-card p { color: var(--guest-muted); }
+.guest-business-card details[open] { grid-column: 1 / -1; }
 .guest-business-card button { justify-self: start; }
-.guest-business-card summary { cursor: pointer; padding-block: .4rem; }
+.guest-business-card summary, .guest-application-history summary { cursor: pointer; min-height: 44px; padding-block: .65rem; }
 .guest-business-card ul { padding-inline-start: 1.25rem; margin: .25rem 0; }
+.guest-application-history { margin-top: .75rem; border-top: 1px solid var(--guest-border); }
+.guest-application-current h2, .guest-application-row h3, .guest-application-row p { margin: 0; }
+.guest-application-row { display: grid; gap: .35rem; }
+.guest-application-row button { justify-self: start; }

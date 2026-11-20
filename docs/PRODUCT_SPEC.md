@@ -261,13 +261,23 @@ MUST:
 - Guest navigation exposes `Заведение` (or `Заведения` without a selected venue), `QR`, `Чаты` and
   `Профиль`. Help lives in the profile and on relevant recovery screens. Browser Back and Telegram
   Back share the guest route history.
-- In the Guest catalog, the compact “У вас своя кальянная?” card discloses venue capabilities inline.
+- Below the Guest catalog results or empty state, “У вас своя кальянная?” offers an application
+  and discloses venue capabilities inline.
   “Подать заявку” and Profile → “Для заведений” open the same screen. Guest history retains the
   opening route across reload. The B2B address and its History entry exclude QR credentials and
   application fields. Reload restores the current visit through the authenticated Guest API.
   A linked applicant can open that specific cabinet after the server confirms their current OWNER
-  membership and the absence of an active visit. If ownership has ended, the linked request stays
-  in the history and the guest can submit again.
+  membership and the absence of an active visit. Pending requests, approvals awaiting creation,
+  and confirmed owner cabinets appear first. Completed requests without confirmed owner access,
+  rejections and cancellations stay in the collapsed history. A single refresh reads the applicant’s
+  statuses and rechecks linked cabinets. The list appears as soon as the Guest API responds,
+  including while cabinet access is being checked. After an uncertain submission, the same tab
+  checks the guest’s list for a single new request matching the submitted fields, in any status.
+  Confirmation clears the submitted draft if it is still unchanged. Edits made after session expiry
+  stay in the open screen until the same guest authenticates again, then sync to the tab’s draft.
+  An inconclusive read preserves the draft and requires a separate, explicit action to start another
+  submission. If the server confirms no current OWNER membership for a linked venue, the guest can
+  submit again when there are no other current requests.
 - The venue card leads with name, address, today's schedule and `Меню`. It keeps booking and
   venue-question actions, secondary map choices and the full schedule. Additional information
   sections start collapsed. Expanding a section shows its text and materials inline, under the
