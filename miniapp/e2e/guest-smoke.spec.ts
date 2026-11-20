@@ -10294,6 +10294,7 @@ test('guest catalog sends debounced backend search and city filters then resets'
 })
 
 test('guest catalog has deterministic loading retry general-empty and no-match states', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
   await installTelegramWebApp(page, 123456789)
   const api = await mockGuestApi(page, { catalogVenues: [] })
   api.queueCatalogError({ status: 500, code: 'INTERNAL_ERROR', message: 'Failed' })
@@ -10311,7 +10312,12 @@ test('guest catalog has deterministic loading retry general-empty and no-match s
   const errorCard = page.locator('.catalog-screen .error-card')
   await expect(errorCard).toBeVisible()
   await errorCard.getByRole('button', { name: 'Повторить' }).click()
-  await expect(page.getByText('Пока нет доступных заведений.', { exact: true })).toBeVisible()
+  const emptyCatalog = page.getByText('Пока нет доступных заведений.', { exact: true })
+  await expect(emptyCatalog).toBeVisible()
+  const invitation = page.getByRole('heading', { name: 'У вас своя кальянная?' })
+  await expect(invitation).toBeVisible()
+  expect(await invitation.evaluate(node => node.getBoundingClientRect().top))
+    .toBeGreaterThanOrEqual(await emptyCatalog.evaluate(node => node.getBoundingClientRect().bottom))
   await expect(search).toBeEnabled()
   await expect(city).toBeEnabled()
 
@@ -31240,6 +31246,9 @@ test('guest venue application shares catalog and profile entry and restores both
   const benefit = card.getByText('Гости открывают меню по QR-коду на столе и оформляют заказ.')
   await expect(benefit).toBeHidden()
   await expect(page.getByRole('searchbox')).toBeInViewport()
+  await expect(page.locator('.catalog-list .catalog-item')).toHaveCount(1)
+  expect(await card.evaluate(node => node.getBoundingClientRect().top))
+    .toBeGreaterThanOrEqual(await page.locator('.catalog-list').evaluate(node => node.getBoundingClientRect().bottom))
   await page.screenshot({ path: testInfo.outputPath('guest-catalog-application.png') })
   await card.getByText('Подробнее о возможностях').click()
   await expect(benefit).toBeVisible()
@@ -31300,6 +31309,12 @@ test('guest venue application retains failed form, blocks double submit and relo
   await submit.click()
   await expect(page.getByText(/Не удалось подтвердить отправку/)).toBeVisible()
   await expect(page.getByLabel('Контакт для связи')).toHaveValue(body.contact)
+  await expect(submit).toBeHidden()
+  await page.getByRole('button', { name: 'Обновить статус' }).click()
+  await expect(page.getByText(/В списке пока нет новой заявки/)).toBeVisible()
+  expect(submits).toBe(1)
+  await page.getByRole('button', { name: 'Начать отдельную заявку' }).click()
+  expect(submits).toBe(1)
   await submit.click()
   await expect(submit).toBeDisabled()
   await page.locator('form').evaluate(form => { form.requestSubmit() })
@@ -31313,14 +31328,427 @@ test('guest venue application retains failed form, blocks double submit and relo
   await expect(page.getByText('На рассмотрении', { exact: true })).toBeVisible()
   await expect(submit).toBeHidden()
   await expect(page.getByRole('button', { name: 'Обновить доступ' })).toBeHidden()
-  expect(listReads).toBe(3)
+  expect(listReads).toBe(4)
   await page.goto('about:blank')
   await page.goto('?mode=guest#/catalog')
   await page.getByRole('button', { name: 'Профиль', exact: true }).click()
   await page.getByRole('button', { name: 'Для заведений' }).click()
   await expect(page.getByRole('heading', { name: 'Заявка №81' })).toBeVisible()
-  expect(listReads).toBe(4)
+  expect(listReads).toBe(5)
 })
+
+for (const recovery of ['retry', 'refresh'] as const) {
+  test(`guest venue application recovers a lost receipt via ${recovery}`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    const body = { venueName: 'Дым', city: 'Пермь', contact: '@guest_fixture', comment: null }
+    const row = { ...body, id: 82, status: 'PENDING', createdAt: '2026-10-01T12:00:00Z', linkedVenueId: null }
+    const methods: string[] = []
+    let committed = false
+    await page.route('**/api/guest/venue-applications', route => {
+      const method = route.request().method()
+      methods.push(method)
+      if (method === 'GET') return route.fulfill(jsonResponse(committed ? [row] : []))
+      expect(method).toBe('POST')
+      expect(route.request().postDataJSON()).toEqual(body)
+      if (committed) return route.fulfill(jsonResponse({ created: false, application: row }))
+      committed = true
+      return route.abort('failed')
+    })
+    await page.goto('?mode=guest#/account/venue-application')
+    await page.getByLabel('Название заведения').fill(body.venueName)
+    await page.getByLabel('Город', { exact: true }).fill(body.city)
+    await page.getByLabel('Контакт для связи').fill(body.contact)
+    const submit = page.getByRole('button', { name: 'Отправить заявку' })
+    await submit.click()
+    await expect(page.getByText(/Не удалось подтвердить отправку/)).toBeVisible()
+    await expect(page.getByLabel('Название заведения')).toHaveValue(body.venueName)
+    if (recovery === 'retry') {
+      await page.locator('form.ownership-application-form').evaluate(form => (form as HTMLFormElement).requestSubmit())
+      await expect(page.getByText('Заявка №82 уже принята.')).toBeVisible()
+    }
+    const refresh = page.getByRole('button', { name: 'Обновить статус' })
+    await refresh.click()
+    await expect(refresh).toBeEnabled()
+    await expect(page.getByRole('heading', { name: 'Заявка №82' })).toHaveCount(1)
+    await expect(submit).toBeHidden()
+    expect(methods).toEqual(recovery === 'retry' ? ['GET', 'POST', 'GET', 'GET'] : ['GET', 'POST', 'GET'])
+  })
+}
+
+const receiptForm = { venueName: 'Север', city: 'Казань', contact: '@receipt_fixture', comment: 'После полудня' }
+const receiptRow = { ...receiptForm, id: 2, status: 'PENDING', linkedVenueId: null, createdAt: '2026-11-01T12:00:00Z' }
+
+function readReceiptDraft(page: Page, userId = 123456789) {
+  return page.evaluate(id => {
+    const key = 'hookah_guest_venue_application:user:' + id
+    return { values: JSON.parse(sessionStorage.getItem(key) ?? 'null'), attempt: sessionStorage.getItem(key + ':attempt') !== null }
+  }, userId)
+}
+
+async function fillReceiptForm(page: Page) {
+  await page.getByLabel('Название заведения').fill(receiptForm.venueName)
+  await page.getByLabel('Город', { exact: true }).fill(receiptForm.city)
+  await page.getByLabel('Контакт для связи').fill(receiptForm.contact)
+  await page.getByLabel('Дополнительная информация').fill(receiptForm.comment)
+}
+
+test('guest venue application lost receipt after link never sends another POST for the same attempt', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  const history = { ...receiptRow, id: 1, status: 'REJECTED' }
+  const linked = { ...receiptRow, status: 'APPROVED', linkedVenueId: 21 }
+  let accepted = false
+  const methods: string[] = []
+  await page.route('**/api/venue/me', route => route.fulfill(jsonResponse({}, 403)))
+  await page.route('**/api/guest/venue-applications', route => {
+    const method = route.request().method()
+    methods.push(method)
+    if (method === 'GET') return route.fulfill(jsonResponse(accepted ? [linked, history] : [history]))
+    expect(route.request().postDataJSON()).toEqual(receiptForm)
+    if (methods.filter(m => m === 'POST').length > 1) return route.fulfill(jsonResponse({
+      created: true, application: { ...receiptRow, id: 3 }
+    }))
+    accepted = true
+    return route.abort('failed')
+  })
+  await page.goto('?mode=guest#/account/venue-application')
+  await fillReceiptForm(page)
+  const form = page.locator('form.ownership-application-form')
+  await page.getByRole('button', { name: 'Отправить заявку' }).click()
+  await expect(page.getByText(/Не удалось подтвердить отправку/)).toBeVisible()
+  await form.evaluate(form => (form as HTMLFormElement).requestSubmit())
+  await expect.poll(() => methods.join(' ')).toBe('GET POST GET')
+  await expect(page.getByText(/Заявка №2 уже принята/)).toBeVisible()
+  await page.getByText('История заявок (2)', { exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Заявка №2' })).toBeVisible()
+  await expect(page.getByText('Одобрена. Кабинет создан.')).toBeVisible()
+  await expect(page.getByLabel('Название заведения')).toHaveValue('')
+  await fillReceiptForm(page)
+  await page.getByRole('button', { name: 'Отправить заявку' }).click()
+  await expect(page.getByText('Заявка №3 отправлена.')).toBeVisible()
+  expect(methods).toEqual(['GET', 'POST', 'GET', 'POST'])
+})
+
+for (const edited of [false, true]) {
+  test(`guest venue application reconciles its draft via GET (later edit and reload=${edited})`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    let accepted = false
+    let decision = 'PENDING'
+    const methods: string[] = []
+    await page.route('**/api/guest/venue-applications', route => {
+      const method = route.request().method()
+      methods.push(method)
+      if (method === 'GET') return route.fulfill(jsonResponse(accepted ? [{ ...receiptRow, status: decision }] : []))
+      expect(route.request().postDataJSON()).toEqual(receiptForm)
+      accepted = true
+      return route.abort('failed')
+    })
+    await page.goto('?mode=guest#/account/venue-application')
+    await fillReceiptForm(page)
+    await page.getByRole('button', { name: 'Отправить заявку' }).click()
+    await expect(page.getByText(/Не удалось подтвердить отправку/)).toBeVisible()
+    const name = page.getByLabel('Название заведения')
+    const publicState = await page.evaluate(() => location.href + JSON.stringify(history.state) + JSON.stringify(localStorage))
+    for (const value of Object.values(receiptForm)) expect(publicState).not.toContain(value)
+    if (edited) {
+      await name.fill('Следующая кальянная')
+      await page.reload()
+    } else {
+      await page.getByRole('button', { name: 'Обновить статус' }).click()
+    }
+    await expect(page.getByRole('heading', { name: 'Заявка №2' })).toBeVisible()
+    const expectedDraft = edited ? ['Следующая кальянная', receiptForm.city, receiptForm.contact, receiptForm.comment] : null
+    expect(await readReceiptDraft(page)).toEqual({ values: expectedDraft, attempt: false })
+    decision = 'REJECTED'
+    await page.reload()
+    await expect(name).toBeVisible()
+    await expect(name).toHaveValue(edited ? 'Следующая кальянная' : '')
+    await expect(page.getByLabel('Контакт для связи')).toHaveValue(edited ? receiptForm.contact : '')
+    expect(methods).toEqual(['GET', 'POST', 'GET', 'GET'])
+  })
+}
+
+for (const recovery of ['confirmed', 'offline read', 'denied auth', 'different account'] as const) {
+  test(`guest venue application keeps late edits across session expiry (${recovery})`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    const start = Date.UTC(2026, 10, 20, 12)
+    await page.clock.setFixedTime(start)
+    const calls: string[] = []
+    let denyAuth = recovery === 'denied auth'
+    let offlineRead = recovery === 'offline read'
+    let draftBeforeFailedRead: Awaited<ReturnType<typeof readReceiptDraft>> | undefined
+    let decision = 'PENDING'
+    let accepted = false
+    await page.route('**/api/auth/telegram', async route => {
+      expect(route.request().method()).toBe('POST')
+      const session = await fixtureAuthSession(page, route)
+      const userId = session.user.telegramUserId
+      calls.push(`auth ${userId}`)
+      if (accepted && denyAuth) {
+        denyAuth = false
+        return route.fulfill(jsonResponse({}, 401))
+      }
+      return route.fulfill(jsonResponse({ ...session, token: 'fixture-' + userId }))
+    })
+    await page.route('**/api/guest/venue-applications', async route => {
+      const method = route.request().method()
+      const actor = route.request().headers().authorization === 'Bearer fixture-123456789' ? 123456789 : 987654321
+      expect(route.request().headers().authorization).toBe('Bearer fixture-' + actor)
+      calls.push(`${method} ${actor}`)
+      if (method === 'POST') {
+        expect(route.request().postDataJSON()).toEqual(receiptForm)
+        accepted = true
+        return route.abort('failed')
+      }
+      expect(method).toBe('GET')
+      if (accepted && offlineRead) {
+        offlineRead = false
+        draftBeforeFailedRead = await readReceiptDraft(page)
+        return route.abort('failed')
+      }
+      return route.fulfill(jsonResponse(accepted && actor === 123456789 ? [{ ...receiptRow, status: decision }] : []))
+    })
+    const original = Object.values(receiptForm)
+    const revised = ['Новая редакция', ...original.slice(1)]
+    const name = page.getByLabel('Название заведения')
+    const refresh = page.getByRole('button', { name: 'Обновить статус' })
+    await page.goto('?mode=guest#/account/venue-application')
+    await fillReceiptForm(page)
+    await page.getByRole('button', { name: 'Отправить заявку' }).click()
+    await expect(page.getByText(/Не удалось подтвердить отправку/)).toBeVisible()
+    await page.clock.setFixedTime(start + 3_601_000)
+    await name.fill(revised[0])
+    expect(await readReceiptDraft(page)).toEqual({ values: original, attempt: true })
+    const expected = ['auth 123456789', 'GET 123456789', 'POST 123456789']
+    expect(calls).toEqual(expected)
+
+    if (recovery === 'different account') {
+      await page.evaluate(() => {
+        const sdk = (window as unknown as { Telegram: { WebApp: { initDataUnsafe: { user: { id: number } }, initData: string } } }).Telegram.WebApp
+        sdk.initDataUnsafe = { user: { id: 987654321 } }
+        sdk.initData = 'query_id=other&user=%7B%22id%22%3A987654321%7D&hash=fixture'
+        window.dispatchEvent(new Event('focus'))
+      })
+      await expect(page.getByText('У вас пока нет заявок.')).toBeVisible()
+      await expect(name).toHaveValue('')
+      await expect(page.getByRole('heading', { name: 'Заявка №2' })).toHaveCount(0)
+      expect(await readReceiptDraft(page, 987654321)).toEqual({ values: null, attempt: false })
+      expect(await readReceiptDraft(page)).toEqual({ values: original, attempt: true })
+      expect(calls).toEqual([...expected, 'auth 987654321', 'GET 987654321'])
+      return
+    }
+
+    await refresh.click()
+    expected.push('auth 123456789')
+    if (recovery === 'denied auth' || recovery === 'offline read') {
+      if (recovery === 'denied auth') {
+        await expect(page.getByText(/Сессия истекла/)).toBeVisible()
+        await expect(name).toBeHidden()
+        expect(await readReceiptDraft(page)).toEqual({ values: original, attempt: true })
+      } else {
+        expected.push('GET 123456789')
+        await expect(page.getByText(/Не удалось загрузить заявки/)).toBeVisible()
+        await expect(name).toHaveValue(revised[0])
+        expect(draftBeforeFailedRead).toEqual({ values: revised, attempt: true })
+        expect(await readReceiptDraft(page)).toEqual({ values: revised, attempt: true })
+      }
+      await expect(page.getByText(/уже принята/)).toHaveCount(0)
+      expect(calls).toEqual(expected)
+      await refresh.click()
+      if (recovery === 'denied auth') expected.push('auth 123456789')
+    }
+    await expect(page.getByText('Заявка №2 уже принята.')).toBeVisible()
+    expected.push('GET 123456789')
+    const confirmedDraft = await readReceiptDraft(page)
+    decision = 'REJECTED'
+    await page.reload()
+    await expect(name).toBeVisible()
+    expect(calls).toEqual([...expected, 'GET 123456789'])
+    await expect(name).toHaveValue(revised[0])
+    expect(confirmedDraft).toEqual({ values: revised, attempt: false })
+    expect(await readReceiptDraft(page)).toEqual(confirmedDraft)
+    const publicState = await page.evaluate(() => location.href + JSON.stringify(history.state) + JSON.stringify(localStorage))
+    for (const value of [...original, revised[0]]) expect(publicState).not.toContain(value)
+  })
+}
+
+for (const code of [200, 401, 403, 503]) {
+  test(`guest venue application shows pending and history while OWNER is unresolved (${code})`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    const methods: string[] = []
+    await page.route('**/api/guest/venue-applications', route => {
+      methods.push(route.request().method())
+      return route.fulfill(jsonResponse([receiptRow, { ...receiptRow, id: 1, status: 'APPROVED', linkedVenueId: 21 }]))
+    })
+    let release!: () => void
+    const delayed = new Promise<void>(resolve => { release = resolve })
+    // Home also reads /venue/me. Hold only the access check following the application list.
+    await page.route('**/api/venue/me', async route => {
+      if (methods.length) await delayed
+      return route.fulfill(jsonResponse({ userId: 123456789, venues: [linkedMembership] }, methods.length ? code : 200))
+    })
+    const ownerRequest = page.waitForRequest(req => methods.length > 0 && req.url().endsWith('/api/venue/me'))
+    await page.goto('?mode=guest#/account/venue-application')
+    await ownerRequest
+    const enter = page.getByRole('button', { name: 'Перейти в кабинет заведения' })
+    try {
+      await expect(page.getByRole('heading', { name: 'Заявка №2' })).toBeVisible()
+      await expect(page.getByText('На рассмотрении', { exact: true })).toBeVisible()
+      await page.getByText('История заявок (1)', { exact: true }).click()
+      await expect(page.getByText('Одобрена. Кабинет создан.')).toBeVisible()
+      await expect(page.getByText('Текущий доступ владельца к этому заведению не подтверждён.')).toBeHidden()
+      await expect(enter).toBeHidden()
+    } finally { release() }
+    if (code === 200) {
+      await expect(enter).toBeVisible()
+    } else {
+      const message = code === 401 ? /Сессия истекла/ : code === 403
+        ? /Текущий доступ владельца к этому заведению не подтверждён/ : /Пока не удалось проверить доступ владельца/
+      await expect(page.getByText(message)).toBeVisible()
+      await expect(enter).toBeHidden()
+      const pending = page.getByRole('heading', { name: 'Заявка №2' })
+      if (code === 401) await expect(pending).toHaveCount(0)
+      else await expect(pending).toBeVisible()
+    }
+    expect(methods).toEqual(['GET'])
+  })
+}
+
+test('guest venue application reconciles only one newly observed exact match', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  const old = { ...receiptRow, id: 1, status: 'REJECTED' }
+  const exact = { ...receiptRow, id: 3, status: 'CANCELLED' }
+  let rows = [old]
+  let status = 200
+  const methods: string[] = []
+  await page.route('**/api/guest/venue-applications', route => {
+    const method = route.request().method()
+    methods.push(method)
+    if (method === 'GET') return route.fulfill(jsonResponse(rows, status))
+    return route.abort('failed')
+  })
+  await page.goto('?mode=guest#/account/venue-application')
+  await fillReceiptForm(page)
+  const submit = page.getByRole('button', { name: 'Отправить заявку' })
+  await submit.click()
+  await expect(page.getByText(/Не удалось подтвердить отправку/)).toBeVisible()
+  const refresh = page.getByRole('button', { name: 'Обновить статус' })
+  status = 503
+  await refresh.click()
+  await expect(page.getByText(/Не удалось загрузить заявки/)).toBeVisible()
+  await expect(submit).toBeHidden()
+  status = 200
+  rows = [old, { ...receiptRow, comment: 'Другой комментарий', status: 'REJECTED' }]
+  await refresh.click()
+  await expect(page.getByText(/В списке пока нет новой заявки/)).toBeVisible()
+  await expect(page.getByLabel('Контакт для связи')).toHaveValue(receiptForm.contact)
+  rows = [old, exact, { ...exact, id: 4 }]
+  await refresh.click()
+  await expect(page.getByText(/Найдено несколько новых заявок/)).toBeVisible()
+  await expect(submit).toBeHidden()
+  await expect(page.getByLabel('Название заведения')).toHaveValue(receiptForm.venueName)
+  rows = [old, exact, { ...exact, id: 4, comment: 'Изменён' }]
+  await refresh.click()
+  await expect(page.getByText('Заявка №3 уже принята.')).toBeVisible()
+  await expect(page.getByLabel('Название заведения')).toHaveValue('')
+  expect(methods).toEqual(['GET', 'POST', 'GET', 'GET', 'GET', 'GET'])
+})
+
+test('guest venue application handles a confirmed refusal and an existing server receipt', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page)
+  const methods: string[] = []
+  await page.route('**/api/guest/venue-applications', route => {
+    const method = route.request().method()
+    methods.push(method)
+    if (method === 'GET') return route.fulfill(jsonResponse([]))
+    expect(route.request().postDataJSON()).toEqual(receiptForm)
+    return route.fulfill(methods.length === 2 ? jsonResponse({}, 400) : jsonResponse({ created: false, application: receiptRow }))
+  })
+  await page.goto('?mode=guest#/account/venue-application')
+  await fillReceiptForm(page)
+  const submit = page.getByRole('button', { name: 'Отправить заявку' })
+  await submit.click()
+  await expect(page.getByText(/Заявка не принята/)).toBeVisible()
+  await expect(page.getByLabel('Контакт для связи')).toHaveValue(receiptForm.contact)
+  await submit.click()
+  await expect(page.getByText('Заявка №2 уже принята.')).toBeVisible()
+  await expect(submit).toBeHidden()
+  expect(methods).toEqual(['GET', 'POST', 'POST'])
+})
+
+for (const denied of [401, 403]) {
+  test(`guest venue application hides private history on a denied list read (${denied})`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    let reads = 0
+    await page.route('**/api/guest/venue-applications', route => {
+      expect(route.request().method()).toBe('GET')
+      reads++
+      return route.fulfill(reads === 2 ? jsonResponse({}, denied) : jsonResponse([{ ...receiptRow, status: 'REJECTED' }]))
+    })
+    await page.goto('?mode=guest#/account/venue-application')
+    await page.getByText('История заявок (1)').click()
+    await fillReceiptForm(page)
+    const refresh = page.getByRole('button', { name: 'Обновить статус' })
+    await refresh.click()
+    await expect(page.getByText(denied === 401 ? /Сессия истекла/ : /Нет доступа к заявкам/)).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Заявка №2' })).toHaveCount(0)
+    await expect(page.getByLabel('Контакт для связи')).toBeHidden()
+    await refresh.click()
+    await expect(page.getByLabel('Контакт для связи')).toHaveValue(receiptForm.contact)
+    expect(reads).toBe(3)
+  })
+}
+
+for (const delayed of ['list', 'owner']) {
+  test(`guest venue application discards a late ${delayed} response after an account switch`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    await mockGuestApi(page)
+    await mockReleaseGuestSession(page)
+    let release!: () => void
+    const delay = new Promise<void>(resolve => { release = resolve })
+    const readers: string[] = []
+    await page.route('**/api/guest/venue-applications', async route => {
+      expect(route.request().method()).toBe('GET')
+      const actor = route.request().headers().authorization
+      readers.push(actor)
+      if (delayed === 'list' && readers.length === 2) await delay
+      return route.fulfill(jsonResponse(actor === 'Bearer session-123456789' ? [linkedGuestApplication] : []))
+    })
+    await page.route('**/api/venue/me', async route => {
+      if (delayed === 'owner' && readers.length === 2) await delay
+      return route.fulfill(jsonResponse({}, 403))
+    })
+    await page.goto('?mode=guest#/account/venue-application')
+    await fillReceiptForm(page)
+    await page.getByText('История заявок (1)').click()
+    const path = delayed === 'list' ? '/venue-applications' : '/api/venue/me'
+    const waiting = page.waitForRequest(r => r.url().endsWith(path))
+    await page.getByRole('button', { name: 'Обновить доступ и статус' }).click()
+    await waiting
+    const oldResponse = page.waitForResponse(r => r.url().endsWith(path) &&
+      r.request().headers().authorization === 'Bearer session-123456789')
+    try {
+      await page.evaluate(() => {
+        const sdk = (window as unknown as { Telegram: { WebApp: { initDataUnsafe: { user: { id: number } }, initData: string } } }).Telegram.WebApp
+        sdk.initDataUnsafe = { user: { id: 987654321 } }
+        sdk.initData = 'query_id=other&user=%7B%22id%22%3A987654321%7D&hash=fixture'
+        window.dispatchEvent(new Event('focus'))
+      })
+      await expect(page.getByText('У вас пока нет заявок.')).toBeVisible()
+    } finally { release() }
+    await oldResponse
+    await expect(page.getByRole('heading', { name: 'Заявка №53' })).toHaveCount(0)
+    await expect(page.getByLabel('Контакт для связи')).toHaveValue('')
+    expect(readers).toEqual(['Bearer session-123456789', 'Bearer session-123456789', 'Bearer session-987654321'])
+  })
+}
 
 test('guest venue application distinguishes decisions, linked cabinet and fresh owner access', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
@@ -31337,6 +31765,9 @@ test('guest venue application distinguishes decisions, linked cabinet and fresh 
   await page.route('**/api/platform/me', route => route.fulfill(jsonResponse({}, 403)))
   await page.goto('?mode=guest#/account/venue-application')
   await expect(page.getByText('Одобрена. Платформа готовит кабинет.')).toBeVisible()
+  const history = page.getByText('История заявок (2)', { exact: true })
+  await expect(page.getByRole('heading', { name: 'Заявка №52' })).toBeHidden()
+  await history.click()
   await expect(page.getByText('Отклонена', { exact: true })).toBeVisible()
   await expect(page.getByText('Отменена', { exact: true })).toBeVisible()
   const access = page.getByRole('button', { name: 'Обновить доступ' })
@@ -31346,7 +31777,7 @@ test('guest venue application distinguishes decisions, linked cabinet and fresh 
   await page.getByRole('button', { name: 'Обновить статус' }).click()
   await expect(page.getByText('Одобрена. Кабинет создан.')).toBeVisible()
   await access.click()
-  await expect(page.getByText(/Сейчас у вас нет доступа владельца к этому заведению/)).toBeVisible()
+  await expect(page.getByText('Текущий доступ владельца к этому заведению не подтверждён.')).toBeVisible()
   await expect(enter).toBeHidden()
   venueId = 21
   let stillVisiting = true
@@ -31511,14 +31942,17 @@ test('guest venue application preserves a revoked OWNER history and accepts anot
   await page.route('**/api/venue/me', route => route.fulfill(jsonResponse(
     readStatus === 200 ? { userId: 123456789, venues: [otherStaffMembership] } : {}, readStatus)))
   const pending = { ...linkedGuestApplication, id: 54, linkedVenueId: null, status: 'PENDING' }
-  let submitted = false
+  let submits = 0
   await page.route('**/api/guest/venue-applications', route => {
-    if (route.request().method() === 'GET') return route.fulfill(jsonResponse(submitted ? [pending, linkedGuestApplication] : [linkedGuestApplication]))
+    if (route.request().method() === 'GET') return route.fulfill(jsonResponse(submits ? [pending, linkedGuestApplication] : [linkedGuestApplication]))
     expect(route.request().postDataJSON()).toEqual({ venueName: 'Север', city: 'Казань', contact: '@fixture', comment: null })
-    submitted = true
+    submits++
     return route.fulfill(jsonResponse({ created: true, application: pending }))
   })
   await page.goto('?mode=guest#/account/venue-application')
+  const history = page.getByText('История заявок (1)', { exact: true })
+  await expect(page.getByRole('heading', { name: 'Заявка №53' })).toBeHidden()
+  await history.click()
   await expect(page.getByText('Одобрена. Кабинет создан.')).toBeVisible()
   const form = page.getByRole('button', { name: 'Отправить заявку' })
   await expect(form).toBeVisible()
@@ -31537,7 +31971,17 @@ test('guest venue application preserves a revoked OWNER history and accepts anot
   await page.getByLabel('Контакт для связи').fill('@fixture')
   await form.click()
   await expect(page.getByText('Заявка №54 отправлена.')).toBeVisible()
+  const refresh = page.getByRole('button', { name: /Обновить (доступ|статус)/ })
+  await expect(refresh).toHaveCount(1)
+  const updated = page.waitForResponse(r => r.url().endsWith('/api/guest/venue-applications') && r.request().method() === 'GET')
+  await refresh.click()
+  await updated
+  await expect(refresh).toBeEnabled()
+  expect(submits).toBe(1)
   await page.reload()
+  await expect(page.getByRole('heading', { name: 'Заявка №54' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Заявка №53' })).toBeHidden()
+  await history.click()
   await expect(page.getByRole('heading', { name: 'Заявка №53' })).toBeVisible()
   await expect(page.getByText('На рассмотрении', { exact: true })).toBeVisible()
   await expect(form).toBeHidden()
@@ -32087,7 +32531,9 @@ test('release findings revoked OWNER target returns to applications after cabine
   await page.route('**/api/venue/me',route => route.fulfill(jsonResponse({userId:123456789,venues:[otherStaffMembership]})))
   await page.reload()
   await expect(page.getByRole('heading',{name:'Для заведений'})).toBeVisible()
-  await expect(page.getByText(/Сейчас у вас нет доступа владельца/)).toBeVisible()
+  await expect(page.getByText(/Доступ владельца пока не подтверждён/)).toBeVisible()
+  await page.getByText('История заявок (1)', { exact: true }).click()
+  await expect(page.getByText('Текущий доступ владельца к этому заведению не подтверждён.')).toBeVisible()
   expect(requests.some(url => /venueId=10|\/venues?\/10\//.test(url))).toBe(false)
 })
 
@@ -32096,7 +32542,14 @@ test('release findings application draft survives ended visit and remains privat
   const active = buildRestoreContext()
   await mockGuestApi(page, { restoreContext: active })
   await mockReleaseGuestSession(page)
-  await page.route('**/api/guest/venue-applications', route => route.fulfill(jsonResponse([])))
+  const applicationReaders: string[] = []
+  await page.route('**/api/guest/venue-applications', route => {
+    const reader = route.request().headers().authorization
+    applicationReaders.push(reader)
+    const history = reader === 'Bearer session-123456789'
+      ? [{ ...linkedGuestApplication, status: 'CANCELLED', linkedVenueId: null }] : []
+    return route.fulfill(jsonResponse(history))
+  })
   let expired = false
   await page.route('**/api/guest/table/resolve?**', route => route.fulfill(jsonResponse(expired ?
     { ...active, tableSessionActive:false, tableSessionStatus:'EXPIRED', tableSessionInactiveReason:'TABLE_SESSION_EXPIRED' } : active)))
@@ -32112,6 +32565,8 @@ test('release findings application draft survives ended visit and remains privat
   await expect(page).toHaveURL(/#\/catalog$/)
   await page.getByRole('button', {name:'Подать заявку'}).click()
   for (let i=0; i<labels.length; i++) await expect(page.getByLabel(labels[i], {exact:true})).toHaveValue(values[i])
+  await page.getByText('История заявок (1)', { exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Заявка №53' })).toBeVisible()
   const serialized = await page.evaluate(() => location.href + JSON.stringify(history.state) + JSON.stringify(localStorage))
   for (const value of values) expect(serialized).not.toContain(value)
   await page.evaluate(() => {
@@ -32120,6 +32575,9 @@ test('release findings application draft survives ended visit and remains privat
   })
   await page.reload()
   await expect(page.getByLabel(labels[0], {exact:true})).toHaveValue('')
+  await expect(page.getByText('Заявка №53', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('История заявок (1)', { exact: true })).toHaveCount(0)
+  expect(applicationReaders.at(-1)).toBe('Bearer session-987654321')
 })
 
 
