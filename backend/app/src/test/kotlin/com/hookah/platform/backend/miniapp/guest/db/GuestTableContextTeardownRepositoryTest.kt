@@ -11,6 +11,31 @@ import kotlin.test.assertNull
 
 class GuestTableContextTeardownRepositoryTest {
     @Test
+    fun `tabless Bot exit requires the exact actor and preserves a pending staff call`() =
+        runBlocking {
+            val db = GuestTableContextLifecycleTestDatabase.create("bot-visit-before-first-bill")
+            val now = Instant.now()
+            val session = db.createActiveSession(now.minusSeconds(60), now, now.plusSeconds(3600))
+            db.insertContext(tableSessionId = session, updatedAt = now)
+            db.insertDialog()
+            val lifecycle = db.lifecycleRepository()
+            val before = db.contextSnapshot()
+            val dialog = db.dialogSnapshot()
+            assertIs<GuestTableTeardownResult.Denied>(lifecycle.teardownByChat(db.actorUserId + 1, db.chatId, now))
+            assertEquals(before, db.contextSnapshot())
+            assertEquals(dialog, db.dialogSnapshot())
+            assertNull(db.exitSnapshot(session))
+
+            db.createActiveStaffCall(session)
+            val blocked =
+                assertIs<GuestTableTeardownResult.Blocked>(lifecycle.teardownByChat(db.actorUserId, db.chatId, now))
+            assertEquals(TableSessionEndBlockedReason.ACTIVE_STAFF_CALL, blocked.reason)
+            assertEquals(before, db.contextSnapshot())
+            assertEquals(dialog, db.dialogSnapshot())
+            assertNull(db.exitSnapshot(session))
+        }
+
+    @Test
     fun `teardown clears stored context independently of token table venue and subscription availability`() =
         runBlocking {
             val scenarios =
@@ -66,7 +91,7 @@ class GuestTableContextTeardownRepositoryTest {
                         expiresAt = now.plus(Duration.ofHours(2)),
                     )
                 database.createPersonalTab(tableSessionId)
-                database.insertContext(updatedAt = now.minus(Duration.ofMinutes(1)))
+                database.insertContext(tableSessionId = tableSessionId, updatedAt = now.minus(Duration.ofMinutes(1)))
                 database.insertDialog()
                 scenario.mutate(database)
 
@@ -90,7 +115,7 @@ class GuestTableContextTeardownRepositoryTest {
         }
 
     @Test
-    fun `ordinary guest context saved before first session still records exit`() =
+    fun `legacy unbound chat cannot record exit for a later session even with tab membership`() =
         runBlocking {
             val database = GuestTableContextLifecycleTestDatabase.create("guest-teardown-context-before-session")
             val now = Instant.parse("2026-08-05T10:00:00Z")
@@ -112,9 +137,9 @@ class GuestTableContextTeardownRepositoryTest {
                 )
 
             val cleared = assertIs<GuestTableTeardownResult.Cleared>(result)
-            assertEquals(tableSessionId, cleared.tableSessionId)
-            assertEquals(true, cleared.exitRecorded)
-            assertNotNull(database.exitSnapshot(tableSessionId))
+            assertNull(cleared.tableSessionId)
+            assertEquals(false, cleared.exitRecorded)
+            assertNull(database.exitSnapshot(tableSessionId))
             assertNull(database.contextSnapshot())
             assertNull(database.dialogSnapshot())
         }
@@ -132,7 +157,7 @@ class GuestTableContextTeardownRepositoryTest {
                 )
             database.createPersonalTab(tableSessionId)
             database.createActiveStaffCall(tableSessionId)
-            database.insertContext(updatedAt = now.minus(Duration.ofMinutes(1)))
+            database.insertContext(tableSessionId = tableSessionId, updatedAt = now.minus(Duration.ofMinutes(1)))
             database.insertDialog()
             database.update("UPDATE venues SET status = 'PAUSED' WHERE id = ?") {
                 it.setLong(1, database.venueId)
@@ -165,7 +190,7 @@ class GuestTableContextTeardownRepositoryTest {
                     expiresAt = now.plus(Duration.ofHours(2)),
                 )
             database.createPersonalTab(tableSessionId)
-            database.insertContext(updatedAt = now.minus(Duration.ofMinutes(1)))
+            database.insertContext(tableSessionId = tableSessionId, updatedAt = now.minus(Duration.ofMinutes(1)))
             database.insertDialog()
 
             val result =
@@ -194,7 +219,7 @@ class GuestTableContextTeardownRepositoryTest {
                     expiresAt = now.plus(Duration.ofHours(2)),
                 )
             database.createPersonalTab(tableSessionId)
-            database.insertContext(updatedAt = now.minus(Duration.ofMinutes(1)))
+            database.insertContext(tableSessionId = tableSessionId, updatedAt = now.minus(Duration.ofMinutes(1)))
             database.insertDialog()
             database.update("DELETE FROM venue_tables WHERE id = ?") {
                 it.setLong(1, database.tableId)
@@ -232,7 +257,7 @@ class GuestTableContextTeardownRepositoryTest {
                 it.setObject(1, now.minus(Duration.ofHours(1)))
                 it.setLong(2, oldTableSessionId)
             }
-            database.insertContext(updatedAt = now.minus(Duration.ofMinutes(30)))
+            database.insertContext(tableSessionId = oldTableSessionId, updatedAt = now.minus(Duration.ofMinutes(30)))
             database.insertDialog()
             val newTableSessionId =
                 database.createActiveSession(

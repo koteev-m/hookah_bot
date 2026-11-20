@@ -471,7 +471,7 @@ export async function guestResolveTable(
   tableToken: string,
   deps: RequestDependencies,
   signal?: AbortSignal,
-  options?: { tableSessionId?: number | null; allowCreateSession?: boolean }
+  options?: { tableSessionId?: number | null; allowCreateSession?: boolean; verifyOnly?: boolean }
 ): Promise<ApiResult<TableResolveResponse>> {
   const normalizedToken = normalizeTableToken(tableToken)
   if (!normalizedToken) {
@@ -484,6 +484,7 @@ export async function guestResolveTable(
     }
     search.set('tableSessionId', String(options.tableSessionId))
   }
+  if (options?.verifyOnly) search.set('verifyOnly', 'true')
   if (options?.allowCreateSession === true) {
     search.set('resolveMode', 'create')
   }
@@ -495,14 +496,35 @@ export async function guestResolveTable(
   )
 }
 
+export function guestRejoinTable(
+  backendUrl: string,
+  tableToken: string,
+  tableSessionId: number,
+  exitEventId: string,
+  deps: RequestDependencies,
+  signal: AbortSignal
+): Promise<ApiResult<TableResolveResponse>> {
+  return requestApi<TableResolveResponse>(backendUrl, '/api/guest/table/session/rejoin', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tableToken, tableSessionId, exitEventId }), signal
+  }, deps)
+}
+
 export async function guestRestoreTable(
   backendUrl: string,
   deps: RequestDependencies,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  visit?: { tableToken: string; tableSessionId: number } | 'active-visits' | null
 ): Promise<ApiResult<TableRestoreResponse>> {
+  const query = new URLSearchParams()
+  if (visit === 'active-visits') query.set('scope', visit)
+  else if (visit) {
+    query.set('tableToken', visit.tableToken)
+    query.set('tableSessionId', String(visit.tableSessionId))
+  }
   return requestApi<TableRestoreResponse>(
     backendUrl,
-    '/api/guest/table/restore',
+    query.size ? `/api/guest/table/restore?${query}` : '/api/guest/table/restore',
     { signal },
     deps
   )
@@ -779,6 +801,25 @@ export async function guestGetTabs(
     backendUrl,
     `/api/guest/tabs?table_session_id=${encodeURIComponent(String(tableSessionId))}`,
     { signal },
+    deps
+  )
+}
+
+export async function guestOpenPersonalTab(
+  backendUrl: string,
+  payload: { tableSessionId: number },
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestTabResponse>> {
+  return requestApi<GuestTabResponse>(
+    backendUrl,
+    '/api/guest/tabs/personal',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal
+    },
     deps
   )
 }

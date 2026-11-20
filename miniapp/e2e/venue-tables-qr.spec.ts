@@ -40,7 +40,7 @@ async function mountTables(page: Page, permissions = ['TABLE_VIEW', 'TABLE_MANAG
       }, true)
     }
     sessionStorage.setItem(`hookah_session_token:${location.host}:user:${telegram ? '7001' : 'unknown'}`, JSON.stringify({
-      token: 'synthetic-test-session', expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 3600
+      userId: telegram ? 7001 : undefined, token: 'synthetic-test-session', expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 3600
     }))
     const path = '/miniapp/src/screens/venueTables.ts'
     const { renderVenueTablesScreen } = await import(path)

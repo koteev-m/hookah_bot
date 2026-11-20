@@ -60,7 +60,7 @@ class TableSessionRepository(
                         val session = resolveActiveSession(connection, venueId, tableId, ttl, now)
                         connection.commit()
                         session
-                    } catch (e: SQLException) {
+                    } catch (e: Exception) {
                         runCatching { connection.rollback() }
                         throw e
                     } finally {
@@ -348,6 +348,9 @@ class TableSessionRepository(
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        // Exit and rejoin serialize on the physical session, even between marker rows.
+                        findSessionForTable(connection, tableSessionId, venueId, tableId, forUpdate = true)
+                            ?: return@use null
                         val activeUserContext =
                             isActiveUserTableContext(
                                 connection = connection,
@@ -408,37 +411,36 @@ class TableSessionRepository(
         }
     }
 
-    suspend fun clearUserExit(
+    suspend fun currentQrExit(
         userId: Long,
-        tableSessionId: Long,
-    ) {
+        venueId: Long,
+        tableId: Long,
+        now: Instant = Instant.now(),
+    ): Long? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        withContext(Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    clearUserExit(connection, userId, tableSessionId)
+                    connection.prepareStatement(
+                        """
+                        SELECT e.exit_event_id FROM guest_table_session_exits e
+                        WHERE e.user_id = ? AND e.table_session_id = (
+                            SELECT id FROM table_sessions WHERE venue_id = ? AND table_id = ?
+                                AND status = 'ACTIVE' AND ended_at IS NULL AND expires_at > ?
+                            ORDER BY id DESC LIMIT 1
+                        )
+                        """.trimIndent(),
+                    ).use {
+                        it.setLong(1, userId)
+                        it.setLong(2, venueId)
+                        it.setLong(3, tableId)
+                        it.setTimestamp(4, Timestamp.from(now))
+                        it.executeQuery().use { rows -> if (rows.next()) rows.getLong(1) else null }
+                    }
                 }
-            } catch (e: SQLException) {
+            } catch (_: SQLException) {
                 throw DatabaseUnavailableException()
             }
-        }
-    }
-
-    fun clearUserExit(
-        connection: Connection,
-        userId: Long,
-        tableSessionId: Long,
-    ) {
-        connection.prepareStatement(
-            """
-            DELETE FROM guest_table_session_exits
-            WHERE user_id = ?
-              AND table_session_id = ?
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, userId)
-            statement.setLong(2, tableSessionId)
-            statement.executeUpdate()
         }
     }
 
@@ -621,6 +623,34 @@ class TableSessionRepository(
         }
     }
 
+    fun findExitEventId(
+        connection: Connection,
+        userId: Long,
+        tableSessionId: Long,
+    ): Long? =
+        connection.prepareStatement(
+            "SELECT exit_event_id FROM guest_table_session_exits WHERE user_id = ? AND table_session_id = ?",
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.setLong(2, tableSessionId)
+            statement.executeQuery().use { rows -> if (rows.next()) rows.getLong(1) else null }
+        }
+
+    fun consumeExitEvent(
+        connection: Connection,
+        userId: Long,
+        tableSessionId: Long,
+        exitEventId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            "DELETE FROM guest_table_session_exits WHERE user_id = ? AND table_session_id = ? AND exit_event_id = ?",
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.setLong(2, tableSessionId)
+            statement.setLong(3, exitEventId)
+            statement.executeUpdate() == 1
+        }
+
     suspend fun hasUserExit(
         userId: Long,
         tableSessionId: Long,
@@ -660,6 +690,7 @@ class TableSessionRepository(
         userId: Long,
         venueId: Long,
         tableSessionId: Long,
+        forUpdate: Boolean = false,
     ): Boolean =
         connection.prepareStatement(
             """
@@ -671,6 +702,7 @@ class TableSessionRepository(
               AND t.status = 'ACTIVE'
               AND tm.user_id = ?
             LIMIT 1
+            ${if (forUpdate) "FOR UPDATE" else ""}
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
@@ -683,7 +715,7 @@ class TableSessionRepository(
         connection: Connection,
         venueId: Long,
         tableId: Long,
-        contextUpdatedAt: Instant,
+        tableSessionId: Long,
         now: Instant,
         forUpdate: Boolean,
     ): TableSessionRecord? {
@@ -697,15 +729,13 @@ class TableSessionRepository(
               AND status = 'ACTIVE'
               AND ended_at IS NULL
               AND expires_at > ?
-              AND started_at <= ?
-            ORDER BY started_at DESC, id DESC
-            LIMIT 1$lockClause
+              AND id = ?$lockClause
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.setLong(2, tableId)
             statement.setTimestamp(3, Timestamp.from(now))
-            statement.setTimestamp(4, Timestamp.from(contextUpdatedAt))
+            statement.setLong(4, tableSessionId)
             statement.executeQuery().use { rs -> if (rs.next()) rs.toRecord() else null }
         }
     }
@@ -790,7 +820,7 @@ class TableSessionRepository(
         }
     }
 
-    private fun findActiveSessionForUpdate(
+    fun findActiveSessionForUpdate(
         connection: Connection,
         venueId: Long,
         tableId: Long,

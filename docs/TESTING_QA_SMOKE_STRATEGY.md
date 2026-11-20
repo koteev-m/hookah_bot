@@ -4001,6 +4001,25 @@ invalid, so Actions are recorded as user-confirmed rather than independently que
   isolation, edit/cancel/reject/close/Platform denial and focused labels/live-region/focus assertions.
   The deterministic local run passed `191 / 191`, including ownership onboarding `15 / 15`.
 
+**Guest Mini App first-application coverage (local, HT-GUEST-FIRST-VENUE-ONBOARDING-01)**
+
+- Run `VenueOnboardingRoutesTest` for an authenticated first applicant, private reads, canonical
+  retry and a single submit audit, bounded input, rate limits, and Platform approval through DRAFT
+  creation and OWNER assignment. Retain the repository, Telegram, Platform and PostgreSQL suites above.
+- Run the Playwright cases matching `guest venue application` in Chromium and WebKit. They cover
+  both entrances, disclosure, Browser/Telegram Back across reload, failed submission and retry,
+  fresh opening, all four statuses and a linked cabinet with changing membership or visit state.
+  Check the actual selected venue and dashboard request with STAFF and OWNER memberships, an
+  ended QR launch across reload, the B2B URL and History during a change of table, and a new
+  submission following OWNER revocation. Keep the full Chromium guest/QR/cart/order and
+  Venue/Platform smoke as the regression gate.
+- Run `guest context continuity` in Chromium and WebKit for the shared tab, loss or expiry of
+  the last scanned table, browse/visit separation, active-session mode guard and bot chat fallback.
+  `GuestTableResolveAvailabilityPostgresTest` checks exact versus ranked discovery, tab membership,
+  closed orders and read-only restoration using authenticated Ktor requests.
+- Device acceptance still requires checking the catalog, keyboard and native Back in Telegram on
+  iOS/Android against an explicitly authorized test environment.
+
 Consolidated staging smoke:
 
 1. An authenticated Telegram user with zero OWNER memberships sees and submits a first-venue

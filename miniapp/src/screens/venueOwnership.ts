@@ -1,3 +1,4 @@
+import { venueApplicationFields } from '../shared/ui/venueApplicationFields'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import {
@@ -53,19 +54,6 @@ function apiDeps(isDebug: boolean) {
   return { isDebug, getAccessToken, clearSession }
 }
 
-function labeledControl<T extends HTMLInputElement | HTMLTextAreaElement>(
-  id: string,
-  labelText: string,
-  control: T
-) {
-  const field = el('div', { className: 'ownership-field' })
-  const label = el('label', { className: 'field-label', text: labelText }) as HTMLLabelElement
-  control.id = id
-  label.htmlFor = id
-  append(field, label, control)
-  return field
-}
-
 function buildDom(root: HTMLDivElement): ScreenRefs {
   const wrapper = el('div', { className: 'venue-orders ownership-workspace' })
   const header = el('section', { className: 'card' })
@@ -102,41 +90,13 @@ function buildDom(root: HTMLDivElement): ScreenRefs {
   form.hidden = true
   const formTitle = el('h3', { id: 'ownership-application-title', text: 'Новая заявка' }) as HTMLHeadingElement
   form.setAttribute('aria-labelledby', formTitle.id)
-  const formGrid = el('div', { className: 'venue-form-grid' })
-  const venueName = document.createElement('input')
-  venueName.className = 'venue-input'
-  venueName.placeholder = 'Например, «Северный дым»'
-  venueName.maxLength = 200
-  venueName.required = true
-  venueName.autocomplete = 'organization'
-  const city = document.createElement('input')
-  city.className = 'venue-input'
-  city.placeholder = 'Например, Казань'
-  city.maxLength = 120
-  city.required = true
-  city.autocomplete = 'address-level2'
-  const contact = document.createElement('input')
-  contact.className = 'venue-input'
-  contact.placeholder = 'Телефон или Telegram username'
-  contact.maxLength = 200
-  contact.required = true
-  const comment = document.createElement('textarea')
-  comment.className = 'venue-input'
-  comment.placeholder = 'Дополнительная информация для платформы'
-  comment.maxLength = 500
+  const { formGrid, venueName, city, contact, comment } = venueApplicationFields('ownership', 'Комментарий (необязательно)')
   const formActions = el('div', { className: 'venue-inline-actions' })
   const submit = el('button', { text: 'Отправить заявку' }) as HTMLButtonElement
   submit.type = 'submit'
   const reset = el('button', { className: 'button-secondary', text: 'Отмена' }) as HTMLButtonElement
   reset.type = 'button'
   append(formActions, submit, reset)
-  append(
-    formGrid,
-    labeledControl('ownership-venue-name', 'Название заведения', venueName),
-    labeledControl('ownership-city', 'Город', city),
-    labeledControl('ownership-contact', 'Контакт для связи', contact),
-    labeledControl('ownership-comment', 'Комментарий (необязательно)', comment)
-  )
   append(form, formTitle, formGrid, formActions)
 
   const applicationCard = el('section', { className: 'card' })

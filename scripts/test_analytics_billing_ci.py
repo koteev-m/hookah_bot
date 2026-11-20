@@ -103,6 +103,53 @@ class AnalyticsBillingCiTest(unittest.TestCase):
             tree.write(path)
         return mutate
 
+    def test_guest_exit_backfill_requires_both_dialects_in_migration_job(self):
+        suite = 'com.hookah.platform.backend.miniapp.guest.GuestExitEventMigrationTest'
+        selector = step(self.workflow, 'Run migration sanity tests')
+        self.assertEqual(selector.count(f'--tests "{suite}"'), 1)
+        code = python_step(self.workflow, 'Assert mandatory migration test results')
+        with tempfile.TemporaryDirectory() as directory:
+            code = code.replace(REPORT_PATH, directory)
+            setup, checks = code.split('problems = []', 1)
+            env = {}
+            exec(setup, env)
+            exit_report = Path(directory) / f'TEST-{suite}.xml'
+            for _, path, minimum in env['required_suites']:
+                root = ET.Element('testsuite', tests=str(minimum))
+                if path == exit_report:
+                    for dialect in ('postgres', 'h2'):
+                        for title in (
+                            'backfills populated exit markers and generates a fresh identity per exit',
+                            'preserves legacy chat without granting session access',
+                        ):
+                            ET.SubElement(root, 'testcase', classname=suite, name=f'{dialect} {title}()')
+                ET.ElementTree(root).write(path)
+            self.assertTrue(exit_report.exists())
+            good = exit_report.read_bytes()
+
+            def verify():
+                with contextlib.redirect_stdout(io.StringIO()):
+                    exec('problems = []' + checks, env)
+
+            verify()
+            exit_report.unlink()
+            with self.assertRaisesRegex(SystemExit, 'missing JUnit XML'):
+                verify()
+            for index in range(4):
+                for mutation in ('missing', 'duplicate', 'skipped', 'failure', 'error'):
+                    with self.subTest(index=index, mutation=mutation):
+                        root = ET.fromstring(good)
+                        case = root.findall('testcase')[index]
+                        if mutation == 'missing':
+                            root.remove(case)
+                        elif mutation == 'duplicate':
+                            root.append(case)
+                        else:
+                            ET.SubElement(case, mutation)
+                        ET.ElementTree(root).write(exit_report)
+                        with self.assertRaisesRegex(SystemExit, 'guest migration'):
+                            verify()
+
     def test_workflow_selects_exact_classes_in_existing_docker_job(self):
         body = self.workflow.split('  backend-release-critical-routes:\n', 1)[1].split('\n  backend-venue-booking-rbac:', 1)[0]
         run = step(body, 'Run guest venue platform route and security tests')

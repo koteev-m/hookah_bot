@@ -1409,6 +1409,7 @@ jobs:
             --tests "com.hookah.platform.backend.analytics.AnalyticsFoundationPostgresTest" \
             --tests "com.hookah.platform.backend.telegram.TelegramDialogStateMigrationTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.TableSessionsMigrationV28PostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.guest.GuestExitEventMigrationTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.AuditLogTargetMigrationH2Test" \
             --tests "com.hookah.platform.backend.miniapp.venue.AuditLogTargetMigrationPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.guest.GuestBatchIdempotencyFingerprintMigrationH2Test" \
@@ -1430,7 +1431,9 @@ jobs:
           from xml.etree import ElementTree
 
           report_dir = Path("backend/app/build/test-results/test")
+          exit_events = report_dir / "TEST-com.hookah.platform.backend.miniapp.guest.GuestExitEventMigrationTest.xml"
           required_suites = [
+              ("Guest exit and exact chat binding migrations", exit_events, 4),
               (
                   "H2 analytics foundation migration and rollback",
                   report_dir / "TEST-com.hookah.platform.backend.analytics.AnalyticsFoundationH2Test.xml",
@@ -1564,6 +1567,17 @@ jobs:
                   key: int(suite.attrib.get(key, "0"))
                   for key in ("tests", "skipped", "failures", "errors")
               }
+              if report == exit_events:
+                  cases = suite.findall("testcase")
+                  for dialect in ("postgres", "h2"):
+                      for name in (
+                          f"{dialect} backfills populated exit markers and generates a fresh identity per exit()",
+                          f"{dialect} preserves legacy chat without granting session access()",
+                      ):
+                          matches = [case for case in cases if case.get("name") == name
+                                     and case.get("classname") == "com.hookah.platform.backend.miniapp.guest.GuestExitEventMigrationTest"]
+                          if len(matches) != 1 or any(matches[0].find(tag) is not None for tag in ("skipped", "failure", "error")):
+                              problems.append(f"missing, duplicate or non-passing guest migration: {name}")
               executed = counts["tests"] - counts["skipped"]
               print(
                   f"{label} JUnit: xml={report} "

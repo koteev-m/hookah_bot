@@ -1,4 +1,5 @@
 import { clearSession, getAccessToken } from './api/auth'
+import { boundSessionActor } from './api/sessionBinding'
 import { ApiErrorCodes, type ApiErrorInfo } from './api/types'
 import { isDebugEnabled } from './debug'
 import { getTelegramContext } from './telegram'
@@ -80,15 +81,14 @@ export function mountAuthGate(options: AuthGateOptions) {
       ? [
           `isTelegram=${String(ctx.isTelegram)}`,
           `hasWebApp=${String(Boolean(ctx.webApp))}`,
-          `initDataLength=${ctx.initData ? String(ctx.initData.length) : '0'}`,
-          `location.href=${window.location.href}`
+          `hasInitData=${Boolean(ctx.initData)}`
         ].join('\n')
       : ''
   }
 
   const runAuth = async () => {
     const ctx = getTelegramContext()
-    if (!ctx.initData) {
+    if (!ctx.initData && !(ctx.telegramUserId && boundSessionActor() === ctx.telegramUserId)) {
       renderTelegramRequired()
       return
     }

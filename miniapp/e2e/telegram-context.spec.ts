@@ -19,7 +19,7 @@ for (const source of ['webapp', 'hash-with-sdk', 'hash-without-sdk'] as const) {
     if (source === 'webapp') await page.evaluate((initData) => {
       Object.assign(window, { Telegram: { WebApp: { initData } } })
     }, telegramLaunchInitData)
-    const expectedInitData = source === 'webapp' ? telegramLaunchInitData : decodeURIComponent(telegramLaunchInitData)
+    const expectedInitData = telegramLaunchInitData
     const authRequests: unknown[] = []
     await page.route('**/api/auth/telegram', (route) => {
       expect(route.request().method()).toBe('POST')

@@ -2033,7 +2033,7 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `table entry choice includes mini app web app and bot fallback`() {
-        val markup = TelegramKeyboards.inlineTableEntryChoice("https://mini.app/miniapp/", "abc123")
+        val markup = TelegramKeyboards.inlineTableEntryChoice("https://mini.app/miniapp/", "abc123", 55L)
         val buttons = markup.inlineKeyboard.flatten()
 
         assertEquals(2, buttons.size)
@@ -2047,7 +2047,7 @@ class TelegramKeyboardsTest {
         assertFalse(webAppUrl.contains("start_param"))
         assertFalse(webAppUrl.contains("tgWebAppData"))
         assertEquals("💬 Заказывать в боте", buttons[1].text)
-        assertEquals("continue_in_bot", buttons[1].callbackData)
+        assertEquals("continue_in_bot:55", buttons[1].callbackData)
         assertEquals(null, buttons[1].webApp)
     }
 
@@ -2069,7 +2069,7 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `table entry choice reports missing mini app url safely`() {
-        val markup = TelegramKeyboards.inlineTableEntryChoice(null, "abc123")
+        val markup = TelegramKeyboards.inlineTableEntryChoice(null, "abc123", 55L)
         val buttons = markup.inlineKeyboard.flatten()
 
         assertEquals("📱 Mini App не настроен", buttons[0].text)

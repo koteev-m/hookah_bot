@@ -8279,6 +8279,10 @@ extra = {
     'h2/V140__order_closed_fact.sql': '436d11999369fc24ce9730bec9423552956b0536eb42fba786e2798f77de7fe4',
     'postgresql/V140__accounting_create_result.sql': '15da3529b3799195956caf7c933267b5f89d4ed174a8fab36fd2049d5d48e56e',
     'h2/V141__accounting_create_result.sql': '15da3529b3799195956caf7c933267b5f89d4ed174a8fab36fd2049d5d48e56e',
+    'postgresql/V141__guest_exit_event_id.sql': 'f101dfb5b7b3d572eeeadfed376f1b8a27277126b1a9cc5e90309a2c6e602f37',
+    'postgresql/V142__telegram_chat_table_session.sql': '5b595fbe139f39b0e94c92aa5c233062f093c46e13635fad029ea2b3a7cdbf99',
+    'h2/V142__guest_exit_event_id.sql': 'f101dfb5b7b3d572eeeadfed376f1b8a27277126b1a9cc5e90309a2c6e602f37',
+    'h2/V143__telegram_chat_table_session.sql': '7cd69b144e88d605c2ddac6ff93ef13382ee1f20e6b65f4158825aeaf17a0e0c',
 }
 paths = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if not p.is_dir() or p.is_symlink()}
 if set(paths) != set(historical) | set(extra):
@@ -8393,7 +8397,11 @@ PY
     postgresql/V139__order_closed_fact.sql \
     h2/V140__order_closed_fact.sql \
     postgresql/V140__accounting_create_result.sql \
-    h2/V141__accounting_create_result.sql; do
+    h2/V141__accounting_create_result.sql \
+    postgresql/V141__guest_exit_event_id.sql \
+    postgresql/V142__telegram_chat_table_session.sql \
+    h2/V142__guest_exit_event_id.sql \
+    h2/V143__telegram_chat_table_session.sql; do
     printf '\n-- forbidden reviewed tail drift\n' >> "${fixture}/${addition}"
     expect_failure "changed reviewed tail SQL rejects lineage: ${addition}" 'reviewed migration drift' \
       verify_current_migration_lineage "${fixture}"
@@ -8413,7 +8421,11 @@ PY
     postgresql/V139__order_closed_fact.sql \
     h2/V140__order_closed_fact.sql \
     postgresql/V140__accounting_create_result.sql \
-    h2/V141__accounting_create_result.sql; do
+    h2/V141__accounting_create_result.sql \
+    postgresql/V141__guest_exit_event_id.sql \
+    postgresql/V142__telegram_chat_table_session.sql \
+    h2/V142__guest_exit_event_id.sql \
+    h2/V143__telegram_chat_table_session.sql; do
     rm "${fixture}/${addition}"
     expect_failure "missing reviewed menu SQL rejects lineage: ${addition}" 'migration inventory drift' \
       verify_current_migration_lineage "${fixture}"

@@ -75,6 +75,10 @@ internal class MiniAppAbuseProtection(
 
         data class StaffPhotoReadActor(val actorId: Long) : BucketKey
 
+        data class GuestApplicationRead(val userId: Long) : BucketKey
+
+        data class GuestApplicationSubmit(val userId: Long) : BucketKey
+
         data object QrDeliveryGlobal : BucketKey
 
         data class QrDeliveryActor(val userId: Long) : BucketKey
@@ -239,6 +243,20 @@ internal class MiniAppAbuseProtection(
             listOf(
                 Requirement(BucketKey.StaffPhotoReadGlobal, MiniAppRateLimitPolicy(1200, Duration.ofMinutes(1))),
                 Requirement(BucketKey.StaffPhotoReadActor(actorId), MiniAppRateLimitPolicy(240, Duration.ofMinutes(1))),
+            ),
+        )
+
+    fun tryGuestApplicationRead(userId: Long): MiniAppRateLimitDecision =
+        acquire(
+            listOf(
+                Requirement(BucketKey.GuestApplicationRead(userId), MiniAppRateLimitPolicy(60, Duration.ofMinutes(1))),
+            ),
+        )
+
+    fun tryGuestApplicationSubmit(userId: Long): MiniAppRateLimitDecision =
+        acquire(
+            listOf(
+                Requirement(BucketKey.GuestApplicationSubmit(userId), MiniAppRateLimitPolicy(5, Duration.ofMinutes(5))),
             ),
         )
 

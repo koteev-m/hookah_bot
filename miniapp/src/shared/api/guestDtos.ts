@@ -166,6 +166,7 @@ export type TableResolveResponse = {
   tableSessionId: number
   tableSessionStatus: string
   tableSessionActive: boolean
+  exitEventId?: string | null
   tableSessionInactiveReason?: string | null
   tableNumber: string
   venueStatus: string
@@ -176,7 +177,7 @@ export type TableResolveResponse = {
 
 export type TableRestoreContextResponse = TableResolveResponse & {
   tableToken: string
-  tabId: number
+  tabId: number | null
 }
 
 export type TableRestoreResponse = {

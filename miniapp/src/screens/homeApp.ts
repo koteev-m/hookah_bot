@@ -1,12 +1,11 @@
-import { getExplicitVenueBrowsePayload, clearVenueBrowse } from '../shared/state/venueBrowseContext'
+import { openHomeMode, returnToGuestApplication } from '../shared/homeMode'
+import { getExplicitVenueBrowsePayload } from '../shared/state/venueBrowseContext'
 import { clearSession, getAccessToken } from '../shared/api/auth'
-import { guestRestoreTable } from '../shared/api/guestApi'
 import { platformGetMe } from '../shared/api/platformApi'
-import { venueGetMe } from '../shared/api/venueApi'
+import { isVenueAccessForUser, venueGetMe } from '../shared/api/venueApi'
 import { isDebugEnabled } from '../shared/debug'
-import { tableTokenQueryParamKeys } from '../shared/validation/tableToken'
 import { getTelegramContext } from '../shared/telegram'
-import { getTableContext, subscribe } from '../shared/state/tableContext'
+import { botVisitExitHint, checkGuestVisit, subscribe } from '../shared/state/tableContext'
 import { append, el } from '../shared/ui/dom'
 import { mountGuestApp } from './guestApp'
 import { mountPlatformApp } from './platformApp'
@@ -42,18 +41,18 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
     const [venue, platform, visit] = await Promise.all([
       venueGetMe(backendUrl, deps, controller.signal),
       platformGetMe(backendUrl, deps, controller.signal),
-      guestRestoreTable(backendUrl, deps, controller.signal)
+      checkGuestVisit(backendUrl, controller.signal)
     ])
     if (disposed) return
-    if (!visit.ok || (!venue.ok && venue.error.status !== 403) || (!platform.ok && platform.error.status !== 403)) {
+    const launch = getTelegramContext()
+    const explicitQr = launch.tableTokenStatus === 'valid' && launch.tableTokenAutoResolve
+    if ((visit === 'unknown' && !explicitQr && window.location.hash !== '#/account/venue-application' &&
+        !window.history.state?.hookahGuestNavigation) || (!venue.ok && venue.error.status !== 403) || (!platform.ok && platform.error.status !== 403)) {
       fail('Не удалось проверить доступ или посещение. Повторите попытку; если сессия истекла, откройте приложение из Telegram заново.')
       return
     }
     const userId = getTelegramContext().telegramUserId
-    const venueAccessValid = !venue.ok || (venue.data?.userId === userId && Array.isArray(venue.data.venues) &&
-      venue.data.venues.every(item => item != null && Number.isSafeInteger(item.venueId) && item.venueId > 0 &&
-        ['OWNER', 'MANAGER', 'STAFF'].includes(item.role) && Array.isArray(item.permissions) &&
-        item.permissions.every(permission => typeof permission === 'string')))
+    const venueAccessValid = !venue.ok || isVenueAccessForUser(venue.data, userId)
     const platformAccessValid = !platform.ok || (platform.data?.ok === true && platform.data.ownerUserId === userId)
     if (!venueAccessValid || !platformAccessValid) {
       fail('Не удалось подтвердить доступные роли. Откройте приложение из Telegram заново.')
@@ -63,10 +62,17 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
     if (venue.ok && venue.data.venues.length) allowed.push('venue')
     if (platform.ok && platform.data.ok) allowed.push('platform')
     const explicitTable = getTelegramContext().tableTokenStatus !== 'missing'
-    const activeVisit = visit.data.context?.tableSessionActive === true
-    const requested = new URLSearchParams(window.location.search).get('entry')
+    const activeVisit = visit === 'active'
+    const params = new URLSearchParams(window.location.search)
+    const requested = params.get('entry')
+    if (requested === 'venue' && params.get('from') === 'venue-application' &&
+        (!venue.ok || !venue.data.venues.some(item => item.role === 'OWNER' && String(item.venueId) === params.get('venueId')))) {
+      returnToGuestApplication()
+      return
+    }
     const workModes = allowed.filter(mode => mode !== 'guest')
-    const selected: Mode | null = explicitTable || activeVisit || getExplicitVenueBrowsePayload() !== null ? 'guest'
+    const selected: Mode | null = visit === 'unknown' || explicitTable || activeVisit || getExplicitVenueBrowsePayload() !== null ||
+      window.location.hash === '#/account/venue-application' ? 'guest'
       : requested && allowed.includes(requested as Mode) ? requested as Mode
       : workModes.length > 1 ? null : workModes[0] ?? 'guest'
     status.textContent = ''
@@ -82,12 +88,12 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
         switching = true
         buttons.forEach(item => { item.disabled = true })
         // Recheck server-owned visit state; an active visit permits Guest but blocks work modes.
-        const currentVisit = await guestRestoreTable(backendUrl, deps, controller.signal)
+        const currentVisit = await checkGuestVisit(backendUrl, controller.signal)
         if (disposed) return
-        if (!currentVisit.ok || (mode !== 'guest' && (currentVisit.data.context?.tableSessionActive || getTableContext().tableSessionActive))) {
+        if (currentVisit === 'unknown' || (mode !== 'guest' && currentVisit === 'active')) {
           status.hidden = false
-          status.textContent = currentVisit.ok
-            ? 'Сначала завершите текущее посещение в гостевом режиме.'
+          status.textContent = currentVisit === 'active'
+            ? 'Сначала завершите текущее посещение в гостевом режиме. ' + botVisitExitHint
             : 'Не удалось проверить посещение. Повторите попытку.'
           switching = false
           buttons.forEach((item, index) => { item.disabled = allowed[index] === selected })
@@ -101,18 +107,7 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
           buttons.forEach((item, index) => { item.disabled = allowed[index] === selected })
           return
         }
-        const url = new URL(window.location.href)
-        url.searchParams.set('mode', 'home')
-        url.searchParams.set('entry', mode)
-        clearVenueBrowse()
-        url.searchParams.set('venue_browse', 'off')
-        url.searchParams.delete('venue_entry')
-        url.searchParams.delete('venueId')
-        url.searchParams.delete('screen')
-        for (const key of [...tableTokenQueryParamKeys, 'tableSessionId', 'table_session_id']) url.searchParams.delete(key)
-        url.hash = ''
-        // A fresh bootstrap re-reads roles; no cached/client role grants access.
-        window.location.assign(url.href)
+        openHomeMode(mode)
       })
       buttons.push(button)
       append(actions, button)
@@ -134,7 +129,7 @@ export function mountHomeApp({ root, backendUrl }: { root: HTMLDivElement | null
       unsubscribe = subscribe(snapshot => {
         if (snapshot.tableSessionActive && allowed.length > 1) {
           status.hidden = false
-          status.textContent = 'Идёт посещение. Для перехода в рабочий режим сначала завершите визит.'
+          status.textContent = 'Идёт посещение. Для перехода в рабочий режим сначала завершите визит. ' + botVisitExitHint
         } else if (snapshot.status !== 'resolving' && snapshot.status !== 'error') {
           status.hidden = !(requested && !allowed.includes(requested as Mode))
           if (!status.hidden) status.textContent = 'Выбранный режим больше недоступен. Доступные режимы проверены заново.'

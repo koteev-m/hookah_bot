@@ -15,6 +15,7 @@ internal data class PlatformGuestQrPendingConfirmation(
     val venueId: Long,
     val tableId: Long,
     val expiresAt: Instant,
+    val exitEventId: Long? = null,
 )
 
 /**

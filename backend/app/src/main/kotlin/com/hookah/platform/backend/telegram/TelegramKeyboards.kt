@@ -1816,7 +1816,7 @@ object TelegramKeyboards {
     fun inlineTableEntryChoice(
         webAppUrl: String?,
         tableToken: String,
-        tableSessionId: Long? = null,
+        tableSessionId: Long,
     ): InlineKeyboardMarkup {
         val rows =
             buildList {
@@ -1828,9 +1828,7 @@ object TelegramKeyboards {
                                     put("mode", "guest")
                                     put("tableToken", tableToken)
                                     put("screen", "menu")
-                                    if (tableSessionId != null) {
-                                        put("tableSessionId", tableSessionId.toString())
-                                    }
+                                    put("tableSessionId", tableSessionId.toString())
                                 }
                             InlineKeyboardButton(
                                 text = "📱 Заказывать в Mini App",
@@ -1852,7 +1850,7 @@ object TelegramKeyboards {
                     listOf(
                         InlineKeyboardButton(
                             text = "💬 Заказывать в боте",
-                            callbackData = tableSessionId?.let { "continue_in_bot:$it" } ?: "continue_in_bot",
+                            callbackData = "continue_in_bot:$tableSessionId",
                         ),
                     ),
                 )
@@ -7208,6 +7206,7 @@ object TelegramKeyboards {
     fun inlineOpenActiveOrder(
         webAppUrl: String?,
         tableToken: String,
+        tableSessionId: Long,
     ): InlineKeyboardMarkup? {
         val url = webAppUrl ?: return null
         return InlineKeyboardMarkup(
@@ -7218,7 +7217,15 @@ object TelegramKeyboards {
                             text = "Открыть в Mini App",
                             webApp =
                                 WebAppInfo(
-                                    url = buildWebAppUrl(url, mapOf("table_token" to tableToken, "screen" to "order")),
+                                    url =
+                                        buildWebAppUrl(
+                                            url,
+                                            mapOf(
+                                                "table_token" to tableToken,
+                                                "tableSessionId" to tableSessionId.toString(),
+                                                "screen" to "order",
+                                            ),
+                                        ),
                                 ),
                         ),
                     ),
@@ -7440,6 +7447,7 @@ object TelegramKeyboards {
     fun inlineOpenMenu(
         webAppUrl: String?,
         tableToken: String,
+        tableSessionId: Long,
     ): InlineKeyboardMarkup? {
         val url = webAppUrl ?: return null
         return InlineKeyboardMarkup(
@@ -7450,7 +7458,15 @@ object TelegramKeyboards {
                             text = "🍽️ Меню",
                             webApp =
                                 WebAppInfo(
-                                    url = buildWebAppUrl(url, mapOf("table_token" to tableToken, "screen" to "menu")),
+                                    url =
+                                        buildWebAppUrl(
+                                            url,
+                                            mapOf(
+                                                "table_token" to tableToken,
+                                                "tableSessionId" to tableSessionId.toString(),
+                                                "screen" to "menu",
+                                            ),
+                                        ),
                                 ),
                         ),
                     ),

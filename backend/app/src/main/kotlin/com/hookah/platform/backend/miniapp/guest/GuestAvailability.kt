@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.guest
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.api.SubscriptionBlockedException
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
+import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.VenueAvailabilityResolver
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 
@@ -10,9 +11,15 @@ suspend fun ensureGuestActionAvailable(
     venueId: Long,
     guestVenueRepository: GuestVenueRepository,
     subscriptionRepository: SubscriptionRepository,
+    readOnly: Boolean = false,
 ) {
     val venue = ensureVenuePublishedForGuest(venueId, guestVenueRepository)
-    val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(venueId)
+    val subscriptionStatus =
+        if (readOnly) {
+            subscriptionRepository.findSubscriptionState(venueId)?.status ?: SubscriptionStatus.UNKNOWN
+        } else {
+            subscriptionRepository.getSubscriptionStatus(venueId)
+        }
     val availability = VenueAvailabilityResolver.resolve(venue.status, subscriptionStatus)
     if (availability.available) {
         return

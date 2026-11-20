@@ -339,26 +339,10 @@ fun Route.venueRoutes(
             post("/applications") {
                 val userId = call.requireUserId()
                 requireOperationalOwner(venueAccessRepository, userId)
-                val request = call.receive<VenueConnectionApplicationWriteRequest>().normalized()
-                val result =
-                    venueOnboardingService.submitApplication(
-                        applicantUserId = userId,
-                        venueName = request.venueName,
-                        city = request.city,
-                        contact = request.contact,
-                        comment = request.comment,
-                        source = VenueOnboardingSource.VENUE_MINI_APP,
-                    )
-                when (result) {
-                    is VenueConnectionRequestSubmitResult.Success ->
-                        call.respond(
-                            VenueConnectionApplicationWriteResponse(
-                                application = result.request.toVenueApplicationDto(),
-                                created = result.created,
-                            ),
-                        )
-                    VenueConnectionRequestSubmitResult.ApplicantNotOperationalOwner -> throw ForbiddenException()
-                }
+                val request = call.receive<VenueConnectionApplicationWriteRequest>()
+                call.respond(
+                    venueOnboardingService.submitFromMiniApp(userId, request, VenueOnboardingSource.VENUE_MINI_APP),
+                )
             }
 
             put("/applications/{requestId}") {
@@ -1069,6 +1053,21 @@ private suspend fun requireOperationalOwner(
 private fun ApplicationCall.requireVenueConnectionRequestId(): Long =
     parameters["requestId"]?.toLongOrNull()?.takeIf { it > 0L } ?: throw NotFoundException()
 
+internal suspend fun VenueOnboardingService.submitFromMiniApp(
+    userId: Long,
+    body: VenueConnectionApplicationWriteRequest,
+    source: VenueOnboardingSource,
+): VenueConnectionApplicationWriteResponse {
+    val request = body.normalized()
+    val result =
+        submitApplication(userId, request.venueName, request.city, request.contact, request.comment, source)
+    return when (result) {
+        is VenueConnectionRequestSubmitResult.Success ->
+            VenueConnectionApplicationWriteResponse(result.request.toVenueApplicationDto(), created = result.created)
+        VenueConnectionRequestSubmitResult.ApplicantNotOperationalOwner -> throw ForbiddenException()
+    }
+}
+
 private fun VenueConnectionApplicationWriteRequest.normalized(): VenueConnectionApplicationWriteRequest =
     VenueConnectionApplicationWriteRequest(
         venueName = normalizeVenueApplicationRequired(venueName, 200, "Название"),
@@ -1097,7 +1096,7 @@ private fun normalizeVenueApplicationComment(value: String?): String? {
     return normalized.ifBlank { null }
 }
 
-private fun VenueConnectionRequestRecord.toVenueApplicationDto(): VenueConnectionApplicationDto =
+internal fun VenueConnectionRequestRecord.toVenueApplicationDto(): VenueConnectionApplicationDto =
     VenueConnectionApplicationDto(
         id = id,
         venueName = venueName,

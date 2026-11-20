@@ -16,7 +16,8 @@ test('table QR parser preserves generated bot, Mini App and raw token formats wi
   for (const value of accepted) {
     expect(extractTableTokenFromScannedText(value, context), value).toBe(fixture.tableToken)
   }
-  expect(extractTableTokenFromScannedText(fixture.qrText, { ...context, botUsername: null })).toBe(fixture.tableToken)
+  expect(extractTableTokenFromScannedText(fixture.qrText, { ...context, botUsername: null })).toBeNull()
+  expect(extractTableTokenFromScannedText(fixture.tableToken, { ...context, botUsername: null })).toBe(fixture.tableToken)
 })
 
 test('table QR parser rejects empty, foreign, conflicting, malformed and double-encoded payloads', () => {

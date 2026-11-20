@@ -15,13 +15,16 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Url
 import io.ktor.http.content.TextContent
 import io.ktor.http.contentType
 import io.ktor.http.headersOf
@@ -34,6 +37,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
@@ -48,9 +54,12 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class TelegramWebhookRoutesTest {
+    private val sentMessages = ConcurrentLinkedQueue<JsonObject>()
     private val sentChats = ConcurrentLinkedQueue<Long>()
     private val providerFailures = ConcurrentLinkedQueue<String>()
 
@@ -58,6 +67,416 @@ class TelegramWebhookRoutesTest {
     fun verifySyntheticProviderBoundary() {
         assertTrue(providerFailures.isEmpty(), providerFailures.joinToString())
     }
+
+    private fun botVisitConfig(db: PostgresTestDatabase): MapApplicationConfig =
+        PostgresTestEnv.buildConfig(db).apply {
+            put("telegram.enabled", "true")
+            put("telegram.token", "test-token")
+            put("telegram.mode", "webhook")
+            put("telegram.platformOwnerId", FIRST_PRODUCT_USER_ID.toString())
+            put("telegram.webhookSecretToken", "secret")
+            put("telegram.staffChatLinkSecretPepper", "pepper")
+            put("telegram.trafficPolicy", "PRODUCT")
+            put("telegram.webAppPublicUrl", "https://miniapp.example.test/miniapp/")
+            put("billing.subscription.intervalSeconds", "0")
+        }
+
+    // The application serving the next Mini App button starts with empty process-local cart maps.
+    private fun startOrdinaryVisit(db: PostgresTestDatabase) =
+        testApplication {
+            environment { config = botVisitConfig(db) }
+            application { moduleWithOverrides(syntheticOverrides()) }
+            client.get("/health")
+            DriverManager.getConnection(db.jdbcUrl, db.user, db.password).use { connection ->
+                connection.createStatement().use { sql ->
+                    sql.executeUpdate(
+                        "INSERT INTO venues (id,name,city,address,status) OVERRIDING SYSTEM VALUE " +
+                            "VALUES (101,'Fixture','City','Fixture','PUBLISHED')",
+                    )
+                    sql.executeUpdate(
+                        "INSERT INTO venue_tables(id,venue_id,table_number) OVERRIDING SYSTEM VALUE VALUES (201,101,4)",
+                    )
+                    sql.executeUpdate("INSERT INTO table_tokens(token,table_id) VALUES ('bot-closure',201)")
+                    sql.executeUpdate("INSERT INTO venue_subscriptions(venue_id,status) VALUES (101,'ACTIVE')")
+                }
+            }
+            val actor = ALLOWED_USER_ID
+            val response =
+                client.post("/telegram/webhook") {
+                    contentType(ContentType.Application.Json)
+                    headers { append("X-Telegram-Bot-Api-Secret-Token", "secret") }
+                    setBody(
+                        """{"update_id":91,"message":{"message_id":91,"chat":{"id":$actor,"type":"private"},
+                            "from":{"id":$actor},"text":"/start bot-closure"}}""",
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, response.status)
+            withTimeout(15000) {
+                while (db.scalar("SELECT table_session_id FROM telegram_chat_context WHERE user_id=$actor") == null) {
+                    delay(20)
+                }
+            }
+        }
+
+    @Test
+    fun `an ordinary bot cart action refreshes its exact session before expiry`() =
+        testApplication {
+            val db = PostgresTestEnv.createDatabase()
+            startOrdinaryVisit(db)
+            environment { config = botVisitConfig(db) }
+            application { moduleWithOverrides(syntheticOverrides(callbackId = "cart-activity")) }
+            client.get("/health")
+            val actor = ALLOWED_USER_ID
+            val session =
+                checkNotNull(db.scalar("SELECT table_session_id FROM telegram_chat_context WHERE user_id=$actor"))
+            DriverManager.getConnection(db.jdbcUrl, db.user, db.password).use { conn ->
+                conn.createStatement().use {
+                    it.executeUpdate(
+                        "UPDATE table_sessions SET expires_at=now()+interval '30 seconds' WHERE id=$session",
+                    )
+                }
+            }
+            val response =
+                client.post("/telegram/webhook") {
+                    contentType(ContentType.Application.Json)
+                    headers { append("X-Telegram-Bot-Api-Secret-Token", "secret") }
+                    setBody(
+                        """{"update_id":92,"callback_query":{"id":"cart-activity","chat_instance":"test",
+                            "from":{"id":$actor},"message":{"message_id":91,"chat":{"id":$actor,"type":"private"}},
+                            "data":"bot_menu_cart_clear"}}""",
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, response.status)
+            withTimeout(15000) {
+                val ownedBill = "SELECT COUNT(*) FROM tab WHERE table_session_id=$session AND owner_user_id=$actor"
+                while (db.scalar(ownedBill) != "1") {
+                    delay(20)
+                }
+            }
+            val refreshed =
+                "SELECT COUNT(*) FROM table_sessions WHERE id=$session AND expires_at>now()+interval '5 minutes'"
+            assertEquals("1", db.scalar(refreshed))
+            assertEquals(session, db.scalar("SELECT table_session_id FROM telegram_chat_context WHERE user_id=$actor"))
+        }
+
+    @Test
+    fun `confirmed bot exit before the first bill protects the old Mini App button in both clients`() =
+        testApplication {
+            val db = PostgresTestEnv.createDatabase()
+            val user = ALLOWED_USER_ID
+            startOrdinaryVisit(db)
+            environment { config = botVisitConfig(db) }
+            application { moduleWithOverrides(syntheticOverrides()) }
+            client.get("/health")
+            val second = createClient {}
+
+            suspend fun login(
+                http: HttpClient,
+                actor: Long = user,
+            ): String {
+                val response =
+                    http.post("/api/auth/telegram") {
+                        contentType(ContentType.Application.Json)
+                        setBody(Json.encodeToString(TelegramAuthRequest(syntheticInitData(actor))))
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return Json.parseToJsonElement(response.bodyAsText()).jsonObject.getValue("token").jsonPrimitive.content
+            }
+            val firstAuth = login(client)
+            val secondAuth = login(second)
+            var update = 100
+
+            suspend fun message(
+                text: String,
+                actor: Long = user,
+            ) {
+                ++update
+                val response =
+                    client.post("/telegram/webhook") {
+                        contentType(ContentType.Application.Json)
+                        headers { append("X-Telegram-Bot-Api-Secret-Token", "secret") }
+                        setBody(
+                            """{"update_id":$update,"message":{"message_id":$update,
+                                "chat":{"id":$actor,"type":"private"},"from":{"id":$actor},"text":"$text"}}""",
+                        )
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+            }
+
+            suspend fun awaitMessage(predicate: (JsonObject) -> Boolean): JsonObject =
+                withTimeout(15000) {
+                    while (sentMessages.none(predicate)) delay(20)
+                    sentMessages.first(predicate)
+                }
+            val counts = listOf("tab", "tab_member", "orders", "order_batches", "venue_subscriptions", "audit_log")
+
+            fun snapshot() = counts.associateWith { db.scalar("SELECT COUNT(*) FROM $it") }
+            val before = snapshot()
+            val session =
+                checkNotNull(db.scalar("SELECT id FROM table_sessions WHERE table_id=201 AND status='ACTIVE'"))
+            message("📱 Заказывать в Mini App")
+            val link = awaitMessage { it["text"]?.jsonPrimitive?.content?.startsWith("📱 Mini App") == true }
+            val buttons = link.getValue("reply_markup").jsonObject.getValue("inline_keyboard").jsonArray
+            val entry = buttons.flatMap { it.jsonArray }.first { it.jsonObject.containsKey("web_app") }
+            val pointer = Url(entry.jsonObject.getValue("web_app").jsonObject.getValue("url").jsonPrimitive.content)
+            val qr = checkNotNull(pointer.parameters["tableToken"] ?: pointer.parameters["table_token"])
+            assertEquals("bot-closure", qr)
+            assertEquals(session, pointer.parameters["tableSessionId"])
+            assertEquals(before, snapshot())
+            message("🚪 Завершить визит")
+            awaitMessage { it["text"]?.jsonPrimitive?.content?.startsWith("Визит завершён.") == true }
+            val markerSql =
+                "SELECT exit_event_id FROM guest_table_session_exits " +
+                    "WHERE user_id=$user AND table_session_id=$session"
+            val event = checkNotNull(db.scalar(markerSql))
+
+            suspend fun getTable(
+                http: HttpClient,
+                auth: String,
+            ): JsonObject {
+                val response =
+                    http.get("/api/guest/table/resolve?tableToken=$qr&resolveMode=create") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $auth") }
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return Json.parseToJsonElement(response.bodyAsText()).jsonObject
+            }
+            for ((http, auth) in listOf(client to firstAuth, second to secondAuth)) {
+                val result = getTable(http, auth)
+                assertEquals("false", result.getValue("tableSessionActive").jsonPrimitive.content)
+                assertEquals(event, result.getValue("exitEventId").jsonPrimitive.content)
+            }
+            assertEquals(event, db.scalar(markerSql))
+            assertEquals("ACTIVE", db.scalar("SELECT status FROM table_sessions WHERE id=$session"))
+            val activeChatSql =
+                "SELECT COUNT(*) FROM telegram_chat_context " +
+                    "WHERE user_id=$user AND table_token IS NOT NULL"
+            assertEquals("0", db.scalar(activeChatSql))
+            assertEquals(before, snapshot())
+
+            val scanned = getTable(second, secondAuth)
+            val scannedEvent = scanned.getValue("exitEventId").jsonPrimitive.content
+            assertEquals(event, scannedEvent)
+            assertEquals(session, scanned.getValue("tableSessionId").jsonPrimitive.content)
+
+            suspend fun rejoin(
+                http: HttpClient,
+                auth: String,
+                expected: HttpStatusCode,
+                confirmation: String = scannedEvent,
+            ) {
+                val response =
+                    http.post("/api/guest/table/session/rejoin") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $auth") }
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"tableToken":"$qr","tableSessionId":$session,"exitEventId":"$confirmation"}""")
+                    }
+                assertEquals(expected, response.status)
+                if (expected == HttpStatusCode.OK) {
+                    assertEquals(
+                        "true",
+                        Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                            .getValue("tableSessionActive").jsonPrimitive.content,
+                    )
+                }
+            }
+
+            suspend fun hasVisit(query: String = "scope=active-visits"): Boolean {
+                val response =
+                    client.get("/api/guest/table/restore?$query") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $firstAuth") }
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return Json.parseToJsonElement(response.bodyAsText()).jsonObject.getValue("context") != JsonNull
+            }
+
+            suspend fun readTabs(expected: HttpStatusCode) {
+                val response =
+                    second.get("/api/guest/tabs?table_session_id=$session") {
+                        headers { append(HttpHeaders.Authorization, "Bearer $secondAuth") }
+                    }
+                assertEquals(expected, response.status)
+                if (expected == HttpStatusCode.OK) {
+                    assertTrue(
+                        Json.parseToJsonElement(response.bodyAsText()).jsonObject.getValue("tabs").jsonArray.isEmpty(),
+                    )
+                }
+            }
+            assertFalse(hasVisit())
+            readTabs(HttpStatusCode.Forbidden)
+            rejoin(second, secondAuth, HttpStatusCode.OK)
+            assertNull(db.scalar(markerSql))
+            val freshWebView = createClient {}
+            val freshRead =
+                freshWebView.get("/api/guest/table/resolve?tableToken=$qr&tableSessionId=$session") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $firstAuth") }
+                }
+            assertEquals(HttpStatusCode.OK, freshRead.status)
+            val orderRead =
+                freshWebView.get("/api/guest/order/active?tableToken=$qr") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $firstAuth") }
+                }
+            assertEquals(HttpStatusCode.OK, orderRead.status)
+            assertTrue(Json.parseToJsonElement(orderRead.bodyAsText()).jsonObject["order"].toString() == "null")
+            assertEquals(before, snapshot())
+            assertTrue(hasVisit())
+            assertTrue(hasVisit("tableToken=$qr&tableSessionId=$session"))
+            assertFalse(hasVisit("tableToken=other-fixture&tableSessionId=$session"))
+            readTabs(HttpStatusCode.OK)
+            assertEquals("1", db.scalar(activeChatSql))
+            assertEquals(before, snapshot())
+            rejoin(client, firstAuth, HttpStatusCode.Conflict)
+            message("🚪 Завершить визит")
+            withTimeout(15000) {
+                while (db.scalar(markerSql) == null) delay(20)
+            }
+            val laterExit = checkNotNull(db.scalar(markerSql))
+            assertNotEquals(event, laterExit)
+            rejoin(second, secondAuth, HttpStatusCode.Conflict)
+            assertEquals(laterExit, db.scalar(markerSql))
+            assertFalse(hasVisit())
+            assertEquals("1", db.scalar("SELECT COUNT(*) FROM table_sessions"))
+            assertEquals(before, snapshot())
+
+            suspend fun command(
+                path: String,
+                payload: String,
+                auth: String = secondAuth,
+            ) = second.post("/api/guest/$path") {
+                headers { append(HttpHeaders.Authorization, "Bearer $auth") }
+                contentType(ContentType.Application.Json)
+                setBody(payload)
+            }
+            val bill = """{"tableSessionId":$session}"""
+            val exit = """{"tableToken":"$qr","tableSessionId":$session}"""
+            assertEquals(HttpStatusCode.Forbidden, command("tabs/personal", bill).status)
+            rejoin(second, secondAuth, HttpStatusCode.OK, laterExit)
+            val deniedActor = login(second, SECOND_PRODUCT_USER_ID)
+            assertEquals(HttpStatusCode.Forbidden, command("tabs/personal", bill, deniedActor).status)
+            assertEquals(HttpStatusCode.NotFound, command("table/session/end", exit, deniedActor).status)
+            val ended = command("table/session/end", exit)
+            assertEquals(HttpStatusCode.OK, ended.status)
+            assertEquals(
+                "true",
+                Json.parseToJsonElement(ended.bodyAsText()).jsonObject.getValue("ended").jsonPrimitive.content,
+            )
+            val miniAppExit = checkNotNull(db.scalar(markerSql))
+            assertNotEquals(laterExit, miniAppExit)
+            val verify = "/api/guest/table/resolve?tableToken=$qr&tableSessionId=$session&verifyOnly=true"
+            val check = client.get(verify) { headers { append(HttpHeaders.Authorization, "Bearer $firstAuth") } }
+            assertEquals(HttpStatusCode.OK, check.status)
+            assertEquals(
+                miniAppExit,
+                Json.parseToJsonElement(check.bodyAsText()).jsonObject.getValue("exitEventId").jsonPrimitive.content,
+            )
+            assertEquals(miniAppExit, db.scalar(markerSql))
+            assertEquals("ACTIVE", db.scalar("SELECT status FROM table_sessions WHERE id=$session"))
+            assertEquals(before, snapshot())
+            rejoin(second, secondAuth, HttpStatusCode.Conflict, laterExit)
+            rejoin(second, secondAuth, HttpStatusCode.OK, miniAppExit)
+            readTabs(HttpStatusCode.OK)
+            assertEquals(before, snapshot())
+            val firstBill = command("tabs/personal", bill)
+            val sameBill = command("tabs/personal", bill, firstAuth)
+            assertEquals(HttpStatusCode.OK, firstBill.status)
+            assertEquals(HttpStatusCode.OK, sameBill.status)
+            val tab = Json.parseToJsonElement(firstBill.bodyAsText()).jsonObject.getValue("tab").jsonObject
+            assertEquals(tab, Json.parseToJsonElement(sameBill.bodyAsText()).jsonObject.getValue("tab"))
+            assertEquals("PERSONAL", tab.getValue("type").jsonPrimitive.content)
+            assertEquals(session, tab.getValue("tableSessionId").jsonPrimitive.content)
+            assertEquals("1", db.scalar("SELECT COUNT(*) FROM tab_member WHERE user_id=$user"))
+            assertEquals("1", db.scalar("SELECT COUNT(*) FROM tab WHERE table_session_id=$session"))
+            assertEquals(before - setOf("tab", "tab_member"), snapshot() - setOf("tab", "tab_member"))
+            assertEquals(HttpStatusCode.OK, command("table/session/end", exit).status)
+
+            // A Platform prompt for an exited actor cannot provision a missing subscription.
+            val platform = FIRST_PRODUCT_USER_ID
+            login(second, platform)
+            DriverManager.getConnection(db.jdbcUrl, db.user, db.password).use { connection ->
+                connection.createStatement().use { sql ->
+                    sql.executeUpdate("DELETE FROM venue_subscriptions WHERE venue_id=101")
+                    sql.executeUpdate(
+                        "INSERT INTO guest_table_session_exits(user_id,table_session_id,exited_at) " +
+                            "VALUES ($platform,$session,now())",
+                    )
+                }
+            }
+            val beforePrompt = snapshot()
+            readTabs(HttpStatusCode.Locked)
+            assertEquals(HttpStatusCode.Locked, command("tabs/personal", bill).status)
+            assertEquals(beforePrompt, snapshot())
+            message("/start bot-closure", platform)
+            awaitMessage {
+                it["chat_id"]?.jsonPrimitive?.content == platform.toString() &&
+                    it["text"]?.jsonPrimitive?.content?.contains("подписк", ignoreCase = true) == true
+            }
+            assertEquals(beforePrompt, snapshot())
+            assertEquals("1", db.scalar("SELECT COUNT(*) FROM table_sessions"))
+            assertEquals("2", db.scalar("SELECT COUNT(*) FROM guest_table_session_exits"))
+            DriverManager.getConnection(db.jdbcUrl, db.user, db.password).use { connection ->
+                connection.createStatement().use { sql ->
+                    sql.executeUpdate("INSERT INTO venue_subscriptions(venue_id,status) VALUES (101,'ACTIVE')")
+                    sql.executeUpdate(
+                        "INSERT INTO venue_tables(id,venue_id,table_number) OVERRIDING SYSTEM VALUE " +
+                            "VALUES (202,101,5),(203,101,6)",
+                    )
+                    sql.executeUpdate(
+                        "INSERT INTO table_tokens(token,table_id) VALUES ('second-qr',202),('third-qr',203)",
+                    )
+                }
+            }
+            message("/start second-qr")
+
+            suspend fun awaitTable(id: Long) =
+                withTimeout(15000) {
+                    val sql =
+                        "SELECT table_id FROM telegram_chat_context " +
+                            "WHERE user_id=$user AND table_token IS NOT NULL"
+                    while (db.scalar(sql) != id.toString()) delay(
+                        20,
+                    )
+                }
+            awaitTable(202)
+            val oldPhysical = checkNotNull(db.scalar("SELECT id FROM table_sessions WHERE table_id=202"))
+            val previousMarker =
+                "SELECT exit_event_id FROM guest_table_session_exits " +
+                    "WHERE user_id=$user AND table_session_id=$oldPhysical"
+            message("🚪 Завершить визит")
+            withTimeout(15000) { while (db.scalar(previousMarker) == null) delay(20) }
+            val oldEvent = checkNotNull(db.scalar(previousMarker))
+            message("/start third-qr")
+            awaitTable(203)
+            val beforeDenied = snapshot()
+            message("/start second-qr")
+            val denial =
+                awaitMessage { it["text"]?.jsonPrimitive?.content?.contains("больше не связан с чатом") == true }
+            assertFalse(denial.toString().contains("Снова за столом"))
+            assertEquals("203", db.scalar("SELECT table_id FROM telegram_chat_context WHERE user_id=$user"))
+            assertEquals(oldEvent, db.scalar(previousMarker))
+            DriverManager.getConnection(db.jdbcUrl, db.user, db.password).use { connection ->
+                connection.createStatement().use { sql ->
+                    sql.executeUpdate("UPDATE table_sessions SET status='ENDED', ended_at=now() WHERE id=$oldPhysical")
+                    sql.executeUpdate(
+                        "INSERT INTO table_sessions(venue_id,table_id,status,started_at,last_activity_at,expires_at) " +
+                            "VALUES (101,202,'ACTIVE',now(),now(),now()+interval '1 hour')",
+                    )
+                }
+            }
+            val exactOld =
+                client.get(
+                    "/api/guest/table/resolve?tableToken=second-qr&tableSessionId=$oldPhysical&verifyOnly=true",
+                ) {
+                    headers { append(HttpHeaders.Authorization, "Bearer $firstAuth") }
+                }
+            assertEquals(HttpStatusCode.OK, exactOld.status)
+            val body = Json.parseToJsonElement(exactOld.bodyAsText()).jsonObject
+            assertEquals(oldPhysical, body.getValue("tableSessionId").jsonPrimitive.content)
+            assertEquals("false", body.getValue("tableSessionActive").jsonPrimitive.content)
+            val stale = """{"tableToken":"second-qr","tableSessionId":$oldPhysical,"exitEventId":"$oldEvent"}"""
+            assertEquals(HttpStatusCode.Conflict, command("table/session/rejoin", stale).status)
+            assertEquals(beforeDenied, snapshot())
+            assertEquals(oldEvent, db.scalar(previousMarker))
+        }
 
     @Test
     fun `maintenance webhook gate acknowledges denied identity before queue persistence`() =
@@ -527,19 +946,32 @@ class TelegramWebhookRoutesTest {
         }
     }
 
-    private fun syntheticOverrides(): ModuleOverrides =
+    private fun syntheticOverrides(callbackId: String? = null): ModuleOverrides =
         ModuleOverrides(
-            telegramHttpClientFactory = ::syntheticTelegramClient,
+            telegramHttpClientFactory = { json -> syntheticTelegramClient(json, callbackId) },
             telegramCommandMenuConfigurator = {},
         )
 
-    private fun syntheticTelegramClient(json: Json): HttpClient =
+    private fun syntheticTelegramClient(json: Json): HttpClient = syntheticTelegramClient(json, null)
+
+    private fun syntheticTelegramClient(
+        json: Json,
+        callbackId: String?,
+    ): HttpClient =
         HttpClient(
             MockEngine { request ->
                 try {
                     check(request.url.protocol.name == "https" && request.url.host == "api.telegram.org")
                     check(request.url.port == 443 && request.method == HttpMethod.Post)
                     check(request.url.parameters.isEmpty())
+                    if (callbackId != null && request.url.encodedPath == "/bottest-token/answerCallbackQuery") {
+                        val payload = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+                        check(payload.getValue("callback_query_id").jsonPrimitive.content == callbackId)
+                        return@MockEngine respond(
+                            """{"ok":true,"result":true}""",
+                            headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                        )
+                    }
                     check(
                         request.url.encodedPath in
                             setOf("/bottest-token/sendMessage", "/bot$SENSITIVE_BOT_TOKEN/sendMessage"),
@@ -547,6 +979,7 @@ class TelegramWebhookRoutesTest {
                     val body = (request.body as TextContent).text
                     val chatId = json.parseToJsonElement(body).jsonObject.getValue("chat_id").jsonPrimitive.long
                     check(chatId in setOf(ALLOWED_USER_ID, FIRST_PRODUCT_USER_ID))
+                    sentMessages.add(json.parseToJsonElement(body).jsonObject)
                     sentChats.add(chatId)
                     respond(
                         """{"ok":true,"result":{"message_id":7001}}""",

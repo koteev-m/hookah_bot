@@ -1,3 +1,4 @@
+import { renderGuestVenueApplication } from './guestVenueApplication'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { requestApi } from '../shared/api/request'
@@ -22,7 +23,7 @@ import type {
 } from '../shared/api/guestDtos'
 import type { ApiErrorInfo } from '../shared/api/types'
 import { addLinesToCart } from '../shared/state/cartStore'
-import { getSelectedGuestTabId, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
+import { chooseGuestTab, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
 import { updateItemCache } from '../shared/state/itemCache'
 import type { TableContextSnapshot } from '../shared/state/tableContext'
 import { append, el, on } from '../shared/ui/dom'
@@ -31,7 +32,7 @@ import { renderGuestProfile, type GuestProfileDraft } from './guestProfile'
 import { renderGuestLoyalty } from './guestLoyalty'
 import { parsePositiveInt } from '../shared/parse'
 
-type AccountSection = 'home' | 'profile' | 'history' | 'favorites' | 'loyalty'
+type AccountSection = 'home' | 'profile' | 'history' | 'favorites' | 'loyalty' | 'venue-application'
 
 const FEEDBACK_TAGS: Array<{ slug: string; label: string }> = [
   { slug: 'service', label: 'Сервис' },
@@ -105,6 +106,7 @@ function renderAccountHome(
     ['История', () => navigate('#/account/history')],
     ['Избранное', () => navigate('#/account/favorites')],
     ['Лояльность', () => navigate('#/account/loyalty')],
+    ['Для заведений', () => navigate('#/account/venue-application')],
     ['Помощь', onOpenHelp]
   ]
   section.appendChild(el('h1', { text: 'Профиль' }))
@@ -382,14 +384,7 @@ function renderVisitRepeatBlock(
         }
         return
       }
-      const activeTabs = tabsResult.data.tabs.filter(
-        (tab) => tab.status === 'ACTIVE' && tab.tableSessionId === tableSessionId
-      )
-      const storedTabId = getSelectedGuestTabId(tableSessionId)
-      const selectedTab =
-        activeTabs.find((tab) => tab.id === storedTabId) ??
-        activeTabs.find((tab) => tab.type === 'PERSONAL') ??
-        activeTabs[0]
+      const selectedTab = chooseGuestTab(tabsResult.data.tabs, tableSessionId)
       if (!selectedTab) {
         planPending = false
         repeatButton.disabled = false
@@ -963,6 +958,8 @@ export function renderGuestAccountScreen(options: GuestAccountScreenOptions) {
 
   const section = (window.location.hash.split('/')[2]?.split('?')[0] ?? 'home') as AccountSection
   switch (section) {
+    case 'venue-application':
+      return renderGuestVenueApplication(root, backendUrl, isDebug, onBack)
     case 'profile':
       return renderGuestProfile(root, backendUrl, isDebug, profileDraft, onBack)
     case 'history':

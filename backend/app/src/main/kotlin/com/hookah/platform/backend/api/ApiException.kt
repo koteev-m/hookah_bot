@@ -54,6 +54,12 @@ class NotFoundException(
         details = details,
     )
 
+class TableRejoinStaleException : ApiException(
+    code = "TABLE_REJOIN_STALE",
+    httpStatus = HttpStatusCode.Conflict,
+    message = "Посещение изменилось. Отсканируйте QR стола заново.",
+)
+
 class ServiceSuspendedException(
     message: String = "Service suspended",
     details: JsonObject? = null,

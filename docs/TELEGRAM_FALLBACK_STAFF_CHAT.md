@@ -223,7 +223,9 @@ Target:
 - Mini App choice carries the current token/session with Guest mode and leaves the bot keyboard removed. New bot-choice callbacks bind the originating session and actor, revalidate token/availability and reject ended, expired, exited or switched-table context without creating/touching a session; a valid choice shows the existing complete order keyboard, including its help/staff-call/navigation actions. Repeated QR entry or channel choice does not reset the same-visit cart or create an order. Role precedence and the separate Platform Owner confirmation stay unchanged.
 - `table_token` is short, opaque and base64url/deeplink-compatible.
 - Token resolution verifies venue/table visibility and table enabled state.
-- For an ordinary Guest, or for exact Platform Owner only after explicit confirmation, the token creates or touches `TABLE_SESSION` and default personal tab according to `docs/ORDER_SESSION_TAB_CORE.md`.
+- An allowed first Bot QR entry binds the chat to the exact active `TABLE_SESSION`. An ordinary guest can complete this step before opening a bill. The Platform Owner must confirm the controlled QR entry first. Bill creation follows `docs/ORDER_SESSION_TAB_CORE.md`.
+- Every table Mini App button carries the session ID confirmed in the Bot chat. Reopening the menu after a restart uses the persisted binding. Legacy Bot menu links without a session ID require a new scan in a fresh WebView. An ended, exited or missing binding asks the guest to scan the QR again.
+- An authorized change to the ordinary Bot cart refreshes the TTL of its current physical session. Reading the Mini App link leaves the TTL unchanged. Delayed Mini App fallback cannot replace an existing chat binding, including one retained for explicit rejoin after exit.
 - If token is revoked, unknown or expired, show safe copy and do not disclose internal ids.
 - If table is disabled, show safe copy and ask the guest to contact staff.
 - If venue is hidden/suspended/unavailable to guests, show safe copy and do not open ordering.
@@ -265,7 +267,7 @@ Target behavior:
 - Venue Mode remains source of truth for queue/detail/status/bill.
 
 Current vs target:
-- Current docs say the Mini App fallback payload sends `{"cmd":"start_quick_order","table_token":"<tableToken>"}` and has code-test verification.
+- Current docs say the Mini App fallback payload sends `{"cmd":"start_quick_order","table_token":"<tableToken>","table_session_id":123}` with the current physical session ID. The server checks the exact Bot visit or existing membership before continuing. A legacy payload lacking the ID requires an already confirmed matching Bot visit. When Telegram sendData is unavailable, the Mini App opens the configured bot chat directly. The guest can inspect its current table or explicitly scan a table QR.
 - Real Telegram client fallback ordering remains part of release smoke.
 - Shared-tab fallback selection and structured menu mapping are future/partial unless implementation evidence exists.
 

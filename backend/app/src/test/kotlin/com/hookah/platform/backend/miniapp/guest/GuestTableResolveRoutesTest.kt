@@ -57,6 +57,8 @@ class GuestTableResolveRoutesTest {
 
             assertEquals(HttpStatusCode.Unauthorized, response.status)
             assertApiErrorEnvelope(response, ApiErrorCodes.UNAUTHORIZED)
+            val rejoin = client.post("/api/guest/table/session/rejoin")
+            assertEquals(HttpStatusCode.Unauthorized, rejoin.status)
         }
 
     @Test
@@ -334,6 +336,7 @@ class GuestTableResolveRoutesTest {
                 tableId = tableId,
                 tableToken = tokenValue,
                 updatedAt = Instant.now(),
+                tableSessionId = tableSessionId,
             )
             val token = issueToken(config, PLATFORM_OWNER_USER_ID)
 
@@ -385,6 +388,7 @@ class GuestTableResolveRoutesTest {
                 tableId = tableId,
                 tableToken = "different-confirmed-token",
                 updatedAt = Instant.now(),
+                tableSessionId = tableSessionId,
             )
             val before = fetchTableSessionTiming(jdbcUrl, tableSessionId)
             val token = issueToken(config, PLATFORM_OWNER_USER_ID)
@@ -437,6 +441,7 @@ class GuestTableResolveRoutesTest {
                 tableId = differentTableId,
                 tableToken = requestedToken,
                 updatedAt = Instant.now(),
+                tableSessionId = tableSessionId,
             )
             val before = fetchTableSessionTiming(jdbcUrl, tableSessionId)
             val token = issueToken(config, PLATFORM_OWNER_USER_ID)
@@ -487,6 +492,7 @@ class GuestTableResolveRoutesTest {
                 tableId = tableId,
                 tableToken = tokenValue,
                 updatedAt = Instant.now(),
+                tableSessionId = tableSessionId,
             )
             seedUserExit(jdbcUrl, PLATFORM_OWNER_USER_ID, tableSessionId)
             val before = fetchTableSessionTiming(jdbcUrl, tableSessionId)
@@ -505,6 +511,13 @@ class GuestTableResolveRoutesTest {
             assertApiErrorEnvelope(createResponse, ApiErrorCodes.FORBIDDEN)
             assertEquals(HttpStatusCode.Forbidden, explicitResponse.status)
             assertApiErrorEnvelope(explicitResponse, ApiErrorCodes.FORBIDDEN)
+            val rejoin =
+                client.post("/api/guest/table/session/rejoin") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId,"exitEventId":"1"}""")
+                }
+            assertEquals(HttpStatusCode.Forbidden, rejoin.status)
             assertEquals(before, fetchTableSessionTiming(jdbcUrl, tableSessionId))
             assertEquals(1, countUserTableSessionExits(jdbcUrl, PLATFORM_OWNER_USER_ID, tableSessionId))
             assertEquals(0, countPersonalTabs(jdbcUrl, PLATFORM_OWNER_USER_ID))
@@ -545,6 +558,7 @@ class GuestTableResolveRoutesTest {
                 tableId = tableId,
                 tableToken = tokenValue,
                 updatedAt = Instant.now(),
+                tableSessionId = tableSessionId,
             )
             seedUserExit(jdbcUrl, PLATFORM_OWNER_USER_ID, tableSessionId)
             val before = fetchTableSessionTiming(jdbcUrl, tableSessionId)
@@ -617,6 +631,7 @@ class GuestTableResolveRoutesTest {
                 tableId = tableId,
                 tableToken = tokenValue,
                 updatedAt = Instant.now(),
+                tableSessionId = tableSessionId,
             )
             val before = fetchTableSessionTiming(jdbcUrl, tableSessionId) ?: error("Expected session")
             val token = issueToken(config, PLATFORM_OWNER_USER_ID)
@@ -630,7 +645,7 @@ class GuestTableResolveRoutesTest {
             val after = fetchTableSessionTiming(jdbcUrl, tableSessionId) ?: error("Expected session")
             assertTrue(after.lastActivityAt > before.lastActivityAt)
             assertEquals(1, countTableSessions(jdbcUrl))
-            assertEquals(1, countPersonalTabs(jdbcUrl, PLATFORM_OWNER_USER_ID, tableSessionId))
+            assertEquals(0, countPersonalTabs(jdbcUrl, PLATFORM_OWNER_USER_ID, tableSessionId))
             assertEquals(0, countUserTableSessionExits(jdbcUrl, PLATFORM_OWNER_USER_ID, tableSessionId))
         }
 
@@ -731,6 +746,7 @@ class GuestTableResolveRoutesTest {
                 tableId = tableId,
                 tableToken = tokenValue,
                 updatedAt = Instant.now(),
+                tableSessionId = tableSessionId,
             )
             setTableTokenActive(jdbcUrl, tokenValue, active = false)
             val token = issueToken(config, PLATFORM_OWNER_USER_ID)
@@ -846,6 +862,7 @@ class GuestTableResolveRoutesTest {
                 tableId = tableId,
                 tableToken = tokenValue,
                 updatedAt = Instant.now(),
+                tableSessionId = tableSessionId,
             )
             val before = fetchTableSessionTiming(jdbcUrl, tableSessionId) ?: error("Expected session timing")
             val token = issueToken(config, PLATFORM_OWNER_USER_ID)
@@ -908,6 +925,7 @@ class GuestTableResolveRoutesTest {
             client.get("/health")
 
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableId = seedTable(jdbcUrl, venueId, 9)
             seedTableToken(jdbcUrl, tableId, "restore-active-token")
             seedUser(jdbcUrl, TELEGRAM_USER_ID)
@@ -958,6 +976,7 @@ class GuestTableResolveRoutesTest {
             val ownerUserId = TELEGRAM_USER_ID
             val anotherUserId = 789L
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableId = seedTable(jdbcUrl, venueId, 10)
             seedTableToken(jdbcUrl, tableId, "restore-other-user-token")
             seedUser(jdbcUrl, ownerUserId)
@@ -997,6 +1016,7 @@ class GuestTableResolveRoutesTest {
             client.get("/health")
 
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableId = seedTable(jdbcUrl, venueId, 11)
             seedTableToken(jdbcUrl, tableId, "restore-closed-token")
             seedUser(jdbcUrl, TELEGRAM_USER_ID)
@@ -1036,6 +1056,7 @@ class GuestTableResolveRoutesTest {
 
             seedUser(jdbcUrl, TELEGRAM_USER_ID)
             val firstVenueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, firstVenueId, "ACTIVE")
             val firstTableId = seedTable(jdbcUrl, firstVenueId, 21)
             seedTableToken(jdbcUrl, firstTableId, "restore-first-token")
             val firstSessionId =
@@ -1060,6 +1081,7 @@ class GuestTableResolveRoutesTest {
             )
 
             val secondVenueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, secondVenueId, "ACTIVE")
             val secondTableId = seedTable(jdbcUrl, secondVenueId, 22)
             seedTableToken(jdbcUrl, secondTableId, "restore-second-token")
             val secondSessionId =
@@ -1113,6 +1135,7 @@ class GuestTableResolveRoutesTest {
             val guestB = 789L
             val tokenValue = "end-empty-token"
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableId = seedTable(jdbcUrl, venueId, 31)
             seedTableToken(jdbcUrl, tableId, tokenValue)
             seedUser(jdbcUrl, guestA)
@@ -1171,9 +1194,24 @@ class GuestTableResolveRoutesTest {
             assertEquals(guestBTabId, guestBContext.tabId)
             assertEquals(tableSessionId, guestBContext.tableSessionId)
 
-            val reenterResponse =
+            val preview =
                 client.get("/api/guest/table/resolve?tableToken=$tokenValue&resolveMode=create") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                }
+
+            assertEquals(HttpStatusCode.OK, preview.status)
+            val exited = json.decodeFromString<TableResolveResponse>(preview.bodyAsText())
+            assertEquals(false, exited.tableSessionActive)
+            assertEquals(1, countUserTableSessionExits(jdbcUrl, guestA, tableSessionId))
+            val reenterResponse =
+                client.post("/api/guest/table/session/rejoin") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """{"tableToken":"$tokenValue","tableSessionId":$tableSessionId,"exitEventId":"${checkNotNull(
+                            exited.exitEventId,
+                        )}"}""",
+                    )
                 }
 
             assertEquals(HttpStatusCode.OK, reenterResponse.status)
@@ -1193,6 +1231,7 @@ class GuestTableResolveRoutesTest {
             application { module() }
 
             client.get("/health")
+            createTelegramChatContextFixture(jdbcUrl)
 
             val guestA = TELEGRAM_USER_ID
             val guestB = 789L
@@ -1424,6 +1463,7 @@ class GuestTableResolveRoutesTest {
 
             val tokenValue = "no-create-token"
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableId = seedTable(jdbcUrl, venueId, 104)
             seedTableToken(jdbcUrl, tableId, tokenValue)
             val token = issueToken(config)
@@ -1458,6 +1498,7 @@ class GuestTableResolveRoutesTest {
 
             val tokenValue = "ended-session-token"
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableId = seedTable(jdbcUrl, venueId, 104)
             seedTableToken(jdbcUrl, tableId, tokenValue)
             val endedSessionId =
@@ -1499,6 +1540,7 @@ class GuestTableResolveRoutesTest {
 
             val tokenValue = "expired-session-token"
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableId = seedTable(jdbcUrl, venueId, 104)
             seedTableToken(jdbcUrl, tableId, tokenValue)
             val expiredSessionId =
@@ -1716,6 +1758,7 @@ class GuestTableResolveRoutesTest {
                 statement.execute(
                     """
                     CREATE TABLE IF NOT EXISTS telegram_chat_context (
+                        table_session_id BIGINT REFERENCES table_sessions(id) ON DELETE SET NULL,
                         chat_id BIGINT PRIMARY KEY,
                         user_id BIGINT NOT NULL REFERENCES users(telegram_user_id) ON DELETE CASCADE,
                         venue_id BIGINT NULL REFERENCES venues(id) ON DELETE SET NULL,
@@ -1743,6 +1786,7 @@ class GuestTableResolveRoutesTest {
         tableId: Long,
         tableToken: String,
         updatedAt: Instant,
+        tableSessionId: Long? = null,
     ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
@@ -1753,9 +1797,10 @@ class GuestTableResolveRoutesTest {
                     venue_id,
                     table_id,
                     table_token,
-                    updated_at
+                    updated_at,
+                    table_session_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, chatId)
@@ -1764,6 +1809,7 @@ class GuestTableResolveRoutesTest {
                 statement.setLong(4, tableId)
                 statement.setString(5, tableToken)
                 statement.setTimestamp(6, Timestamp.from(updatedAt))
+                statement.setObject(7, tableSessionId)
                 statement.executeUpdate()
             }
         }

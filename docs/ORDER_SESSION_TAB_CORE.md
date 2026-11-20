@@ -158,10 +158,38 @@ The active order belongs to a verified table session/visit, not to a physical ta
   explicitly requested session may be read within the resolved venue/table scope; its status does not override
   unavailable venue/subscription access. Without an explicit session, an unavailable resolve returns the
   existing missing-session representation (`0`, `UNKNOWN`, `TABLE_SESSION_MISSING`), including
-  `resolveMode=create`. Available QR re-entry retains session reuse, personal-tab creation and user-scoped
-  exit clearing. Disabled tables/revoked tokens and unpublished venues retain their existing not-found
+  `resolveMode=create`. An available first QR entry may reuse or create the physical session and personal tab.
+  Once this actor has exited, GET (including legacy `resolveMode=create`), restore, reload and focus
+  leave the exit in force. A scan without a session ID returns `tableSessionActive=false`,
+  `TABLE_SESSION_EXITED` and the current `exitEventId` as a decimal string. After the guest confirms,
+  the Mini App sends authenticated `POST /api/guest/table/session/rejoin` with `tableToken`,
+  `tableSessionId` and `exitEventId`. The server locks the session, verifies current availability
+  and consumes the matching actor/session/event in the same transaction. A guest with no bill can
+  also resume a previously confirmed Bot visit. On exit the Bot removes the token from its server-owned
+  chat binding. Only that actor’s matching chat, table, physical session and current exit event can
+  reactivate it. This restores the visit without creating a tab or granting access to existing bills.
+  Exact table reads, bill lists and active-order reads leave the bill list unchanged. When the guest has no personal bill, «Открыть личный счёт»
+  calls `POST /api/guest/tabs/personal`. An ordinary guest needs a current membership in that
+  session or a confirmed Bot visit at that table. An exit blocks the operation. Repeating it
+  returns the same personal bill. Checkout on a SHARED bill uses its selected membership and leaves the set of bills unchanged. A revoked membership cannot be restored by opening the bill.
+  A guest with a confirmed Bot visit can also end it in the Mini App before opening a bill.
+  The Mini App clears the visit only after the server confirms the exit. On refusal, the guest checks the current table in the Bot menu before ending a visit there.
+  After a lost SDK rejoin response, the guest can explicitly retry. The Mini App first verifies
+  the original physical session read-only, including after a reload in the same WebView. That response can supply a fresh challenge for the
+  same session and requires a new confirmation. A replacement session requires a new scan.
+  If the chat has moved to another table and the guest has no bill membership at the old one,
+  the Bot explains the loss of access and offers no rejoin button.
+  Success returns the active resolve response. A consumed or superseded event returns HTTP 409
+  (`TABLE_REJOIN_STALE`); the guest can scan again for a fresh confirmation. Older Mini Apps can
+  reopen the updated scanner or use the table QR through the ordinary Telegram Bot /start flow.
+  After an exit the Bot shows a
+  one-time confirmation bound to the actor, chat, table and current exit event. Legacy web_app_data
+  leaves the exit in force. Platform controlled QR also binds its existing prompt to the observed event. Disabled tables/revoked tokens and unpublished venues retain their existing not-found
   response.
+- For exact Platform Owner, showing a QR confirmation reads subscription status without creating a trial.
+  A missing subscription after exit blocks rejoin. Only an authorized initial admission can provision the usual trial.
 - For exact Platform Owner, a table token creates no context/session until explicit controlled confirmation. The five-minute process-local opaque pending is not session state or authority and is lost safely on restart. Phase 1 uses single-instance long-polling; a callback missing on another instance fails closed.
+- Ordinary and controlled Bot QR confirmation persist the selected physical session in `telegram_chat_context.table_session_id` in the transaction that locks the table and session. Legacy chat rows keep a null session ID until the next explicit QR confirmation. They can serve informational Bot screens. Moving a different session onto the same seat grants no authority to the old chat.
 - Confirmed Platform Guest activation is all-or-nothing: final token/venue/table/availability/subscription validation, session resolve/create/touch, exit-marker clear, persisted Guest-dialog clear and exact chat-context save share one JDBC transaction. In-memory cart/draft cleanup follows commit only.
 - Exact Platform Owner Mini App create/touch or explicit-session resolve requires a matching active server-owned Telegram chat context and no user-exit marker. Client token, session id, `mode=guest` and Platform role are never sufficient authority.
 - All permissions and ownership checks are server-side.
@@ -241,7 +269,7 @@ failure cannot reopen a request already completed in PostgreSQL.
 | Full bill | Guest/Venue/Bot bill identity parity is staging-smoked; Venue detail shows included/excluded/discount/service-charge context and human tab labels. | Bill is backend-owned, shows batches/tabs/service charges and does not expose raw technical ids as primary labels. | Keep money snapshot and role-denial regression. |
 | Display order number | Human `Заказ №<display_number>` is used on Guest/Venue/Bot surfaces where present. | Human display number is primary for operators and guests; raw DB ids stay internal/secondary. | No DB uniqueness constraint for display number is documented; keep venue-local day semantics explicit. |
 | Staff-call separation | `STAFF_CALL` is separate from support/chat. Bill request is stored through staff-call context but remains order/tab-scoped and deduped. | Staff calls are operational events tied to current table/session/order context where available. | CANCELLED UI/lifecycle and row-level ACK/DONE actor columns remain future where docs already say so. |
-| Fallback chat order | Mini App fallback emits `cmd=start_quick_order` with `table_token`; real Telegram fallback remains release smoke. Canonical fallback/staff-chat rules are in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. | Bot fallback must create/use the same table session/tab rules as Mini App. | Keep fallback smoke whenever bot order fallback changes. |
+| Fallback chat order | Mini App fallback emits `cmd=start_quick_order` with `table_token` and the originating `table_session_id`; real Telegram fallback remains release smoke. Canonical fallback/staff-chat rules are in `docs/TELEGRAM_FALLBACK_STAFF_CHAT.md`. | Bot fallback must create/use the same table session/tab rules as Mini App. | Keep fallback smoke whenever bot order fallback changes. |
 | Visit history foundation | Guest History Foundation MVP is DONE / staging-smoke-passed: current-user list/detail shows closed-order visits and booking-only `SEATED` visits, filters non-seated booking statuses, preserves but hides legacy invalid rows, opens legacy closed order details safely and keeps privacy filters strict. | `VISIT` is derived from closed orders and booking `SEATED`, with merge/dedup where booking + order represent the same real visit. | Repeat templates, post-visit feedback, full base item historical snapshotting where still missing, loyalty/preorder `visit_count` and analytics event completeness remain follow-ups. |
 
 ## Personal-link browsing versus active visit (local candidate)

@@ -139,7 +139,7 @@ async function mountGuestChoice(page: Page, navigate = true) {
   if (navigate) await page.goto('guest-hall-test')
   await page.evaluate(async () => {
     Reflect.set(window, 'Telegram', { WebApp: { initData: 'synthetic', initDataUnsafe: { user: { id: 1003 } } } })
-    sessionStorage.setItem(`hookah_session_token:${location.host}:user:1003`, JSON.stringify({ token: 'synthetic', expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 3600 }))
+    sessionStorage.setItem(`hookah_session_token:${location.host}:user:1003`, JSON.stringify({ userId: 1003, token: 'synthetic', expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 3600 }))
     const themePath = '/miniapp/src/shared/ui/appTheme.ts'
     const { bindAppTheme } = await import(themePath)
     bindAppTheme(document.documentElement)

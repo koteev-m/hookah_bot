@@ -8,6 +8,7 @@ import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.StoredChatContext
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
+import com.hookah.platform.backend.telegram.db.TableTokenState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -39,6 +40,8 @@ enum class GuestTableActivationDeniedReason {
     VENUE_UNAVAILABLE,
     SUBSCRIPTION_BLOCKED,
 }
+
+data class MiniAppFallbackVisit(val tableSessionId: Long?)
 
 sealed class GuestTableActivationResult {
     data class Applied(
@@ -84,7 +87,7 @@ sealed class PlatformGuestTableResolveResult {
     data class Allowed(
         val context: TableContext,
         val tableSession: TableSessionRecord,
-        val personalTab: GuestTabModel,
+        val personalTab: GuestTabModel?,
         val venueStatus: VenueStatus,
         val subscriptionStatus: SubscriptionStatus,
     ) : PlatformGuestTableResolveResult()
@@ -147,9 +150,18 @@ class GuestTableContextLifecycleRepository(
         expectedTableId: Long,
         ttl: Duration,
         now: Instant = Instant.now(),
+        expectedExitEventId: Long? = null,
+        ordinaryBot: Boolean = false,
+        fallback: MiniAppFallbackVisit? = null,
     ): GuestTableActivationResult =
         transaction(GuestTableActivationResult.DatabaseUnavailable) { connection ->
-            chatContextRepository.getForUpdate(connection, chatId)
+            if (!chatContextRepository.lockActorForBinding(connection, actorUserId)) {
+                return@transaction GuestTableActivationResult.Denied(GuestTableActivationDeniedReason.INVALID_CONTEXT)
+            }
+            val existing = chatContextRepository.lockBinding(connection, chatId)
+            if (existing != null && existing.userId != actorUserId) {
+                return@transaction GuestTableActivationResult.Denied(GuestTableActivationDeniedReason.INVALID_CONTEXT)
+            }
             val tableState =
                 tableTokenRepository.resolveForUpdate(
                     connection = connection,
@@ -169,17 +181,64 @@ class GuestTableContextLifecycleRepository(
                     GuestTableActivationDeniedReason.TABLE_UNAVAILABLE,
                 )
             }
-            if (tableState.venueStatus != VenueStatus.PUBLISHED) {
+            val venueAvailable =
+                canEnterBotVenue(connection, actorUserId, tableState, ordinaryBot, lockMember = true)
+            if (!venueAvailable) {
                 return@transaction GuestTableActivationResult.Denied(
                     GuestTableActivationDeniedReason.VENUE_UNAVAILABLE,
                 )
             }
-            val subscriptionStatus =
+            val sessionId =
+                tableSessionRepository.findActiveSessionForUpdate(connection, expectedVenueId, expectedTableId, now)
+            val staleConfirmation = GuestTableActivationResult.Denied(GuestTableActivationDeniedReason.INVALID_CONTEXT)
+            if (fallback != null) {
+                if (sessionId == null || expectedExitEventId != null ||
+                    (fallback.tableSessionId != null && fallback.tableSessionId != sessionId)
+                ) {
+                    return@transaction staleConfirmation
+                }
+                val authorized =
+                    if (existing != null) {
+                        val bound = existing.context
+                        bound != null && bound.tableSessionId == sessionId && bound.venueId == expectedVenueId &&
+                            bound.tableId == expectedTableId && bound.tableToken == tableToken
+                    } else {
+                        fallback.tableSessionId == sessionId &&
+                            tableSessionRepository.hasActiveUserTabMembership(
+                                connection, actorUserId, expectedVenueId, sessionId, forUpdate = true,
+                            )
+                    }
+                if (!authorized) return@transaction staleConfirmation
+            }
+            if (expectedExitEventId == null) {
+                val exited = sessionId != null && tableSessionRepository.hasUserExit(connection, actorUserId, sessionId)
+                if (exited) {
+                    return@transaction staleConfirmation
+                }
+            } else {
+                if (sessionId == null) return@transaction staleConfirmation
+                if (ordinaryBot &&
+                    !ordinaryRejoinBound(
+                        connection, actorUserId, chatId, expectedVenueId, expectedTableId, sessionId,
+                        expectedExitEventId,
+                    )
+                ) {
+                    return@transaction staleConfirmation
+                }
+                if (tableSessionRepository.findExitEventId(connection, actorUserId, sessionId) != expectedExitEventId) {
+                    return@transaction staleConfirmation
+                }
+            }
+            var subscriptionStatus =
                 subscriptionRepository.getSubscriptionStatus(
                     connection = connection,
                     venueId = expectedVenueId,
                     forUpdate = true,
                 )
+            if (fallback == null && expectedExitEventId == null && subscriptionStatus == SubscriptionStatus.UNKNOWN) {
+                subscriptionRepository.ensureRowExistsForVenue(connection, expectedVenueId)
+                subscriptionStatus = subscriptionRepository.getSubscriptionStatus(connection, expectedVenueId)
+            }
             if (subscriptionStatus.isBlockedForGuest()) {
                 return@transaction GuestTableActivationResult.Denied(
                     GuestTableActivationDeniedReason.SUBSCRIPTION_BLOCKED,
@@ -194,7 +253,14 @@ class GuestTableContextLifecycleRepository(
                     now = now,
                 )
             activationCheckpoint(GuestTableActivationCheckpoint.AFTER_SESSION)
-            tableSessionRepository.clearUserExit(connection, actorUserId, tableSession.id)
+            if (expectedExitEventId != null &&
+                !tableSessionRepository.consumeExitEvent(
+                    connection, actorUserId, tableSession.id, expectedExitEventId,
+                )
+            ) {
+                connection.rollback()
+                return@transaction staleConfirmation
+            }
             activationCheckpoint(GuestTableActivationCheckpoint.AFTER_EXIT_CLEAR)
             dialogStateRepository.clear(connection, chatId)
             activationCheckpoint(GuestTableActivationCheckpoint.AFTER_DIALOG_CLEAR)
@@ -204,6 +270,7 @@ class GuestTableContextLifecycleRepository(
                 userId = actorUserId,
                 context = tableState.context,
                 updatedAt = now,
+                tableSessionId = tableSession.id,
             )
             activationCheckpoint(GuestTableActivationCheckpoint.AFTER_CONTEXT_SAVE)
             GuestTableActivationResult.Applied(
@@ -216,14 +283,16 @@ class GuestTableContextLifecycleRepository(
         actorUserId: Long,
         chatId: Long,
         now: Instant = Instant.now(),
+        ordinaryBotVisit: Boolean = false,
     ): GuestTableTeardownResult =
         transaction(GuestTableTeardownResult.DatabaseUnavailable) { connection ->
             val stored =
-                chatContextRepository.getForUpdate(connection, chatId, actorUserId)
+                chatContextRepository.getForUpdate(connection, chatId, userId = null)
                     ?: run {
                         dialogStateRepository.clear(connection, chatId)
                         return@transaction GuestTableTeardownResult.Missing
                     }
+            if (stored.userId != actorUserId) return@transaction GuestTableTeardownResult.Denied
             teardownCheckpoint(GuestTableTeardownCheckpoint.AFTER_CONTEXT_LOCK)
             teardownLockedContext(
                 connection = connection,
@@ -231,6 +300,7 @@ class GuestTableContextLifecycleRepository(
                 actorUserId = actorUserId,
                 expectedTableSessionId = null,
                 now = now,
+                retainBotChatForRejoin = ordinaryBotVisit,
             )
         }
 
@@ -239,6 +309,7 @@ class GuestTableContextLifecycleRepository(
         tableToken: String,
         expectedTableSessionId: Long? = null,
         now: Instant = Instant.now(),
+        ordinaryBotVisit: Boolean = false,
     ): GuestTableTeardownResult =
         transaction(GuestTableTeardownResult.DatabaseUnavailable) { connection ->
             val matchingContexts =
@@ -253,13 +324,21 @@ class GuestTableContextLifecycleRepository(
             if (matchingContexts.size != 1) {
                 return@transaction GuestTableTeardownResult.Denied
             }
+            val stored = matchingContexts.single()
+            if (ordinaryBotVisit) {
+                val visit = validBotVisit(connection, actorUserId, stored, now, allowMember = false, forUpdate = true)
+                if (visit == null || visit.tableSession.id != expectedTableSessionId) {
+                    return@transaction GuestTableTeardownResult.Denied
+                }
+            }
             teardownCheckpoint(GuestTableTeardownCheckpoint.AFTER_CONTEXT_LOCK)
             teardownLockedContext(
                 connection = connection,
-                stored = matchingContexts.single(),
+                stored = stored,
                 actorUserId = actorUserId,
                 expectedTableSessionId = expectedTableSessionId,
                 now = now,
+                retainBotChatForRejoin = ordinaryBotVisit,
             )
         }
 
@@ -271,6 +350,8 @@ class GuestTableContextLifecycleRepository(
         requestedTableSessionId: Long?,
         ttl: Duration,
         now: Instant = Instant.now(),
+        verifyOnly: Boolean = false,
+        createPersonalTab: Boolean = false,
     ): PlatformGuestTableResolveResult =
         transaction(PlatformGuestTableResolveResult.DatabaseUnavailable) { connection ->
             resolvePlatformMiniAppLocked(
@@ -282,6 +363,8 @@ class GuestTableContextLifecycleRepository(
                 requestedTableSessionId = requestedTableSessionId,
                 ttl = ttl,
                 now = now,
+                verifyOnly = verifyOnly,
+                createPersonalTab = createPersonalTab,
             )
         }
 
@@ -372,7 +455,7 @@ class GuestTableContextLifecycleRepository(
             val storedChatId = stored.chatId ?: return@mutationTransaction PlatformGuestTableMutationResult.Denied
             val venueId = stored.venueId ?: return@mutationTransaction PlatformGuestTableMutationResult.Denied
             val tableId = stored.tableId ?: return@mutationTransaction PlatformGuestTableMutationResult.Denied
-            val confirmedAt = stored.updatedAt ?: return@mutationTransaction PlatformGuestTableMutationResult.Denied
+            val boundId = stored.tableSessionId ?: return@mutationTransaction PlatformGuestTableMutationResult.Denied
             if (
                 stored.userId != actorUserId ||
                 (chatId != null && storedChatId != chatId) ||
@@ -413,7 +496,7 @@ class GuestTableContextLifecycleRepository(
                     connection = connection,
                     venueId = venueId,
                     tableId = tableId,
-                    contextUpdatedAt = confirmedAt,
+                    tableSessionId = boundId,
                     now = now,
                     forUpdate = true,
                 ) ?: return@mutationTransaction PlatformGuestTableMutationResult.Denied
@@ -461,45 +544,221 @@ class GuestTableContextLifecycleRepository(
             if (stored == null || stored.userId != actorUserId) {
                 return@transaction PlatformGuestContextValidationResult.Inactive
             }
-            val venueId = stored.venueId ?: return@transaction PlatformGuestContextValidationResult.Inactive
-            val tableId = stored.tableId ?: return@transaction PlatformGuestContextValidationResult.Inactive
-            val confirmedAt = stored.updatedAt ?: return@transaction PlatformGuestContextValidationResult.Inactive
-            val tableState =
-                tableTokenRepository.resolveActiveState(connection, stored.tableToken)
-                    ?: return@transaction PlatformGuestContextValidationResult.Inactive
-            if (
-                tableState.context.venueId != venueId ||
-                tableState.context.tableId != tableId ||
-                !tableState.tokenActive ||
-                !tableState.tableActive ||
-                tableState.venueStatus != VenueStatus.PUBLISHED
+            validBotVisit(connection, actorUserId, stored, now, allowMember = false)
+                ?: PlatformGuestContextValidationResult.Inactive
+        }
+
+    suspend fun ordinaryBotVisit(
+        actorUserId: Long,
+        chatId: Long,
+        expectedTable: TableContext? = null,
+        expectedSessionId: Long? = null,
+        activityTtl: Duration? = null,
+    ): PlatformGuestContextValidationResult =
+        transaction(PlatformGuestContextValidationResult.DatabaseUnavailable) { connection ->
+            val stored =
+                if (activityTtl == null) {
+                    chatContextRepository.get(connection, chatId)
+                } else {
+                    chatContextRepository.getForUpdate(connection, chatId)
+                }
+            if (stored == null || stored.userId != actorUserId ||
+                (
+                    expectedTable != null && (
+                        expectedSessionId == null || stored.tableSessionId != expectedSessionId ||
+                            stored.venueId != expectedTable.venueId || stored.tableId != expectedTable.tableId ||
+                            stored.tableToken != expectedTable.tableToken
+                    )
+                )
             ) {
                 return@transaction PlatformGuestContextValidationResult.Inactive
             }
-            val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(connection, venueId)
-            if (subscriptionStatus.isBlockedForGuest()) {
-                return@transaction PlatformGuestContextValidationResult.Inactive
-            }
-            val tableSession =
-                tableSessionRepository.findActiveSessionForContext(
+            val visit =
+                validBotVisit(
+                    connection, actorUserId, stored, Instant.now(),
+                    allowMember = true,
+                    forUpdate = activityTtl != null,
+                )
+                    ?: return@transaction PlatformGuestContextValidationResult.Inactive
+            if (activityTtl == null) return@transaction visit
+            val refreshed =
+                tableSessionRepository.touchActiveSession(
                     connection = connection,
-                    venueId = venueId,
-                    tableId = tableId,
-                    contextUpdatedAt = confirmedAt,
-                    now = now,
-                    forUpdate = false,
+                    tableSessionId = visit.tableSession.id,
+                    venueId = visit.context.venueId,
+                    tableId = visit.context.tableId,
+                    ttl = activityTtl,
+                    now = Instant.now(),
                 ) ?: return@transaction PlatformGuestContextValidationResult.Inactive
-            if (tableSessionRepository.hasUserExit(connection, actorUserId, tableSession.id)) {
-                return@transaction PlatformGuestContextValidationResult.Inactive
-            }
-            PlatformGuestContextValidationResult.Active(
-                identity = stored.toIdentity(),
-                context = tableState.context,
-                tableSession = tableSession,
-                venueStatus = VenueStatus.PUBLISHED,
-                subscriptionStatus = subscriptionStatus,
-            )
+            visit.copy(tableSession = refreshed)
         }
+
+    fun findExitedBotChat(
+        connection: Connection,
+        userId: Long,
+        table: TableContext,
+        sessionId: Long,
+        eventId: Long,
+        forUpdate: Boolean,
+    ): Long? =
+        chatContextRepository.findExitedBotChat(
+            connection,
+            userId,
+            table.venueId,
+            table.tableId,
+            sessionId,
+            eventId,
+            forUpdate,
+        )
+
+    fun resumeBotChat(
+        connection: Connection,
+        chatId: Long,
+        userId: Long,
+        table: TableContext,
+        tableSessionId: Long,
+        now: Instant,
+    ) {
+        chatContextRepository.saveContext(connection, chatId, userId, table, now, tableSessionId)
+    }
+
+    fun lockBotVisitForPersonalTab(
+        connection: Connection,
+        userId: Long,
+        session: TableSessionContext,
+    ): Boolean {
+        val stored =
+            chatContextRepository.findActorTableContextsForUpdate(
+                connection, userId, session.venueId, session.tableId,
+            ).singleOrNull() ?: return false
+        val visit = validBotVisit(connection, userId, stored, Instant.now(), allowMember = false, forUpdate = true)
+        return visit?.tableSession?.id == session.id
+    }
+
+    suspend fun ordinaryBotCanRejoin(
+        actor: Long,
+        chatId: Long,
+        venueId: Long,
+        tableId: Long,
+        event: Long,
+    ): Boolean? =
+        transaction<Boolean?>(null) { connection ->
+            chatContextRepository.getForUpdate(connection, chatId)
+            val session =
+                tableSessionRepository.findActiveSessionForUpdate(connection, venueId, tableId, Instant.now())
+                    ?: return@transaction false
+            tableSessionRepository.findExitEventId(connection, actor, session) == event &&
+                ordinaryRejoinBound(connection, actor, chatId, venueId, tableId, session, event)
+        }
+
+    private fun ordinaryRejoinBound(
+        connection: Connection,
+        actor: Long,
+        chatId: Long,
+        venueId: Long,
+        tableId: Long,
+        session: Long,
+        event: Long,
+    ): Boolean =
+        tableSessionRepository.hasActiveUserTabMembership(connection, actor, venueId, session, forUpdate = true) ||
+            chatContextRepository.findExitedBotChat(
+                connection, actor, venueId, tableId, session, event, forUpdate = true,
+            ) == chatId
+
+    fun hasExactBotVisit(
+        connection: Connection,
+        userId: Long,
+        table: TableContext,
+        sessionId: Long,
+        now: Instant,
+    ): Boolean =
+        chatContextRepository.findActorContexts(connection, userId).any { stored ->
+            stored.tableToken == table.tableToken &&
+                validBotVisit(connection, userId, stored, now, allowMember = false)?.tableSession?.id == sessionId
+        }
+
+    suspend fun activeBotVisit(
+        actorUserId: Long,
+        allowMember: Boolean,
+        expectedToken: String? = null,
+        expectedSession: Long? = null,
+    ): PlatformGuestContextValidationResult =
+        transaction(PlatformGuestContextValidationResult.DatabaseUnavailable) { connection ->
+            val now = Instant.now()
+            chatContextRepository.findActorContexts(connection, actorUserId).firstNotNullOfOrNull { stored ->
+                if (expectedToken != null && stored.tableToken != expectedToken) return@firstNotNullOfOrNull null
+                validBotVisit(connection, actorUserId, stored, now, allowMember)
+                    ?.takeIf { expectedSession == null || it.tableSession.id == expectedSession }
+            } ?: PlatformGuestContextValidationResult.Inactive
+        }
+
+    private fun canEnterBotVenue(
+        connection: Connection,
+        actorUserId: Long,
+        state: TableTokenState,
+        allowMember: Boolean,
+        lockMember: Boolean = false,
+    ): Boolean {
+        if (state.venueStatus == VenueStatus.PUBLISHED) return true
+        if (!allowMember || state.venueStatus == null || state.venueStatus == VenueStatus.DELETED) return false
+        val lock = if (lockMember) " FOR UPDATE" else ""
+        return connection.prepareStatement("SELECT 1 FROM venue_members WHERE user_id = ? AND venue_id = ?$lock").use {
+            it.setLong(1, actorUserId)
+            it.setLong(2, state.context.venueId)
+            it.executeQuery().use { rows -> rows.next() }
+        }
+    }
+
+    private fun validBotVisit(
+        connection: Connection,
+        actorUserId: Long,
+        stored: StoredChatContext,
+        now: Instant,
+        allowMember: Boolean,
+        forUpdate: Boolean = false,
+    ): PlatformGuestContextValidationResult.Active? {
+        val venueId = stored.venueId ?: return null
+        val tableId = stored.tableId ?: return null
+        val boundId = stored.tableSessionId ?: return null
+        val tableState =
+            if (forUpdate) {
+                tableTokenRepository.resolveForUpdate(connection, stored.tableToken, venueId, tableId)
+            } else {
+                tableTokenRepository.resolveActiveState(connection, stored.tableToken)
+            } ?: return null
+        if (
+            tableState.context.venueId != venueId ||
+            tableState.context.tableId != tableId ||
+            !tableState.tokenActive ||
+            !tableState.tableActive ||
+            !canEnterBotVenue(connection, actorUserId, tableState, allowMember, lockMember = forUpdate)
+        ) {
+            return null
+        }
+        val subscriptionStatus = subscriptionRepository.getSubscriptionStatus(connection, venueId, forUpdate)
+        if (subscriptionStatus.isBlockedForGuest()) {
+            return null
+        }
+        val tableSession =
+            tableSessionRepository.findActiveSessionForContext(
+                connection = connection,
+                venueId = venueId,
+                tableId = tableId,
+                tableSessionId = boundId,
+                now = now,
+                forUpdate = forUpdate,
+            ) ?: return null
+        if (tableSessionRepository.hasUserExit(connection, actorUserId, tableSession.id)) {
+            return null
+        }
+        return PlatformGuestContextValidationResult.Active(
+            identity = stored.toIdentity(),
+            context = tableState.context,
+            tableSession = tableSession,
+            venueStatus = checkNotNull(tableState.venueStatus),
+            subscriptionStatus = subscriptionStatus,
+        )
+    }
 
     private fun teardownLockedContext(
         connection: Connection,
@@ -507,50 +766,49 @@ class GuestTableContextLifecycleRepository(
         actorUserId: Long,
         expectedTableSessionId: Long?,
         now: Instant,
+        retainBotChatForRejoin: Boolean = false,
     ): GuestTableTeardownResult {
         val identity = stored.toIdentityOrNull() ?: return GuestTableTeardownResult.Denied
         val venueId = stored.venueId
         val tableId = stored.tableId
-        val tableSession =
-            if (venueId != null && tableId != null) {
+        val boundId = stored.tableSessionId
+        if (expectedTableSessionId != null && boundId != null && boundId != expectedTableSessionId) {
+            return GuestTableTeardownResult.Denied
+        }
+        val memberSession =
+            if (boundId != null && venueId != null && tableId != null) {
                 tableSessionRepository.findActiveUserSessionForTeardown(
                     connection = connection,
                     userId = actorUserId,
                     venueId = venueId,
                     tableId = tableId,
-                    expectedTableSessionId = expectedTableSessionId,
+                    expectedTableSessionId = boundId,
                     now = now,
                 )
             } else {
                 null
             }
-        if (
-            expectedTableSessionId != null &&
-            tableSession == null &&
-            venueId != null &&
-            tableId != null
-        ) {
-            val activeActorSession =
-                tableSessionRepository.findActiveUserSessionForTeardown(
-                    connection = connection,
-                    userId = actorUserId,
-                    venueId = venueId,
-                    tableId = tableId,
-                    expectedTableSessionId = null,
-                    now = now,
-                )
-            val confirmedAt = stored.updatedAt
-            if (activeActorSession != null && confirmedAt != null && activeActorSession.startedAt <= confirmedAt) {
-                return GuestTableTeardownResult.Denied
+        val botSession =
+            if (memberSession == null && venueId != null && tableId != null && boundId != null) {
+                val table = tableTokenRepository.resolveForUpdate(connection, stored.tableToken, venueId, tableId)
+                if (table == null) {
+                    null
+                } else {
+                    tableSessionRepository.findActiveSessionForContext(
+                        connection,
+                        venueId,
+                        tableId,
+                        boundId,
+                        now,
+                        forUpdate = true,
+                    )
+                }
+            } else {
+                null
             }
-        }
+        val tableSession = memberSession ?: botSession
         var exitRecorded = false
-        if (
-            tableSession != null &&
-            venueId != null &&
-            tableId != null &&
-            tableSessionRepository.hasActiveUserTabMembership(connection, actorUserId, venueId, tableSession.id)
-        ) {
+        if (tableSession != null && venueId != null && tableId != null) {
             val blockedReason =
                 when {
                     tableSessionRepository.hasActiveUserOrderObligation(
@@ -581,7 +839,11 @@ class GuestTableContextLifecycleRepository(
             tableSessionRepository.recordUserExit(connection, actorUserId, tableSession.id, now)
             exitRecorded = true
         }
-        chatContextRepository.clear(connection, identity.chatId, actorUserId)
+        if (botSession != null && retainBotChatForRejoin) {
+            chatContextRepository.detachTableToken(connection, identity.chatId, actorUserId, now)
+        } else {
+            chatContextRepository.clear(connection, identity.chatId, actorUserId)
+        }
         dialogStateRepository.clear(connection, identity.chatId)
         return GuestTableTeardownResult.Cleared(
             identity = identity,
@@ -600,6 +862,8 @@ class GuestTableContextLifecycleRepository(
         ttl: Duration,
         now: Instant,
         lockedContext: StoredChatContext? = null,
+        verifyOnly: Boolean = false,
+        createPersonalTab: Boolean = false,
     ): PlatformGuestTableResolveResult {
         val matchingContexts =
             if (lockedContext == null) {
@@ -625,7 +889,7 @@ class GuestTableContextLifecycleRepository(
         ) {
             return PlatformGuestTableResolveResult.Denied
         }
-        val confirmedAt = stored.updatedAt ?: return PlatformGuestTableResolveResult.Denied
+        val boundId = stored.tableSessionId ?: return PlatformGuestTableResolveResult.Denied
         val tableState =
             tableTokenRepository.resolveForUpdate(
                 connection = connection,
@@ -657,7 +921,7 @@ class GuestTableContextLifecycleRepository(
                 connection = connection,
                 venueId = expectedVenueId,
                 tableId = expectedTableId,
-                contextUpdatedAt = confirmedAt,
+                tableSessionId = boundId,
                 now = now,
                 forUpdate = true,
             ) ?: return PlatformGuestTableResolveResult.Denied
@@ -667,25 +931,28 @@ class GuestTableContextLifecycleRepository(
         if (tableSessionRepository.hasUserExit(connection, actorUserId, tableSession.id)) {
             return PlatformGuestTableResolveResult.Denied
         }
-        val touchedSession =
-            tableSessionRepository.touchActiveSession(
-                connection = connection,
-                tableSessionId = tableSession.id,
-                venueId = expectedVenueId,
-                tableId = expectedTableId,
-                ttl = ttl,
-                now = now,
-            ) ?: return PlatformGuestTableResolveResult.Denied
+        val session =
+            if (verifyOnly) {
+                tableSession
+            } else {
+                tableSessionRepository.touchActiveSession(
+                    connection = connection,
+                    tableSessionId = tableSession.id,
+                    venueId = expectedVenueId,
+                    tableId = expectedTableId,
+                    ttl = ttl,
+                    now = now,
+                ) ?: return PlatformGuestTableResolveResult.Denied
+            }
         val personalTab =
-            guestTabsRepository.ensurePersonalTab(
-                connection = connection,
-                venueId = expectedVenueId,
-                tableSessionId = touchedSession.id,
-                userId = actorUserId,
-            )
+            if (createPersonalTab && !verifyOnly) {
+                guestTabsRepository.ensurePersonalTab(connection, expectedVenueId, session.id, actorUserId)
+            } else {
+                guestTabsRepository.findPersonalTabForUpdate(connection, expectedVenueId, session.id, actorUserId)
+            }
         return PlatformGuestTableResolveResult.Allowed(
             context = tableState.context,
-            tableSession = touchedSession,
+            tableSession = session,
             personalTab = personalTab,
             venueStatus = VenueStatus.PUBLISHED,
             subscriptionStatus = subscriptionStatus,

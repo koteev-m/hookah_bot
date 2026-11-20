@@ -252,7 +252,21 @@ class PlatformGuestTableMutationCoordinatorTest {
             allowMutation.countDown()
 
             assertIs<PlatformGuestTableMutationResult.Applied<*>>(withTimeout(10_000) { mutation.await() })
-            assertIs<GuestTableTeardownResult.Cleared>(withTimeout(10_000) { exit.await() })
+            val blocked = assertIs<GuestTableTeardownResult.Blocked>(withTimeout(10_000) { exit.await() })
+            assertEquals(TableSessionEndBlockedReason.ACTIVE_STAFF_CALL, blocked.reason)
+            assertEquals(null, fixture.database.exitSnapshot(fixture.tableSessionId))
+            fixture.database.update("UPDATE staff_calls SET status='DONE' WHERE table_session_id = ?") {
+                it.setLong(1, fixture.tableSessionId)
+            }
+            val cleared =
+                exitRepository.teardownByActorAndToken(
+                    actorUserId = fixture.database.actorUserId,
+                    tableToken = fixture.database.tableToken,
+                    expectedTableSessionId = fixture.tableSessionId,
+                    now = fixture.now.plusSeconds(2),
+                )
+            assertEquals(true, assertIs<GuestTableTeardownResult.Cleared>(cleared).exitRecorded)
+
             val retry =
                 mutationRepository.withConfirmedPlatformGuestMutation(
                     actorUserId = fixture.database.actorUserId,
@@ -412,7 +426,7 @@ class PlatformGuestTableMutationCoordinatorTest {
                 lastActivityAt = now.minus(Duration.ofHours(1)),
                 expiresAt = now.plus(Duration.ofMinutes(30)),
             )
-        database.insertContext(updatedAt = now.minus(Duration.ofMinutes(1)))
+        database.insertContext(tableSessionId = tableSessionId, updatedAt = now.minus(Duration.ofMinutes(1)))
         return MutationFixture(
             database = database,
             tableSessionId = tableSessionId,

@@ -2,6 +2,7 @@ import { getTelegramContext } from '../telegram'
 
 let dismissed = false
 let selectedVenueId: number | null = null
+let selectedPayload: string | null = null
 const key = () => `hookah_browse_venue:user:${getTelegramContext().telegramUserId ?? 'unknown'}`
 
 export function getExplicitVenueBrowsePayload(): string | null {
@@ -18,26 +19,50 @@ export function getVenueBrowsePayload(): string | null {
   const ctx = getTelegramContext()
   if (ctx.tableTokenAutoResolve) {
     selectedVenueId = null
-    try { localStorage.removeItem(key()) } catch { /* explicit QR supersedes a browsing choice */ }
+    selectedPayload = null
+    try { sessionStorage.removeItem(key()) } catch { /* explicit QR supersedes a browsing choice */ }
     return null
   }
   const explicit = getExplicitVenueBrowsePayload()
   if (explicit !== null) return explicit
-  try { return localStorage.getItem(key()) } catch { return null }
+  const saved = savedBrowsePayload()
+  return saved?.startsWith('venue_') ? saved : null
 }
 
-export function getVenueBrowseId(): number | null { return dismissed ? null : selectedVenueId }
+function savedBrowsePayload(): string | null {
+  if (dismissed) return null
+  if (selectedPayload !== null) return selectedPayload
+  if (new URLSearchParams(window.location.search).get('venue_browse') === 'off') return null
+  try { return sessionStorage.getItem(key()) } catch { return null }
+}
+
+export function isPersonalVenueBrowse(venueId: number | null): boolean {
+  return venueId !== null && savedBrowsePayload()?.startsWith('venue_') === true && getVenueBrowseId() === venueId
+}
+
+export function getVenueBrowseId(): number | null {
+  if (dismissed) return null
+  if (selectedVenueId !== null) return selectedVenueId
+  const payload = savedBrowsePayload()
+  if (!payload) return null
+  const catalogId = /^catalog:([1-9][0-9]*)$/.exec(payload)?.[1]
+  const personalId = /^venue_([1-9a-z][0-9a-z]{0,12})$/.exec(payload)?.[1]
+  const id = catalogId ? Number(catalogId) : personalId ? Number.parseInt(personalId, 36) : null
+  return id !== null && Number.isSafeInteger(id) && id > 0 ? id : null
+}
 
 export function rememberVenueBrowse(payload: string, venueId: number): void {
   dismissed = false
   selectedVenueId = venueId
-  try { localStorage.setItem(key(), payload) } catch { /* browsing still works without storage */ }
+  selectedPayload = payload
+  try { sessionStorage.setItem(key(), payload) } catch { /* browsing still works without storage */ }
 }
 
 export function clearVenueBrowse(): void {
   dismissed = true
+  selectedPayload = null
   selectedVenueId = null
-  try { localStorage.removeItem(key()) } catch { /* optional persistence */ }
+  try { sessionStorage.removeItem(key()) } catch { /* optional persistence */ }
   const url = new URL(window.location.href)
   url.searchParams.set('venue_browse', 'off')
   url.searchParams.delete('venue_entry')

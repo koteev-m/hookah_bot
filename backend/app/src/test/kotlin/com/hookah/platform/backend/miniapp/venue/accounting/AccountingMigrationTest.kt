@@ -73,7 +73,8 @@ class AccountingMigrationTest {
                 statement.executeUpdate()
             }
             val oldHistory = history(c)
-            val forward = Flyway.configure().dataSource(ds).locations("classpath:db/migration/$dialect").load()
+            val forward =
+                Flyway.configure().dataSource(ds).locations("classpath:db/migration/$dialect").target(next).load()
             assertEquals(1, forward.migrate().migrationsExecuted)
             assertEquals(next, forward.info().current().version.version)
             forward.validate()

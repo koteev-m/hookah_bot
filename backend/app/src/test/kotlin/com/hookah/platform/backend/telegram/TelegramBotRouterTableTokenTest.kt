@@ -28,9 +28,11 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestFavoritesRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestMenuRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabModel
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableActivationDeniedReason
 import com.hookah.platform.backend.miniapp.guest.db.GuestTableActivationResult
 import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextIdentity
 import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleTestDatabase
 import com.hookah.platform.backend.miniapp.guest.db.GuestTableTeardownResult
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVisitDetail
@@ -41,6 +43,7 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestVisitPromotionDiscount
 import com.hookah.platform.backend.miniapp.guest.db.MenuCategoryModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
 import com.hookah.platform.backend.miniapp.guest.db.MenuModel
+import com.hookah.platform.backend.miniapp.guest.db.MiniAppFallbackVisit
 import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestContextValidationResult
 import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationResult
 import com.hookah.platform.backend.miniapp.guest.db.RestorableTableContext
@@ -70,6 +73,7 @@ import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestStatus
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionSettings
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.subscription.db.VenueSubscriptionState
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_ACK_AUDIT_ACTION
 import com.hookah.platform.backend.miniapp.venue.STAFF_CALL_AUDIT_SOURCE_TELEGRAM_STAFF_CHAT
@@ -280,6 +284,7 @@ import org.flywaydb.core.Flyway
 import org.h2.jdbcx.JdbcDataSource
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -484,7 +489,7 @@ class TelegramBotRouterTableTokenTest {
                 }
             }
             coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) { chatContextRepository.clear(any()) }
             coVerify(exactly = 0) { dialogStateRepository.clear(any()) }
         }
@@ -538,7 +543,7 @@ class TelegramBotRouterTableTokenTest {
             }
             coVerify(exactly = 0) { chatContextRepository.clear(any()) }
             coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
         }
 
     @Test
@@ -563,7 +568,7 @@ class TelegramBotRouterTableTokenTest {
                 outboxEnqueuer.enqueueSendMessage(200, "Выберите действие за столом.", any<ReplyKeyboardMarkup>())
             }
             coVerify(exactly = 0) { chatContextRepository.clear(any()) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
         }
 
     @Test
@@ -580,7 +585,15 @@ class TelegramBotRouterTableTokenTest {
                 DialogStateType.GUEST_BOOKING_WAIT_REPLY,
                 mapOf("venue_id" to "10", "booking_id" to "77", "guest_user_id" to "200"),
             )
-        val stored = StoredChatContext(userId = 200L, tableToken = "TOKEN", chatId = 200L, venueId = 10L, tableId = 11L)
+        val stored =
+            StoredChatContext(
+                userId = 200L,
+                tableToken = "TOKEN",
+                chatId = 200L,
+                venueId = 10L,
+                tableId = 11L,
+                tableSessionId = 55L,
+            )
         coEvery { dialogStateRepository.get(200L) } answers { state }
         coEvery { dialogStateRepository.clear(200L) } answers {
             state = DialogState(DialogStateType.NONE)
@@ -618,7 +631,7 @@ class TelegramBotRouterTableTokenTest {
         verify { supportThreadRepository wasNot Called }
         assertEquals(stored.takeIf { hasTableContext }, chatContextRepository.get(200L))
         coVerify(exactly = 0) { chatContextRepository.clear(any()) }
-        coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+        coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
         verify { tableSessionRepository wasNot Called }
         verify { guestTableContextLifecycleRepository wasNot Called }
     }
@@ -665,7 +678,7 @@ class TelegramBotRouterTableTokenTest {
                 discounts = emptyList(),
                 pricingFingerprint = "test-no-adjustments",
             )
-        coEvery { chatContextRepository.saveContext(any(), any(), any()) } returns Unit
+        coEvery { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) } returns Unit
         coEvery { chatContextRepository.get(any()) } returns null
         coEvery { chatContextRepository.clear(any()) } returns Unit
         coEvery {
@@ -1051,6 +1064,9 @@ class TelegramBotRouterTableTokenTest {
                 expectedTableId = any(),
                 ttl = any(),
                 now = any(),
+                expectedExitEventId = matchNullable { true },
+                ordinaryBot = any(),
+                fallback = matchNullable { true },
             )
         } answers {
             val token = invocation.args[2] as String
@@ -1086,7 +1102,7 @@ class TelegramBotRouterTableTokenTest {
             )
         } returns PlatformGuestTableMutationResult.Denied
         coEvery {
-            guestTableContextLifecycleRepository.teardownByChat(any(), any(), any())
+            guestTableContextLifecycleRepository.teardownByChat(any(), any(), any(), any())
         } answers {
             val actorUserId = invocation.args[0] as Long
             val chatId = invocation.args[1] as Long
@@ -1115,7 +1131,39 @@ class TelegramBotRouterTableTokenTest {
                 endedAt = null,
                 status = TableSessionStatus.ACTIVE,
             )
-        coEvery { tableSessionRepository.clearUserExit(any(), any()) } returns Unit
+        coEvery {
+            guestTableContextLifecycleRepository.ordinaryBotVisit(any(), any(), any(), any(), any())
+        } coAnswers {
+            val actor = firstArg<Long>()
+            val chatId = secondArg<Long>()
+            val expected = thirdArg<TableContext?>()
+            val saved = chatContextRepository.get(chatId)
+            val table = saved?.let { tableTokenRepository.resolve(it.tableToken) }
+            val id = saved?.tableSessionId
+            if (saved?.userId != actor || table == null || id == null ||
+                (expected != null && (expected != table || id != arg<Long?>(3)))
+            ) {
+                return@coAnswers PlatformGuestContextValidationResult.Inactive
+            }
+            val session = tableSessionRepository.findSessionForTable(id, table.venueId, table.tableId)
+            if (session == null || session.endedAt != null || session.expiresAt <= Instant.now() ||
+                tableSessionRepository.hasUserExit(actor, id)
+            ) {
+                PlatformGuestContextValidationResult.Inactive
+            } else {
+                platformGuestContextActive(table, actor, chatId).copy(tableSession = session)
+            }
+        }
+        coEvery { tableSessionRepository.hasUserExit(any(), any()) } returns false
+        coEvery { tableSessionRepository.findSessionForTable(55L, any(), any()) } answers {
+            platformGuestTableSession().copy(
+                venueId = secondArg(), tableId = thirdArg(), expiresAt = Instant.now().plusSeconds(3600),
+            )
+        }
+        coEvery {
+            guestTableContextLifecycleRepository.ordinaryBotCanRejoin(any(), any(), any(), any(), any())
+        } returns true
+        coEvery { tableSessionRepository.currentQrExit(any(), any(), any(), any()) } returns null
         coEvery {
             guestTabsRepository.ensurePersonalTab(
                 venueId = any(),
@@ -2124,7 +2172,9 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `continue in bot with revoked table token does not restore ordering keyboard`() =
         runBlocking {
-            coEvery { chatContextRepository.get(100L) } returns StoredChatContext(userId = 200L, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100L)
+            } returns StoredChatContext(userId = 200L, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns null
 
             processBotCallback(80_008L, "channel-revoked", "continue_in_bot:55")
@@ -2133,7 +2183,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 0) {
                 outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
-                chatContextRepository.saveContext(any(), any(), any())
+                chatContextRepository.saveContext(any(), any(), any(), any(), any(), any())
             }
         }
 
@@ -2164,8 +2214,10 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
                 tableSessionRepository.touchActiveSession(any(), any(), any(), any(), any())
-                tableSessionRepository.clearUserExit(any(), any())
-                chatContextRepository.saveContext(any(), any(), any())
+                guestTableContextLifecycleRepository.activate(
+                    any(), any(), any(), any(), any(), any(), any(), null, true,
+                )
+                chatContextRepository.saveContext(any(), any(), any(), any(), any(), any())
                 chatContextRepository.clear(any())
                 outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
             }
@@ -2191,7 +2243,9 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
                 tableSessionRepository.touchActiveSession(any(), any(), any(), any(), any())
-                tableSessionRepository.clearUserExit(any(), any())
+                guestTableContextLifecycleRepository.activate(
+                    any(), any(), any(), any(), any(), any(), any(), null, true,
+                )
                 outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
             }
         }
@@ -2207,7 +2261,7 @@ class TelegramBotRouterTableTokenTest {
             processTableStart(updateId = 80_040L, actorUserId = 200L)
             processTableStart(updateId = 80_041L, actorUserId = 200L, token = "OTHER_TOKEN")
             coEvery { chatContextRepository.get(100L) } returns
-                StoredChatContext(userId = 200L, tableToken = "OTHER_TOKEN")
+                StoredChatContext(userId = 200L, tableToken = "OTHER_TOKEN", tableSessionId = 55L)
             coEvery { tableSessionRepository.findSessionForTable(55L, 10L, 12L) } returns null
             clearMocks(tableSessionRepository, chatContextRepository, outboxEnqueuer, answers = false)
 
@@ -2224,7 +2278,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
                 tableSessionRepository.touchActiveSession(any(), any(), any(), any(), any())
-                chatContextRepository.saveContext(any(), any(), any())
+                chatContextRepository.saveContext(any(), any(), any(), any(), any(), any())
                 chatContextRepository.clear(any())
                 outboxEnqueuer.enqueueSendMessage(100L, any(), match { it is ReplyKeyboardMarkup }, dedupeKey = any())
             }
@@ -2270,8 +2324,12 @@ class TelegramBotRouterTableTokenTest {
                 )
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
 
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
             router.process(
                 TelegramUpdate(
                     updateId = 9_1,
@@ -2285,7 +2343,12 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify { chatContextRepository.saveContext(100, 200, context) }
+            coVerify {
+                guestTableContextLifecycleRepository.activate(
+                    200L, 100L, context.tableToken, 10L, 11L,
+                    any(), any(), null, true, MiniAppFallbackVisit(null),
+                )
+            }
             coVerify {
                 dialogStateRepository.set(
                     100,
@@ -2296,6 +2359,94 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify { outboxEnqueuer.enqueueSendMessage(100, "Опишите, что хотите заказать.", null) }
+        }
+
+    @Test
+    fun `platform QR offer after exit cannot provision a missing subscription`() =
+        runBlocking {
+            stubPlatformGuestQrAccess()
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns null
+            coEvery { tableSessionRepository.currentQrExit(999L, 10L, 11L, any()) } returns 123L
+            processTableStart(updateId = 81_010L, actorUserId = 999L)
+            coVerify(exactly = 1) { subscriptionRepository.findSubscriptionState(10L) }
+            coVerify(exactly = 0) { subscriptionRepository.getSubscriptionStatus(any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `bot rejoin offer with a missing subscription does not start a trial`() =
+        runBlocking {
+            val context = stubBotGiftCartContext(Instant.now())
+            coEvery { tableSessionRepository.currentQrExit(200L, 10L, 11L, any()) } returns 123L
+            val db = GuestTableContextLifecycleTestDatabase.create("bot-rejoin-offer")
+            val subscriptions = SubscriptionRepository(db.dataSource)
+            db.connection { connection ->
+                connection.prepareStatement("DELETE FROM venue_subscriptions WHERE venue_id = ?").use {
+                    it.setLong(1, db.venueId)
+                    it.executeUpdate()
+                }
+            }
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } coAnswers {
+                subscriptions.findSubscriptionState(db.venueId)
+            }
+            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } coAnswers {
+                subscriptions.getSubscriptionStatus(db.venueId)
+            }
+            assertNull(subscriptions.findSubscriptionState(db.venueId))
+            processTableStart(updateId = 81_009L, actorUserId = 200L, token = context.tableToken)
+            assertNull(subscriptions.findSubscriptionState(db.venueId))
+            coVerify(exactly = 0) { subscriptionRepository.getSubscriptionStatus(10L) }
+            coVerify(exactly = 0) {
+                guestTableContextLifecycleRepository.activate(
+                    any(), any(), any(), any(), any(), any(), any(), null, true,
+                )
+            }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
+        }
+
+    @Test
+    fun `fallback cannot rejoin an exited guest while a new bot start explicitly can`() =
+        runBlocking {
+            val context = stubBotGiftCartContext(Instant.now())
+            coEvery {
+                guestTableContextLifecycleRepository.activate(
+                    200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true, MiniAppFallbackVisit(null),
+                )
+            } returns
+                GuestTableActivationResult.Denied(GuestTableActivationDeniedReason.INVALID_CONTEXT)
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
+            router.process(
+                TelegramUpdate(
+                    updateId = 81_001L,
+                    message =
+                        Message(
+                            messageId = 81_001L,
+                            chat = Chat(id = 100L, type = "private"),
+                            fromUser = User(id = 200L),
+                            webAppData = WebAppData("""{"cmd":"start_quick_order","table_token":"TOKEN"}"""),
+                        ),
+                ),
+            )
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.activate(
+                    200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true, MiniAppFallbackVisit(null),
+                )
+            }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
+            coEvery { tableSessionRepository.currentQrExit(200L, 10L, 11L, any()) } returns 123L
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
+            processTableStart(updateId = 81_002L, actorUserId = 200L, token = context.tableToken)
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
+            processBotCallback(81_003L, "explicit-qr", "gqr_r:pgqr00000001")
+            processBotCallback(81_004L, "duplicate-qr", "gqr_r:pgqr00000001")
+            coVerify(exactly = 1) {
+                guestTableContextLifecycleRepository.activate(
+                    200L, 100L, context.tableToken, 10L, 11L, any(), any(), 123L, true,
+                )
+            }
         }
 
     @Test
@@ -2320,8 +2471,14 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
-            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(
+                exactly = 0,
+            ) {
+                guestTableContextLifecycleRepository.activate(
+                    any(), any(), any(), any(), any(), any(), any(), null, true,
+                )
+            }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) { dialogStateRepository.set(100L, any()) }
             coVerify(exactly = 1) {
                 guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
@@ -2423,7 +2580,7 @@ class TelegramBotRouterTableTokenTest {
                     any(),
                 )
             }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
         }
 
     @Test
@@ -4306,7 +4463,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
                 outboxEnqueuer.enqueueSendMessage(
                     any(),
@@ -4382,11 +4539,17 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 1) { tableTokenRepository.resolve("TOKEN") }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
-            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
+            coVerify(
+                exactly = 0,
+            ) {
+                guestTableContextLifecycleRepository.activate(
+                    any(), any(), any(), any(), any(), any(), any(), null, true,
+                )
+            }
             coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
         }
 
@@ -4401,6 +4564,8 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve(promptedContext.tableToken) } returns promptedContext
             coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
             coEvery {
                 guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
             } returns platformGuestContextActive(activeContext)
@@ -4464,7 +4629,7 @@ class TelegramBotRouterTableTokenTest {
 
             coVerify(exactly = 0) { dialogStateRepository.clear(100L) }
             coVerify(exactly = 0) { chatContextRepository.clear(100L) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
@@ -4596,7 +4761,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 1) { tableTokenRepository.resolve("TOKEN") }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
@@ -4689,6 +4854,7 @@ class TelegramBotRouterTableTokenTest {
                 auditEntered.complete(Unit)
                 releaseAudit.await()
             }
+            coEvery { tableSessionRepository.currentQrExit(999L, 10L, 11L, any()) } returns 321L
             processTableStart(updateId = 10_017, actorUserId = 999L)
 
             val confirm =
@@ -4732,6 +4898,7 @@ class TelegramBotRouterTableTokenTest {
                     expectedTableId = 11L,
                     ttl = Duration.ofHours(2),
                     now = any(),
+                    expectedExitEventId = 321L,
                 )
             }
             coVerify {
@@ -4789,8 +4956,14 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
-            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(
+                exactly = 0,
+            ) {
+                guestTableContextLifecycleRepository.activate(
+                    any(), any(), any(), any(), any(), any(), any(), null, true,
+                )
+            }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
@@ -4810,7 +4983,8 @@ class TelegramBotRouterTableTokenTest {
                 if (resolveCalls.incrementAndGet() == 1L) context else null
             }
             coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
-            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
             processTableStart(updateId = 10_030, actorUserId = 999L)
 
             processPlatformGuestQrCallback(
@@ -4820,7 +4994,7 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN") }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
@@ -4844,7 +5018,8 @@ class TelegramBotRouterTableTokenTest {
             }
             coEvery { tableTokenRepository.resolveInactiveTable("TOKEN") } returns context
             coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
-            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
             processTableStart(updateId = 10_040, actorUserId = 999L)
 
             processPlatformGuestQrCallback(
@@ -4855,7 +5030,7 @@ class TelegramBotRouterTableTokenTest {
 
             coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN") }
             coVerify(exactly = 1) { tableTokenRepository.resolveInactiveTable("TOKEN") }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
@@ -4882,7 +5057,8 @@ class TelegramBotRouterTableTokenTest {
                     platformGuestQrVenue(status = VenueStatus.HIDDEN)
                 }
             }
-            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
             processTableStart(updateId = 10_050, actorUserId = 999L)
 
             processPlatformGuestQrCallback(
@@ -4893,8 +5069,8 @@ class TelegramBotRouterTableTokenTest {
 
             coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN") }
             coVerify(exactly = 2) { platformVenueRepository.getVenueDetail(10L) }
-            coVerify(exactly = 1) { subscriptionRepository.getSubscriptionStatus(10L) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 1) { subscriptionRepository.findSubscriptionState(10L) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -4912,12 +5088,14 @@ class TelegramBotRouterTableTokenTest {
             val subscriptionReads = AtomicLong()
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
-            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } answers {
-                if (subscriptionReads.incrementAndGet() == 1L) {
-                    SubscriptionStatus.ACTIVE
-                } else {
-                    SubscriptionStatus.SUSPENDED_BY_PLATFORM
-                }
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } answers {
+                val status =
+                    if (subscriptionReads.incrementAndGet() == 1L) {
+                        SubscriptionStatus.ACTIVE
+                    } else {
+                        SubscriptionStatus.SUSPENDED_BY_PLATFORM
+                    }
+                VenueSubscriptionState(10L, status, null, null, Instant.now())
             }
             processTableStart(updateId = 10_060, actorUserId = 999L)
 
@@ -4928,8 +5106,8 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 2) { tableTokenRepository.resolve("TOKEN") }
-            coVerify(exactly = 2) { subscriptionRepository.getSubscriptionStatus(10L) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 2) { subscriptionRepository.findSubscriptionState(10L) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
@@ -4978,11 +5156,17 @@ class TelegramBotRouterTableTokenTest {
                     payload = any(),
                 )
             }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
-            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
+            coVerify(
+                exactly = 0,
+            ) {
+                guestTableContextLifecycleRepository.activate(
+                    any(), any(), any(), any(), any(), any(), any(), null, true,
+                )
+            }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
                     100L,
@@ -5148,7 +5332,7 @@ class TelegramBotRouterTableTokenTest {
 
             coVerify(exactly = 1) { tableTokenRepository.resolve("TOKEN") }
             coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
                     100L,
@@ -5185,7 +5369,7 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueAnswerCallbackQuery(
                     100L,
@@ -5289,7 +5473,8 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN_A") } returns firstContext
             coEvery { tableTokenRepository.resolve("TOKEN_B") } returns secondContext
             coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
-            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
             processTableStart(updateId = 10_140, actorUserId = 999L, token = "TOKEN_A")
             processTableStart(updateId = 10_141, actorUserId = 999L, token = "TOKEN_B")
 
@@ -5334,7 +5519,13 @@ class TelegramBotRouterTableTokenTest {
             val miniAppRouter = routerWithWebAppPublicUrl("https://mini.app/miniapp/")
             stubPlatformGuestQrAccess(context)
             coEvery { chatContextRepository.get(100L) } returns
-                StoredChatContext(userId = 999L, tableToken = "TOKEN")
+                StoredChatContext(
+                    userId = 999L,
+                    tableToken = context.tableToken,
+                    venueId = context.venueId,
+                    tableId = context.tableId,
+                    tableSessionId = 55L,
+                )
             coEvery {
                 guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
             } returns platformGuestContextActive(context)
@@ -5506,6 +5697,8 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `platform exit clears pending confirmation cart and booking drafts`() =
         runBlocking {
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
             val activeContext = platformGuestQrContext(token = "ACTIVE_TOKEN")
             val promptedContext = platformGuestQrContext(token = "NEW_TOKEN", tableId = 12L, tableNumber = 6)
             val bookingDate = LocalDate.now(ZoneId.of("Europe/Moscow")).plusDays(1)
@@ -5939,7 +6132,10 @@ class TelegramBotRouterTableTokenTest {
                 )
 
                 coVerify(exactly = 1) {
-                    chatContextRepository.saveContext(200L + index, actorUserId, context)
+                    guestTableContextLifecycleRepository.activate(
+                        actorUserId, 200L + index, context.tableToken, context.venueId, context.tableId,
+                        any(), any(), null, true,
+                    )
                 }
                 coVerifyOrder {
                     outboxEnqueuer.enqueueSendMessage(
@@ -5996,7 +6192,7 @@ class TelegramBotRouterTableTokenTest {
                 token = "INVALID_TOKEN",
             )
 
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
@@ -6048,8 +6244,14 @@ class TelegramBotRouterTableTokenTest {
                     any(),
                 )
             }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
-            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
+            coVerify(
+                exactly = 0,
+            ) {
+                guestTableContextLifecycleRepository.activate(
+                    any(), any(), any(), any(), any(), any(), any(), null, true,
+                )
+            }
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
@@ -6072,6 +6274,8 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `platform menu keeps stale confirmed guest context until explicit exit`() =
         runBlocking {
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
             val context = platformGuestQrContext()
             val resolveCalls = AtomicLong()
             coEvery { tableTokenRepository.resolve("TOKEN") } answers {
@@ -6266,7 +6470,7 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) { tableTokenRepository.resolve("INVALID_PLATFORM_TOKEN") }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
                 tableSessionRepository.resolveActiveSession(any(), any(), any(), any())
             }
@@ -6297,6 +6501,8 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `platform confirm treats explicitly revoked token as invalid repository contract`() =
         runBlocking {
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
             val context = platformGuestQrContext(token = "REVOKED_TOKEN")
             val resolveCalls = AtomicLong()
             coEvery { tableTokenRepository.resolve("REVOKED_TOKEN") } answers {
@@ -6320,7 +6526,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 2) { tableTokenRepository.resolve("REVOKED_TOKEN") }
             coVerify(exactly = 1) { tableTokenRepository.resolveInactiveTable("REVOKED_TOKEN") }
             coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
@@ -6333,6 +6539,8 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `platform confirm treats table missing after prompt as invalid repository contract`() =
         runBlocking {
+            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
+                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
             val context = platformGuestQrContext(token = "MISSING_TABLE_TOKEN")
             val resolveCalls = AtomicLong()
             coEvery { tableTokenRepository.resolve("MISSING_TABLE_TOKEN") } answers {
@@ -6356,7 +6564,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 2) { tableTokenRepository.resolve("MISSING_TABLE_TOKEN") }
             coVerify(exactly = 1) { tableTokenRepository.resolveInactiveTable("MISSING_TABLE_TOKEN") }
             coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
@@ -6418,8 +6626,14 @@ class TelegramBotRouterTableTokenTest {
                     now = any(),
                 )
             }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
-            coVerify(exactly = 0) { tableSessionRepository.clearUserExit(any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
+            coVerify(
+                exactly = 0,
+            ) {
+                guestTableContextLifecycleRepository.activate(
+                    any(), any(), any(), any(), any(), any(), any(), null, true,
+                )
+            }
             coVerify(exactly = 1) {
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
@@ -16119,7 +16333,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestFavoritesRepository.listFavoriteItemsForVenue(200L, 10L, any()) } returns
@@ -16368,7 +16584,9 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L) } returns
                 repeatableVisitDetail(includeUnavailable = true)
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns repeatMenu(10L, itemId = 101L)
@@ -16434,7 +16652,9 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L) } returns
                 repeatableVisitDetail(includeUnavailable = true)
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 99L)
 
             router.process(
@@ -16464,7 +16684,9 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L) } returns
                 repeatableVisitDetail(includeUnavailable = true)
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns repeatMenu(10L, itemId = 101L)
@@ -16508,7 +16730,9 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             coEvery { visitRepository.getGuestVisitDetail(userId = 200, visitId = 44L) } returns
                 repeatableVisitDetail(includeUnavailable = true)
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns repeatMenu(10L, itemId = 101L)
@@ -20809,7 +21033,9 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `start menu promotions button opens global feed even with table context`() =
         runBlocking {
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
             coEvery { venuePromotionRepository.listPromotionVenuesForGuest(6, 0, any(), any(), any()) } returns
                 listOf(
@@ -21159,7 +21385,9 @@ class TelegramBotRouterTableTokenTest {
     @Test
     fun `table context venue promotions empty state uses venue-specific wording with back button`() =
         runBlocking {
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
             coEvery { venuePromotionRepository.listActivePromotionsForVenue(10L, 20, any()) } returns emptyList()
 
@@ -27496,7 +27724,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
@@ -27550,7 +27780,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
@@ -27595,7 +27827,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
@@ -27661,7 +27895,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
@@ -27732,7 +27968,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns disabledShiftExtensionSettings()
@@ -27798,7 +28036,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
@@ -27910,7 +28150,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
@@ -28153,7 +28395,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
@@ -28198,7 +28442,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, 1L) } returns
@@ -28247,7 +28493,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
@@ -28296,7 +28544,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -28363,7 +28613,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
@@ -28412,7 +28664,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
@@ -28479,7 +28733,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -28595,7 +28851,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -28715,7 +28973,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -28793,7 +29053,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -28871,7 +29133,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -28954,7 +29218,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
@@ -29030,7 +29296,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -29112,7 +29380,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
@@ -29211,7 +29481,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns disabledShiftExtensionSettings()
@@ -29278,7 +29550,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -29347,7 +29621,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
@@ -29500,7 +29776,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
@@ -29544,7 +29822,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
@@ -29582,7 +29862,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -29691,7 +29973,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -29783,7 +30067,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -29927,7 +30213,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -30022,7 +30310,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -30248,7 +30538,9 @@ class TelegramBotRouterTableTokenTest {
                     discountMinor = 0L,
                     linePayableMinor = 25_000L,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -31316,7 +31608,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -31397,7 +31691,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -31471,7 +31767,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -31572,7 +31870,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -31657,7 +31957,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
@@ -31709,7 +32011,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -31894,7 +32198,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -32024,7 +32330,9 @@ class TelegramBotRouterTableTokenTest {
                     ownerUserId = 999L,
                     status = "ACTIVE",
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestTabsRepository.listTabsForUser(10L, 55L, 200L) } returns listOf(sharedTab)
@@ -32150,7 +32458,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null
@@ -32245,9 +32555,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN_B",
                     staffChatId = null,
                 )
-            var storedContext = StoredChatContext(userId = 200, tableToken = "TOKEN_A")
+            var storedContext = StoredChatContext(userId = 200, tableToken = "TOKEN_A", tableSessionId = 55L)
             coEvery { chatContextRepository.get(100) } answers { storedContext }
-            coEvery { chatContextRepository.saveContext(any(), any(), any()) } answers {
+            coEvery { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) } answers {
                 storedContext =
                     StoredChatContext(
                         userId = args[1] as Long,
@@ -32381,15 +32691,19 @@ class TelegramBotRouterTableTokenTest {
                     endedAt = null,
                     status = TableSessionStatus.ACTIVE,
                 )
+            var bound = session55
+            coEvery { chatContextRepository.get(100) } answers {
+                StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = bound.id)
+            }
+            coEvery { tableSessionRepository.findSessionForTable(any(), 10L, 11L) } answers {
+                bound.takeIf { it.id == firstArg<Long>() }?.copy(expiresAt = Instant.now().plusSeconds(3600))
+            }
             coEvery {
-                tableSessionRepository.resolveActiveSession(
-                    venueId = any(),
-                    tableId = any(),
-                    ttl = any(),
-                    now = any(),
-                )
-            } returnsMany listOf(session55, session66, session66)
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+                guestTableContextLifecycleRepository.activate(200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true)
+            } answers {
+                bound = session66
+                GuestTableActivationResult.Applied(context, bound)
+            }
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -32493,7 +32807,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
@@ -32537,7 +32853,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
@@ -32637,7 +32955,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
@@ -32706,7 +33026,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -32794,7 +33116,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -32893,7 +33217,7 @@ class TelegramBotRouterTableTokenTest {
                     any(),
                 )
             }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
         }
 
     @Test
@@ -32918,7 +33242,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(101, "База недоступна, попробуйте позже.", any())
             }
-            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any()) }
+            coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
         }
 
     @Test
@@ -32958,7 +33282,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
@@ -33039,7 +33365,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
@@ -33100,7 +33428,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
@@ -33168,7 +33498,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
@@ -33290,7 +33622,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, any()) } returns
@@ -33375,7 +33709,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, any()) } returns
@@ -33443,7 +33779,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, any()) } returns
@@ -33531,7 +33869,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
@@ -33588,7 +33928,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = -777L,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
@@ -33648,7 +33990,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, 1L) } returns
@@ -33699,7 +34043,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -33774,12 +34120,16 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
-            coEvery { chatContextRepository.get(101) } returns StoredChatContext(userId = 201, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
+            coEvery {
+                chatContextRepository.get(101)
+            } returns StoredChatContext(userId = 201, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
             } returns
                 GuestTableTeardownResult.Cleared(
                     identity = platformGuestIdentity(actorUserId = 200L, chatId = 100L, context = context),
@@ -33801,7 +34151,7 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
             }
             coVerify(exactly = 0) { guestTabsRepository.findLatestRestorableTableContext(any(), any()) }
             coVerify(exactly = 0) { tableSessionRepository.endUserTableSession(any(), any(), any(), any(), any()) }
@@ -33829,11 +34179,13 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
             } returns
                 GuestTableTeardownResult.Blocked(
                     identity = platformGuestIdentity(actorUserId = 200L, chatId = 100L, context = context),
@@ -33855,7 +34207,7 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
             }
             coVerify(exactly = 0) { chatContextRepository.clear(100) }
             coVerify {
@@ -33868,7 +34220,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `end table visit without user tab clears current chat context only`() =
+    fun `end table visit before first tab reports a committed user exit`() =
         runBlocking {
             val context =
                 TableContext(
@@ -33879,16 +34231,18 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
             } returns
                 GuestTableTeardownResult.Cleared(
                     identity = platformGuestIdentity(actorUserId = 200L, chatId = 100L, context = context),
-                    tableSessionId = null,
-                    exitRecorded = false,
+                    tableSessionId = 301L,
+                    exitRecorded = true,
                 )
 
             router.process(
@@ -33905,7 +34259,7 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any())
+                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
             }
             coVerify(exactly = 0) { chatContextRepository.clear(100) }
             coVerify(exactly = 0) {
@@ -33939,7 +34293,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = -777L,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, 1L) } returns
@@ -34025,7 +34381,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = -777L,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { ordersRepository.findActiveOrderDetailsForTab(55L, 1L) } returns null
@@ -34087,7 +34445,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
@@ -36230,7 +36590,9 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
                 staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
-            coEvery { chatContextRepository.get(200L) } returns StoredChatContext(userId = 200L, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(200L)
+            } returns StoredChatContext(userId = 200L, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestMenuRepository.getMenu(10L) } returns repeatMenu(10L, itemId = 1000L)
@@ -36277,7 +36639,9 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             coEvery { venueOrdersRepository.loadOrderDetail(10L, 19L) } returns
                 staffChatOrderDetail(batchId = 57L, status = OrderWorkflowStatus.ACCEPTED)
-            coEvery { chatContextRepository.get(200L) } returns StoredChatContext(userId = 200L, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(200L)
+            } returns StoredChatContext(userId = 200L, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns repeatTableContext(venueId = 10L)
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
@@ -36837,7 +37201,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { dialogStateRepository.get(100) } returns
@@ -36898,7 +37264,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { dialogStateRepository.get(100) } returns
@@ -36976,7 +37344,9 @@ class TelegramBotRouterTableTokenTest {
                     tableToken = "TOKEN",
                     staffChatId = null,
                 )
-            coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+            coEvery {
+                chatContextRepository.get(100)
+            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { dialogStateRepository.get(100) } returns
@@ -37413,15 +37783,15 @@ class TelegramBotRouterTableTokenTest {
     ) {
         val context = platformGuestQrContext(token = seat.token, venueId = seat.venue, tableId = seat.tables[0])
         coEvery { chatContextRepository.get(chatId) } returns
-            StoredChatContext(userId = userId, tableToken = seat.token)
+            StoredChatContext(userId = userId, tableToken = seat.token, tableSessionId = seat.session)
         coEvery { tableTokenRepository.resolve(seat.token) } returns context
         coEvery {
             platformVenueRepository.getVenueDetail(seat.venue)
         } returns platformGuestQrVenue(venueId = seat.venue)
         coEvery { subscriptionRepository.getSubscriptionStatus(seat.venue) } returns SubscriptionStatus.ACTIVE
         coEvery {
-            tableSessionRepository.resolveActiveSession(seat.venue, seat.tables[0], any(), any())
-        } returns platformGuestTableSession(context, seat.session)
+            tableSessionRepository.findSessionForTable(seat.session, seat.venue, seat.tables[0])
+        } returns platformGuestTableSession(context, seat.session).copy(expiresAt = Instant.now().plusSeconds(3600))
         val tab = GuestTabModel(seat.tab, seat.venue, seat.session, "PERSONAL", userId, "ACTIVE")
         coEvery { guestTabsRepository.ensurePersonalTab(seat.venue, seat.session, userId) } returns tab
         coEvery { guestTabsRepository.listTabsForUser(seat.venue, seat.session, userId) } returns listOf(tab)
@@ -37686,6 +38056,8 @@ class TelegramBotRouterTableTokenTest {
                 venueName = context.venueName,
                 status = venueStatus,
             )
+        coEvery { subscriptionRepository.findSubscriptionState(context.venueId) } returns
+            VenueSubscriptionState(context.venueId, subscriptionStatus, null, null, Instant.now())
         coEvery { subscriptionRepository.getSubscriptionStatus(context.venueId) } returns subscriptionStatus
     }
 
@@ -38081,7 +38453,9 @@ class TelegramBotRouterTableTokenTest {
                 tableToken = "TOKEN",
                 staffChatId = null,
             )
-        coEvery { chatContextRepository.get(100) } returns StoredChatContext(userId = 200, tableToken = "TOKEN")
+        coEvery {
+            chatContextRepository.get(100)
+        } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
         coEvery { tableTokenRepository.resolve("TOKEN") } returns context
         coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
         coEvery { ordersRepository.findActiveOrderSummary(11L) } returns null

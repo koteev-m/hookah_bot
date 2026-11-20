@@ -14,6 +14,45 @@ import kotlin.test.assertTrue
 
 class GuestTableContextActivationRepositoryTest {
     @Test
+    fun `only a current venue member may resume a tabless ordinary Bot visit in DRAFT`() =
+        runBlocking {
+            for (role in listOf("OWNER", "STAFF")) {
+                val db = GuestTableContextLifecycleTestDatabase.create("tabless-rejoin-" + role.lowercase())
+                val now = Instant.now()
+                val session = db.createActiveSession(now.minusSeconds(60), now, now.plusSeconds(3600))
+                db.insertContext(tableSessionId = session, updatedAt = now)
+                val lifecycle = db.lifecycleRepository()
+                val exited =
+                    assertIs<GuestTableTeardownResult.Cleared>(
+                        lifecycle.teardownByChat(db.actorUserId, db.chatId, now, ordinaryBotVisit = true),
+                    )
+                assertTrue(exited.exitRecorded)
+                val sessions = TableSessionRepository(db.dataSource)
+                val event = checkNotNull(sessions.currentQrExit(db.actorUserId, db.venueId, db.tableId))
+                db.update("UPDATE venues SET status='DRAFT' WHERE id=?") { it.setLong(1, db.venueId) }
+
+                suspend fun confirm(ordinary: Boolean) =
+                    lifecycle.activate(
+                        db.actorUserId, db.chatId, db.tableToken, db.venueId, db.tableId,
+                        Duration.ofHours(4), now, event, ordinaryBot = ordinary,
+                    )
+                assertIs<GuestTableActivationResult.Denied>(confirm(true))
+                db.update("INSERT INTO venue_members(venue_id,user_id,role) VALUES (?,?,?)") {
+                    it.setLong(1, db.venueId)
+                    it.setLong(2, db.actorUserId)
+                    it.setString(3, role)
+                }
+                assertIs<GuestTableActivationResult.Denied>(confirm(false))
+                val joined = assertIs<GuestTableActivationResult.Applied>(confirm(true))
+                assertEquals(session, joined.tableSession.id)
+                assertNull(db.exitSnapshot(session))
+                assertEquals(0, db.countRows("tab"))
+                assertEquals(0, db.countRows("tab_member"))
+                assertIs<GuestTableActivationResult.Denied>(confirm(true))
+            }
+        }
+
+    @Test
     fun `activation atomically touches session clears exit and dialog then saves exact context`() =
         runBlocking {
             val database = GuestTableContextLifecycleTestDatabase.create("guest-activation-success")
@@ -35,6 +74,10 @@ class GuestTableContextActivationRepositoryTest {
                     tableToken = database.tableToken,
                     expectedVenueId = database.venueId,
                     expectedTableId = database.tableId,
+                    expectedExitEventId =
+                        TableSessionRepository(
+                            database.dataSource,
+                        ).currentQrExit(database.actorUserId, database.venueId, database.tableId, now),
                     ttl = Duration.ofHours(4),
                     now = now,
                 )
@@ -57,6 +100,89 @@ class GuestTableContextActivationRepositoryTest {
                 ),
                 database.contextSnapshot(),
             )
+        }
+
+    @Test
+    fun `platform prompt and bot choice cannot clear a more recent exit`() =
+        runBlocking {
+            val database = GuestTableContextLifecycleTestDatabase.create("stale-qr-confirmation")
+            val now = Instant.now()
+            val session = database.createActiveSession(now.minusSeconds(60), now, now.plusSeconds(3600))
+            val sessions = TableSessionRepository(database.dataSource)
+            database.insertExit(session, now)
+            val previous =
+                checkNotNull(sessions.currentQrExit(database.actorUserId, database.venueId, database.tableId))
+            database.dataSource.connection.use {
+                sessions.recordUserExit(it, database.actorUserId, session, now)
+            }
+            var current = checkNotNull(sessions.currentQrExit(database.actorUserId, database.venueId, database.tableId))
+            assertTrue(current != previous)
+            val before = database.activationAuthoritativeSnapshot()
+            for (expected in listOf(null, previous)) {
+                val activation =
+                    database.lifecycleRepository().activate(
+                        database.actorUserId,
+                        database.chatId,
+                        database.tableToken,
+                        database.venueId,
+                        database.tableId,
+                        Duration.ofHours(4),
+                        now,
+                        expected,
+                    )
+                assertIs<GuestTableActivationResult.Denied>(activation)
+                assertIs<GuestTableActivationResult.Denied>(
+                    database.lifecycleRepository().activate(
+                        database.actorUserId, database.chatId, database.tableToken, database.venueId,
+                        database.tableId, Duration.ofHours(4), now, expected, ordinaryBot = true,
+                    ),
+                )
+                assertEquals(before, database.activationAuthoritativeSnapshot())
+                assertEquals(current, sessions.currentQrExit(database.actorUserId, database.venueId, database.tableId))
+            }
+
+            suspend fun confirmBot() =
+                database.lifecycleRepository().activate(
+                    database.actorUserId,
+                    database.chatId,
+                    database.tableToken,
+                    database.venueId,
+                    database.tableId,
+                    Duration.ofHours(4),
+                    now,
+                    current,
+                    ordinaryBot = true,
+                )
+            assertIs<GuestTableActivationResult.Denied>(confirmBot())
+            assertEquals(current, sessions.currentQrExit(database.actorUserId, database.venueId, database.tableId))
+            database.createPersonalTab(session)
+            assertEquals(session, assertIs<GuestTableActivationResult.Applied>(confirmBot()).tableSession.id)
+            assertNull(sessions.currentQrExit(database.actorUserId, database.venueId, database.tableId))
+            database.insertExit(session, now)
+            current = checkNotNull(sessions.currentQrExit(database.actorUserId, database.venueId, database.tableId))
+            database.dataSource.connection.use { connection ->
+                connection.createStatement().use { sql ->
+                    sql.executeUpdate("UPDATE venues SET status='DRAFT' WHERE id=" + database.venueId)
+                    assertIs<GuestTableActivationResult.Denied>(confirmBot())
+                    sql.executeUpdate(
+                        "INSERT INTO venue_members(venue_id,user_id,role) VALUES (" +
+                            "${database.venueId},${database.actorUserId},'STAFF')",
+                    )
+                }
+            }
+            val platformConfirmation =
+                database.lifecycleRepository().activate(
+                    database.actorUserId,
+                    database.chatId,
+                    database.tableToken,
+                    database.venueId,
+                    database.tableId,
+                    Duration.ofHours(4),
+                    now,
+                    current,
+                )
+            assertIs<GuestTableActivationResult.Denied>(platformConfirmation)
+            assertEquals(session, assertIs<GuestTableActivationResult.Applied>(confirmBot()).tableSession.id)
         }
 
     @ParameterizedTest(name = "{0}")
@@ -105,6 +231,10 @@ class GuestTableContextActivationRepositoryTest {
                 tableToken = database.tableToken,
                 expectedVenueId = database.venueId,
                 expectedTableId = database.tableId,
+                expectedExitEventId =
+                    TableSessionRepository(
+                        database.dataSource,
+                    ).currentQrExit(database.actorUserId, database.venueId, database.tableId, now),
                 ttl = Duration.ofHours(4),
                 now = now,
             )
@@ -171,7 +301,7 @@ class GuestTableContextActivationRepositoryTest {
                     lastActivityAt = now.minus(Duration.ofHours(1)),
                     expiresAt = now.plus(Duration.ofMinutes(30)),
                 )
-            database.insertContext(updatedAt = now.minus(Duration.ofMinutes(1)))
+            database.insertContext(tableSessionId = tableSessionId, updatedAt = now.minus(Duration.ofMinutes(1)))
 
             val result =
                 database.lifecycleRepository().resolvePlatformMiniApp(
@@ -182,6 +312,7 @@ class GuestTableContextActivationRepositoryTest {
                     requestedTableSessionId = tableSessionId,
                     ttl = Duration.ofHours(4),
                     now = now,
+                    createPersonalTab = true,
                 )
 
             val allowed = assertIs<PlatformGuestTableResolveResult.Allowed>(result)
@@ -203,7 +334,7 @@ class GuestTableContextActivationRepositoryTest {
                     lastActivityAt = now.minus(Duration.ofHours(1)),
                     expiresAt = now.plus(Duration.ofMinutes(30)),
                 )
-            database.insertContext(updatedAt = now.minus(Duration.ofMinutes(1)))
+            database.insertContext(tableSessionId = tableSessionId, updatedAt = now.minus(Duration.ofMinutes(1)))
             database.insertExit(tableSessionId, now.minus(Duration.ofSeconds(30)))
             val sessionBefore = database.sessionSnapshot(tableSessionId)
             val exitBefore = database.exitSnapshot(tableSessionId)

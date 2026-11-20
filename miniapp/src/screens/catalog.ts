@@ -106,6 +106,28 @@ function renderCatalogPromotions(root: HTMLDivElement, { backendUrl, isDebug, on
   return () => controller.abort()
 }
 
+function venueApplicationCard(navigate = (hash: string) => { window.location.hash = hash }) {
+  const card = el('section', { className: 'card guest-business-card' })
+  const details = el('details')
+  const benefits = el('ul')
+  for (const benefit of [
+    'Гости открывают меню по QR-коду на столе и оформляют заказ.',
+    'Принимайте бронирования и следите за их статусом.',
+    'Назначайте роли сотрудникам и отвечайте на вызовы гостей за столом.',
+    'Обновляйте меню и отмечайте позиции, которые закончились.',
+    'Следите за заказами и операционными показателями заведения.',
+    'Размещайте акции и отвечайте на сообщения гостей.'
+  ]) benefits.appendChild(el('li', { text: benefit }))
+  append(details, el('summary', { text: 'Подробнее о возможностях' }), benefits)
+  const apply = el('button', { className: 'button-small', text: 'Подать заявку' })
+  apply.addEventListener('click', () => navigate('#/account/venue-application'))
+  append(card, el('h2', { text: 'У вас своя кальянная?' }),
+    el('strong', { text: 'Подключите заведение к Hookah Tootah' }),
+    el('p', { text: 'Управляйте меню, бронированиями, заказами и работой персонала в одном Telegram-приложении.' }),
+    details, apply)
+  return card
+}
+
 function buildCatalogDom(root: HTMLDivElement, navigate?: (hash: string) => void): CatalogRefs {
   const wrapper = el('div', { className: 'catalog-screen' })
   const controls = el('div', { className: 'catalog-controls' })
@@ -145,7 +167,7 @@ function buildCatalogDom(root: HTMLDivElement, navigate?: (hash: string) => void
 
   const list = el('ul', { className: 'catalog-list' })
 
-  append(wrapper, catalogHeader(false, navigate), controls, status, error, list)
+  append(wrapper, catalogHeader(false, navigate), venueApplicationCard(navigate), controls, status, error, list)
   root.replaceChildren(wrapper)
 
   return {

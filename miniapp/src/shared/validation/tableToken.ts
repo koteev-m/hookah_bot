@@ -30,6 +30,12 @@ export function normalizeTableToken(value: string | null | undefined): string | 
 
 export const tableTokenQueryParamKeys = ['table_token', 'tableToken', 'tgWebAppStartParam', 'startapp', 'start_param'] as const
 
+export function normalizeBotUsername(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const username = value.trim().replace(/^@/, '')
+  return /^[A-Za-z0-9_]{1,29}bot$/i.test(username) ? username : null
+}
+
 export function extractTableTokenFromScannedText(
   scannedText: string,
   context: { miniAppUrl: string; botUsername: string | null }
@@ -50,8 +56,8 @@ export function extractTableTokenFromScannedText(
     if (!isTelegram && !isMiniApp) return null
     if (isTelegram) {
       const username = url.pathname.slice(1)
-      if (!/^[A-Za-z0-9_]+bot$/i.test(username) || url.hash) return null
-      if (context.botUsername && username.toLowerCase() !== context.botUsername.replace(/^@/, '').toLowerCase()) return null
+      if (normalizeBotUsername(username) !== username || url.hash) return null
+      if (!context.botUsername || username.toLowerCase() !== context.botUsername.replace(/^@/, '').toLowerCase()) return null
       let unsupportedParam = false
       url.searchParams.forEach((_value, key) => {
         if (key !== 'start' && key !== 'startapp') unsupportedParam = true

@@ -58,17 +58,15 @@ fun Route.guestTabsRoutes(
                 ttl = tableSessionConfig?.ttl,
             )
         if (userId != platformOwnerUserId) {
-            ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+            ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository, readOnly = true)
         }
 
-        if (platformAccess == null) {
-            guestTabsRepository.ensurePersonalTab(
-                venueId = session.venueId,
-                tableSessionId = session.id,
-                userId = userId,
-            )
-        }
-        val tabs = guestTabsRepository.listTabsForUser(session.venueId, session.id, userId)
+        val tabs =
+            if (platformAccess == null) {
+                guestTabsRepository.listOrdinaryGuestTabs(session, userId)
+            } else {
+                guestTabsRepository.listTabsForUser(session.venueId, session.id, userId)
+            }
         call.respond(GuestTabsResponse(tabs = tabs.map { it.toDto() }))
     }
 
@@ -77,7 +75,7 @@ fun Route.guestTabsRoutes(
         val userId = call.requireUserId()
         val session = guestTabsRepository.findActiveTableSession(request.tableSessionId) ?: throw NotFoundException()
         if (userId != platformOwnerUserId) {
-            ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository)
+            ensureGuestActionAvailable(session.venueId, guestVenueRepository, subscriptionRepository, readOnly = true)
         }
 
         val tab =
@@ -99,10 +97,10 @@ fun Route.guestTabsRoutes(
                     )
                 }
             } else {
-                guestTabsRepository.ensurePersonalTab(
-                    venueId = session.venueId,
-                    tableSessionId = session.id,
-                    userId = userId,
+                guestTabsRepository.openOrdinaryPersonalTab(
+                    session,
+                    userId,
+                    guestTableContextLifecycleRepository ?: throw ForbiddenException(),
                 )
             }
         call.respond(GuestTabResponse(tab = tab.toDto()))
