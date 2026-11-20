@@ -94,9 +94,7 @@ let giftDecisionDraft: ScopedGiftDecisionDraft | null = null
 let pendingGiftDecisionDraft: ScopedGiftDecisionDraft | null = null
 let menuSelectionIssues = new Map<string, CartMenuSelectionIssue>()
 let pendingValidationLineRefs = new Set<string>()
-let activeTableToken: string | null = null
 let activeDraftStorageKey: string | null = null
-let activeDraftUserPart: string | null = null
 
 function clampQty(qty: number): number {
   return Math.max(0, Math.min(MAX_QTY, qty))
@@ -258,8 +256,8 @@ function getCurrentUserPart(): string {
   return userId ? `user:${userId}` : 'user:unknown'
 }
 
-function getDraftStorageKey(tableToken: string, userPart: string): string {
-  return `${cartDraftLocalStoragePrefix}${userPart}:${tableToken}`
+function getDraftStorageKey(tableToken: string, sessionId: number, userPart: string): string {
+  return `${cartDraftLocalStoragePrefix}${userPart}:${tableToken}:session:${sessionId}`
 }
 
 function setLocalStorageItem(key: string, value: string): void {
@@ -496,16 +494,22 @@ function updateTotals() {
   }
 }
 
-export function setCartTableToken(tableToken: string | null): void {
-  const normalizedToken = tableToken?.trim() || null
-  const nextUserPart = getCurrentUserPart()
-  clearPersistedGiftDecisionsForAccountSwitch(nextUserPart)
-  if (normalizedToken === activeTableToken && nextUserPart === activeDraftUserPart) {
-    return
-  }
-  activeTableToken = normalizedToken
-  activeDraftUserPart = nextUserPart
-  activeDraftStorageKey = normalizedToken ? getDraftStorageKey(normalizedToken, nextUserPart) : null
+export function hasTableCartDraft(tableToken: string, sessionId: number): boolean {
+  return loadDraftFromStorage(getDraftStorageKey(tableToken, sessionId, getCurrentUserPart())).items.size > 0
+}
+
+export function discardTableCart(tableToken: string, sessionId: number): void {
+  const key = getDraftStorageKey(tableToken, sessionId, getCurrentUserPart())
+  if (activeDraftStorageKey === key) clearCart()
+  removeLocalStorageItem(key)
+}
+
+export function setCartTableToken(tableToken: string | null, sessionId: number | null): void {
+  const userPart = getCurrentUserPart()
+  clearPersistedGiftDecisionsForAccountSwitch(userPart)
+  const key = tableToken && sessionId && userPart !== 'user:unknown' ? getDraftStorageKey(tableToken, sessionId, userPart) : null
+  if (key === activeDraftStorageKey) return
+  activeDraftStorageKey = key
   if (!activeDraftStorageKey) {
     items = new Map()
     totalQty = 0

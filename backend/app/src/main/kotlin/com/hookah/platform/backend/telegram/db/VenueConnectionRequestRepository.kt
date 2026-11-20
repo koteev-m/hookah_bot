@@ -76,6 +76,7 @@ data class VenueConnectionRequestApplicantRecord(
 
 enum class VenueOnboardingSource {
     TELEGRAM_BOT,
+    GUEST_MINI_APP,
     VENUE_MINI_APP,
     PLATFORM_MINI_APP,
 }

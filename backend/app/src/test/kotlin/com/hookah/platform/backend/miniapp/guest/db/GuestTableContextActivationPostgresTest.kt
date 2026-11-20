@@ -6,7 +6,11 @@ import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import com.hookah.platform.backend.test.PostgresTestEnv
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.MethodSource
@@ -16,7 +20,13 @@ import java.sql.Statement
 import java.sql.Timestamp
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class GuestTableContextActivationPostgresTest {
@@ -59,6 +69,10 @@ class GuestTableContextActivationPostgresTest {
                     expectedTableId = fixture.tableId,
                     ttl = Duration.ofHours(4),
                     now = now,
+                    expectedExitEventId =
+                        TableSessionRepository(
+                            dataSource,
+                        ).currentQrExit(fixture.actorUserId, fixture.venueId, fixture.tableId, now),
                 )
 
             assertTrue(checkpointReached, scenario.toString())
@@ -70,6 +84,262 @@ class GuestTableContextActivationPostgresTest {
             )
         }
     }
+
+    @Test
+    fun `ordinary QR binds the locked physical session and rejects a later seat occupant`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { ds ->
+                val now = Instant.now()
+                val fixture = seedFixture(ds.connection, now, rollbackScenarios().first())
+                val chats = ChatContextRepository(ds)
+                val sessions = TableSessionRepository(ds)
+                val seat = fixture.tableId
+                val actor = fixture.actorUserId
+                val chat = fixture.chatId
+                var sawLockedSeat = false
+                val repository =
+                    GuestTableContextLifecycleRepository(
+                        ds,
+                        TableTokenRepository(ds),
+                        SubscriptionRepository(ds),
+                        sessions,
+                        GuestTabsRepository(ds),
+                        chats,
+                        DialogStateRepository(ds, Json),
+                        activationCheckpoint = { point ->
+                            if (point == GuestTableActivationCheckpoint.AFTER_SESSION) {
+                                ds.connection.use { competing ->
+                                    competing.createStatement().use { sql ->
+                                        val locked =
+                                            assertFailsWith<SQLException> {
+                                                sql.executeQuery(
+                                                    "SELECT id FROM venue_tables WHERE id = $seat FOR UPDATE NOWAIT",
+                                                )
+                                            }
+                                        assertEquals("55P03", locked.sqlState)
+                                        sawLockedSeat = true
+                                    }
+                                }
+                            }
+                        },
+                    )
+                val activation =
+                    assertIs<GuestTableActivationResult.Applied>(
+                        repository.activate(
+                            fixture.actorUserId,
+                            fixture.chatId,
+                            fixture.tableToken,
+                            fixture.venueId,
+                            fixture.tableId,
+                            Duration.ofHours(2),
+                            now,
+                            ordinaryBot = true,
+                        ),
+                    )
+                assertTrue(sawLockedSeat)
+                val original = activation.tableSession.id
+                assertEquals(original, chats.get(fixture.chatId)?.tableSessionId)
+                ds.connection.use { conn ->
+                    assertTrue(repository.hasExactBotVisit(conn, actor, activation.context, original, now))
+                    conn.createStatement().use { sql ->
+                        val replacement =
+                            sql.executeQuery("SELECT id FROM table_sessions WHERE table_id <> $seat").use {
+                                assertTrue(it.next())
+                                it.getLong(1)
+                            }
+                        sql.executeUpdate(
+                            "UPDATE table_sessions SET status = 'ENDED', ended_at = now() WHERE id = $original",
+                        )
+                        sql.executeUpdate("UPDATE table_sessions SET table_id = $seat WHERE id = $replacement")
+                        assertFalse(repository.hasExactBotVisit(conn, actor, activation.context, replacement, now))
+                        for (source in listOf(MiniAppFallbackVisit(null), MiniAppFallbackVisit(original))) {
+                            assertIs<GuestTableActivationResult.Denied>(
+                                repository.activate(
+                                    actor, chat, fixture.tableToken, fixture.venueId, seat, Duration.ofHours(2),
+                                    now, ordinaryBot = true, fallback = source,
+                                ),
+                            )
+                        }
+                        assertEquals(original, chats.get(fixture.chatId)?.tableSessionId)
+                        sql.executeUpdate(
+                            "UPDATE telegram_chat_context SET table_session_id = NULL WHERE chat_id = $chat",
+                        )
+                        assertFalse(repository.hasExactBotVisit(conn, actor, activation.context, replacement, now))
+                    }
+                }
+            }
+        }
+
+    @Test
+    fun `cart activity extends only its authorized unexpired physical visit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { ds ->
+                val now = Instant.now()
+                val f = seedFixture(ds.connection, now, rollbackScenarios().first())
+                val repository =
+                    GuestTableContextLifecycleRepository(
+                        ds,
+                        TableTokenRepository(ds),
+                        SubscriptionRepository(ds),
+                        TableSessionRepository(ds),
+                        GuestTabsRepository(ds),
+                        ChatContextRepository(ds),
+                        DialogStateRepository(ds, Json),
+                    )
+                val ttl = Duration.ofHours(2)
+                val visit =
+                    assertIs<GuestTableActivationResult.Applied>(
+                        repository.activate(
+                            f.actorUserId,
+                            f.chatId,
+                            f.tableToken,
+                            f.venueId,
+                            f.tableId,
+                            ttl,
+                            ordinaryBot = true,
+                        ),
+                    )
+                val id = visit.tableSession.id
+
+                fun execute(sql: String) =
+                    ds.connection.use { it.createStatement().use { st -> st.executeUpdate(sql) } }
+
+                suspend fun inspect(
+                    actor: Long,
+                    duration: Duration?,
+                ) = repository.ordinaryBotVisit(actor, f.chatId, visit.context, id, duration)
+
+                suspend fun activeVisit(duration: Duration? = null) =
+                    assertIs<PlatformGuestContextValidationResult.Active>(inspect(f.actorUserId, duration)).tableSession
+
+                execute("UPDATE table_sessions SET expires_at = now() + interval '15 seconds' WHERE id=$id")
+                val before = activeVisit()
+                assertIs<PlatformGuestContextValidationResult.Inactive>(inspect(f.actorUserId + 1, ttl))
+                assertEquals(before, activeVisit())
+                val refreshed = activeVisit(ttl)
+                assertEquals(id, refreshed.id)
+                assertTrue(refreshed.expiresAt > before.expiresAt.plus(Duration.ofHours(1)))
+                execute("UPDATE table_sessions SET expires_at = now() - interval '1 second' WHERE id=$id")
+                assertIs<PlatformGuestContextValidationResult.Inactive>(inspect(f.actorUserId, ttl))
+                execute("UPDATE table_sessions SET status='ENDED', ended_at=now() WHERE id=$id")
+                execute("UPDATE table_sessions SET table_id=${f.tableId} WHERE id<>$id")
+                val snapshot = ds.connection.use(::loadTestActivationAuthoritativeSnapshot)
+                assertIs<PlatformGuestContextValidationResult.Inactive>(inspect(f.actorUserId, ttl))
+                assertEquals(snapshot, ds.connection.use(::loadTestActivationAuthoritativeSnapshot))
+            }
+        }
+
+    @Test
+    fun `a delayed fallback preserves the current chat before and across exit`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { ds ->
+                val f = seedFixture(ds.connection, Instant.now(), rollbackScenarios().first())
+                val actor = f.actorUserId
+                val chats = ChatContextRepository(ds)
+                val exitLocked = CountDownLatch(1)
+                val finishExit = CountDownLatch(1)
+                val repository =
+                    GuestTableContextLifecycleRepository(
+                        ds,
+                        TableTokenRepository(ds),
+                        SubscriptionRepository(ds),
+                        TableSessionRepository(ds),
+                        GuestTabsRepository(ds),
+                        chats,
+                        DialogStateRepository(ds, Json),
+                        teardownCheckpoint = {
+                            if (it == GuestTableTeardownCheckpoint.AFTER_CONTEXT_LOCK) {
+                                exitLocked.countDown()
+                                check(finishExit.await(15, TimeUnit.SECONDS))
+                            }
+                        },
+                    )
+                val ttl = Duration.ofHours(2)
+                val visit =
+                    assertIs<GuestTableActivationResult.Applied>(
+                        repository.activate(
+                            actor,
+                            f.chatId,
+                            f.tableToken,
+                            f.venueId,
+                            f.tableId,
+                            ttl,
+                            ordinaryBot = true,
+                        ),
+                    )
+
+                fun number(sql: String): Long =
+                    ds.connection.use { c ->
+                        c.createStatement().use { st ->
+                            st.executeQuery(sql).use { rows ->
+                                check(rows.next())
+                                rows.getLong(1)
+                            }
+                        }
+                    }
+                val a = number("SELECT id FROM table_sessions WHERE table_id<>${f.tableId}")
+                val seatA = number("SELECT table_id FROM table_sessions WHERE id=$a")
+                ds.connection.use { c ->
+                    c.createStatement().use { st ->
+                        st.executeUpdate("INSERT INTO table_tokens(token,table_id) VALUES ('fixture-a',$seatA)")
+                        st.executeUpdate(
+                            "INSERT INTO tab_member(tab_id,user_id,role) " +
+                                "SELECT id,$actor,'MEMBER' FROM tab WHERE table_session_id=$a",
+                        )
+                    }
+                }
+
+                suspend fun fallback(chatId: Long) =
+                    repository.activate(
+                        actor,
+                        chatId,
+                        "fixture-a",
+                        f.venueId,
+                        seatA,
+                        ttl,
+                        ordinaryBot = true,
+                        fallback = MiniAppFallbackVisit(a),
+                    )
+
+                // Existing membership admits the old fallback only for an absent chat.
+                assertIs<GuestTableActivationResult.Applied>(fallback(f.chatId + 100))
+                assertIs<GuestTableActivationResult.Denied>(fallback(f.chatId))
+                assertEquals(visit.tableSession.id, chats.get(f.chatId)?.tableSessionId)
+                val exit = async(Dispatchers.IO) { repository.teardownByChat(actor, f.chatId, ordinaryBotVisit = true) }
+                check(exitLocked.await(10, TimeUnit.SECONDS))
+                val late = async(Dispatchers.IO) { fallback(f.chatId) }
+                try {
+                    val blockedChatLock =
+                        "SELECT COUNT(*) FROM pg_stat_activity WHERE datname=current_database() " +
+                            "AND wait_event_type='Lock' AND query LIKE '%FROM telegram_chat_context%FOR UPDATE%'"
+                    withTimeout(10000) {
+                        while (number(blockedChatLock) == 0L) delay(10)
+                    }
+                } finally {
+                    finishExit.countDown()
+                }
+                assertTrue(assertIs<GuestTableTeardownResult.Cleared>(exit.await()).exitRecorded)
+                assertIs<GuestTableActivationResult.Denied>(late.await())
+                val marker =
+                    "SELECT exit_event_id FROM guest_table_session_exits " +
+                        "WHERE user_id=$actor AND table_session_id=${visit.tableSession.id}"
+                val eventId = number(marker)
+                assertEquals(
+                    visit.tableSession.id,
+                    number(
+                        "SELECT table_session_id FROM telegram_chat_context " +
+                            "WHERE chat_id=${f.chatId} AND table_token IS NULL",
+                    ),
+                )
+                val after = ds.connection.use(::loadTestActivationAuthoritativeSnapshot)
+                assertIs<GuestTableActivationResult.Denied>(fallback(f.chatId))
+                assertEquals(eventId, number(marker))
+                assertEquals(after, ds.connection.use(::loadTestActivationAuthoritativeSnapshot))
+            }
+        }
 
     private fun seedFixture(
         connection: Connection,

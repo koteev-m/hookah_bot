@@ -107,7 +107,7 @@ async function serveRelease(context: BrowserContext, options: { auth?: 'denied' 
         const id = JSON.parse(new URLSearchParams(request.postDataJSON().initData).get('user')!).id
         const key = `${url.origin}:${id}`, generation = (generations.get(key) ?? 0) + 1
         generations.set(key, generation)
-        return json({ token: `${new URL(url.origin).hostname}:${id}:${generation}`, expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 3600 })
+        return json({ user: { telegramUserId: id }, token: `${new URL(url.origin).hostname}:${id}:${generation}`, expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 3600 })
       }
       if (url.pathname.endsWith('/media/1') || url.pathname.includes('/staff/4/photos/')) return route.fulfill({ contentType: 'image/png', body: png })
       if (url.pathname.endsWith('/media/2')) return route.fulfill({ contentType: 'application/pdf', body: infoMediaPdf(1) })

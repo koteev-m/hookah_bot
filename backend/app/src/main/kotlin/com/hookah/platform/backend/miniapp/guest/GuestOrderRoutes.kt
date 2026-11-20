@@ -117,7 +117,7 @@ fun Route.guestOrderRoutes(
         val rawToken = call.request.queryParameters["tableToken"]
         val token = validateTableToken(rawToken)
         val table = tableTokenResolver(token) ?: throw NotFoundException()
-        ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+        ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository, readOnly = true)
         val userId = call.requireUserId()
         val tableSessionId = parseOptionalPositiveLong(call.request.queryParameters["tableSessionId"], "tableSessionId")
         val tabId = parseOptionalPositiveLong(call.request.queryParameters["tabId"], "tabId")
@@ -168,36 +168,33 @@ fun Route.guestOrderRoutes(
                 }
             } else {
                 guestOrderTransactionCoordinator.execute { connection ->
-                    val tableSession =
-                        platformAccess?.tableSession
-                            ?: tableSessionRepository.resolveActiveSession(
-                                connection = connection,
-                                venueId = table.venueId,
-                                tableId = table.tableId,
-                                ttl = tableSessionConfig.ttl,
-                                now = Instant.now(),
+                    val activeSessionId =
+                        platformAccess?.tableSession?.id
+                            ?: tableSessionRepository.findActiveSessionForUpdate(
+                                connection, table.venueId, table.tableId, Instant.now(),
                             )
-                    if (tableSessionRepository.hasUserExit(connection, userId, tableSession.id)) {
+                            ?: return@execute null
+                    if (tableSessionRepository.hasUserExit(connection, userId, activeSessionId)) {
                         throw NotFoundException()
                     }
                     val personalTab =
                         platformAccess?.personalTab
-                            ?: guestTabsRepository.ensurePersonalTab(
+                            ?: guestTabsRepository.findPersonalTabForUpdate(
                                 connection = connection,
                                 venueId = table.venueId,
-                                tableSessionId = tableSession.id,
+                                tableSessionId = activeSessionId,
                                 userId = userId,
-                            )
+                            ) ?: return@execute null
                     val activeOrderDetails =
                         ordersRepository.findActiveOrderDetailsForTab(
                             connection,
-                            tableSession.id,
+                            activeSessionId,
                             personalTab.id,
                         )
-                    tableSession.id to (personalTab.id to activeOrderDetails)
+                    activeSessionId to (personalTab.id to activeOrderDetails)
                 }
             }
-        val activeOrder = scopedActiveOrder.second.second
+        val activeOrder = scopedActiveOrder?.second?.second
         call.respond(
             ActiveOrderResponse(
                 order =
@@ -489,6 +486,7 @@ fun Route.guestOrderRoutes(
                             ) {
                                 throw ForbiddenException("Tab access denied")
                             }
+                            guestOrderContextCheckpoint(GuestOrderContextCheckpoint.AFTER_TAB_AUTHORIZATION)
                             ordersRepository.createGuestOrderBatch(
                                 analyticsChannel = AnalyticsChannel.MINIAPP,
                                 connection = connection,
@@ -513,15 +511,6 @@ fun Route.guestOrderRoutes(
                                         now = Instant.now(),
                                     ) ?: throw NotFoundException()
                                     guestOrderContextCheckpoint(GuestOrderContextCheckpoint.AFTER_SESSION_TOUCH)
-                                    guestTabsRepository.ensurePersonalTab(
-                                        connection = connection,
-                                        venueId = table.venueId,
-                                        tableSessionId = confirmed.tableSession.id,
-                                        userId = userId,
-                                    )
-                                    guestOrderContextCheckpoint(
-                                        GuestOrderContextCheckpoint.AFTER_PERSONAL_TAB_ENSURE,
-                                    )
                                 },
                                 venueZoneIdProvider = { zoneConnection ->
                                     venueSettingsRepository.resolvePromotionZoneId(
@@ -551,6 +540,7 @@ fun Route.guestOrderRoutes(
                             ) {
                                 throw ForbiddenException("Tab access denied")
                             }
+                            guestOrderContextCheckpoint(GuestOrderContextCheckpoint.AFTER_TAB_AUTHORIZATION)
                             ordersRepository.createGuestOrderBatch(
                                 analyticsChannel = AnalyticsChannel.MINIAPP,
                                 connection = connection,
@@ -575,15 +565,6 @@ fun Route.guestOrderRoutes(
                                         now = Instant.now(),
                                     ) ?: throw NotFoundException()
                                     guestOrderContextCheckpoint(GuestOrderContextCheckpoint.AFTER_SESSION_TOUCH)
-                                    guestTabsRepository.ensurePersonalTab(
-                                        connection = connection,
-                                        venueId = table.venueId,
-                                        tableSessionId = tableSession.id,
-                                        userId = userId,
-                                    )
-                                    guestOrderContextCheckpoint(
-                                        GuestOrderContextCheckpoint.AFTER_PERSONAL_TAB_ENSURE,
-                                    )
                                 },
                                 venueZoneIdProvider = { zoneConnection ->
                                     venueSettingsRepository.resolvePromotionZoneId(

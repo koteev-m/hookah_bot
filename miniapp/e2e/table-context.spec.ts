@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
 import { expect, test } from '@playwright/test'
+import { normalizeTableToken } from '../src/shared/validation/tableToken'
 import { ApiErrorCodes, type ApiResult } from '../src/shared/api/types'
 import type { TableResolveResponse, TableRestoreResponse } from '../src/shared/api/guestDtos'
 
@@ -37,14 +38,19 @@ function createContext() {
       rememberTableToken: (token: string) => { remembered.push(token) },
       forgetTableToken: () => {}
     },
-    './guestTabSelection': { setSelectedGuestTabId: (session: number, tab: number | null) => { selectedTabs.push([session, tab]) } }
+    '../validation/tableToken': { normalizeTableToken },
+    './cartStore': { hasTableCartDraft: () => false, discardTableCart: () => {} },
+    './guestTabSelection': {
+      setSelectedGuestTabId: (session: number, tab: number | null) => { selectedTabs.push([session, tab]) },
+      restoreGuestTabSelection: (session: number, tab: number) => { selectedTabs.push([session, tab]) }
+    }
   }
   const source = readFileSync(new URL('../src/shared/state/tableContext.ts', import.meta.url), 'utf8')
   const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
   const module = { exports: {} as TableContextModule }
   runInNewContext(output, {
     exports: module.exports, AbortController,
-    window: { sessionStorage: {
+    window: { history: { state: null }, sessionStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem: (key: string, value: string) => storage.set(key, value),
       removeItem: (key: string) => storage.delete(key)

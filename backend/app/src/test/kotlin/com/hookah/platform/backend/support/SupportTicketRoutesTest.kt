@@ -1711,9 +1711,10 @@ class SupportTicketRoutesTest {
                     venue_id,
                     table_id,
                     table_token,
-                    updated_at
+                    updated_at,
+                    table_session_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, chatId)
@@ -1722,6 +1723,7 @@ class SupportTicketRoutesTest {
                 statement.setLong(4, table.tableId)
                 statement.setString(5, tableToken)
                 statement.setTimestamp(6, Timestamp.from(Instant.now()))
+                statement.setLong(7, table.tableSessionId)
                 statement.executeUpdate()
             }
         }
@@ -1733,6 +1735,7 @@ class SupportTicketRoutesTest {
                 statement.execute(
                     """
                     CREATE TABLE IF NOT EXISTS telegram_chat_context (
+                        table_session_id BIGINT REFERENCES table_sessions(id) ON DELETE SET NULL,
                         chat_id BIGINT PRIMARY KEY,
                         user_id BIGINT NOT NULL REFERENCES users(telegram_user_id) ON DELETE CASCADE,
                         venue_id BIGINT NULL REFERENCES venues(id) ON DELETE SET NULL,

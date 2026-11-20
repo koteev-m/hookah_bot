@@ -261,6 +261,13 @@ MUST:
 - Guest navigation exposes `Заведение` (or `Заведения` without a selected venue), `QR`, `Чаты` and
   `Профиль`. Help lives in the profile and on relevant recovery screens. Browser Back and Telegram
   Back share the guest route history.
+- In the Guest catalog, the compact “У вас своя кальянная?” card discloses venue capabilities inline.
+  “Подать заявку” and Profile → “Для заведений” open the same screen. Guest history retains the
+  opening route across reload. The B2B address and its History entry exclude QR credentials and
+  application fields. Reload restores the current visit through the authenticated Guest API.
+  A linked applicant can open that specific cabinet after the server confirms their current OWNER
+  membership and the absence of an active visit. If ownership has ended, the linked request stays
+  in the history and the guest can submit again.
 - The venue card leads with name, address, today's schedule and `Меню`. It keeps booking and
   venue-question actions, secondary map choices and the full schedule. Additional information
   sections start collapsed. Expanding a section shows its text and materials inline, under the
@@ -332,9 +339,10 @@ MUST:
 - Tokens are non-guessable; support re-issue.
 - Platform Owner controlled QR test status is **PLATFORM OWNER CONTROLLED GUEST QR TEST ESCAPE / DONE / MVP / STAGING-SMOKE-PASSED**; schema verdict is `NO_MIGRATION`. Commit/push, green Actions for the release HEAD, staging deploy and the bounded real Telegram role/privacy/exit smoke are complete. This closes only the controlled Phase 1 test escape, not the whole product or broader Platform/Guest parity.
 - Exact Platform Owner `/start <valid_table_token>` first shows public venue/table labels and an explicit `Продолжить как гость` / `Остаться в режиме платформы` choice. The opaque callback reference points to a five-minute process-local pending record bound to the exact actor and chat; restart, expiry, cancel or consumption loses it safely. This is single-instance long-polling Phase 1: if a callback reaches another instance and the pending record is absent, it fails closed. Prompting does not save Guest context, touch/create a table session, clear an exit marker, Guest dialog, booking draft or cart/draft, or write success audit.
-- Confirm conditionally consumes the pending reference exactly once, rechecks the authenticated exact Platform Owner and then writes fail-closed `PLATFORM_GUEST_QR_TEST_CONFIRMED`. This audit records confirmation only; it is not evidence that `GUEST_CONTEXT_APPLIED`. After audit, one JDBC transaction finally re-resolves the token, verifies exact token/venue/table identity and current published-venue, subscription and active-table guards, resolves/creates/touches the table session, clears the exit marker and persisted Guest dialog, and saves the exact chat/table context. Any repository/SQL failure becomes one safe domain failure and rolls back the entire activation; in-memory cart/draft cleanup runs only after commit.
+- Confirm conditionally consumes the pending reference exactly once, rechecks the authenticated exact Platform Owner and then writes fail-closed `PLATFORM_GUEST_QR_TEST_CONFIRMED`. This audit records confirmation only; it is not evidence that `GUEST_CONTEXT_APPLIED`. After audit, one JDBC transaction finally re-resolves the token, verifies exact token/venue/table identity and current published-venue, subscription and active-table guards, resolves/creates/touches the table session, consumes the exit event observed by the prompt (a later exit rejects activation), clears the persisted Guest dialog, and saves the exact chat/table context. Any repository/SQL failure becomes one safe domain failure and rolls back the entire activation; in-memory cart/draft cleanup runs only after commit.
 - While the confirmed table context exists, the Platform Owner uses the ordinary Guest Bot/table/session flow and Guest Mini App `mode=guest`, with no persistent impersonation flag or Platform privilege in Guest APIs. Exact Platform Owner Mini App create/touch and explicit-session resolve require the matching server-owned Telegram chat context and no user-exit marker; an old token/button/session after exit fails closed without session touch/create, personal-tab creation or exit-marker clearing. Every subsequent table-bound Guest API still enforces the ordinary actor/session/tab checks server-side; confirmation is not blanket Guest authority. Ordinary Guest behavior is unchanged.
 - For exact Platform Owner, every authoritative table-bound Guest mutation in order/bill, staff-call, tab/invite/membership, shift-extension and table-bound support create/read-receipt/reply/status flows locks the same exact chat-context row used by exit, repeats token/venue/table/session/exit checks and performs the domain write through the same JDBC connection and transaction. If exit commits first, the mutation is denied without a domain row or hidden session/tab write; if the mutation owns the lock first, its domain transaction completes before exit can continue. Telegram/staff notifications remain after commit. A support request containing `tableToken` uses this guard even when `tableSessionId` is absent; the server derives the live session only from the confirmed context. Global support, booking chat and ordinary `VENUE_CHAT` remain outside this table-only guard.
+- A confirmed Bot visit can end before its first bill. The active session still blocks work modes until the guest uses **🚪 Завершить визит** in the Bot. An old Mini App button keeps the exit in effect. Explicit rejoin restores only the visit, without creating a bill.
 - Existing `Завершить визит` uses the stored exact actor/chat context for teardown without requiring the token, table, venue or subscription to remain Guest-available. It clears context, persisted Guest dialog, cart/draft and pending confirmation, records or preserves the user-exit marker when the linked table session remains resolvable, and then restores Platform menu precedence. If deletion makes the linked session unavailable, context and local Guest state are still cleared and the old entry remains fail-closed even though no marker can be recorded. While an active confirmed Guest context remains, `/start` without a token keeps Guest routing and shows the Guest table menu or the safe instruction to use `Завершить визит`; only after exit does tokenless `/start` show the normal Platform menu.
 SHOULD:
 - Venue “general QR” (no table) that opens venue card/menu preview.
@@ -391,7 +399,32 @@ SHOULD:
   CATALOG-SEARCH-MANUAL-001**. It is required before catalog pagination, ranking, map/geo or a
   large pilot rollout, but the limited current staging dataset does not downgrade the completed
   Phase 1 MVP status.
-- Returning guest can safely restore an active table context while their table session/tab/order is still open, without rescanning QR. Manual `Завершить визит` stores a user-scoped exit marker so that guest no longer restores the table context; scanning the table QR again explicitly re-enters and clears that marker.
+- Returning guest can safely restore an active table context while their table session/tab/order is still open, without rescanning QR. Manual `Завершить визит` stores a user-scoped exit marker so that guest no longer restores the table context; an ordinary Mini App guest scans the table QR again and confirms re-entry. Only the authenticated rejoin command for the current exit event clears that marker. A stale confirmation leaves a later exit in force.
+- When a guest reloads “Для заведений”, the Mini App verifies the saved QR token and session together
+  with authenticated `GET /api/guest/table/restore`. The exact lookup checks active table, token,
+  unexpired session, tab membership, exit and venue availability. It performs no visit writes.
+  Discovery without a saved visit retains its existing order-based ranking. An unavailable saved
+  visit prompts a new scan. The guest’s tab choice belongs to the user and session and must still
+  appear in the active tabs response. A missing choice for an existing cart or a closed selected
+  tab requires an explicit selection before pricing or checkout. Cart keys include the user, QR
+  and session. Legacy drafts without a session identifier cannot be assigned to a later visit.
+  Catalog cards and personal links preserve the browsing venue separately. The applications
+  screen loads independently of that venue’s publication status. Browsing and unfinished applications
+  are scoped to the current window and user. Sending or explicitly discarding the application clears
+  its draft. A hash-only Telegram launch can resume the server-confirmed session until it expires.
+  After losing a table, a retained SDK launch parameter requires a guest action to connect again.
+  Reloading a linked owner cabinet rechecks OWNER at the requested venue.
+- Both work-mode entry points use the read-only `GET /api/guest/table/restore?scope=active-visits`.
+  It checks the actor’s eligible visits, including a physically active visit after order closure,
+  and a confirmed Bot visit before its first tab. Exited sessions are excluded. Offering re-entry
+  reads subscription status without starting a trial. Ordinary Bot staff may confirm re-entry at
+  their own DRAFT venue. Platform-controlled entry still requires publication. The response only informs mode selection. A failed read blocks
+  work-mode entry until a successful check. Verification reads use the existing subscription and
+  a missing subscription makes the venue unavailable. Focus rechecks an already confirmed session
+  with `verifyOnly=true` on table resolution, preserving its expiry, tab membership and exit marker.
+- Telegram QR links and fallback chat navigation use the validated bot username returned by
+  the current authentication session. If it is missing, the guest can use the table QR inside
+  the app or manually return to the bot chat.
 - Manual guest exit is blocked only for that guest's obligations in the current `table_session`: active order/bill batches or active `NEW`/`ACK` staff calls created by the guest. Empty personal tabs and another guest's order/call at the same table do not block exit.
 - Current staging-smoked behavior: pre-visit venue card keeps address, route/copy address and booking actions; active table context hides those pre-visit actions and shows `Завершить визит`. Exiting does not close the shared physical `table_sessions` row for other guests.
 - Adaptive booking reminders are implemented as M7c code/test-backed behavior and passed one controlled real Telegram staging smoke; runtime remains disabled by default and requires explicit opt-in. MVP sends at most one transactional reminder for `CONFIRMED`/`CHANGED` bookings, calculated in venue-local time with a 24h preferred target, 3h fallback, quiet window 10:00-22:00, and actions `Да, буду`, `Перенести`, `Отменить`. Legacy reminder rows are preserved but isolated by policy version; legacy unsent rows are reconciled to canceled by migration and cannot be claimed by the M7c worker. Outbox enqueue means `QUEUED`, not Telegram-delivered. `Да, буду` / `Я приду` records guest attendance intent separately from venue-controlled booking status, edits the guest reminder state, and exposes the response in Bot `/my`, Guest Mini App `Мои брони` and Venue Mini App booking queue. The latest enriched staff-chat attendance copy is code/test-backed but has not been manually re-smoked with a new booking.
@@ -693,7 +726,12 @@ MUST:
   contract even without an active OWNER membership. Venue Mini App submission is an additional-venue
   entry available only to an active operational Owner; Manager, Staff, foreign and Platform-only
   identities are denied there. The adapter selects this policy server-side, applicant/source are
-  never client fields, and both entries use one service and repository writer.
+  never client fields. Guest Mini App also accepts authenticated first applicants without membership.
+  All entry points use one service and repository writer. The Guest form collects venue name, city,
+  contact and optional details and restores the applicant’s status from the server on every open.
+  The linked cabinet opens through the role bootstrap after an OWNER access check for that venue.
+  Create/link leaves the card unpublished. Catalog visibility requires separate publication,
+  a guest-eligible subscription and enabled catalog listing.
 - Submit creates only a request and is not blocked by commercial quota. Under the applicant row lock,
   an exact canonical tuple of normalized venue name, city, contact and optional comment returns the
   matching `PENDING` or `APPROVED`-unlinked request without insert/audit. A distinct tuple creates a

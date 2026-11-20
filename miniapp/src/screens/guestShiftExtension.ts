@@ -11,10 +11,9 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type {
   ActiveOrderDto,
   GuestShiftExtensionOptionsResponse,
-  GuestTabDto,
   ShiftExtensionRequestDto
 } from '../shared/api/guestDtos'
-import { getSelectedGuestTabId, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
+import { chooseGuestTab, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
 import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
 import { getTelegramContext } from '../shared/telegram'
 import { append, el } from '../shared/ui/dom'
@@ -141,16 +140,6 @@ function updateLastRequest(scope: ExtensionScope, request: LastExtensionRequest,
   } catch {
     // ignore session storage errors
   }
-}
-
-function chooseTab(tabs: GuestTabDto[], tableSessionId: number): GuestTabDto | null {
-  const activeTabs = tabs.filter((tab) => tab.status === 'ACTIVE' && tab.tableSessionId === tableSessionId)
-  const storedTabId = getSelectedGuestTabId(tableSessionId)
-  const storedTab = storedTabId != null ? activeTabs.find((tab) => tab.id === storedTabId) ?? null : null
-  if (storedTab) {
-    return storedTab
-  }
-  return activeTabs.find((tab) => tab.type === 'PERSONAL') ?? activeTabs[0] ?? null
 }
 
 function formatDuration(minutes: number | null | undefined): string {
@@ -427,7 +416,7 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
       hideCard('TAB_LOOKUP_UNAVAILABLE')
       return null
     }
-    const selectedTab = chooseTab(tabsResult.data.tabs, baseScope.tableSessionId)
+    const selectedTab = chooseGuestTab(tabsResult.data.tabs, baseScope.tableSessionId)
     if (!selectedTab) {
       hideCard('ACTIVE_TAB_NOT_FOUND')
       return null

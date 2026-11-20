@@ -431,6 +431,7 @@ class GuestOrderRoutesTest {
             val optionId = seedMenuOption(jdbcUrl, venueId, itemId, "Platform mismatch option")
             val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, ownerUserId)
             seedConfirmedPlatformGuestContext(
+                tableSessionId = tableSessionId,
                 jdbcUrl = jdbcUrl,
                 chatId = 7_700_137L,
                 userId = ownerUserId,
@@ -545,6 +546,7 @@ class GuestOrderRoutesTest {
             val optionId = seedMenuOption(jdbcUrl, venueId, itemId, "Platform deleted option")
             val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, ownerUserId)
             seedConfirmedPlatformGuestContext(
+                tableSessionId = tableSessionId,
                 jdbcUrl = jdbcUrl,
                 chatId = 7_700_138L,
                 userId = ownerUserId,
@@ -2046,6 +2048,7 @@ class GuestOrderRoutesTest {
                 seedMenuOption(jdbcUrl, venueId, unavailableOptionItemId, "Platform unavailable option")
             val personalTabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, ownerUserId)
             seedConfirmedPlatformGuestContext(
+                tableSessionId = tableSessionId,
                 jdbcUrl = jdbcUrl,
                 chatId = 7_700_135L,
                 userId = ownerUserId,
@@ -2154,6 +2157,46 @@ class GuestOrderRoutesTest {
         }
 
     @Test
+    fun `a first batch on the only shared tab and its replay preserve the chosen bill`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("shared-only-checkout")
+            val settings = buildConfig(jdbcUrl)
+            environment { config = settings }
+            application { module() }
+            client.get("/health")
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            val tableId = seedTable(jdbcUrl, venueId, 8)
+            seedTableToken(jdbcUrl, tableId, "shared-only")
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val session = seedTableSession(jdbcUrl, venueId, tableId)
+            val item = seedMenuItem(jdbcUrl, venueId, seedMenuCategory(jdbcUrl, venueId), "Tea")
+            val shared = seedSharedTab(jdbcUrl, venueId, session, TELEGRAM_USER_ID)
+            val token = issueToken(settings)
+            val request =
+                AddBatchRequest(
+                    tableToken = "shared-only",
+                    tableSessionId = session,
+                    tabId = shared,
+                    idempotencyKey = "shared-only-first-batch",
+                    items = listOf(AddBatchItemDto(itemId = item, qty = 1)),
+                )
+            assertEquals(1, countRows(jdbcUrl, "tab"))
+            repeat(2) {
+                val response =
+                    client.post("/api/guest/order/add-batch") {
+                        contentType(ContentType.Application.Json)
+                        headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                        setBody(json.encodeToString(AddBatchRequest.serializer(), request))
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertEquals(1, countRows(jdbcUrl, "tab"))
+                assertEquals(1, countRows(jdbcUrl, "tab_member"))
+                assertEquals(1, countRows(jdbcUrl, "order_batches"))
+                assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
+            }
+        }
+
+    @Test
     fun `submit failure checkpoints roll back context tab order and idempotency writes`() {
         data class FailureCase(
             val name: String,
@@ -2168,8 +2211,8 @@ class GuestOrderRoutesTest {
                     contextCheckpoint = GuestOrderContextCheckpoint.AFTER_SESSION_TOUCH,
                 ),
                 FailureCase(
-                    name = "after-personal-tab-ensure",
-                    contextCheckpoint = GuestOrderContextCheckpoint.AFTER_PERSONAL_TAB_ENSURE,
+                    name = "after-selected-tab-authorization",
+                    contextCheckpoint = GuestOrderContextCheckpoint.AFTER_TAB_AUTHORIZATION,
                 ),
                 FailureCase(
                     name = "after-order-batch-write",
@@ -5874,6 +5917,16 @@ class GuestOrderRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
                 }
             assertEquals(HttpStatusCode.OK, reentry.status)
+            val challenge = json.parseToJsonElement(reentry.bodyAsText()).jsonObject
+            assertEquals("TABLE_SESSION_EXITED", challenge.getValue("tableSessionInactiveReason").jsonPrimitive.content)
+            val event = challenge.getValue("exitEventId").jsonPrimitive.content
+            val confirmed =
+                client.post("/api/guest/table/session/rejoin") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                    setBody("""{"tableToken":"$tableToken","tableSessionId":$tableSessionId,"exitEventId":"$event"}""")
+                }
+            assertEquals(HttpStatusCode.OK, confirmed.status)
             val afterReentry =
                 client.get(activePath) {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
@@ -6677,6 +6730,7 @@ class GuestOrderRoutesTest {
     }
 
     private fun seedConfirmedPlatformGuestContext(
+        tableSessionId: Long,
         jdbcUrl: String,
         chatId: Long,
         userId: Long,
@@ -6689,6 +6743,7 @@ class GuestOrderRoutesTest {
                 statement.execute(
                     """
                     CREATE TABLE IF NOT EXISTS telegram_chat_context (
+                        table_session_id BIGINT REFERENCES table_sessions(id) ON DELETE SET NULL,
                         chat_id BIGINT PRIMARY KEY,
                         user_id BIGINT NOT NULL,
                         venue_id BIGINT NULL,
@@ -6713,9 +6768,10 @@ class GuestOrderRoutesTest {
                     venue_id,
                     table_id,
                     table_token,
-                    updated_at
+                    updated_at,
+                    table_session_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, chatId)
@@ -6724,6 +6780,7 @@ class GuestOrderRoutesTest {
                 statement.setLong(4, tableId)
                 statement.setString(5, tableToken)
                 statement.setTimestamp(6, Timestamp.from(Instant.now()))
+                statement.setLong(7, tableSessionId)
                 statement.executeUpdate()
             }
             connection.prepareStatement(

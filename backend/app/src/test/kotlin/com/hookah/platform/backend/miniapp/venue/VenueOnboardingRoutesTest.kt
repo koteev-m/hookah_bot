@@ -12,6 +12,7 @@ import com.hookah.platform.backend.platform.PlatformOperationalOwnerResponse
 import com.hookah.platform.backend.telegram.db.VenueConnectionRequestRepository
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
 import com.hookah.platform.backend.test.migrateH2OnboardingFixture
+import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -881,6 +882,163 @@ class VenueOnboardingRoutesTest {
             assertEquals(2, countRows(jdbcUrl, "venue_members"))
             assertEquals(0, countRows(jdbcUrl, "menu_categories"))
             assertNotNull(firstLink.request.linkedVenueId)
+        }
+
+    @Test
+    fun `guest first application is private and idempotent through platform review and linking`() =
+        testApplication {
+            val jdbc = buildJdbcUrl("guest-first-application")
+            val config = buildConfig(jdbc, PLATFORM_OWNER_ID)
+            migrateFixture(jdbc)
+            environment { this.config = config }
+            application { module() }
+            seedUser(jdbc, UNAFFILIATED_ID, "first", "Первый", "Гость")
+            seedUser(jdbc, SECOND_OWNER_ID, "other", "Другой", "Гость")
+            seedUser(jdbc, PLATFORM_OWNER_ID, "platform", "Платформа", "Тест")
+            val guest = issueToken(config, UNAFFILIATED_ID)
+            val other = issueToken(config, SECOND_OWNER_ID)
+            val platform = issueToken(config, PLATFORM_OWNER_ID)
+            val path = "/api/guest/venue-applications"
+
+            suspend fun own(token: String): List<VenueConnectionApplicationDto> {
+                val response = client.get(path) { bearerAuth(token) }
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertEquals("no-store, private", response.headers[HttpHeaders.CacheControl])
+                return json.decodeFromString(response.bodyAsText())
+            }
+
+            suspend fun submit(name: String): VenueConnectionApplicationWriteResponse {
+                val response =
+                    client.post(path) {
+                        bearerAuth(guest)
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"venueName":"$name","city":"Казань","contact":"@fixture"}""")
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return json.decodeFromString(response.bodyAsText())
+            }
+
+            assertEquals(HttpStatusCode.Unauthorized, client.get(path).status)
+            assertEquals(HttpStatusCode.Unauthorized, client.post(path).status)
+            assertTrue(own(guest).isEmpty())
+            val first = submit("Первый дым")
+            val retry = submit(" ПЕРВЫЙ   дым ")
+            assertEquals(true, first.created)
+            assertEquals(false, retry.created)
+            assertEquals(first.application, retry.application)
+            assertEquals("PENDING", first.application.status)
+            assertEquals(listOf(first.application), own(guest))
+            assertTrue(own(other).isEmpty())
+            val audit = loadSingleAudit(jdbc, VenueConnectionRequestRepository.AUDIT_SUBMITTED)
+            assertEquals(UNAFFILIATED_ID, audit.actorUserId)
+            assertEquals(first.application.id, audit.entityId)
+            val payload = json.decodeFromString<JsonObject>(audit.payloadJson)
+            assertEquals("GUEST_MINI_APP", payload["source"]?.jsonPrimitive?.content)
+            assertEquals(1, countRows(jdbc, "venue_connection_requests"))
+
+            val foreignItem = "$path/${first.application.id}"
+            assertEquals(HttpStatusCode.NotFound, client.get(foreignItem) { bearerAuth(other) }.status)
+            assertEquals(HttpStatusCode.NotFound, client.put(foreignItem) { bearerAuth(other) }.status)
+            assertEquals(HttpStatusCode.NotFound, client.post("$foreignItem/cancel") { bearerAuth(other) }.status)
+
+            val review = "/api/platform/onboarding/requests/${first.application.id}"
+            assertEquals(HttpStatusCode.Forbidden, client.get(review) { bearerAuth(guest) }.status)
+            assertEquals(HttpStatusCode.Forbidden, client.post("$review/approve") { bearerAuth(guest) }.status)
+            assertEquals(HttpStatusCode.Forbidden, client.get("/api/venue/ownership") { bearerAuth(guest) }.status)
+            assertEquals(HttpStatusCode.OK, client.post("$review/approve") { bearerAuth(platform) }.status)
+            assertEquals("APPROVED", own(guest).single().status)
+            assertEquals(null, own(guest).single().linkedVenueId)
+            assertEquals(HttpStatusCode.Forbidden, client.get("/api/venue/me") { bearerAuth(guest) }.status)
+            assertEquals(0, countRows(jdbc, "venues"))
+            assertEquals(0, countRows(jdbc, "venue_members"))
+
+            val terms =
+                client.put("$review/commercial-terms") {
+                    bearerAuth(platform)
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"trialConfigured":true,"currentPriceRub":1500}""")
+                }
+            assertEquals(HttpStatusCode.OK, terms.status)
+            repeat(2) {
+                assertEquals(HttpStatusCode.OK, client.post("$review/create-and-link") { bearerAuth(platform) }.status)
+            }
+            val me = client.get("/api/venue/me") { bearerAuth(guest) }
+            assertEquals(HttpStatusCode.OK, me.status)
+            val membership = json.decodeFromString<VenueMeResponse>(me.bodyAsText()).venues.single()
+            assertEquals("OWNER", membership.role)
+            assertEquals("DRAFT", membership.venueStatus)
+            assertEquals(membership.venueId, own(guest).single().linkedVenueId)
+            assertTrue(own(other).isEmpty())
+            assertEquals(1, countRows(jdbc, "venues"))
+            assertEquals(1, countRows(jdbc, "venue_members"))
+            assertEquals(0, countRows(jdbc, "menu_categories"))
+
+            // Model a second operational owner, then use the platform's normal revocation route.
+            DriverManager.getConnection(jdbc, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    "INSERT INTO venue_members (venue_id, user_id, role) VALUES (?, ?, 'OWNER')",
+                ).use {
+                    it.setLong(1, membership.venueId)
+                    it.setLong(2, SECOND_OWNER_ID)
+                    assertEquals(1, it.executeUpdate())
+                }
+            }
+            val revoke = "/api/platform/venues/${membership.venueId}/owners/$UNAFFILIATED_ID/revoke"
+            assertEquals(HttpStatusCode.OK, client.post(revoke) { bearerAuth(platform) }.status)
+            assertEquals(HttpStatusCode.Forbidden, client.get("/api/venue/me") { bearerAuth(guest) }.status)
+            assertEquals(HttpStatusCode.Forbidden, client.get("/api/venue/ownership") { bearerAuth(guest) }.status)
+            assertEquals(HttpStatusCode.Forbidden, client.get(review) { bearerAuth(guest) }.status)
+            val historical = own(guest).single()
+            assertEquals("APPROVED", historical.status)
+            assertEquals(membership.venueId, historical.linkedVenueId)
+            val next = submit("Первый дым")
+            assertEquals(true, next.created)
+            assertEquals("PENDING", next.application.status)
+            assertEquals(null, next.application.linkedVenueId)
+            val nextRetry = submit(" ПЕРВЫЙ   дым ")
+            assertEquals(false, nextRetry.created)
+            assertEquals(next.application.id, nextRetry.application.id)
+            assertEquals(setOf(historical, next.application), own(guest).toSet())
+            assertEquals(2, countRows(jdbc, "venue_connection_requests"))
+            assertEquals(2, countAudit(jdbc, VenueConnectionRequestRepository.AUDIT_SUBMITTED))
+            assertEquals(1, countRows(jdbc, "venues"))
+        }
+
+    @Test
+    fun `guest application validates fields rejects client authority and rate limits the applicant`() =
+        testApplication {
+            val jdbc = buildJdbcUrl("guest-application-validation")
+            val config = buildConfig(jdbc)
+            migrateFixture(jdbc)
+            environment { this.config = config }
+            application { module() }
+            seedUser(jdbc, UNAFFILIATED_ID, "guest", "Гость", "Тест")
+            seedUser(jdbc, SECOND_OWNER_ID, "other", "Другой", "Тест")
+            val path = "/api/guest/venue-applications"
+            val token = issueToken(config, UNAFFILIATED_ID)
+            val valid = """{"venueName":"Дым","city":"Казань","contact":"fixture"}"""
+
+            suspend fun submit(
+                body: String,
+                actor: String = token,
+            ) = client.post(path) {
+                bearerAuth(actor)
+                contentType(ContentType.Application.Json)
+                setBody(body)
+            }
+
+            val spoofed = valid.dropLast(1) + ""","applicantUserId":$SECOND_OWNER_ID,"source":"VENUE_MINI_APP"}"""
+            assertEquals(HttpStatusCode.BadRequest, submit(spoofed).status)
+            assertEquals(HttpStatusCode.BadRequest, submit(valid.replace("Казань", "   ")).status)
+            assertEquals(HttpStatusCode.BadRequest, submit(valid.replace("fixture", "x".repeat(201))).status)
+            assertEquals(0, countRows(jdbc, "venue_connection_requests"))
+            repeat(2) { assertEquals(HttpStatusCode.OK, submit(valid).status) }
+            val denied = submit(valid)
+            assertEquals(HttpStatusCode.TooManyRequests, denied.status)
+            assertNotNull(denied.headers[HttpHeaders.RetryAfter])
+            assertEquals(HttpStatusCode.OK, submit(valid, issueToken(config, SECOND_OWNER_ID)).status)
+            assertEquals(2, countRows(jdbc, "venue_connection_requests"))
+            assertEquals(2, countAudit(jdbc, VenueConnectionRequestRepository.AUDIT_SUBMITTED))
         }
 
     private fun buildJdbcUrl(prefix: String): String {

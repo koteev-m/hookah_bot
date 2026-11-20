@@ -16,6 +16,14 @@ data class TableResolveResponse(
     val subscriptionStatus: String,
     val available: Boolean,
     val unavailableReason: String?,
+    val exitEventId: String? = null,
+)
+
+@Serializable
+data class TableRejoinRequest(
+    val tableToken: String,
+    val tableSessionId: Long,
+    val exitEventId: String,
 )
 
 @Serializable
@@ -40,7 +48,7 @@ data class TableRestoreResponse(
 @Serializable
 data class RestoredTableContextResponse(
     val tableToken: String,
-    val tabId: Long,
+    val tabId: Long?,
     val venueId: Long,
     val venueName: String,
     val tableId: Long,

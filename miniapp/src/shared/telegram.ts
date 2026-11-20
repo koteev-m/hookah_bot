@@ -1,3 +1,4 @@
+import { boundSessionActor } from './api/sessionBinding'
 import { validateTableToken } from './validation/tableToken'
 
 const tableTokenSessionStorageKey = 'hookah_guest_table_token'
@@ -56,8 +57,9 @@ export type TelegramContext = {
   tableSessionId: number | null
   tableTokenStatus: 'missing' | 'invalid' | 'valid'
   tableTokenAutoResolve: boolean
+  tableTokenFromUrl: boolean
+  unboundBotTableButton: boolean
   startParam: string | null
-  botUsername: string | null
   telegramUserId: number | null
   webApp: TelegramWebAppLike | null
 }
@@ -211,22 +213,28 @@ export function getTelegramContext(): TelegramContext {
       if (!tgWebAppData) {
         return null
       }
+      // URLSearchParams already decoded the outer launch field. Preserve the signed
+      // inner query, including escaped separators inside Telegram user details.
+      if (tgWebAppData.includes('=')) return tgWebAppData
       try {
         return decodeURIComponent(tgWebAppData)
       } catch {
-        return tgWebAppData
+        return null
       }
     })()
+  // A mode switch or completed visit restores server state. Telegram still exposes
+  // the webview's original QR payload, while an explicit new launch URL wins below.
+  const sdkLaunch = getQueryParam(params, 'visit') === 'restore' ? undefined : webApp?.initDataUnsafe
   const startParamCandidates: Array<{ value: string | null | undefined; source: string }> = [
     { value: getQueryParam(params, 'tableToken'), source: 'query_tableToken' },
     { value: getQueryParam(params, 'table_token'), source: 'query_table_token' },
     { value: getQueryParam(params, 'tgWebAppStartParam'), source: 'query_tgWebAppStartParam' },
     { value: getQueryParam(params, 'startapp'), source: 'query_startapp' },
     { value: getQueryParam(params, 'start_param'), source: 'query_start_param' },
-    { value: webApp?.initDataUnsafe?.start_param, source: 'initDataUnsafe_start_param' },
-    { value: webApp?.initDataUnsafe?.startParam, source: 'initDataUnsafe_startParam' }
+    { value: sdkLaunch?.start_param, source: 'initDataUnsafe_start_param' },
+    { value: sdkLaunch?.startParam, source: 'initDataUnsafe_startParam' }
   ]
-  const selectedStartParam = startParamCandidates.find((candidate) => normalizeNonEmpty(candidate.value))
+  const selectedStartParam = startParamCandidates.find(candidate => normalizeNonEmpty(candidate.value))
   const startParamSource = selectedStartParam?.source ?? null
   const startParam = normalizeNonEmpty(selectedStartParam?.value)
   const screen = normalizeNonEmpty(getQueryParam(params, 'screen'))
@@ -252,10 +260,9 @@ export function getTelegramContext(): TelegramContext {
   const tableSessionId =
     parsePositiveNumber(getQueryParam(params, 'tableSessionId')) ??
     parsePositiveNumber(getQueryParam(params, 'table_session_id'))
-  const botUsername = normalizeNonEmpty(getQueryParam(params, 'tgWebAppBotUsername'))
   const rawUserId = webApp?.initDataUnsafe?.user?.id
   const telegramUserId =
-    typeof rawUserId === 'number' && rawUserId > 0 ? rawUserId : parseTelegramUserIdFromInitData(initData)
+    typeof rawUserId === 'number' && rawUserId > 0 ? rawUserId : initData ? parseTelegramUserIdFromInitData(initData) : boundSessionActor()
   return {
     isTelegram: Boolean(webApp),
     hasTelegramLaunchData: normalizeNonEmpty(initData) !== null,
@@ -264,8 +271,10 @@ export function getTelegramContext(): TelegramContext {
     tableSessionId,
     tableTokenStatus,
     tableTokenAutoResolve,
+    tableTokenFromUrl: startParamSource?.startsWith('query_') === true,
+    unboundBotTableButton: tableSessionId === null && startParamSource === 'query_tableToken' &&
+      getQueryParam(params, 'mode') === 'guest' && screen === 'menu',
     startParam,
-    botUsername,
     telegramUserId,
     webApp
   }

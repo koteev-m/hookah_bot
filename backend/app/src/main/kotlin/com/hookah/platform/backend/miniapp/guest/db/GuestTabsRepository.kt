@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.guest.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.Connection
@@ -81,12 +82,47 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
     suspend fun findLatestRestorableTableContext(
         userId: Long,
         tableToken: String? = null,
-    ): RestorableTableContext? {
+        tableSessionId: Long? = null,
+    ): RestorableTableContext? =
+        restorableTableContexts(userId, tableToken, tableSessionId, allVisits = false).firstOrNull()
+
+    suspend fun activeVisitContexts(userId: Long): List<RestorableTableContext> =
+        restorableTableContexts(userId, null, null, allVisits = true)
+
+    private suspend fun restorableTableContexts(
+        userId: Long,
+        tableToken: String?,
+        tableSessionId: Long?,
+        allVisits: Boolean,
+    ): List<RestorableTableContext> {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     val tokenFilter = if (tableToken != null) "AND tt.token = ?" else ""
+                    // A confirmed visit can outlive its last order. Discovery retains its order-based filter.
+                    val sessionFilter =
+                        if (tableSessionId != null) {
+                            "AND ts.id = ?"
+                        } else if (allVisits) {
+                            ""
+                        } else {
+                            """
+                            AND (
+                                NOT EXISTS (
+                                    SELECT 1
+                                    FROM orders o_any
+                                    WHERE o_any.table_session_id = ts.id
+                                )
+                                OR EXISTS (
+                                    SELECT 1
+                                    FROM orders o_active
+                                    WHERE o_active.table_session_id = ts.id
+                                      AND o_active.status = 'ACTIVE'
+                                )
+                            )
+                            """.trimIndent()
+                        }
                     connection.prepareStatement(
                         """
                         SELECT
@@ -118,19 +154,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                               WHERE gtse.user_id = tm.user_id
                                 AND gtse.table_session_id = ts.id
                           )
-                          AND (
-                              NOT EXISTS (
-                                  SELECT 1
-                                  FROM orders o_any
-                                  WHERE o_any.table_session_id = ts.id
-                              )
-                              OR EXISTS (
-                                  SELECT 1
-                                  FROM orders o_active
-                                  WHERE o_active.table_session_id = ts.id
-                                    AND o_active.status = 'ACTIVE'
-                              )
-                          )
+                          $sessionFilter
                         ORDER BY
                             COALESCE(
                                 (
@@ -155,27 +179,32 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                             END,
                             CASE WHEN t.type = 'PERSONAL' THEN 0 ELSE 1 END,
                             t.id DESC
-                        LIMIT 1
+                        ${if (allVisits) "" else "LIMIT 1"}
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setLong(1, userId)
                         if (tableToken != null) {
                             statement.setString(2, tableToken)
                         }
+                        if (tableSessionId != null) {
+                            statement.setLong(if (tableToken == null) 2 else 3, tableSessionId)
+                        }
                         statement.executeQuery().use { rs ->
-                            if (rs.next()) {
-                                RestorableTableContext(
-                                    tableToken = rs.getString("token"),
-                                    tabId = rs.getLong("tab_id"),
-                                    venueId = rs.getLong("venue_id"),
-                                    venueName = rs.getString("venue_name"),
-                                    tableId = rs.getLong("table_id"),
-                                    tableSessionId = rs.getLong("table_session_id"),
-                                    tableSessionStatus = rs.getString("table_session_status"),
-                                    tableNumber = rs.getInt("table_number"),
-                                )
-                            } else {
-                                null
+                            buildList {
+                                while (rs.next()) {
+                                    add(
+                                        RestorableTableContext(
+                                            tableToken = rs.getString("token"),
+                                            tabId = rs.getLong("tab_id"),
+                                            venueId = rs.getLong("venue_id"),
+                                            venueName = rs.getString("venue_name"),
+                                            tableId = rs.getLong("table_id"),
+                                            tableSessionId = rs.getLong("table_session_id"),
+                                            tableSessionStatus = rs.getString("table_session_status"),
+                                            tableNumber = rs.getInt("table_number"),
+                                        ),
+                                    )
+                                }
                             }
                         }
                     }
@@ -238,6 +267,81 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
             ownerUserId = userId,
             status = "ACTIVE",
         )
+    }
+
+    suspend fun listOrdinaryGuestTabs(
+        session: TableSessionContext,
+        userId: Long,
+    ): List<GuestTabModel> {
+        return withActiveOrdinarySession(session, userId) { connection ->
+            listTabsForUser(connection, session.venueId, session.id, userId)
+        }
+    }
+
+    suspend fun openOrdinaryPersonalTab(
+        session: TableSessionContext,
+        userId: Long,
+        lifecycle: GuestTableContextLifecycleRepository,
+    ): GuestTabModel =
+        withActiveOrdinarySession(session, userId, lifecycle) { connection ->
+            val memberships = listTabsForUser(connection, session.venueId, session.id, userId)
+            val existing = findPersonalTabForUpdate(connection, session.venueId, session.id, userId)
+            if (existing != null && memberships.none { it.id == existing.id }) throw ForbiddenException()
+            existing ?: ensurePersonalTab(connection, session.venueId, session.id, userId)
+        }
+
+    private suspend fun <T> withActiveOrdinarySession(
+        session: TableSessionContext,
+        userId: Long,
+        authorizePersonal: GuestTableContextLifecycleRepository? = null,
+        operation: (Connection) -> T,
+    ): T {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        val sessions = TableSessionRepository(ds)
+        return withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                connection.autoCommit = false
+                try {
+                    val bot =
+                        if (authorizePersonal != null &&
+                            !sessions.hasActiveUserTabMembership(connection, userId, session.venueId, session.id)
+                        ) {
+                            authorizePersonal.lockBotVisitForPersonalTab(connection, userId, session)
+                        } else {
+                            false
+                        }
+                    val physical =
+                        sessions.findSessionForTable(
+                            connection,
+                            session.id,
+                            session.venueId,
+                            session.tableId,
+                            forUpdate = true,
+                        )
+                    val now = Instant.now()
+                    if (physical == null || physical.status != TableSessionStatus.ACTIVE ||
+                        physical.endedAt != null || physical.expiresAt <= now ||
+                        sessions.hasUserExit(connection, userId, session.id)
+                    ) {
+                        throw ForbiddenException("Визит завершён. Отсканируйте QR стола заново.")
+                    }
+                    if (authorizePersonal != null && !bot &&
+                        !sessions.hasActiveUserTabMembership(
+                            connection, userId, session.venueId, session.id, forUpdate = true,
+                        )
+                    ) {
+                        throw ForbiddenException()
+                    }
+                    val result = operation(connection)
+                    connection.commit()
+                    result
+                } catch (e: Exception) {
+                    connection.rollback()
+                    if (e is SQLException) throw DatabaseUnavailableException()
+                    throw e
+                }
+            }
+        }
     }
 
     suspend fun listTabsForUser(
@@ -561,7 +665,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun findPersonalTabForUpdate(
+    internal fun findPersonalTabForUpdate(
         connection: Connection,
         venueId: Long,
         tableSessionId: Long,

@@ -240,3 +240,10 @@ body:has(.guest-shell) .toast { bottom: calc(4.5rem + max(env(safe-area-inset-bo
   .guest-nav { grid-template-columns: minmax(0, 1.25fr) minmax(0, .65fr) minmax(0, .85fr) minmax(0, 1.1fr); }
   .guest-nav button { font-size: .75rem; }
 }
+
+.guest-business-card { display: grid; gap: .4rem; }
+.guest-business-card h2, .guest-business-card p { margin: 0; }
+.guest-business-card h2 { font-size: 1.1rem; }
+.guest-business-card button { justify-self: start; }
+.guest-business-card summary { cursor: pointer; padding-block: .4rem; }
+.guest-business-card ul { padding-inline-start: 1.25rem; margin: .25rem 0; }

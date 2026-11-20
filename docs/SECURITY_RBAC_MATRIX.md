@@ -886,7 +886,7 @@ STAGING-SMOKE-PASSED**.
 | Actor | Own memberships | Connection requests | Platform requests/owners/venues | Decisions and owner assignment |
 | --- | --- | --- | --- | --- |
 | Venue Owner | Read every own active membership and safe venue card. | Create/read/edit/cancel only own request through a server-derived user id; see only own contact/comment. | No Platform-wide access. | None. Approval does not seed a menu. |
-| Authenticated Telegram applicant without OWNER membership | None until Platform create/link succeeds. | Create a first venue request and read/edit/cancel only own request through the server-derived Telegram user id. | None. | None. Submit creates no venue, membership, link, selected venue or menu. |
+| Authenticated Telegram applicant without OWNER membership | None until Platform create/link succeeds. | Guest Mini App can submit and list own requests. Telegram also supports own pending edits and cancellation. | None. | None. Submit creates no venue, membership, link, selected venue or menu. |
 | Manager | Existing own-venue operational access only. | No Venue Mini App application authority; as an authenticated Telegram user, may use the ordinary acquisition entry for a first or additional venue with a server-derived applicant. | None. | None. |
 | Staff | Existing own-venue operational access only. | No Venue Mini App application authority; as an authenticated Telegram user, may use the ordinary acquisition entry for a first or additional venue with a server-derived applicant. | None. | None. |
 | Platform Owner | No automatic ordinary Venue-route bypass; the ordinary authenticated Telegram acquisition entry remains separate from Platform authority. | Read all requests including applicant contact/comment needed for review. | Read all venues, active OWNER memberships and safe user identity aggregates. | Explicit approve/reject/commercial/create-new-DRAFT-and-link and OWNER assignment/revoke under Platform RBAC and audit policy. |
@@ -898,10 +898,15 @@ Required implementation rules:
   the applicant from the validated session. Telegram accepts any authenticated current
   message/callback user for a first or additional venue. The route/adapter selects this entry policy;
   request owner id, actor, source and linked venue are not accepted as client authority. Every
-  own-request lookup includes the server-derived user predicate. The current DTO contract safely
+  own-request lookup includes the server-derived user predicate. The Venue DTO contract safely
   ignores spoof-like applicant/actor/owner/source/entry-policy/venue/link-target extras; direct route
   tests prove they grant no authority, and a repository audit failure returns safe
   `503 DATABASE_UNAVAILABLE` with no request, audit, facts leak or false success.
+- Guest Mini App uses authenticated GET/POST `/api/guest/venue-applications`. The session supplies
+  the applicant and the route records `GUEST_MINI_APP`. POST accepts only venue name, city, contact
+  and optional comment. The shared limiter scopes reads and submissions separately by applicant.
+  GET returns only the session user’s requests. Guest exposes no item lookup, edit or cancellation.
+  A link on a request conveys no permissions. Venue access still requires a current membership.
 - Platform routes require exact `PlatformOwnerIdResolver` authorization before request, owner or
   venue facts. Manager/Staff membership never implies Platform authority. Approval/rejection,
   commercial changes, create/link and owner membership changes are explicit POST actions; GET/list
@@ -913,7 +918,7 @@ Required implementation rules:
   identity uses only current platform-safe display name/username plus necessary opaque/internal id;
   raw Telegram update/initData, phone/private provider fields, callback/message payloads, secrets and
   unrelated PII are forbidden.
-- Both Mini Apps and Telegram call one backend application/orchestration contract. Under the
+- All onboarding surfaces call one backend application/orchestration contract. Under the
   applicant lock, the writer loads all `PENDING` and `APPROVED`-unlinked rows and compares normalized
   venue name, city, contact and optional comment. Canonicalization is Unicode NFKC, full Unicode
   `White_Space` collapse, trim, `Locale.ROOT` lowercase and whitespace-only optional comment to

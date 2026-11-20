@@ -1,3 +1,4 @@
+import { returnToGuestApplication } from '../shared/homeMode'
 import { renderOwnStaffPhotoScreen, type StaffPhotoNavigation } from './staffPhoto'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
@@ -656,7 +657,13 @@ export function mountVenueApp(options: VenueAppOptions) {
     const result = await venueGetMe(backendUrl, deps, controller.signal)
     if (disposed || accessAbort !== controller || contextEpoch !== epoch || getTelegramContext().telegramUserId !== requestActor) return
     accessAbort = null
+    const params = new URLSearchParams(window.location.search)
+    const ownerHandoff = params.get('from') === 'venue-application'
     if (!result.ok) {
+      if (ownerHandoff && result.error.status === 403) {
+        returnToGuestApplication()
+        return
+      }
       if (result.error.code === REQUEST_ABORTED_CODE) {
         return
       }
@@ -685,7 +692,10 @@ export function mountVenueApp(options: VenueAppOptions) {
       if (!access || key !== photoKey(access, session.route)) { photoSessions.delete(key); session.dispose() }
     }
     const telegramContext = getTelegramContext()
-    const params = new URLSearchParams(window.location.search)
+    if (ownerHandoff && !accessList.some(venue => venue.role === 'OWNER' && String(venue.venueId) === params.get('venueId'))) {
+      returnToGuestApplication()
+      return
+    }
     const requestedVenueId = parsePositiveInt(params.get('venueId')) ?? parsePositiveInt(telegramContext.startParam)
     selectedVenueId = null
     if (requestedVenueId && accessList.some((venue) => venue.venueId === requestedVenueId)) {
@@ -710,8 +720,9 @@ export function mountVenueApp(options: VenueAppOptions) {
     render()
   }
 
-  const persistSelectedVenue = () => {
+  const persistSelectedVenue = (explicitSelection = false) => {
     const nextUrl = new URL(window.location.href)
+    if (explicitSelection && nextUrl.searchParams.get('from') === 'venue-application') nextUrl.searchParams.delete('from')
     const allowedSelection =
       selectedVenueId != null && accessList.some((venue) => venue.venueId === selectedVenueId)
         ? selectedVenueId
@@ -904,7 +915,7 @@ export function mountVenueApp(options: VenueAppOptions) {
           selectedVenueId = venueId
           refs.venueSelect.value = String(venueId)
           updateAccessFromSelection()
-          persistSelectedVenue()
+          persistSelectedVenue(true)
           navigate('#/dashboard')
         },
         onAccessRefresh: loadAccess
@@ -1225,7 +1236,7 @@ export function mountVenueApp(options: VenueAppOptions) {
         return
       }
       updateAccessFromSelection()
-      persistSelectedVenue()
+      persistSelectedVenue(true)
       render()
     })
   )

@@ -1,8 +1,10 @@
+import type { GuestTabDto } from '../api/guestDtos'
 import { getTelegramContext } from '../telegram'
 
 const STORAGE_KEY = 'hookahMiniAppGuestTabSelection'
 
-let memorySelection: Record<string, number> = {}
+type TabSelection = number | 'choose'
+let memorySelection: Record<string, TabSelection> = {}
 
 function normalizeId(value: number | null | undefined): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
@@ -20,7 +22,7 @@ function resolveSelectionKey(tableSessionId: number): string {
   return `${resolveUserStoragePart()}:session:${tableSessionId}`
 }
 
-function readStorage(): Record<string, number> {
+function readStorage(): Record<string, TabSelection> {
   if (typeof window === 'undefined') {
     return memorySelection
   }
@@ -33,15 +35,15 @@ function readStorage(): Record<string, number> {
     if (!parsed || typeof parsed !== 'object') {
       return memorySelection
     }
-    const next: Record<string, number> = {}
+    const next: Record<string, TabSelection> = {}
     Object.entries(parsed).forEach(([key, value]) => {
       const tabId = typeof value === 'number' ? value : Number(value)
       const normalizedTabId = normalizeId(tabId)
-      if (!normalizedTabId) {
+      if (!normalizedTabId && value !== 'choose') {
         return
       }
       if (normalizeId(Number(key)) || /^user:(?:\d+|unknown):session:\d+$/.test(key)) {
-        next[key] = normalizedTabId
+        next[key] = normalizedTabId ?? 'choose'
       }
     })
     memorySelection = next
@@ -51,7 +53,7 @@ function readStorage(): Record<string, number> {
   }
 }
 
-function writeStorage(selection: Record<string, number>): void {
+function writeStorage(selection: Record<string, TabSelection>): void {
   memorySelection = selection
   if (typeof window === 'undefined') {
     return
@@ -69,7 +71,7 @@ export function getSelectedGuestTabId(tableSessionId: number | null | undefined)
     return null
   }
   const value = readStorage()[resolveSelectionKey(sessionId)]
-  return normalizeId(value)
+  return typeof value === 'number' ? normalizeId(value) : null
 }
 
 export function setSelectedGuestTabId(
@@ -89,4 +91,20 @@ export function setSelectedGuestTabId(
     selection[selectionKey] = normalizedTabId
   }
   writeStorage(selection)
+}
+
+export function restoreGuestTabSelection(sessionId: number, defaultId: number | null, hasDraft: boolean): void {
+  const selection = readStorage()
+  const key = resolveSelectionKey(sessionId)
+  if (selection[key] !== undefined) return
+  if (hasDraft) writeStorage({ ...selection, [key]: 'choose' })
+  else if (defaultId !== null) writeStorage({ ...selection, [key]: defaultId })
+}
+
+export function chooseGuestTab(tabs: GuestTabDto[], tableSessionId: number | null): GuestTabDto | null {
+  const active = tabs.filter(tab => tab.status === 'ACTIVE' && tab.tableSessionId === tableSessionId)
+  const selected = tableSessionId ? readStorage()[resolveSelectionKey(tableSessionId)] : undefined
+  if (selected === 'choose') return null
+  if (selected !== undefined) return active.find(tab => tab.id === selected) ?? null
+  return active.find(tab => tab.type === 'PERSONAL') ?? active[0] ?? null
 }

@@ -10,6 +10,7 @@ data class TelegramAuthResponse(
     val token: String,
     val expiresAtEpochSeconds: Long,
     val user: MiniAppUserDto,
+    val botUsername: String? = null,
 )
 
 @Serializable

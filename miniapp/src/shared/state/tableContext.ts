@@ -1,19 +1,23 @@
 import { getBackendBaseUrl } from '../api/backend'
 import { REQUEST_ABORTED_CODE } from '../api/abort'
 import { clearSession, getAccessToken } from '../api/auth'
-import { guestResolveTable, guestRestoreTable } from '../api/guestApi'
+import { guestRejoinTable, guestResolveTable, guestRestoreTable } from '../api/guestApi'
 import type { TableResolveResponse } from '../api/guestDtos'
 import { ApiErrorCodes, type ApiErrorInfo } from '../api/types'
+import { normalizeTableToken } from '../validation/tableToken'
+import { discardTableCart, hasTableCartDraft } from './cartStore'
 import { isDebugEnabled } from '../debug'
 import { forgetTableToken, getTelegramContext, rememberTableToken } from '../telegram'
-import { setSelectedGuestTabId } from './guestTabSelection'
+import { restoreGuestTabSelection, setSelectedGuestTabId } from './guestTabSelection'
 
 export type TableContextStatus =
+  | 'rescan'
   | 'missing'
   | 'invalid'
   | 'resolving'
   | 'resolved'
   | 'notFound'
+  | 'rejoinUnavailable'
   | 'error'
 
 export type TableContextSnapshot = {
@@ -78,6 +82,8 @@ function resolveBlockReasonText(reason: string | null): string {
 
 function resolveTableSessionInactiveText(reason: string | null): string {
   switch (reason) {
+    case 'TABLE_SESSION_EXITED':
+      return 'Визит завершён. Для нового входа отсканируйте QR стола в обновлённом приложении.'
     case 'TABLE_SESSION_EXPIRED':
     case 'TABLE_SESSION_ENDED':
     default:
@@ -96,32 +102,77 @@ function resolveTableSessionStorageKey(): string {
   return `${tableSessionStorageKeyPrefix}:${userPart}`
 }
 
-function loadStoredTableSessionContext(tableToken: string): number | null {
-  if (typeof window === 'undefined') {
-    return null
-  }
-  try {
-    const raw = window.sessionStorage.getItem(resolveTableSessionStorageKey())
-    if (!raw) {
-      return null
-    }
-    const parsed = JSON.parse(raw) as Partial<StoredTableSessionContext>
-    if (
-      parsed.tableToken === tableToken &&
-      typeof parsed.tableSessionId === 'number' &&
-      Number.isFinite(parsed.tableSessionId) &&
-      parsed.tableSessionId > 0
-    ) {
-      return parsed.tableSessionId
-    }
-  } catch {
-    // ignore stale storage
-  }
-  return null
+// An unresolved SDK command can only be checked against its original session.
+type SdkRejoinAttempt = { sessionId: number; tokenDigest: string; requiresScan?: boolean }
+
+function sdkRejoinKey(): string | null {
+  return getTelegramContext().telegramUserId ? resolveTableSessionStorageKey() + ':sdk-rejoin' : null
 }
 
+export function pendingSdkRejoin(): SdkRejoinAttempt | null {
+  const key = sdkRejoinKey()
+  if (!key) return null
+  const raw = window.sessionStorage.getItem(key)
+  if (!raw) return null
+  const value = JSON.parse(raw)
+  if (!Number.isSafeInteger(value.sessionId) || value.sessionId <= 0 || !/^[a-f0-9]{64}$/.test(value.tokenDigest)) {
+    throw new Error('Invalid pending QR session')
+  }
+  return value
+}
+
+export async function sdkTokenDigest(token: string): Promise<string> {
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+  return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+export function rememberSdkRejoin(attempt: SdkRejoinAttempt | null) {
+  const key = sdkRejoinKey()
+  if (!key) throw new Error('Missing guest identity')
+  if (attempt) window.sessionStorage.setItem(key, JSON.stringify(attempt))
+  else window.sessionStorage.removeItem(key)
+}
+
+type VisitPointer = StoredTableSessionContext | 'unavailable' | 'lost' | null
+
+function storedVisit(): VisitPointer {
+  if (!getTelegramContext().telegramUserId) return null
+  try {
+    const raw = window.sessionStorage.getItem(resolveTableSessionStorageKey())
+    if (!raw) return null
+    const value = JSON.parse(raw)
+    if (value === 'unavailable' || value === 'lost') return value
+    if (normalizeTableToken(value?.tableToken) === value?.tableToken &&
+        typeof value?.tableToken === 'string' && Number.isSafeInteger(value.tableSessionId) && value.tableSessionId > 0) {
+      return { tableToken: value.tableToken, tableSessionId: value.tableSessionId }
+    }
+  } catch { /* A missing or corrupt pointer cannot identify a visit. */ }
+  return 'lost'
+}
+
+function confirmedVisit() {
+  if (currentSnapshot.tableSessionActive && currentSnapshot.tableToken && currentSnapshot.tableSessionId) {
+    return { tableToken: currentSnapshot.tableToken, tableSessionId: currentSnapshot.tableSessionId }
+  }
+  return storedVisit()
+}
+
+export function hasGuestVisitToResume() {
+  return Boolean(confirmedVisit()) || currentSnapshot.status === 'resolving' && Boolean(currentSnapshot.tableToken)
+}
+
+function resumePointer(): VisitPointer {
+  return confirmedVisit() ?? (window.history.state?.hookahGuestNavigation?.resumeTable === true ? 'lost' : null)
+}
+
+function requestNewScan(reason: 'lost' | 'unavailable') {
+  if (getTelegramContext().telegramUserId) {
+    try { window.sessionStorage.setItem(resolveTableSessionStorageKey(), JSON.stringify(reason)) } catch { /* optional */ }
+  }
+  updateSnapshot(buildEmptySnapshot('rescan'))
+}
 function rememberTableSessionContext(tableToken: string, tableSessionId: number) {
-  if (typeof window === 'undefined' || tableSessionId <= 0) {
+  if (typeof window === 'undefined' || !getTelegramContext().telegramUserId || tableSessionId <= 0) {
     return
   }
   try {
@@ -249,10 +300,24 @@ export function subscribe(listener: (snapshot: TableContextSnapshot) => void): (
   }
 }
 
-export async function refresh(options?: { forceResolveSession?: boolean; scannedToken?: string }): Promise<TableContextSnapshot | null> {
+export async function refresh(options?: {
+  forceResolveSession?: boolean
+  scannedToken?: string
+  retrySessionId?: number
+  confirmRejoin?: (table: TableResolveResponse) => boolean
+}): Promise<TableContextSnapshot | null> {
   const isScan = options?.scannedToken !== undefined
   const forceResolveSession = isScan || options?.forceResolveSession === true
-  const { tableTokenStatus, tableToken, tableSessionId } = getTelegramContext()
+  const launch = getTelegramContext()
+  // Old Bot menu buttons have no visit ID. Only an actual scan or the live
+  // session already confirmed in this WebView can supply a visit for refresh.
+  if (launch.unboundBotTableButton && !isScan && currentSnapshot.status !== 'resolved') {
+    const rescan = buildEmptySnapshot('rescan')
+    updateSnapshot(rescan)
+    return rescan
+  }
+  const tableTokenStatus = launch.unboundBotTableButton ? 'missing' : launch.tableTokenStatus
+  const { tableToken, tableSessionId } = launch
   const hasResolvedSnapshotToken =
     !forceResolveSession &&
     tableTokenStatus === 'missing' &&
@@ -277,10 +342,8 @@ export async function refresh(options?: { forceResolveSession?: boolean; scanned
     currentSnapshot.tableToken === nextToken
       ? currentSnapshot.tableSessionId
       : null
-  const storedSessionId =
-    !forceResolveSession && contextTableSessionId === null && currentSessionId === null
-      ? loadStoredTableSessionContext(nextToken)
-      : null
+  const stored = storedVisit()
+  const storedSessionId = stored && typeof stored === 'object' && stored.tableToken === nextToken ? stored.tableSessionId : null
   if (activeController) {
     activeController.abort()
   }
@@ -295,11 +358,36 @@ export async function refresh(options?: { forceResolveSession?: boolean; scanned
 
   const backendUrl = getBackendBaseUrl()
   const deps = buildApiDeps()
+  const sessionId = forceResolveSession ? null : contextTableSessionId ?? currentSessionId ?? storedSessionId
+  const retrySession = isScan ? options?.retrySessionId : undefined
   const request = guestResolveTable(backendUrl, nextToken, deps, controller.signal, {
-    tableSessionId: forceResolveSession ? null : contextTableSessionId ?? currentSessionId ?? storedSessionId,
-    allowCreateSession: forceResolveSession
+    tableSessionId: retrySession ?? sessionId,
+    verifyOnly: retrySession !== undefined || (sessionId !== null && (sessionId === storedSessionId || sessionId === currentSessionId)),
+    allowCreateSession: forceResolveSession && retrySession === undefined
   })
-  const resolution = request.then((result) => {
+  const resolution = request.then(async (response) => {
+    if (controller.signal.aborted || requestId !== requestCounter) return null
+    let result = response
+    if (retrySession !== undefined && result.ok && (result.data.tableSessionId !== retrySession ||
+        (!result.data.tableSessionActive && result.data.tableSessionInactiveReason !== 'TABLE_SESSION_EXITED'))) {
+      return buildEmptySnapshot('rescan')
+    }
+    if (isScan && result.ok && result.data.tableSessionInactiveReason === 'TABLE_SESSION_EXITED') {
+      const table = result.data
+      if (currentSnapshot.tableToken === nextToken && currentSnapshot.tableSessionId === table.tableSessionId) {
+        updateSnapshot(buildResolvedSnapshot(table, nextToken))
+      }
+      if (!table.exitEventId) return buildEmptySnapshot('rejoinUnavailable')
+      if (table.available && !table.tableSessionActive && options.confirmRejoin?.(table)) {
+        result = await guestRejoinTable(backendUrl, nextToken, table.tableSessionId, table.exitEventId, deps, controller.signal)
+        if (!result.ok && !controller.signal.aborted && requestId === requestCounter) {
+          if (result.error.status === 409) return buildEmptySnapshot('rescan')
+          if (result.error.status === 403) return buildEmptySnapshot('rejoinUnavailable')
+          return { ...buildEmptySnapshot('error'), error: result.error }
+        }
+        if (result.ok && result.data.tableSessionId !== table.tableSessionId) return buildEmptySnapshot('rescan')
+      }
+    }
     if (controller.signal.aborted || requestId !== requestCounter) {
       return null
     }
@@ -317,6 +405,9 @@ export async function refresh(options?: { forceResolveSession?: boolean; scanned
     if (isScan && !resolved.orderAllowed) return resolved
 
     if (result.data.tableSessionActive) {
+      if (hasTableCartDraft(nextToken, result.data.tableSessionId)) {
+        restoreGuestTabSelection(result.data.tableSessionId, null, true)
+      }
       rememberTableToken(nextToken)
       rememberTableSessionContext(nextToken, result.data.tableSessionId)
     } else {
@@ -341,7 +432,12 @@ async function restoreActiveContext(): Promise<void> {
 
   const backendUrl = getBackendBaseUrl()
   const deps = buildApiDeps()
-  const request = guestRestoreTable(backendUrl, deps, controller.signal)
+  const visit = resumePointer()
+  if (typeof visit === 'string') {
+    requestNewScan(visit)
+    return
+  }
+  const request = guestRestoreTable(backendUrl, deps, controller.signal, visit)
   inFlight = request.then((result) => {
     if (controller.signal.aborted || requestId !== requestCounter) {
       return
@@ -351,24 +447,43 @@ async function restoreActiveContext(): Promise<void> {
       if (result.error.code === REQUEST_ABORTED_CODE) {
         return
       }
-      updateSnapshot(buildEmptySnapshot('missing'))
+      updateSnapshot({ ...buildEmptySnapshot('error'), error: result.error })
       return
     }
 
     const restored = result.data.context
+    if (visit && (!restored?.tableSessionActive || restored.tableSessionId !== visit.tableSessionId ||
+        restored.tableToken !== visit.tableToken)) {
+      forgetTableSessionContext(visit.tableToken)
+      forgetTableToken(visit.tableToken)
+      discardTableCart(visit.tableToken, visit.tableSessionId)
+      requestNewScan('unavailable')
+      return
+    }
     if (!restored) {
-      forgetTableSessionContext()
       updateSnapshot(buildEmptySnapshot('missing'))
       return
     }
 
     rememberTableToken(restored.tableToken)
     rememberTableSessionContext(restored.tableToken, restored.tableSessionId)
-    setSelectedGuestTabId(restored.tableSessionId, restored.tabId)
+    restoreGuestTabSelection(restored.tableSessionId, restored.tabId, hasTableCartDraft(restored.tableToken, restored.tableSessionId))
     updateSnapshot(buildResolvedSnapshot(restored, restored.tableToken))
   })
 
   await inFlight
+}
+
+// Both work-mode entry points consult the same authenticated view of the visit.
+export const botVisitExitHint = 'Если кнопки завершения здесь нет, откройте чат с ботом и нажмите «🚪 Завершить визит».'
+
+export async function checkGuestVisit(backendUrl: string, signal: AbortSignal): Promise<'active' | 'absent' | 'unknown'> {
+  if (inFlight) await inFlight
+  const version = requestCounter
+  const result = await guestRestoreTable(backendUrl, buildApiDeps(), signal, 'active-visits')
+  if (!result.ok || version !== requestCounter || signal.aborted) return 'unknown'
+  if (result.data?.context === null) return 'absent'
+  return result.data?.context?.tableSessionActive === true ? 'active' : 'unknown'
 }
 
 export async function ensureResolved(): Promise<TableContextSnapshot> {
@@ -385,6 +500,8 @@ export async function ensureResolved(): Promise<TableContextSnapshot> {
 
 export function formatTableStatus(snapshot: TableContextSnapshot): TableStatusPresentation {
   switch (snapshot.status) {
+    case 'rescan':
+      return { title: 'Не удалось восстановить выбранный стол. Отсканируйте QR на столе заново.', severity: 'warn' }
     case 'missing':
       return {
         title: 'Заказ за столом',
@@ -396,6 +513,8 @@ export function formatTableStatus(snapshot: TableContextSnapshot): TableStatusPr
         title: 'Некорректный QR. Обновите и попробуйте снова.',
         severity: 'error'
       }
+    case 'rejoinUnavailable':
+      return { title: 'Прежний визит недоступен.', details: 'Откройте меню текущего стола в боте или обратитесь к персоналу.', severity: 'warn' }
     case 'notFound':
       return { title: 'Стол не найден. Обновите QR.', severity: 'error' }
     case 'resolving':
@@ -418,7 +537,7 @@ export function formatTableStatus(snapshot: TableContextSnapshot): TableStatusPr
     case 'resolved': {
       if (!snapshot.tableSessionActive) {
         return {
-          title: 'Контекст стола устарел',
+          title: resolveTableSessionInactiveText(snapshot.tableSessionInactiveReason),
           details: 'Чтобы заказать или вызвать персонал, отсканируйте QR на столе заново.',
           severity: 'warn'
         }
@@ -442,10 +561,23 @@ export function initTableContext(): void {
     return
   }
   initialized = true
-  const { tableTokenStatus, tableToken, tableTokenAutoResolve } = getTelegramContext()
+  const { tableTokenStatus, tableToken, tableTokenAutoResolve, tableTokenFromUrl, tableSessionId } = getTelegramContext()
+  const pointer = storedVisit()
+  // A reload of the previous Guest entry is passive. Only a new launch URL or the
+  // scanner can identify a replacement for a lost pointer.
+  const freshQr = tableTokenAutoResolve && tableTokenFromUrl && !window.history.state?.hookahGuestNavigation
+  if (!freshQr && tableTokenAutoResolve && !tableTokenFromUrl) {
+    try {
+      if (pendingSdkRejoin()) { requestNewScan('lost'); return }
+    } catch { requestNewScan('lost'); return }
+  }
+  if (typeof pointer === 'string' && !freshQr) {
+    requestNewScan(pointer)
+    return
+  }
   if (tableTokenStatus === 'valid' && tableToken && tableTokenAutoResolve) {
     updateSnapshot(buildEmptySnapshot('resolving', tableToken))
-    void refresh()
+    void refresh({ forceResolveSession: typeof pointer === 'string' && freshQr && tableSessionId === null })
     return
   }
   if (tableTokenStatus === 'missing') {

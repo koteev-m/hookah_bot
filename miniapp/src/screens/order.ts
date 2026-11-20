@@ -2,9 +2,9 @@ import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
 import { guestGetActiveOrder, guestGetTabs, guestRequestBill } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
-import type { ActiveOrderDto, BillPaymentMethod, GuestTabDto, OrderBatchDto } from '../shared/api/guestDtos'
+import type { ActiveOrderDto, BillPaymentMethod, OrderBatchDto } from '../shared/api/guestDtos'
 import { getItemMeta } from '../shared/state/itemCache'
-import { getSelectedGuestTabId, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
+import { chooseGuestTab, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
 import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
@@ -147,16 +147,6 @@ function paymentMethodLabel(method: BillPaymentMethod): string {
 
 function formatRefreshTime(date: Date): string {
   return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
-
-function chooseOrderTab(tabs: GuestTabDto[], tableSessionId: number): GuestTabDto | null {
-  const activeTabs = tabs.filter((tab) => tab.status === 'ACTIVE' && tab.tableSessionId === tableSessionId)
-  const storedTabId = getSelectedGuestTabId(tableSessionId)
-  const storedTab = storedTabId != null ? activeTabs.find((tab) => tab.id === storedTabId) ?? null : null
-  if (storedTab) {
-    return storedTab
-  }
-  return activeTabs.find((tab) => tab.type === 'PERSONAL') ?? activeTabs[0] ?? null
 }
 
 function buildOrderDom(root: HTMLDivElement): OrderRefs {
@@ -638,7 +628,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       renderState()
       return
     }
-    const selectedTab = chooseOrderTab(tabsResult.data.tabs, tableScope.tableSessionId)
+    const selectedTab = chooseGuestTab(tabsResult.data.tabs, tableScope.tableSessionId)
     if (!selectedTab) {
       inFlight = false
       orderAbort = null

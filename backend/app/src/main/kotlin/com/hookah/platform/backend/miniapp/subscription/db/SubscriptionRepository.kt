@@ -275,7 +275,7 @@ class SubscriptionRepository(
         getSubscriptionStatus(connection, venueId, forUpdate = true)
             .takeUnless { it == SubscriptionStatus.UNKNOWN }
 
-    private fun ensureRowExistsForVenue(
+    fun ensureRowExistsForVenue(
         connection: Connection,
         venueId: Long,
     ) {

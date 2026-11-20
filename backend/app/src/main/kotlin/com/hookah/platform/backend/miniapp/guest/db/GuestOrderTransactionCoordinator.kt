@@ -5,6 +5,7 @@ import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.api.SubscriptionBlockedException
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.telegram.TableContext
 import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -15,7 +16,7 @@ import javax.sql.DataSource
 
 enum class GuestOrderContextCheckpoint {
     AFTER_SESSION_TOUCH,
-    AFTER_PERSONAL_TAB_ENSURE,
+    AFTER_TAB_AUTHORIZATION,
 }
 
 class GuestOrderTransactionCoordinator(
@@ -24,6 +25,29 @@ class GuestOrderTransactionCoordinator(
     private val subscriptionRepository: SubscriptionRepository,
     private val tableSessionRepository: TableSessionRepository,
 ) {
+    fun lockPublishedTable(
+        connection: Connection,
+        tableToken: String,
+        venueId: Long,
+        tableId: Long,
+    ): TableContext {
+        val tableState =
+            tableTokenRepository.resolveForUpdate(
+                connection = connection,
+                token = tableToken,
+                expectedVenueId = venueId,
+                expectedTableId = tableId,
+            ) ?: throw NotFoundException()
+        if (
+            !tableState.tokenActive ||
+            !tableState.tableActive ||
+            tableState.venueStatus != VenueStatus.PUBLISHED
+        ) {
+            throw NotFoundException()
+        }
+        return tableState.context
+    }
+
     suspend fun <T> executeAuthorized(
         actorUserId: Long,
         tableToken: String,
@@ -33,20 +57,7 @@ class GuestOrderTransactionCoordinator(
         operation: (Connection, TableSessionRecord) -> T,
     ): T =
         execute { connection ->
-            val tableState =
-                tableTokenRepository.resolveForUpdate(
-                    connection = connection,
-                    token = tableToken,
-                    expectedVenueId = expectedVenueId,
-                    expectedTableId = expectedTableId,
-                ) ?: throw NotFoundException()
-            if (
-                !tableState.tokenActive ||
-                !tableState.tableActive ||
-                tableState.venueStatus != VenueStatus.PUBLISHED
-            ) {
-                throw NotFoundException()
-            }
+            lockPublishedTable(connection, tableToken, expectedVenueId, expectedTableId)
             if (
                 subscriptionRepository.getSubscriptionStatus(
                     connection = connection,

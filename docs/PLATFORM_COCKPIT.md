@@ -224,7 +224,7 @@ STAGING-SMOKE-PASSED** for release HEAD `e35def99ea8429462e5fdaaeee914f57da72e77
 
 An authenticated Telegram user can submit a first or additional venue, including when they have no
 active OWNER membership. An existing active operational Owner can also submit an additional venue
-from Venue Mini App. Both adapters use one shared onboarding service and repository writer; the
+from Venue Mini App. The submission adapters use one shared onboarding service and repository writer; the
 applicant and source are server-derived. Manager, Staff, foreign and Platform-only identities have
 no Venue Mini App application authority.
 
@@ -238,7 +238,9 @@ returns the authoritative existing request with no insert/audit; a distinct tupl
 Venue Mini App exposes `Мои заведения`, authoritative OWNER cards and own application history plus
 submit/edit/cancel. Manager/Staff and unaffiliated/Platform-only actors are denied. Approval alone
 remains non-seeding and creates no access. After successful create/link, the next authoritative
-`/api/venue/me` reload adds the membership/card/selector option; the venue is not auto-selected.
+`/api/venue/me` reload adds the membership/card/selector option. The Guest application’s cabinet button selects
+the linked venue explicitly after a fresh membership and visit check. Revoking this membership
+leaves the historical approval and link intact. The former owner can apply again through Guest.
 
 Platform Mini App exposes `Заявки`, `Кальянные`, `Владельцы`. Requests support safe list/detail,
 approve/reject/close, commercial terms and create/link; venue rows include city and every safe active
@@ -301,8 +303,15 @@ access data; public Guest venue visibility remains unchanged.
 Exact canonical repeat returns the matching authoritative request; a different venue name, city,
 contact or comment creates another application. Implementation serializes simultaneous exact and
 distinct submissions without relying on the client. After linking, the next authoritative access
-refresh adds the venue card and selector option. Telegram remains the acquisition adapter for first
-applicants and also supports additional venues.
+refresh adds the venue card and selector option. Telegram supports first and additional applicants.
+
+The Guest Mini App acquisition entry (local implementation, outside the staging closure above)
+opens from the catalog card or Profile → “Для заведений”. Both show one form and the applicant’s
+server-backed request history. Approval leaves the cabinet pending until Platform saves terms and
+creates/links the DRAFT. For a linked request the applicant can refresh access and enter Venue Mode
+when the linked venue’s OWNER membership is confirmed and the guest has no active visit. The
+cabinet entry and the normal Home mode selector both recheck the visit. A closed order may still\nbelong to an active table session. After a confirmed exit the cabinet opens at the linked venue ID.\nThe cabinet starts unpublished. Owner publication still requires the existing readiness checks and
+confirmation. Platform lifecycle controls, subscription eligibility and catalog listing still apply.
 
 Platform Mini App receives one top-level onboarding/ownership workspace with:
 

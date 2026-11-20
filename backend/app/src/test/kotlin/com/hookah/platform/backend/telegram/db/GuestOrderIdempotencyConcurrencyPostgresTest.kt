@@ -203,7 +203,11 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
                     TableSessionRepository(dataSource).recordUserExit(connection, USER_ID, personal.tableSessionId, NOW)
                 }
                 assertTrue(repository.listActiveOrderSummariesForUser(USER_ID).isEmpty())
-                TableSessionRepository(dataSource).clearUserExit(USER_ID, personal.tableSessionId)
+                dataSource.connection.use { connection ->
+                    val sessions = TableSessionRepository(dataSource)
+                    val event = assertNotNull(sessions.findExitEventId(connection, USER_ID, personal.tableSessionId))
+                    assertTrue(sessions.consumeExitEvent(connection, USER_ID, personal.tableSessionId, event))
+                }
                 assertEquals(1, repository.listActiveOrderSummariesForUser(USER_ID).single().items.single().qty)
             }
         }

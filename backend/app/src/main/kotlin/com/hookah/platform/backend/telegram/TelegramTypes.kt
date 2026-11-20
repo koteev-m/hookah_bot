@@ -120,6 +120,7 @@ data class DialogState(
 data class ResolvedChatContext(
     val table: TableContext,
     val userId: Long,
+    val tableSessionId: Long?,
 )
 
 data class ActiveOrderSummary(

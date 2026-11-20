@@ -116,6 +116,13 @@ import type {
   VenueConversationUnreadCountResponse
 } from './supportDtos'
 
+export function isVenueAccessForUser(data: VenueMeResponse, userId: number | null) {
+  return userId !== null && data?.userId === userId && Array.isArray(data.venues) &&
+    data.venues.every(item => item != null && Number.isSafeInteger(item.venueId) && item.venueId > 0 &&
+      ['OWNER', 'MANAGER', 'STAFF'].includes(item.role) && Array.isArray(item.permissions) &&
+      item.permissions.every(permission => typeof permission === 'string'))
+}
+
 export async function venueGetMe(
   backendUrl: string,
   deps: RequestDependencies,

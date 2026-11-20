@@ -39,6 +39,7 @@ internal fun Route.miniAppAuthRoutes(
     telegramTrafficPolicy: TelegramTrafficPolicy,
     maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
     abuseProtection: MiniAppAbuseProtection,
+    botUsername: String? = null,
 ) {
     val initDataConfig = initDataValidationConfig(appConfig)
     val requestJson = Json { ignoreUnknownKeys = true }
@@ -76,6 +77,7 @@ internal fun Route.miniAppAuthRoutes(
             call.respond(
                 TelegramAuthResponse(
                     token = result.token.token,
+                    botUsername = botUsername,
                     expiresAtEpochSeconds = result.token.expiresAtEpochSeconds,
                     user =
                         MiniAppUserDto(

@@ -68,6 +68,7 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.guest.guestBookingRoutes
 import com.hookah.platform.backend.miniapp.guest.guestFavoritesRoutes
 import com.hookah.platform.backend.miniapp.guest.guestLoyaltyRoutes
+import com.hookah.platform.backend.miniapp.guest.guestOnboardingRoutes
 import com.hookah.platform.backend.miniapp.guest.guestOrderRoutes
 import com.hookah.platform.backend.miniapp.guest.guestProfileRoutes
 import com.hookah.platform.backend.miniapp.guest.guestStaffCallRoutes
@@ -1350,6 +1351,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         )
 
         miniAppAuthRoutes(
+            botUsername = telegramConfig.botUsername,
             appConfig = appConfig,
             sessionTokenService = sessionTokenService,
             userRepository = userRepository,
@@ -1398,6 +1400,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 )
                 route("/guest") {
                     guestProfileRoutes(userRepository)
+                    guestOnboardingRoutes(venueOnboardingService, miniAppAbuseProtection)
                     guestLoyaltyRoutes(loyaltyRepository, guestVenueRepository, subscriptionRepository)
                     guestVenueRoutes(
                         guestVenueRepository = guestVenueRepository,
@@ -1410,6 +1413,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         guestFavoritesRepository = guestFavoritesRepository,
                     )
                     guestTableResolveRoutes(
+                        transactions = guestOrderTransactionCoordinator,
                         tableTokenResolver = tableTokenResolver,
                         guestVenueRepository = guestVenueRepository,
                         subscriptionRepository = subscriptionRepository,

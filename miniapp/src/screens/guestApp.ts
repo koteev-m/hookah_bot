@@ -1,8 +1,8 @@
 import './guestExperience.css'
-import { clearVenueBrowse, getVenueBrowseId, getVenueBrowsePayload, rememberVenueBrowse } from '../shared/state/venueBrowseContext'
+import { clearVenueBrowse, getVenueBrowseId, getVenueBrowsePayload, isPersonalVenueBrowse, rememberVenueBrowse } from '../shared/state/venueBrowseContext'
 import { requestApi } from '../shared/api/request'
 import { getBackendBaseUrl } from '../shared/api/backend'
-import { clearSession, getAccessToken } from '../shared/api/auth'
+import { clearSession, getAccessToken, getSessionBotUsername } from '../shared/api/auth'
 import { guestEndTableSession, guestGetActiveOrder, guestGetStaffCallStatus, guestGetTabs } from '../shared/api/guestApi'
 import { isDebugEnabled } from '../shared/debug'
 import {
@@ -11,13 +11,16 @@ import {
   formatTableStatus,
   getTableContext,
   initTableContext,
+  pendingSdkRejoin,
+  rememberSdkRejoin,
+  sdkTokenDigest,
   refresh as refreshTableContext,
   subscribe as subscribeTable
 } from '../shared/state/tableContext'
 import { getCartSnapshot, setCartTableToken, subscribeCart } from '../shared/state/cartStore'
 import { parsePositiveInt } from '../shared/parse'
 import { bindTelegramBackButton } from '../shared/telegramBackButton'
-import { createGuestNavigation, guestRouteHash } from '../shared/guestNavigation'
+import { applicationHash, guestApplicationUrl, createGuestNavigation, guestRouteHash } from '../shared/guestNavigation'
 import { getTelegramContext, getTelegramQrScanner } from '../shared/telegram'
 import { openBotChat } from '../shared/telegramActions'
 import { extractTableTokenFromScannedText, tableTokenQueryParamKeys } from '../shared/validation/tableToken'
@@ -397,6 +400,13 @@ function updateGuestShellActions(
 }
 
 export function mountGuestApp(options: GuestAppOptions): () => void {
+  if (guestRouteHash() === applicationHash) {
+    // Older entries may still carry the QR launch query. Restore this route by session.
+    const clean = guestApplicationUrl(new URL(window.location.href))
+    window.history.replaceState(window.history.state, '', clean)
+    return mountGuestScreens(options)
+  }
+  if (/^#\/(account|order|cart|bookings|messages|support)(?:[/?]|$)/.test(guestRouteHash())) return mountGuestScreens(options)
   const payload = getVenueBrowsePayload()
   if (payload === null || !options.root) return mountGuestScreens(options)
   const controller = new AbortController()
@@ -453,10 +463,30 @@ function mountGuestScreens(options: GuestAppOptions) {
     support: { filter: 'active', listScroll: 0, drafts: new Map() }
   }
   let pendingVenueChat: number | null = null
+  let resolvingQr = false
   let visitExitPending = false
   const visitReturn = el('button', { className: 'button-secondary guest-return-visit' })
   visitReturn.hidden = true
   refs.statusCard.after(visitReturn)
+  const resumeLaunch = el('button', { className: 'button-secondary', text: 'Подключиться по QR из Telegram' })
+  refs.statusCard.appendChild(resumeLaunch)
+  let sdkQrAttempted = false
+  let sdkQrRetry = false
+  const launchToken = getTelegramContext().tableToken
+  try {
+    const attempt = pendingSdkRejoin()
+    if (attempt?.requiresScan && launchToken) {
+      sdkQrAttempted = true
+      void sdkTokenDigest(launchToken).then(digest => {
+        if (mounted && digest !== attempt.tokenDigest) {
+          sdkQrAttempted = false
+          renderShellActions()
+        }
+      }).catch(() => { /* A new scan is required. */ })
+    } else {
+      sdkQrRetry = attempt !== null
+    }
+  } catch { sdkQrAttempted = true }
   let staffCallActive = false
   let canLeaveTable = false
   let handleGuestAction: (action: GuestActionId) => void = () => undefined
@@ -465,7 +495,12 @@ function mountGuestScreens(options: GuestAppOptions) {
     const differentVenue = currentRoute.venueId !== null && currentRoute.venueId !== tableSnapshot.venueId
     const showVisit = activeVisit && !differentVenue && ['venue', 'cart', 'order'].includes(currentRoute.name)
     const presentation = formatTableStatus(tableSnapshot)
-    refs.statusCard.hidden = !showVisit && !refs.statusDetails.textContent
+    const launch = getTelegramContext()
+    resumeLaunch.textContent = sdkQrRetry ? 'Повторить подключение по QR' : 'Подключиться по QR из Telegram'
+    resumeLaunch.disabled = resolvingQr || visitExitPending
+    resumeLaunch.hidden = (sdkQrAttempted && !sdkQrRetry) || (!sdkQrRetry && tableSnapshot.status !== 'rescan') || !launch.tableTokenAutoResolve ||
+      launch.tableTokenFromUrl || !launch.tableToken || guestRouteHash() === applicationHash
+    refs.statusCard.hidden = !showVisit && !refs.statusDetails.textContent && resumeLaunch.hidden
     refs.statusTitle.textContent = showVisit ? presentation.title : ''
     refs.statusCard.dataset.activeVisit = String(showVisit && tableSnapshot.tableSessionActive)
     refs.visitState.hidden = !showVisit
@@ -483,7 +518,7 @@ function mountGuestScreens(options: GuestAppOptions) {
       (action) => handleGuestAction(action)
     )
   }
-  setCartTableToken(resolveTableMode(tableSnapshot) === 'active-table' ? tableSnapshot.tableToken : null)
+  setCartTableToken(resolveTableMode(tableSnapshot) === 'active-table' ? tableSnapshot.tableToken : null, tableSnapshot.tableSessionId)
   let rerenderForTableChange: (() => void) | null = null
   let exitCheckAbort: AbortController | null = null
 
@@ -568,17 +603,16 @@ function mountGuestScreens(options: GuestAppOptions) {
       ? `#/venue/${tableSnapshot.venueId}` : '#/catalog'
   const navigation = createGuestNavigation(onNavigationChange, () => fallbackBackHash(), contentRoot)
   let lastResolvedTable = tableSnapshot.status === 'resolved' ? tableSnapshot : null
-  let resolvingQr = false
   const tableSubscription = subscribeTable((snapshot) => {
     const previousCanOpenOrder = canOpenActiveOrder(tableSnapshot)
     const previousMode = resolveTableMode(tableSnapshot)
     const nextCanOpenOrder = canOpenActiveOrder(snapshot)
     tableSnapshot = snapshot
     const nextMode = resolveTableMode(snapshot)
-    setCartTableToken(nextMode === 'active-table' ? snapshot.tableToken : null)
+    setCartTableToken(nextMode === 'active-table' ? snapshot.tableToken : null, snapshot.tableSessionId)
     const presentation = formatTableStatus(snapshot)
     if (!resolvingQr) {
-      const showTableMessage = nextMode === 'ended-table' || snapshot.status === 'resolving' || presentation.severity === 'error'
+      const showTableMessage = snapshot.status === 'rescan' || nextMode === 'ended-table' || snapshot.status === 'resolving' || presentation.severity === 'error'
       refs.statusDetails.textContent = showTableMessage
         ? [presentation.title, presentation.details].filter(Boolean).join(' ')
         : ''
@@ -593,7 +627,8 @@ function mountGuestScreens(options: GuestAppOptions) {
       const changed = previous && (previous.tableToken !== snapshot.tableToken ||
         previous.tableSessionId !== snapshot.tableSessionId || previous.tableSessionActive !== snapshot.tableSessionActive)
       const firstEndedSession = !previous && nextMode === 'ended-table' && (snapshot.tableSessionId ?? 0) > 0
-      if (!resolvingQr && (changed || firstEndedSession)) {
+      const exitedWhileApplying = snapshot.tableSessionInactiveReason === 'TABLE_SESSION_EXITED' && guestRouteHash() === applicationHash
+      if (!resolvingQr && !exitedWhileApplying && (changed || firstEndedSession)) {
         const venueId = snapshot.tableSessionActive ? snapshot.venueId : null
         const sessionId = snapshot.tableSessionId || (previous?.tableToken === snapshot.tableToken ? previous?.tableSessionId : null)
         const url = visitUrl(venueId ? `#/venue/${venueId}` : '#/catalog', snapshot.tableToken,
@@ -658,6 +693,10 @@ function mountGuestScreens(options: GuestAppOptions) {
     pendingVenueChat = venueId
     navigate(`#/messages?venueId=${venueId}`)
   }
+  const openVenueCard = (venueId: number) => {
+    rememberVenueBrowse(`catalog:${venueId}`, venueId)
+    navigate(`#/venue/${venueId}`)
+  }
   const openCatalog = () => {
     if (getVenueBrowseId()) clearVenueBrowse()
     navigate('#/catalog', { root: true, catalogChosen: true })
@@ -675,6 +714,7 @@ function mountGuestScreens(options: GuestAppOptions) {
     const hash = guestRouteHash()
     if (hash === '#/catalog') return null
     if (currentRoute.name === 'catalog') return '#/catalog'
+    if (hash === '#/account/venue-application') return navigation.previousHash() ?? '#/account'
     if (currentRoute.name === 'account' && hash !== '#/account') {
       const params = new URLSearchParams(hash.split('?')[1] ?? '')
       if (params.has('visit')) {
@@ -696,15 +736,69 @@ function mountGuestScreens(options: GuestAppOptions) {
       if (/[?&]cartLineRef=/.test(hash)) return '#/cart'
       const cardAlias = new URLSearchParams(hash.split('?')[1] ?? '').get('browseMenu') === '0'
       const activeMenu = resolveTableMode(tableSnapshot) === 'active-table' &&
-        tableSnapshot.venueId === currentRoute.venueId && getVenueBrowseId() !== currentRoute.venueId
+        tableSnapshot.venueId === currentRoute.venueId && !isPersonalVenueBrowse(currentRoute.venueId)
       if (hash.includes('?') && (!cardAlias || activeMenu)) return `#/venue/${currentRoute.venueId}`
-      return currentRoute.venueId === (getVenueBrowseId() ?? tableSnapshot.venueId) ? null : '#/catalog'
+      return isPersonalVenueBrowse(currentRoute.venueId) || currentRoute.venueId === tableSnapshot.venueId ? null : '#/catalog'
     }
     return contentRoot()
   }
 
   let cancelQrScan: (() => void) | null = null
   disposables.push(() => cancelQrScan?.())
+  const connectToQr = async (token: string, sdkLaunch = false) => {
+    if (resolvingQr || visitExitPending) return
+    resolvingQr = true
+    if (sdkLaunch) {
+      sdkQrAttempted = true
+      sdkQrRetry = false
+      renderShellActions()
+    }
+    try {
+      const tokenDigest = sdkLaunch ? await sdkTokenDigest(token) : ''
+      const pending = sdkLaunch ? pendingSdkRejoin() : null
+      const snapshot = await refreshTableContext({
+        scannedToken: token,
+        retrySessionId: pending?.tokenDigest === tokenDigest ? pending.sessionId : undefined,
+        confirmRejoin: table => {
+          const confirmed = window.confirm(`Визит завершён. Снова подключиться к столу №${table.tableNumber} в заведении «${table.venueName}»?`)
+          if (sdkLaunch && confirmed) rememberSdkRejoin({ sessionId: table.tableSessionId, tokenDigest })
+          return confirmed
+        }
+      })
+      if (!mounted || !snapshot) return
+      if (!snapshot.orderAllowed) {
+        if (snapshot.status === 'rescan' && pending?.tokenDigest === tokenDigest) {
+          rememberSdkRejoin({ ...pending, requiresScan: true })
+        }
+        if (sdkLaunch) sdkQrRetry = snapshot.status === 'error' &&
+          (snapshot.error?.status === 0 || (snapshot.error?.status ?? 0) >= 500)
+        const failure = formatTableStatus(snapshot)
+        const message = [failure.title, failure.details].filter(Boolean).join(' ')
+        refs.statusDetails.textContent = message
+        renderShellActions()
+        showTelegramAlert(message)
+        return
+      }
+      sdkQrRetry = false
+      if (getTelegramContext().telegramUserId) rememberSdkRejoin(null)
+      if (getVenueBrowseId() !== null) clearVenueBrowse()
+      if (snapshot.status === 'resolved' && snapshot.venueId && snapshot.tableSessionActive) {
+        selectedVenue = snapshot.venueId
+        navigation.resetVisit(visitUrl(`#/venue/${snapshot.venueId}`, token))
+      }
+    } catch {
+      if (sdkLaunch) sdkQrRetry = true
+      showTelegramAlert('Не удалось загрузить стол. Попробуйте ещё раз.')
+    } finally {
+      resolvingQr = false
+      if (mounted) renderShellActions()
+    }
+  }
+  resumeLaunch.addEventListener('click', () => {
+    const launch = getTelegramContext()
+    if ((!sdkQrRetry && tableSnapshot.status !== 'rescan') || launch.tableTokenFromUrl || !launch.tableTokenAutoResolve || !launch.tableToken) return
+    void connectToQr(launch.tableToken, true)
+  })
   const openQrScanner = () => {
     if (resolvingQr || visitExitPending) return
     if (cancelQrScan) return
@@ -734,38 +828,19 @@ function mountGuestScreens(options: GuestAppOptions) {
         if (consumed) return true
         const token = extractTableTokenFromScannedText(scannedText, {
           miniAppUrl: window.location.href,
-          botUsername: telegramContext.botUsername
+          botUsername: getSessionBotUsername()
         })
         if (!token) {
           webApp?.showAlert?.('QR-код не содержит токен стола.')
           return false
         }
         finishScan()
-        resolvingQr = true
         try {
           webApp?.closeScanQrPopup?.()
         } catch {
           // ignore scanner close errors
         }
-        void refreshTableContext({ scannedToken: token })
-          .then((snapshot) => {
-            if (!mounted || !snapshot) return
-            if (!snapshot.orderAllowed) {
-              const failure = formatTableStatus(snapshot)
-              const message = [failure.title, failure.details].filter(Boolean).join(' ')
-              refs.statusDetails.textContent = message
-              renderShellActions()
-              showTelegramAlert(message)
-              return
-            }
-            if (getVenueBrowseId() !== null) clearVenueBrowse()
-            if (snapshot.status === 'resolved' && snapshot.venueId && snapshot.tableSessionActive) {
-              selectedVenue = snapshot.venueId
-              navigation.resetVisit(visitUrl(`#/venue/${snapshot.venueId}`, token))
-            }
-          })
-          .catch(() => showTelegramAlert('Не удалось загрузить стол. Попробуйте позже.'))
-          .finally(() => { resolvingQr = false })
+        connectToQr(token)
         return true
       })
     } catch {
@@ -777,10 +852,13 @@ function mountGuestScreens(options: GuestAppOptions) {
   }
   const leaveVisit = () => {
     clearCurrentTableContext()
-    setCartTableToken(null)
+    setCartTableToken(null, null)
     staffCallActive = false
     selectedVenue = null
-    navigation.resetVisit(visitUrl('#/catalog'))
+    const url = visitUrl('#/catalog')
+    url.searchParams.set('visit', 'restore')
+    if (url.searchParams.get('mode') === 'home' || !url.searchParams.has('mode')) url.searchParams.set('entry', 'guest')
+    navigation.resetVisit(url, { ended: true })
   }
   const endTableVisit = () => {
     if (visitExitPending) return
@@ -813,10 +891,9 @@ function mountGuestScreens(options: GuestAppOptions) {
           tableSnapshot.tableSessionId !== snapshot.tableSessionId) return
         if (!result.ok) {
           if (result.error.status === 403 || result.error.status === 404) {
-            const message = 'Контекст стола уже недоступен. Отсканируйте QR заново.'
+            const message = 'Сервер не подтвердил выход. Проверьте номер стола и заведение в меню бота. Завершайте визит только если они совпадают с нужным столом.'
             refs.statusDetails.textContent = message
             showTelegramAlert(message)
-            leaveVisit()
             return
           }
           const message = result.error.message || 'Не удалось завершить визит. Попробуйте позже.'
@@ -847,7 +924,7 @@ function mountGuestScreens(options: GuestAppOptions) {
       case 'catalog': {
         const venue = selectedVenue ?? (resolveTableMode(tableSnapshot) === 'active-table' ? tableSnapshot.venueId : null)
         if (venue) {
-          const showingActiveMenu = tableSnapshot.venueId === venue && tableSnapshot.orderAllowed && getVenueBrowseId() !== venue
+          const showingActiveMenu = tableSnapshot.venueId === venue && tableSnapshot.orderAllowed && !isPersonalVenueBrowse(venue)
           navigate(`#/venue/${venue}${showingActiveMenu ? '?browseMenu=0' : ''}`, { root: true })
         } else {
           openCatalog()
@@ -945,7 +1022,7 @@ function mountGuestScreens(options: GuestAppOptions) {
         root: refs.content,
         backendUrl,
         isDebug,
-        onOpenVenue: (venueId) => navigate(`#/venue/${venueId}`),
+        onOpenVenue: openVenueCard,
         onBookVenue: (venueId) => navigate(`#/bookings?venueId=${venueId}`),
         navigate
       })
@@ -966,15 +1043,13 @@ function mountGuestScreens(options: GuestAppOptions) {
       refs.content,
       backendUrl,
       isDebug,
-      (venueId) => {
-        navigate(`#/venue/${venueId}`)
-      },
+      openVenueCard,
       () => {
         navigate('#/order')
       },
       (venueId, focusHeading) => {
         if (venueId) {
-          navigate(`#/venue/${venueId}${getVenueBrowseId() === venueId ? '?browseMenu=1' : ''}`, {
+          navigate(`#/venue/${venueId}${isPersonalVenueBrowse(venueId) ? '?browseMenu=1' : ''}`, {
             focusVenue: focusHeading ? venueId : undefined
           })
           return
@@ -992,17 +1067,15 @@ function mountGuestScreens(options: GuestAppOptions) {
       },
       () => {
         const telegramContext = getTelegramContext()
-        const result = openBotChat(telegramContext, {
-          tableToken: tableSnapshot.tableToken,
-          tableSessionId: tableSnapshot.tableSessionId
-        })
+        const result = openBotChat(telegramContext)
         if (result.ok) {
           return { ok: true }
         }
+        const username = getSessionBotUsername()
         return {
           ok: false,
-          message: telegramContext.botUsername
-            ? `Не удалось открыть чат автоматически. Откройте @${telegramContext.botUsername} вручную.`
+          message: username
+            ? `Не удалось открыть чат автоматически. Откройте @${username} вручную.`
             : 'Не удалось открыть чат автоматически. Откройте чат с ботом вручную.'
         }
       },
@@ -1019,7 +1092,7 @@ function mountGuestScreens(options: GuestAppOptions) {
   rerenderForTableChange = render
 
   function onNavigationChange() {
-    if (resolveTableMode(tableSnapshot) !== 'ended-table') refs.statusDetails.textContent = ''
+    if (resolveTableMode(tableSnapshot) !== 'ended-table' && tableSnapshot.status !== 'rescan') refs.statusDetails.textContent = ''
     render()
     notifyRouteChange()
   }

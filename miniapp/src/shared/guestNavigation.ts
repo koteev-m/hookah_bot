@@ -1,3 +1,4 @@
+import { hasGuestVisitToResume } from './state/tableContext'
 import { getTelegramContext } from './telegram'
 
 type NavigationOptions = {
@@ -14,6 +15,7 @@ type GuestEntry = {
   visit: string
   visitHome: string
   visitEnded: boolean
+  resumeTable?: boolean
   branch: GuestBranch
   trail: string[]
   id: string
@@ -31,7 +33,7 @@ const routeParams: Record<string, readonly string[]> = {
 
 // The launch URL remains available to Telegram auth. Navigation keeps only Guest route inputs.
 export function guestRouteHash(hash = window.location.hash): string {
-  const match = /^#\/?(catalog(?:\/promotions)?|venue(?:\/\d+)?|cart|order|bookings|account(?:\/(?:history|favorites|loyalty|profile))?|messages|support)\/?(?:\?([^#]*))?$/.exec(hash)
+  const match = /^#\/?(catalog(?:\/promotions)?|venue(?:\/\d+)?|cart|order|bookings|account(?:\/(?:history|favorites|loyalty|profile|venue-application))?|messages|support)\/?(?:\?([^#]*))?$/.exec(hash)
   if (!match) return '#/catalog'
   const [, path, query] = match
   const allowed = routeParams[path.startsWith('venue/') ? 'venue' : path] ?? []
@@ -40,6 +42,16 @@ export function guestRouteHash(hash = window.location.hash): string {
     if (allowed.includes(name) && !clean.has(name)) clean.set(name, value)
   })
   return `#/${path}${clean.size ? `?${clean}` : ''}`
+}
+
+export const applicationHash = '#/account/venue-application'
+
+export function guestApplicationUrl(url: URL) {
+  const home = url.searchParams.get('mode') === 'home' || !url.searchParams.has('mode')
+  const clean = new URL(url.pathname, url.origin)
+  clean.search = home ? 'mode=home&entry=guest&visit=restore' : 'mode=guest&visit=restore'
+  clean.hash = applicationHash
+  return clean
 }
 
 // A reload can continue the same Guest trail. Never rewind an unknown browser/mode entry.
@@ -60,6 +72,7 @@ export function createGuestNavigation(
   let visit = initial?.visit ?? scope
   // Records whether this history boundary was reset after a server-confirmed end.
   let visitEnded = initial?.visitEnded === true
+  let resumeTable = initial?.resumeTable === true
   let boundary = new URL(window.location.href)
   boundary.hash = guestRouteHash(initial?.visitHome ?? initial?.branch?.home ?? hash)
   // Forward entries survive replaceState and reload. Carry their branch identity with the entry.
@@ -79,10 +92,28 @@ export function createGuestNavigation(
     // With SDK credentials, a mixed deep link can display its clean URL immediately.
     // A hash-only launch keeps its bootstrap credentials until the first transition.
     const hash = trail[trail.length - 1]
+    if (hash === applicationHash) {
+      url = guestApplicationUrl(url)
+      resumeTable ||= hasGuestVisitToResume()
+      // Back can load the parent as a new document. Keep its route and trail,
+      // but remove the launch credential before pushing the business screen.
+      if (!replace && resumeTable && entry) {
+        const parent = new URL(url)
+        parent.hash = guestRouteHash()
+        window.history.replaceState({
+          ...window.history.state, [key]: { ...entry, resumeTable: true }
+        }, '', parent)
+      }
+    }
+    if (resumeTable) {
+      url = guestApplicationUrl(url)
+      url.hash = hash
+      boundary.search = url.search
+    }
     if (url.hash.startsWith('#/') && url.hash !== hash && getTelegramContext().webApp?.initData) url.hash = hash
-    entry = { scope, visit, visitHome: boundary.hash, visitEnded, branch, trail, id: nextId() }
+    entry = { scope, visit, visitHome: boundary.hash, visitEnded, resumeTable, branch, trail, id: nextId() }
     const state = {
-      ...window.history.state,
+      ...(hash === applicationHash ? {} : window.history.state),
       [key]: entry,
       hookahGuestDepth: trail.length - 1,
       hookahGuestPrevious: trail.at(-2) ?? null,
@@ -140,6 +171,10 @@ export function createGuestNavigation(
     }
     if (owned) {
       entry = owned
+      if (!pendingOptions && ((resumeTable && !owned.resumeTable) ||
+          (guestRouteHash() === applicationHash && guestApplicationUrl(new URL(window.location.href)).href !== window.location.href))) {
+        write(new URL(window.location.href), owned.trail, {}, true)
+      }
       if (pendingOptions) {
         const url = new URL(window.location.href)
         if (pendingHash) url.hash = pendingHash
@@ -160,6 +195,7 @@ export function createGuestNavigation(
     resetVisit: (url: URL, { ended = false }: { ended?: boolean } = {}) => {
       visit = nextId()
       visitEnded = ended
+      resumeTable = false
       boundary = new URL(url)
       branch = { id: visit, home: url.hash, catalogChosen: url.hash === '#/catalog' }
       pendingRoot = null

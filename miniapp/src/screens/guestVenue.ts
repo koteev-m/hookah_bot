@@ -1,5 +1,5 @@
 import { renderGuestPromotion } from './guestPromotions'
-import { getVenueBrowseId } from '../shared/state/venueBrowseContext'
+import { isPersonalVenueBrowse } from '../shared/state/venueBrowseContext'
 import { createInfoMediaPreview, type InfoMediaLoader } from '../shared/ui/infoMediaPreview'
 import { loadInfoMediaContent } from '../shared/api/infoMediaContent'
 import { requestBinary } from '../shared/api/request'
@@ -1028,7 +1028,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     if (readOnlyPreview) return false
     const explicitMenu = routeParams.get('browseMenu')
     return (explicitMenu === '1' || Boolean(replaceCartLineRef) ||
-      (explicitMenu !== '0' && getVenueBrowseId() !== venueId && canPlaceOrders()))
+      (explicitMenu !== '0' && !isPersonalVenueBrowse(venueId) && canPlaceOrders()))
   }
 
   const currentStaffStatusParams = () => {
@@ -1263,7 +1263,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     menuButton.onclick = () => {
       const previous = window.history.state?.hookahGuestPrevious
       const previousCard = previous === `#/venue/${venueId}?browseMenu=0` ||
-        ((!canPlaceOrders() || getVenueBrowseId() === venueId) && previous === `#/venue/${venueId}`)
+        ((!canPlaceOrders() || isPersonalVenueBrowse(venueId)) && previous === `#/venue/${venueId}`)
       if (menuOpen && previousCard) navigate(`#/venue/${venueId}?browseMenu=0`, { parent: previous })
       else navigate(`#/venue/${venueId}?browseMenu=${menuOpen ? '0' : '1'}`, {
         replace: menuOpen && routeParams.get('browseMenu') === '1'
@@ -1927,6 +1927,10 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     if (!venueResult.ok) {
       setStatus('')
       showError(venueResult.error)
+      if (venueResult.error.status === 404) {
+        refs.errorTitle.textContent = 'Заведение недоступно'
+        refs.errorMessage.textContent = 'Вернитесь в каталог, чтобы выбрать другое заведение.'
+      }
       return
     }
     if (!detailsResult.ok) {

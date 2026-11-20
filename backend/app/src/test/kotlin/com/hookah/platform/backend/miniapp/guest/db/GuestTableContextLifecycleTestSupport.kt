@@ -118,6 +118,7 @@ internal class GuestTableContextLifecycleTestDatabase private constructor(
     fun insertContext(
         tableToken: String = this.tableToken,
         updatedAt: Instant,
+        tableSessionId: Long? = null,
         venueId: Long? = this.venueId,
         tableId: Long? = this.tableId,
     ) {
@@ -129,9 +130,10 @@ internal class GuestTableContextLifecycleTestDatabase private constructor(
                 venue_id,
                 table_id,
                 table_token,
-                updated_at
+                updated_at,
+                table_session_id
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
         ) { statement ->
             statement.setLong(1, chatId)
@@ -140,6 +142,7 @@ internal class GuestTableContextLifecycleTestDatabase private constructor(
             statement.setObject(4, tableId)
             statement.setString(5, tableToken)
             statement.setTimestamp(6, Timestamp.from(updatedAt))
+            statement.setObject(7, tableSessionId)
         }
     }
 
@@ -362,7 +365,7 @@ internal class GuestTableContextLifecycleTestDatabase private constructor(
     fun contextSnapshot(): TestContextSnapshot? =
         queryOne(
             """
-            SELECT chat_id, user_id, venue_id, table_id, table_token, updated_at
+            SELECT chat_id, user_id, venue_id, table_id, table_token, updated_at, table_session_id
             FROM telegram_chat_context
             WHERE chat_id = ?
             """.trimIndent(),
@@ -458,6 +461,7 @@ internal class GuestTableContextLifecycleTestDatabase private constructor(
                     statement.execute(
                         """
                         CREATE TABLE telegram_chat_context (
+                            table_session_id BIGINT REFERENCES table_sessions(id) ON DELETE SET NULL,
                             chat_id BIGINT PRIMARY KEY,
                             user_id BIGINT NOT NULL REFERENCES users(telegram_user_id) ON DELETE CASCADE,
                             venue_id BIGINT NULL REFERENCES venues(id) ON DELETE SET NULL,
@@ -605,6 +609,7 @@ internal data class TestActivationDialogRow(
 )
 
 internal data class TestActivationContextRow(
+    val tableSessionId: Long?,
     val chatId: Long,
     val userId: Long,
     val venueId: Long?,
@@ -711,12 +716,13 @@ internal fun loadTestActivationAuthoritativeSnapshot(connection: Connection): Te
         contexts =
             connection.queryRows(
                 """
-                SELECT chat_id, user_id, venue_id, table_id, table_token, updated_at
+                SELECT chat_id, user_id, venue_id, table_id, table_token, updated_at, table_session_id
                 FROM telegram_chat_context
                 ORDER BY chat_id
                 """.trimIndent(),
             ) { rs ->
                 TestActivationContextRow(
+                    tableSessionId = rs.nullableLong("table_session_id"),
                     chatId = rs.getLong("chat_id"),
                     userId = rs.getLong("user_id"),
                     venueId = rs.nullableLong("venue_id"),
