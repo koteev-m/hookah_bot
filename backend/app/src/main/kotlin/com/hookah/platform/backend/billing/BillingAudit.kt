@@ -42,12 +42,14 @@ suspend fun appendBillingCheckoutEnsureAudit(
     )
 }
 
-suspend fun appendBillingCourtesyDaysAudit(
+fun appendBillingCourtesyDaysAudit(
+    connection: java.sql.Connection,
     auditLogRepository: AuditLogRepository,
     actorUserId: Long,
     adjustment: BillingAdjustment,
 ) {
     auditLogRepository.appendJson(
+        connection = connection,
         actorUserId = actorUserId,
         action = "BILLING_COURTESY_DAYS_ADDED",
         entityType = "billing_adjustment",

@@ -569,6 +569,7 @@ type BillingOverviewFixture = {
   nextPaymentDate?: string | null
   nextInvoicePeriodStart?: string | null
   nextInvoicePeriodEnd?: string | null
+  courtesyUntil?: string | null
   courtesyDays?: number | null
   lastCourtesyDays?: number | null
   lastCourtesyReason?: string | null
@@ -580,6 +581,7 @@ type BillingOverviewFixture = {
   checkoutUrl?: string | null
   payableInvoice?: BillingInvoiceFixture | null
   invoices: BillingInvoiceFixture[]
+  outstandingInvoices?: { items: BillingInvoiceFixture[]; nextAfterId: number | null; hasMore: boolean }
 }
 
 type VenueBookingFixture = {
@@ -4511,6 +4513,7 @@ async function mockPlatformBillingApi(
   page: Page,
   options: {
     overview?: Partial<BillingOverviewFixture>
+    savedBasePriceMinor?: number
     manualOnly?: boolean
   } = {}
 ) {
@@ -4523,7 +4526,7 @@ async function mockPlatformBillingApi(
   let subscriptionSettings = {
     trialEndDate: '2026-06-30',
     paidStartDate: '2026-07-01',
-    basePriceMinor: 150000,
+    basePriceMinor: options.savedBasePriceMinor ?? 150000,
     priceOverrideMinor: null as number | null,
     currency: 'RUB'
   }
@@ -4578,7 +4581,7 @@ async function mockPlatformBillingApi(
         ...subscriptionSettings,
         trialEndDate: (lastSubscriptionUpdate.trialEndDate as string | null | undefined) ?? null,
         paidStartDate: (lastSubscriptionUpdate.paidStartDate as string | null | undefined) ?? null,
-        basePriceMinor: (lastSubscriptionUpdate.basePriceMinor as number | null | undefined) ?? null,
+        basePriceMinor: (lastSubscriptionUpdate.basePriceMinor as number | null | undefined) ?? subscriptionSettings.basePriceMinor,
         priceOverrideMinor: (lastSubscriptionUpdate.priceOverrideMinor as number | null | undefined) ?? null,
         currency: (lastSubscriptionUpdate.currency as string | null | undefined) ?? 'RUB'
       }
@@ -4655,6 +4658,7 @@ async function mockPlatformBillingApi(
     overview = {
       ...overview,
       paidThrough: newPaidThrough,
+      courtesyUntil: newPaidThrough,
       nextPaymentDate: nextStart,
       nextInvoicePeriodStart: nextStart,
       nextInvoicePeriodEnd: nextPeriodEndIso(nextStart),
@@ -10757,14 +10761,67 @@ test('guest opens my bookings from profile and manages booking actions', async (
   await mixCard.locator('textarea').fill('другой стол')
   await mixCard.getByRole('button', { name: 'Сохранить перенос' }).click()
 
+  await expect(mixCard).toContainText('11.01.2030, 20:30')
   expect(api.getBookingUpdateRequests()).toHaveLength(1)
   expect(api.getBookingUpdateRequests()[0]).toMatchObject({ venueId: 1, bookingId: 501, partySize: 4, comment: 'другой стол' })
-  await expect(rows.filter({ hasText: 'Микс' })).toContainText('11.01.2030, 20:30')
 
   page.once('dialog', (dialog) => void dialog.accept())
-  await rows.filter({ hasText: 'Микс' }).getByRole('button', { name: 'Отменить бронь' }).click()
+  await mixCard.getByRole('button', { name: 'Отменить бронь' }).click()
+  await expect(mixCard).toHaveCount(0)
   expect(api.getBookingCancelRequests()).toEqual([{ venueId: 1, bookingId: 501 }])
-  await expect(rows.filter({ hasText: 'Микс' })).toHaveCount(0)
+})
+
+test('guest booking cancellation respects dismissal and keeps the booking after a rejected request', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { bookings: [buildGuestBooking({ venueId: 1, bookingId: 501 })] })
+
+  const requests: Array<{ method: string; venueId: string | null; bookingId: number }> = []
+  let releaseResponse!: () => void
+  const pendingResponse = new Promise<void>((resolve) => { releaseResponse = resolve })
+  const errorMessage = 'Не удалось отменить бронь. Попробуйте ещё раз.'
+  await page.route('**/api/guest/booking/cancel?*', async (route) => {
+    const request = route.request()
+    requests.push({
+      method: request.method(),
+      venueId: new URL(request.url()).searchParams.get('venueId'),
+      bookingId: request.postDataJSON()?.bookingId
+    })
+    await pendingResponse
+    await route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE', message: errorMessage } }, 503))
+  })
+
+  await page.goto('?mode=guest#/bookings')
+  const card = page.locator('.guest-booking-card').filter({ hasText: 'Микс' })
+  const cancel = card.getByRole('button', { name: 'Отменить бронь' })
+  const prompts: string[] = []
+  page.on('dialog', async (dialog) => {
+    prompts.push(dialog.message())
+    if (prompts.length === 1) await dialog.dismiss()
+    else await dialog.accept()
+  })
+
+  await cancel.click()
+  await Promise.all([
+    page.waitForResponse((response) => new URL(response.url()).pathname === '/api/guest/bookings'),
+    page.getByRole('button', { name: '🔄 Обновить' }).click()
+  ])
+  expect(prompts).toEqual(['Отменить бронь?'])
+  expect(requests).toEqual([])
+
+  const expectedRequest = [{ method: 'POST', venueId: '1', bookingId: 501 }]
+  try {
+    await cancel.click()
+    await expect.poll(() => requests).toEqual(expectedRequest)
+    await cancel.click({ force: true })
+  } finally {
+    releaseResponse()
+  }
+  const error = page.getByText(errorMessage, { exact: true })
+  await expect(error).toBeVisible()
+  await expect(card).toContainText('Бронь подтверждена заведением')
+  await expect(page.getByText('Бронь отменена', { exact: true })).toHaveCount(0)
+  expect(prompts).toEqual(['Отменить бронь?', 'Отменить бронь?'])
+  expect(requests).toEqual(expectedRequest)
 })
 
 test('guest booking cards open stable isolated conversations and preserve messages', async ({ page }) => {
@@ -19018,7 +19075,8 @@ test('platform billing cockpit shows invoices and uses explicit checkout and mar
   await page.getByLabel('Причина').fill('Сбой сервиса')
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByRole('button', { name: 'Добавить бесплатные дни' }).click()
-  await expect(page.getByText('Оплачено до 03.08.2026 включительно', { exact: true })).toBeVisible()
+  await expect(page.getByText('Оплачено до 31.07.2026 включительно', { exact: true })).toBeVisible()
+  await expect(page.getByText('Льгота до 03.08.2026 включительно', { exact: true })).toBeVisible()
   await expect(page.getByText('Следующая оплата с 04.08.2026', { exact: true })).toBeVisible()
   await expect(page.getByText('Следующий период: 04.08.2026 — 03.09.2026')).toBeVisible()
   await expect(page.getByText('Бесплатные дни: 3')).toBeVisible()
@@ -19028,6 +19086,260 @@ test('platform billing cockpit shows invoices and uses explicit checkout and mar
   await expect(page.getByText('Счёт: #78 · Открыт')).toBeVisible()
   await expect(page.getByText(/Период: 04\.08\.2026 — 03\.09\.2026 включительно/)).toBeVisible()
   expect(api.getCheckoutPostCalls()).toBe(2)
+})
+
+for (const mode of ['platform', 'venue'] as const) {
+  test(`free billing period hides payment actions in ${mode}`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const overview = {
+      priceMinor: 0, paymentAvailable: false, checkoutEnsureAvailable: false, platformCheckoutEnsureAvailable: false,
+      courtesyDays: 3, unavailableReason: 'free_period', paidThrough: '2026-10-31', nextPaymentDate: null, checkoutUrl: null, payableInvoice: null, invoices: []
+    }
+    if (mode === 'platform') {
+      await mockPlatformBillingApi(page, { overview })
+    } else {
+      await mockVenueBillingApi(page, { role: 'OWNER', permissions: ['ORDER_QUEUE_VIEW'], overview })
+    }
+    await page.goto(`?mode=${mode}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    if (mode === 'platform') await page.getByRole('button', { name: 'Открыть' }).click()
+    else await openVenueSection(page, 'Подписка')
+    await expect(page.getByText(/Бесплатный период/).first()).toBeVisible()
+    await expect(page.getByText(/Следующая оплата с|Льгота до/)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Создать счёт|Подготовить оплату|Оплатить картой|Открыть оплату/ })).toHaveCount(0)
+  })
+}
+
+for (const mode of ['platform', 'venue'] as const) {
+  for (const scenario of ['debt', 'free', 'paid', 'suspended'] as const) {
+    test(`free period history ${scenario} in ${mode}`, async ({ page }) => {
+      await installTelegramWebApp(page, 123456789)
+      const invoice = { ...buildBillingOverview().invoices[0], status: scenario === 'paid' ? 'PAID' : 'PAST_DUE' }
+      const overview = {
+        priceMinor: 0, paidThrough: '2026-10-31', nextPaymentDate: null, paymentAvailable: false,
+        checkoutEnsureAvailable: false, platformCheckoutEnsureAvailable: false, checkoutUrl: null,
+        subscriptionStatus: scenario === 'debt' ? 'past_due' : scenario === 'suspended' ? 'suspended_by_platform' : 'active',
+        unavailableReason: scenario === 'debt' ? 'fake_provider_manual_only' : 'free_period',
+        payableInvoice: scenario === 'debt' ? invoice : null, invoices: ['paid', 'debt'].includes(scenario) ? [invoice] : []
+      }
+      if (mode === 'platform') await mockPlatformBillingApi(page, { overview })
+      else await mockVenueBillingApi(page, { role: 'OWNER', permissions: ['ORDER_QUEUE_VIEW'], overview })
+      await page.goto(`?mode=${mode}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+      if (mode === 'platform') await page.getByRole('button', { name: 'Открыть' }).click()
+      else await openVenueSection(page, 'Подписка')
+      await expect(page.getByText(scenario === 'debt' ? /Неоплаченный счёт #77/ : /Бесплатный период/).first()).toBeVisible()
+      await expect(page.getByText(/Следующая оплата с|Оплата учтена|Текущий период оплачен/)).toHaveCount(0)
+      if (scenario === 'suspended') await expect(page.getByText(/Заблокирована платформой/i).first()).toBeVisible()
+      if (scenario === 'paid') await expect(page.getByText(/#77.*оплачен/i).first()).toBeVisible()
+    })
+  }
+}
+
+for (const mode of ['venue', 'platform'] as const) {
+  test(`billing separates payment, courtesy and older debt in ${mode}`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const debt = { ...buildBillingOverview().invoices[0], status: 'PAST_DUE' }
+    const overview = {
+      priceMinor: 105, basePaidThrough: '2026-10-31', paidThrough: '2026-11-07',
+      courtesyUntil: '2026-11-07', courtesyDays: 7, nextPaymentDate: null,
+      subscriptionStatus: 'past_due', paymentAvailable: false, payableInvoice: debt, invoices: [],
+      unavailableReason: 'fake_provider_manual_only'
+    }
+    if (mode === 'platform') await mockPlatformBillingApi(page, { overview })
+    else await mockVenueBillingApi(page, { role: 'OWNER', permissions: ['ORDER_QUEUE_VIEW'], overview })
+    await page.goto(`?mode=${mode}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    if (mode === 'platform') await page.getByRole('button', { name: 'Открыть' }).click()
+    else await openVenueSection(page, 'Подписка')
+    await expect(page.getByText('Оплачено до 31.10.2026 включительно', { exact: true })).toBeVisible()
+    await expect(page.getByText('Льгота до 07.11.2026 включительно', { exact: true })).toBeVisible()
+    await expect(page.getByText(/#77.*Просрочен/i).first()).toBeVisible()
+    await expect(page.getByText(/Оплата учтена|Текущий период оплачен|Следующая оплата с/)).toHaveCount(0)
+  })
+}
+
+for (const mode of ['platform', 'venue'] as const) {
+  test(`billing keeps the other invoice after settlement and reports an unavailable overview in ${mode}`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const invoice = buildBillingOverview().invoices[0]
+    const late = { ...invoice, id: 41, status: 'PAST_DUE', amountMinor: 5000 }
+    const open = { ...invoice, id: 42, status: 'OPEN', amountMinor: 1000, dueAt: '2099-01-15' }
+    const invoices = Array.from({ length: 50 }, (_, i) => ({ ...invoice, id: 101 + i, status: 'PAID' }))
+    let outstanding = [late, open]
+    let unavailable = false
+    const path = mode === 'platform' ? '/api/platform/venues/1/billing' : '/api/venue/1/subscription'
+    if (mode === 'platform') await mockPlatformBillingApi(page)
+    else await mockVenueBillingApi(page)
+    await page.route(url => url.pathname === path, async route => {
+      expect(route.request().method()).toBe('GET')
+      if (unavailable) return route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE' } }, 503))
+      await route.fulfill(jsonResponse(buildBillingOverview({
+        priceMinor: 0, invoices, payableInvoice: outstanding.at(-1) ?? null,
+        outstandingInvoices: { items: outstanding, nextAfterId: null, hasMore: false }
+      })))
+    })
+    await page.goto(`?mode=${mode}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    if (mode === 'platform') await page.getByRole('button', { name: 'Открыть' }).click()
+    else await openVenueSection(page, 'Подписка')
+    const refresh = mode === 'platform'
+      ? page.getByRole('heading', { name: 'Счета и оплата', exact: true }).locator('..')
+          .getByRole('button', { name: 'Обновить', exact: true })
+      : page.getByRole('button', { name: 'Проверить оплату' })
+    const lateItem = page.locator('summary', { hasText: 'Счёт #41 · Просрочен' })
+    const openItem = page.locator('summary', { hasText: 'Счёт #42 · Открыт' })
+    await expect(lateItem).toBeVisible()
+    await expect(openItem).toBeVisible()
+    outstanding = [late]
+    await refresh.click()
+    await expect(openItem).toHaveCount(0)
+    await expect(lateItem).toBeVisible()
+    outstanding = []
+    await refresh.click()
+    await expect(page.getByText('Неоплаченных счетов нет.')).toBeVisible()
+    unavailable = true
+    await refresh.click()
+    await expect(page.getByText('Счета не загружены.')).toBeVisible()
+    await expect(page.getByText('Неоплаченных счетов нет.')).toHaveCount(0)
+  })
+
+  test(`billing outstanding invoices show both obligations and recover a failed continuation in ${mode}`, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const invoice = buildBillingOverview().invoices[0]
+    const overdue = { ...invoice, id: 41, status: 'PAST_DUE', amountMinor: 5000 }
+    const open = { ...invoice, id: 42, status: 'OPEN', amountMinor: 1000, dueAt: '2099-01-15' }
+    const others = Array.from({ length: 48 }, (_, i) => ({ ...overdue, id: 43 + i }))
+    const overview = {
+      ...buildBillingOverview(), priceMinor: 0, payableInvoice: open,
+      invoices: Array.from({ length: 50 }, (_, i) => ({ ...invoice, id: 200 + i, status: 'PAID' })),
+      outstandingInvoices: { items: [overdue, open, ...others], hasMore: true, nextAfterId: 90 }
+    }
+    if (mode === 'platform') await mockPlatformBillingApi(page, { overview })
+    else await mockVenueBillingApi(page, { overview })
+
+    const path = mode === 'platform' ? '/api/platform/venues/1/billing' : '/api/venue/1/subscription'
+    let fail = true
+    await page.route(url => url.pathname === path && url.search !== '', async route => {
+      expect(route.request().method()).toBe('GET')
+      expect(new URL(route.request().url()).searchParams.get('outstandingAfterId')).toBe('90')
+      if (fail) await route.fulfill(jsonResponse({ error: 'DATABASE_UNAVAILABLE' }, 503))
+      else await route.fulfill(jsonResponse({
+        ...overview, outstandingInvoices: { items: [{ ...overdue, id: 91 }], hasMore: false, nextAfterId: null }
+      }))
+    })
+    await page.goto(`?mode=${mode}#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    if (mode === 'platform') await page.getByRole('button', { name: 'Открыть' }).click()
+    else await openVenueSection(page, 'Подписка')
+    for (const [id, status, price] of [[41, 'Просрочен', '50,00'], [42, 'Открыт', '10,00']] as const) {
+      const item = page.locator('details').filter({ has: page.locator('summary', { hasText: `Счёт #${id} · ${status}` }) })
+      await item.locator('summary').click()
+      await expect(item).toContainText(price)
+      await expect(item.getByText(/Срок оплаты:/)).toBeVisible()
+      if (id === 42) await expect(item.getByText(/15.01.2099/)).toBeVisible()
+    }
+    const next = page.getByRole('button', { name: 'Следующие неоплаченные счета' })
+    await next.click()
+    await expect(page.getByText(/Не удалось загрузить неоплаченные счета/)).toBeVisible()
+    await expect(page.getByText('Неоплаченных счетов нет.')).toHaveCount(0)
+    fail = false
+    await next.click()
+    await expect(page.locator('summary', { hasText: 'Счёт #91' })).toBeVisible()
+    await expect(next).toHaveCount(0)
+    await page.getByRole('button', { name: 'К первым неоплаченным счетам' }).click()
+    await expect(page.locator('summary', { hasText: 'Счёт #41' })).toBeVisible()
+  })
+}
+
+test('platform billing resume requires a reason and separate confirmation', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const overview = buildBillingOverview({ subscriptionStatus: 'suspended_by_platform' })
+  await mockPlatformBillingApi(page, { overview })
+  const requests: unknown[] = []
+  await page.route('**/billing/resume-subscription', async route => {
+    requests.push(route.request().postDataJSON())
+    if (requests.length === 1) {
+      await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({
+        error: { code: 'SUBSCRIPTION_RESUME_CONFLICT', message: 'Отсутствует действующее основание доступа.' }
+      }) })
+    } else await route.fulfill(jsonResponse({ ...overview, subscriptionStatus: 'active' }))
+  })
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  const resume = page.getByRole('button', { name: 'Снять блокировку подписки' })
+  const reason = page.getByLabel('Обоснование восстановления')
+  await expect(resume).toBeVisible({ timeout: 4000 })
+  await resume.click()
+  await expect(reason).toBeFocused()
+  expect(requests).toEqual([])
+  await reason.fill('Сверены условия доступа')
+  const prompts: string[] = []
+  page.once('dialog', dialog => { prompts.push(dialog.message()); return dialog.dismiss() })
+  await resume.click()
+  expect(requests).toEqual([])
+  page.once('dialog', dialog => dialog.accept())
+  await resume.click()
+  await expect(page.getByText(/Отсутствует действующее основание доступа.*Проверьте статус подписки/)).toBeVisible()
+  await expect(resume).toBeVisible()
+  page.once('dialog', dialog => dialog.accept())
+  await resume.click()
+  await expect(resume).toBeHidden()
+  expect(prompts[0]).toContain('гостевой доступ')
+  const confirmed = { reason: 'Сверены условия доступа', expectedUpdatedAt: overview.lifecycleUpdatedAt }
+  expect(requests).toEqual([confirmed, confirmed])
+})
+
+test('platform billing saves just the date on a stored free tariff', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockPlatformBillingApi(page, { savedBasePriceMinor: 0, overview: { priceMinor: 0 } })
+  await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: 'Открыть' }).click()
+  await expect(page.getByLabel('Базовая цена, ₽/мес')).toHaveValue('0')
+  await page.getByLabel('Платный период с').fill('2027-01-01')
+  await page.getByRole('button', { name: 'Сохранить настройки' }).click()
+  await expect.poll(() => api.getLastSubscriptionUpdate()).toMatchObject({ basePriceMinor: null, paidStartDate: '2027-01-01' })
+  await expect(page.getByLabel('Базовая цена, ₽/мес')).toHaveValue('0')
+})
+
+test('platform billing keeps the courtesy key through response loss and refresh', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const overview = buildBillingOverview({ basePaidThrough: '2026-10-31', paidThrough: '2026-10-31' })
+  await mockPlatformBillingApi(page, { overview })
+  const keys: string[] = []
+  const prompts: string[] = []
+  await page.route('**/billing/courtesy-days', async route => {
+    keys.push(route.request().headers()['idempotency-key'])
+    if (keys.length === 1) await route.abort()
+    else await route.fulfill(jsonResponse(overview))
+  })
+  const enter = async () => {
+    await page.goto(`?mode=platform#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+    await page.getByRole('button', { name: 'Открыть' }).click()
+  }
+  const grant = async () => {
+    await page.getByLabel('Бесплатные дни').fill('3')
+    await page.getByLabel('Причина').fill('Сбой сервиса')
+    page.once('dialog', dialog => { prompts.push(dialog.message()); return dialog.accept() })
+    await page.getByRole('button', { name: 'Добавить бесплатные дни' }).click()
+  }
+  await enter()
+  await grant()
+  await expect.poll(() => keys.length).toBe(1)
+  await expect(page.getByRole('button', { name: 'Добавить бесплатные дни' })).toBeEnabled()
+  await page.evaluate(() => {
+    const user = window.Telegram?.WebApp?.initDataUnsafe?.user
+    if (user) user.id = 123456790
+  })
+  await page.getByRole('button', { name: 'Добавить бесплатные дни' }).click()
+  await expect(page.getByText('Пользователь изменился. Откройте заведение заново.')).toBeVisible()
+  expect(keys).toHaveLength(1)
+  await page.reload()
+  await enter()
+  await grant()
+  await expect.poll(() => keys.length).toBe(2)
+  await expect(page.getByLabel('Причина')).toHaveValue('')
+  await grant()
+  await expect.poll(() => keys.length).toBe(3)
+  expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/)
+  expect(keys[1]).toBe(keys[0])
+  expect(keys[2]).not.toBe(keys[0])
+  expect(prompts.map(message => message.split(' ')[0])).toEqual(['Добавить', 'Повторить', 'Добавить'])
 })
 
 test('platform billing cockpit explains missing setup before checkout', async ({ page }) => {

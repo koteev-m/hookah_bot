@@ -372,3 +372,21 @@ class MenuFeaturedOperationConflictException :
         httpStatus = HttpStatusCode.Conflict,
         message = "Идентификатор операции уже использован для другого изменения. Обновите подборку.",
     )
+
+class SubscriptionResumeConflictException(message: String) : ApiException(
+    code = "SUBSCRIPTION_RESUME_CONFLICT",
+    httpStatus = HttpStatusCode.Conflict,
+    message = message,
+)
+
+class BillingOperationConflictException : ApiException(
+    code = "BILLING_OPERATION_CONFLICT",
+    httpStatus = HttpStatusCode.Conflict,
+    message = "Ключ операции уже использован для другого начисления.",
+)
+
+class BillingOperationKeyRequiredException : ApiException(
+    code = "BILLING_OPERATION_KEY_REQUIRED",
+    httpStatus = HttpStatusCode(428, "Precondition Required"),
+    message = "Обновите Mini App и повторите начисление. Требуется Idempotency-Key.",
+)

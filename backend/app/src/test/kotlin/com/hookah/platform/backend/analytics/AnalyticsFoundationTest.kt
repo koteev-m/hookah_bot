@@ -494,7 +494,7 @@ abstract class AnalyticsFoundationContract(private val postgres: Boolean) {
                 }
             // Nonempty previous schema: migrated rows must remain unknown.
             f.flyway().migrate()
-            assertEquals(if (postgres) "142" else "143", f.flyway().info().current().version.version)
+            assertEquals(if (postgres) "143" else "144", f.flyway().info().current().version.version)
             if (legacyRows) {
                 assertNull(f.instant("SELECT closed_at FROM orders WHERE id=$oldClosed"))
                 assertNull(f.instant("SELECT first_delivered_at FROM order_batches WHERE id = $oldBatch"))

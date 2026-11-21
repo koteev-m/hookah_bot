@@ -92,11 +92,12 @@ class VenueInfoMediaMigrationPostgresTest {
                     "140" to "V140__accounting_create_result.sql",
                     "141" to "V141__guest_exit_event_id.sql",
                     "142" to "V142__telegram_chat_table_session.sql",
+                    "143" to "V143__billing_courtesy_operation.sql",
                 ),
                 current.info().pending().map { it.version.version to it.script },
             )
-            assertEquals(14, current.migrate().migrationsExecuted)
-            assertEquals("142", current.info().current().version.version)
+            assertEquals(15, current.migrate().migrationsExecuted)
+            assertEquals("143", current.info().current().version.version)
             assertTrue(current.info().pending().isEmpty())
             current.validate()
             assertEquals(0, current.migrate().migrationsExecuted)

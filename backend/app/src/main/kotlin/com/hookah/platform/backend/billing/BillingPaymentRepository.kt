@@ -5,7 +5,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.ResultSet
 import java.sql.SQLException
-import java.sql.Timestamp
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 import javax.sql.DataSource
 
 class BillingPaymentRepository(private val dataSource: DataSource?) {
@@ -70,7 +71,7 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
                         statement.setInt(4, amountMinor)
                         statement.setString(5, currency)
                         statement.setString(6, status.dbValue)
-                        statement.setTimestamp(7, Timestamp.from(occurredAt))
+                        statement.setObject(7, LocalDateTime.ofInstant(occurredAt, ZoneOffset.UTC))
                         if (rawPayload == null) {
                             statement.setNull(8, java.sql.Types.VARCHAR)
                         } else {
@@ -104,7 +105,7 @@ class BillingPaymentRepository(private val dataSource: DataSource?) {
             amountMinor = rs.getInt("amount_minor"),
             currency = rs.getString("currency"),
             status = status,
-            occurredAt = rs.getTimestamp("occurred_at").toInstant(),
+            occurredAt = rs.getObject("occurred_at", LocalDateTime::class.java).toInstant(ZoneOffset.UTC),
             createdAt = rs.getTimestamp("created_at").toInstant(),
             rawPayload = rs.getString("raw_payload"),
         )

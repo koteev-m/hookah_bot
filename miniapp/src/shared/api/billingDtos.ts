@@ -10,6 +10,12 @@ export type OwnerBillingInvoiceDto = {
   paidAt?: string | null
 }
 
+export type OutstandingInvoicePage = {
+  items: OwnerBillingInvoiceDto[]
+  hasMore: boolean
+  nextAfterId?: number | null
+}
+
 export type OwnerBillingOverviewResponse = {
   venueId: number
   subscriptionStatus: string
@@ -25,6 +31,7 @@ export type OwnerBillingOverviewResponse = {
   nextPaymentDate?: string | null
   nextInvoicePeriodStart?: string | null
   nextInvoicePeriodEnd?: string | null
+  courtesyUntil?: string | null
   courtesyDays?: number | null
   lastCourtesyDays?: number | null
   lastCourtesyReason?: string | null
@@ -35,5 +42,6 @@ export type OwnerBillingOverviewResponse = {
   unavailableReason?: string | null
   checkoutUrl?: string | null
   payableInvoice?: OwnerBillingInvoiceDto | null
+  outstandingInvoices?: OutstandingInvoicePage | null
   invoices: OwnerBillingInvoiceDto[]
 }

@@ -20,6 +20,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
+import java.util.TimeZone
 import java.util.UUID
 import javax.sql.DataSource
 import kotlin.test.Test
@@ -33,6 +34,33 @@ import kotlin.test.assertTrue
 internal class PlatformBillingKpiH2Test : PlatformBillingKpiContract(false)
 
 internal class PlatformBillingKpiPostgresTest : PlatformBillingKpiContract(true) {
+    @Test
+    fun `payment writers in UTC and Moscow have the same UTC KPI cutoff`() =
+        fixture { f ->
+            val original = TimeZone.getDefault()
+            try {
+                val invoice = f.invoice()
+                val instant = now.minusSeconds(1)
+                for (zone in listOf("UTC", "Europe/Moscow")) {
+                    TimeZone.setDefault(TimeZone.getTimeZone(zone))
+                    f.payment(invoice, zone, occurred = instant)
+                }
+                TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+                assertEquals("0", f.snapshot(instant).metrics.getValue("invoices.multipleMatchingSuccesses").value)
+                assertEquals("1", f.snapshot(now).metrics.getValue("invoices.multipleMatchingSuccesses").value)
+                f.ds.connection.use { c ->
+                    c.createStatement().use { st ->
+                        st.executeQuery("SELECT COUNT(DISTINCT occurred_at) FROM billing_payments").use {
+                            assertTrue(it.next())
+                            assertEquals(1, it.getInt(1))
+                        }
+                    }
+                }
+            } finally {
+                TimeZone.setDefault(original)
+            }
+        }
+
     @Test
     fun `dense PostgreSQL snapshot preserves results without a payment scan per invoice`() =
         fixture { f ->
@@ -354,7 +382,19 @@ internal abstract class PlatformBillingKpiContract(private val postgres: Boolean
         fun snapshot(
             asOf: Instant = now,
             source: DataSource = ds,
-        ): KpiSnapshot = runBlocking { KpiRepository(source, Clock.fixed(asOf, ZoneOffset.UTC)).platform(request) }
+        ): KpiSnapshot {
+            // H2 comparisons must use the same UTC reader session as PostgreSQL's KPI transaction.
+            val reader =
+                if (postgres) {
+                    source
+                } else {
+                    object : DataSource by source {
+                        override fun getConnection(): Connection =
+                            source.connection.apply { createStatement().use { it.execute("SET TIME ZONE 'UTC'") } }
+                    }
+                }
+            return runBlocking { KpiRepository(reader, Clock.fixed(asOf, ZoneOffset.UTC)).platform(request) }
+        }
 
         fun courtesy(
             end: LocalDate,
@@ -423,7 +463,13 @@ internal abstract class PlatformBillingKpiContract(private val postgres: Boolean
         }
 
         fun assertLegacyEquivalent() {
-            val expected = ds.connection.use { it.count(LEGACY_MULTIPLE_MATCHING_SUCCESSES_SQL, listOf(now, now)) }
+            val expected =
+                ds.connection.use { c ->
+                    c.autoCommit = false
+                    val zoneSql = if (postgres) "SET LOCAL TIME ZONE 'UTC'" else "SET TIME ZONE 'UTC'"
+                    c.createStatement().use { it.execute(zoneSql) }
+                    c.count(LEGACY_MULTIPLE_MATCHING_SUCCESSES_SQL, listOf(now, now))
+                }
             assertEquals(expected.toString(), snapshot().metrics.getValue("invoices.multipleMatchingSuccesses").value)
         }
 

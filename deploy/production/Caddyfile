@@ -1,0 +1,21 @@
+hookahtootah.club {
+	@drained not file {
+		root /var/lib/hookah-production/ingress
+		try_files /open
+	}
+	@foreign expression `{http.request.header.Origin} != "" && {http.request.header.Origin} != "https://hookahtootah.club"`
+	@internal path /api/billing/webhook /api/billing/webhook/* /telegram/webhook /metrics /db/health /telegram/queue/health
+	route {
+		header @drained X-Hookah-Maintenance closed
+		respond @drained 503
+		respond @foreign 403
+		respond @internal 404
+		reverse_proxy 127.0.0.1:18080 {
+			header_up X-Hookah-Pilot-Ingress public
+		}
+	}
+	handle_errors {
+		header X-Hookah-Maintenance closed
+		respond 503
+	}
+}

@@ -116,7 +116,9 @@ Implemented or partial:
 - Venue subscription statuses: `trial`, `active`, `past_due`, `canceled`, `suspended`, `suspended_by_platform`.
 - Guest availability blocks `canceled`, `suspended`, `suspended_by_platform` and unknown subscription state; `past_due` is documented as non-blocking for guest ordering/booking.
 - Platform can manage subscription settings, per-venue price and future price schedule where implemented.
-- Platform and Venue Owner billing overviews are read-only on GET.
+- Each Platform or Venue Owner billing GET reads the subscription, coverage dates, payable invoice,
+  outstanding page and invoice history from one read-only database snapshot. A payment committed
+  after that snapshot appears on a later GET. Each cursor request takes its own snapshot.
 - Invoice/checkout creation uses explicit POST ensure actions.
 - Manual/fake invoices avoid exposing provider-internal fake URLs to users.
 - Platform Owner can manually mark an invoice paid; audit action includes `BILLING_MARK_PAID`.

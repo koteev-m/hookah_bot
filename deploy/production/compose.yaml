@@ -1,0 +1,94 @@
+name: hookah_production
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?select verified PostgreSQL 17 digest}
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hookah_prod
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?required}
+      HOOKAH_APP_PASSWORD: ${DB_PASSWORD:?required}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --data-checksums
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - type: bind
+        source: ./init-app.sql
+        target: /docker-entrypoint-initdb.d/10-hookah.sql
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [database]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "hookah_app", "-d", "hookah_prod"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  backend:
+    image: ${BACKEND_IMAGE:?select verified GHCR digest}
+    platform: linux/amd64
+    restart: unless-stopped
+    user: "10001:10001"
+    init: true
+    entrypoint: ["/bin/sh", "/opt/hookah/traffic-gate.sh", "/run/hookah-ingress/open"]
+    command: ["/app/app/bin/app"]
+    volumes:
+      - type: bind
+        source: ./traffic-gate.sh
+        target: /opt/hookah/traffic-gate.sh
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/hookah-production/ingress
+        target: /run/hookah-ingress
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=128m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["127.0.0.1:18080:8080"]
+    networks: [database, outbound]
+    environment:
+      APP_ENV: prod
+      APP_VERSION: ${RELEASE_SHA:?required}
+      APP_HTTP_PORT: "8080"
+      DB_JDBC_URL: jdbc:postgresql://postgres:5432/hookah_prod
+      DB_USER: hookah_app
+      DB_PASSWORD: ${DB_PASSWORD:?required}
+      API_SESSION_JWT_SECRET: ${API_SESSION_JWT_SECRET:?required}
+      TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER: ${TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER:?required}
+      VENUE_STAFF_INVITE_SECRET_PEPPER: ${VENUE_STAFF_INVITE_SECRET_PEPPER:?required}
+      BILLING_WEBHOOK_SECRET: ${BILLING_WEBHOOK_SECRET:?required}
+      BILLING_SUBSCRIPTION_INTERVAL_SECONDS: "0"
+      BILLING_PROVIDER: fake
+      TELEGRAM_TRAFFIC_POLICY: PRODUCT
+      TELEGRAM_REQUIRE_STAFF_CHAT_ADMIN: "true"
+      TELEGRAM_BOT_MODE: long_polling
+      TELEGRAM_BOT_ENABLED: ${TELEGRAM_BOT_ENABLED:?required}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN-}
+      PLATFORM_OWNER_TELEGRAM_ID: ${PLATFORM_OWNER_TELEGRAM_ID-}
+      TELEGRAM_BOT_USERNAME: hookah_tootah_bot
+      TELEGRAM_WEBAPP_PUBLIC_URL: https://hookahtootah.club/miniapp/
+      TELEGRAM_MAIN_MINI_APP_CONFIGURED: ${TELEGRAM_MAIN_MINI_APP_CONFIGURED:?required}
+      VENUE_PUBLIC_LINK_ORIGIN: https://hookahtootah.club
+      VENUE_PUBLIC_LINK_FORMAT: path
+      CORS_ALLOWED_HOSTS: https://hookahtootah.club
+      MINIAPP_ENTRY_ENABLED: "true"
+      MINIAPP_STATIC_DIR: /app/miniapp
+      AI_ASSISTANT_ENABLED: "false"
+      STAFF_PHOTOS_R2_ENABLED: "false"
+      VENUE_INFO_MEDIA_R2_ENABLED: "false"
+      VENUE_INFO_PDF_WORKER_ENABLED: "false"
+volumes:
+  pgdata: {}
+networks:
+  database:
+    internal: true
+  outbound: {}

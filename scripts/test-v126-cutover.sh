@@ -8283,6 +8283,8 @@ extra = {
     'postgresql/V142__telegram_chat_table_session.sql': '5b595fbe139f39b0e94c92aa5c233062f093c46e13635fad029ea2b3a7cdbf99',
     'h2/V142__guest_exit_event_id.sql': 'f101dfb5b7b3d572eeeadfed376f1b8a27277126b1a9cc5e90309a2c6e602f37',
     'h2/V143__telegram_chat_table_session.sql': '7cd69b144e88d605c2ddac6ff93ef13382ee1f20e6b65f4158825aeaf17a0e0c',
+    'postgresql/V143__billing_courtesy_operation.sql': '5c691365880e08b2cbff794d60d1bd046d58737c78ad82a555d0c9a3e839ffa6',
+    'h2/V144__billing_courtesy_operation.sql': '5c691365880e08b2cbff794d60d1bd046d58737c78ad82a555d0c9a3e839ffa6',
 }
 paths = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if not p.is_dir() or p.is_symlink()}
 if set(paths) != set(historical) | set(extra):
@@ -8401,7 +8403,9 @@ PY
     postgresql/V141__guest_exit_event_id.sql \
     postgresql/V142__telegram_chat_table_session.sql \
     h2/V142__guest_exit_event_id.sql \
-    h2/V143__telegram_chat_table_session.sql; do
+    h2/V143__telegram_chat_table_session.sql \
+    postgresql/V143__billing_courtesy_operation.sql \
+    h2/V144__billing_courtesy_operation.sql; do
     printf '\n-- forbidden reviewed tail drift\n' >> "${fixture}/${addition}"
     expect_failure "changed reviewed tail SQL rejects lineage: ${addition}" 'reviewed migration drift' \
       verify_current_migration_lineage "${fixture}"
@@ -8425,7 +8429,9 @@ PY
     postgresql/V141__guest_exit_event_id.sql \
     postgresql/V142__telegram_chat_table_session.sql \
     h2/V142__guest_exit_event_id.sql \
-    h2/V143__telegram_chat_table_session.sql; do
+    h2/V143__telegram_chat_table_session.sql \
+    postgresql/V143__billing_courtesy_operation.sql \
+    h2/V144__billing_courtesy_operation.sql; do
     rm "${fixture}/${addition}"
     expect_failure "missing reviewed menu SQL rejects lineage: ${addition}" 'migration inventory drift' \
       verify_current_migration_lineage "${fixture}"
@@ -8440,6 +8446,18 @@ PY
       verify_current_migration_lineage "${fixture}"
     rm "${fixture}/${addition}"
     cp "${REPO_ROOT}/${migration_root}/${addition}" "${fixture}/${addition}"
+  done
+  for addition in postgresql/V143__billing_courtesy_operation.sql h2/V144__billing_courtesy_operation.sql; do
+    local tail_dir="${fixture}/${addition%/*}"
+    local tail_name="${addition##*/}"
+    local renamed="${tail_dir}/${tail_name%__*}__unreviewed_name.sql"
+    mv "${fixture}/${addition}" "${renamed}"
+    expect_failure "renamed courtesy SQL rejects lineage: ${addition}" 'migration inventory drift' \
+      verify_current_migration_lineage "${fixture}"
+    mv "${renamed}" "${tail_dir}/V145__billing_courtesy_operation.sql"
+    expect_failure "out-of-order courtesy SQL rejects lineage: ${addition}" 'migration inventory drift' \
+      verify_current_migration_lineage "${fixture}"
+    mv "${tail_dir}/V145__billing_courtesy_operation.sql" "${fixture}/${addition}"
   done
   expect_success 'restored reviewed menu inventory accepts exact lineage' \
     verify_current_migration_lineage "${fixture}"

@@ -1,5 +1,250 @@
 # Project Status
 
+## HT-PRODUCTION-RELEASE-01-BILLING-SNAPSHOT-FIX-01 — согласованное чтение счетов
+
+**BILLING_SNAPSHOT_FIXED · READY_FOR_PUBLICATION = NO** (2026-11-21).
+PROJECT_IDENTITY_OK, прежний production worktree, detached
+`944efe7c4582a4aff5304c6e08b523c5a6864c45`, индекс `worktree14`.
+
+Раньше оплата между двумя SELECT давала OPEN в списке неоплаченных и PAID в
+истории одного ответа. Теперь каждый GET Venue и Platform читает весь обзор
+в одной read-only транзакции REPEATABLE READ. Страницы по курсору независимы.
+На PostgreSQL 17 платёж завершился, пока оба GET ожидали на тестовом барьере.
+Оба вернули OPEN в двух списках, последующие запросы показали PAID и сохранили
+второй долг. Ошибка SQL внутри чтения дала 503. Журнал PostgreSQL подтвердил
+одну транзакцию на каждый из четырёх GET.
+
+[Постоянная регрессия](backend/app/src/test/kotlin/com/hookah/platform/backend/billing/ProductionBillingPostgresTest.kt)
+входит в обязательный backend-набор. Там прошли 35 тестов, в смежных billing-классах
+ещё 16. Обе панели проверены в Chromium и WebKit на фактических ответах JVM.
+Проверки V143 и production-профиля прошли. Следующий шаг — независимая адресная
+проверка локального кандидата перед решением владельца о публикации.
+
+## HT-PRODUCTION-RELEASE-01-TWO-BLOCKERS-FIX-01 — миграции и неоплаченные счета
+
+**PRODUCTION_TWO_BLOCKERS_FIXED · READY_FOR_PUBLICATION = NO** (2026-11-21).
+
+PROJECT_IDENTITY_OK для существующего production worktree, detached HEAD
+`944efe7c4582a4aff5304c6e08b523c5a6864c45`, собственный индекс `worktree14`.
+Начальный кандидат содержал 39 изменённых и 22 неотслеживаемых файла.
+
+Точный тест compose-runtime отклонял единственный файл V143. В проверке текущего
+релиза закреплены имя, SHA-256 и Flyway checksum 1900727557. Исторические V125 и
+V126 сохранили отдельные проверки. На PostgreSQL 17 JVM обновила V142 до V143.
+Все 142 прежние записи Flyway совпали, validate прошёл, pending=0, failed=0,
+повторный migrate применил 0 файлов. PostgreSQL V1–V142 и H2 V1–V143 совпали с
+Git по байтам. Адресные migration tests подтвердили H2 V144.
+
+Изначально GET возвращал OPEN на 10 ₽ и 50 оплаченных записей. Старый PAST_DUE
+на 50 ₽ отсутствовал. Оба авторизованных GET теперь возвращают самостоятельную
+страницу `outstandingInvoices` с лимитом 50 и курсором по ID. В PostgreSQL/API
+проверены оба статуса, даты, суммы, принадлежность заведению, права, чтение без
+мутаций и 54 неоплаченных счёта на страницах 50 + 4. В обеих панелях доступен
+выбор по номеру. Ошибка API отображается отдельно от пустой страницы.
+
+Локально прошли 28 тестов диагностики compose-runtime, 72 теста контракта staging
+на фиктивных данных, 37 production Python tests на Linux, 25 CI contract tests,
+34 обязательных backend-теста, 16 смежных billing-тестов, 9 migration tests
+и 52 проверки Chromium/WebKit на production-сборке. Kotlin compile, ktlint,
+installDist и TypeScript/Vite прошли. При отказе PostgreSQL публичные запросы к
+JVM вернули 503, внутренний health остался доступен. После возврата БД и
+перезапуска JVM доступ вернулся только при явном допуске нового экземпляра.
+
+Источники проверки — [runtime](scripts/test-v126-linux-runtime.py),
+[PostgreSQL/API](backend/app/src/test/kotlin/com/hookah/platform/backend/billing/ProductionBillingPostgresTest.kt)
+и [обе панели](miniapp/e2e/guest-smoke.spec.ts). Следующий шаг — адресная проверка
+локального кандидата. Полный hosted compose-runtime остаётся для GitHub Actions
+после отдельного разрешения на публикацию. Живые окружения не использовались.
+
+## HT-PRODUCTION-RELEASE-01-P1-RESUME-FIX-01 — ручное восстановление подписки
+
+**PRODUCTION_11_FINDINGS_FIXED · READY_FOR_PUBLICATION = NO** (2026-11-21).
+
+Проверен существующий изолированный production worktree Hookah_Tootah, detached HEAD
+`944efe7c4582a4aff5304c6e08b523c5a6864c45`, индекс `worktree14`, общий Git-каталог
+основного checkout, origin `github.com/koteev-m/hookah_bot`. Базовый кандидат
+содержал 39 изменённых и 22 неотслеживаемых файла.
+
+Platform Owner может снять `SUSPENDED_BY_PLATFORM` через
+`POST /api/platform/venues/{venueId}/billing/resume-subscription` после отдельного
+подтверждения причины в карточке. Запрос привязан к `lifecycleUpdatedAt` просмотренной
+подписки. Переход и обязательный аудит выполняются в одной транзакции. Старый запрос
+после повторной блокировки отклоняется. Оплата и подтверждённая льгота дают `ACTIVE`
+в пределах применимого периода, действующий trial даёт `TRIAL`. Для цены 0 ₽ без
+отдельного основания сервер возвращает 409. Контракт UUID для courtesy-days сохранён.
+
+До исправления запрос восстановления возвращал 404, действие отсутствовало в обоих браузерах.
+На PostgreSQL 17 проверены 401/403 для неавторизованного запроса и посторонних ролей,
+400 при пустой причине, 409 при отсутствии основания. Из трёх одновременных запросов
+только один получил 200 и создал запись аудита. При отказе аудита гостевой запрос
+сохранил 404, после успешного восстановления опубликованного заведения вернул 200.
+Проверены также поздний повтор при новой блокировке, незавершённый возврат платежа,
+недоплата, истёкший trial и льготы вне текущего интервала или без подтверждающего аудита.
+Снимки всех строк счетов, платежей и льгот совпали до и после восстановления.
+
+Обязательная backend-команда завершила 33 теста, дополнительные billing/webhook/Venue
+классы — 16, в JUnit ноль пропусков и ошибок. На Linux прошли 37 production Python tests,
+также прошли 25 тестов контракта CI, TypeScript/Vite и 44 адресных Chromium/WebKit проверки.
+Kotlin compile, ktlint, installDist и diff --check прошли. Из десяти изменённых в этой
+задаче файлов два относятся к документации. SQL, workflow и production-скрипты сохранили
+исходные байты. Основной checkout, его индекс, refs и scripts/dev/ сохранили контрольный
+отпечаток. Публикация и проверка реального окружения требуют отдельного разрешения.
+Следующий шаг — независимая проверка полного кандидата на этом worktree.
+
+[Порядок восстановления и действия оператора](docs/PRODUCTION_PILOT.md#восстановление-при-административной-блокировке-подписки).
+
+## HT-PRODUCTION-RELEASE-01-11-FINDINGS-FIX-01 — independent acceptance findings
+
+**PARTIAL · READY_FOR_PUBLICATION = NO** (2026-11-21). Ten findings have local passing evidence.
+P1-2 payment protection passed. Owner approval is pending for a separate, audited API/UI action
+to restore a suspended subscription on an already published venue. The existing publish/unblock
+actions operate on the venue lifecycle. The required UUID header and append-only schema change
+for courtesy days were explicitly approved.
+
+PROJECT_IDENTITY_OK. Hookah_Tootah, origin `github.com/koteev-m/hookah_bot`, detached
+`944efe7c4582a4aff5304c6e08b523c5a6864c45` in the existing DESIGN-AND-REHEARSAL-02
+worktree, private index `worktree14`. Primary remained at `98601ff10db87d7acc2a11776293d7d33cfebe08`
+with 27 modified and 7 untracked entries. The candidate started with 16 modified and 18
+untracked files. Local verification used synthetic data and a dedicated Linux Docker VM.
+
+| Finding | Acceptance review RED | Candidate result |
+| --- | --- | --- |
+| P1-1 | PostgreSQL down, public health and Mini App 200 | PostgreSQL 17 + Caddy, first public request 503 in 0.02 s, loopback health 200. DB recovery on same JVM kept HTTP closed. Explicit admission on a fresh UUID returned 200. JVM SIGKILL and stale marker closed ingress. |
+| P1-2 | Old manual payment activated a suspended venue | PostgreSQL preserved suspension, guest denial, payment and amount after repeat. Current paid invoice may activate eligible trial/past-due status. Separate restoration is pending. |
+| P2-3 | Four failed getUpdates, zero successes, polling running | Current worker must confirm a successful response. Local HTTP Telegram fixture checked initial failure, success, prolonged loss and revocation. The single worker lease released on stop. |
+| P2-4 | Reversed plans reached backend stop | Stored forward pair and cached immutable image checked before stop. Reverse stage exited 1 with the same running container start time. Interrupted resume kept HTTP closed. |
+| P2-5 | Unknown backend returned 0 | Real absent/unknown containers both returned 1 with diagnostics. Known OLD/NEW and NEW stopped remained distinguishable. |
+| P2-6 | Audit failure returned 503 but 3 days persisted and retry doubled them | One PG transaction for grant, status, receipt and audit. Three concurrent UUID replays returned the same response. Audit failure rolled back. 428 without key, 409 on changed parameters, including raw reason. Browser retained key on response loss/reload and guarded account changes. |
+| P2-7 | Same instant wrote invoice timestamps three hours apart | PG manual payments in UTC/Moscow produced one stored time; KPI 0 at the exclusive cutoff, 2 one second later. Ledger total remained 210 minor units. |
+| P2-8 | Editing date with stored free price returned 400 | Date-only edit retained zero. Explicit zero for a new price follows existing validation; paid and negative amounts keep their previous contracts. |
+| P2-9 | One PAST_DUE hidden behind 50 PAID | Bounded payable queries are independent of the 50-row history. Exact debt returned, 51 rows retained. Both panels display off-page debt. |
+| P2-10 | Four debt/courtesy UI reproductions failed | Both panels distinguish base paid-through, courtesy end, invoice debt and subscription state. Missing dates remain absent. |
+| P2-11 | Four mandatory Kotlin classes missing | Existing backend job runs six selected JUnit suites. Actual XML confirmed 31 passed, zero skipped, failed or errored. Linux compose-cutover discovery also tests rejection of skipped/failed/missing XML. |
+
+Production PostgreSQL V143 and H2 V144 add nullable operation key/receipt and a unique key.
+All 142 prior PostgreSQL and 143 prior H2 SQL files match HEAD byte for byte. A V142 DB with a
+pre-existing grant upgraded once and its data remained intact. Backups with stopped backend,
+age integrity and isolated restores passed at V142 and V143. Restore fixtures left zero labeled
+containers or volumes. Rehearsal used one bound database across update and NEW-stopped resume.
+
+Local evidence included 37 production Python cases on Linux, 31 required Kotlin cases,
+80 adjacent migration/Venue billing/KPI cases, 6 worker cases, 25 analytics CI contracts,
+42 Chromium/WebKit billing cases, Kotlin compile/ktlint/installDist, TypeScript/Vite and
+actual Chromium/WebKit execution of the combined image. Full HTTP entry JS (1,122,953 bytes)
+and CSS (105,015 bytes) matched their image hashes. Rehearsal digest
+`sha256:57316e7ee488a01543a705c08a7444a76136171c17befd01a82c7cd1fae718d0`
+identifies the local image built with a synthetic revision. GitHub Actions and registry
+publication require separate authorization. No staging or production operations took place.
+[Operator procedure](docs/PRODUCTION_PILOT.md).
+
+## HT-PRODUCTION-RELEASE-01-FOUR-P2-FIX-01 — final review fixes
+
+**PRODUCTION_FOUR_P2_FIXED** (2026-11-21). PROJECT_IDENTITY_OK for Hookah_Tootah.
+Existing detached rehearsal worktree at `944efe7c4582a4aff5304c6e08b523c5a6864c45`,
+registered index `worktree14` in the primary common directory. Origin fetch/push
+`github.com/koteev-m/hookah_bot`. Separate expected branch/base/parent not supplied.
+Review input: `HT-PRODUCTION-RELEASE-01-FINAL-REVIEW-01`. [Operator procedure](docs/PRODUCTION_PILOT.md).
+
+| Boundary | Before | Locally verified result |
+| --- | --- | --- |
+| Final JVM / HTTP | Public marker appeared while the bot-disabled PID still served. A different PID started later. | One UUID per JVM. Loopback readiness and immutable assets precede activation. Webhook preflight and the poller lease precede final readiness and HTTP admission. Caddy and JVM reject stale decisions. Actual SIGKILL after activation left HTTP closed. Explicit recovery admitted the same UUID. Isolated TLS Telegram fixture recorded peak concurrent getUpdates = 1. |
+| Interrupted update | stage refused exact NEW stopped. | resume checks project, image/revision, exact container and mounts, network and original PG binding. Starts the existing ID only. A killed resume left NEW running behind maintenance. Wrong digest and volume refused before startup. |
+| Free price with outstanding debt | Both debt browser regressions failed; the venue view derived 01.11.2026 from paid-through 31.10.2026. | Venue and Platform preserve the unpaid invoice, explain manual handling and show payment dates from the server. Free/no debt, debt, paid history and suspension exercised in both browser engines. |
+| Partial entry | The previous probe accepted a 4,096-byte module with the expected MIME. | Manifest is derived from the pinned image offline. Real HTTP fixture accepted complete entries and rejected the 4,096-byte prefix, same-size wrong hash, HTML body, plain-text module, missing CSS and HTTP 206. |
+| CI | Production suites absent from the workflow. | Existing mandatory compose-cutover job runs discovery. The exact Linux command failed on an injected interval=1 and passed on the candidate. |
+| Payment timestamps | Real PG 17 with pgJDBC: a UTC and Moscow writer recording the same instant produced a cutoff KPI of 0 instead of 1. | Explicit UTC wall time in the existing TIMESTAMP column. KPI stayed 0 at the exclusive boundary and became 1 just after it, with one distinct stored time. H2 cutoff fixtures use a UTC reader. No historical data rewrite or migration. |
+
+Final check totals: 33 production Python cases, 84 targeted Kotlin cases in UTC (zero skips),
+48 in Europe/Moscow (zero skips), ktlint and installDist, Vite/TypeScript, 34 Chromium/WebKit
+billing cases, real browser execution against the combined image, Linux Compose and Caddy
+validation, Python/shell syntax and diff/whitespace checks. Targeted release rehearsal used
+a disposable Linux VM and a local TLS Telegram fixture. The combined *local* image digest
+was `sha256:ab7be30094f76187d5cef2ff42c6b02d83b32381cb41eae0d276bf07e9d84de8`.
+Served JS 1,121,041 bytes, CSS 105,015 bytes, both matched the image SHA-256.
+The source still has 142 unchanged PostgreSQL migrations and 143 unchanged H2 migrations.
+Encrypted backup and isolated restore implementation matched the inherited candidate byte for byte.
+
+**Candidate inventory relative to HEAD (34 files).** Paths below group files in the same component.
+
+- CI and release documentation: `.github/workflows/ci.yml`, `PROJECT_STATUS.md`, `docs/DEPLOYMENT_RUNBOOK.md`, `docs/PRODUCTION_PILOT.md`.
+- Backend implementation: `Application.kt`, `ProductionTrafficGate.kt`, `BillingOverviewService.kt`, `BillingPaymentRepository.kt`, `SubscriptionBillingEngine.kt`, `SubscriptionBillingPeriodResolver.kt`.
+- Backend tests: `ProductionTrafficGateTest.kt`, `PlatformBillingKpiTest.kt`, `PlatformBillingRoutesTest.kt`, `SubscriptionBillingConfigTest.kt`, `SubscriptionBillingEngineTest.kt`.
+- Mini App: `miniapp/src/screens/platformVenueDetail.ts`, `miniapp/src/screens/venueSubscription.ts`, `miniapp/src/shared/ui/billingDates.ts`, `miniapp/e2e/guest-smoke.spec.ts`.
+- `deploy/production/`: `Caddyfile`, `compose.yaml`, `runtime.env.example`, `init-app.sql`, `history.sql`, `traffic-gate.sh`, `smoke.py`, `backup.sh`, `restore-test.sh`, `restore_test.py`.
+- `scripts/`: `production_profile.py`, `production_traffic.py`, `test_production_profile.py`, `test_production_operations.py`, `test_production_smoke.py`.
+
+Local-only handoff. A future release needs separate publication authorization and successful
+main CI for the published artifact. Any previously written non-UTC timestamps require independent
+provenance before a historical correction. `READY_FOR_PUBLICATION = NO`.
+
+## HT-PRODUCTION-RELEASE-01-REVIEW-FIX-01 — six independent review fixes
+
+**PRODUCTION_REVIEW_FIX_READY** (2026-11-21). Local candidate in the existing detached rehearsal worktree, HEAD
+`944efe7c4582a4aff5304c6e08b523c5a6864c45`. PROJECT_IDENTITY_OK for
+Hookah_Tootah, origin `github.com/koteev-m/hookah_bot`, registered Git dir/index
+`worktree14` under the primary common dir. Review input
+`HT-PRODUCTION-RELEASE-01-INDEPENDENT-REVIEW-01`. [Operator procedure](docs/PRODUCTION_PILOT.md).
+
+| Finding | Reproduced on review input | Local verification |
+| --- | --- | --- |
+| Pilot billing job | Rendered backend lacked the interval override. | Compose and running container report `0`, startup logs disable the job. Job test covers the initial tick. Platform Owner retains manual operations. |
+| Free price | Authenticated checkout returned 503. Zero-amount insertion aborted a mixed-venue tick. Both UI regressions failed. | 0 ₽ creates no invoice or subscription row. Unknown and suspended statuses are preserved. The next paid venue received its 105-kopeck invoice. Playwright exercised owner and venue views. |
+| Update | HTTPS returned 200 and the NEW revision before qualification. | Closed OLD served loopback DB health; external routes returned 503. SIGKILL during NEW admission left the gate closed. Inspection verified the actual revision and original PostgreSQL binding before explicit open. Mock poller observed disabled, enabled and disabled again. |
+| Backup | With stopped backend the old script refused a healthy DB. | Encrypted points succeeded for healthy, stopped and unhealthy backend. PostgreSQL down, wrong volume/container binding and wrong recipient were refused. Stopped-backend point passed restore. |
+| Restore | SIGKILL during streaming pg_restore left the old container and anonymous volume. | Next invocation recovered the journaled attempt, verified 250,000 synthetic rows and cleaned up. The unrelated control volume and production-profile DB survived. Cleanup failure and foreign ownership regressions deny success. A forced VM power cut during pg_restore also recovered with a durable encrypted input. A torn, freshly copied test archive was refused; the independently stored original restored correctly. |
+| Mini App | Missing stylesheet and text/plain JS both passed the previous probe. | Both fail, as do HTML masquerading as JS, a short module and a foreign module URL. Chromium executed the entry and applied CSS on the real loopback backend. |
+
+Published image rehearsal used the prior green main pair `fee87e4 → 944efe7`
+on disposable Linux/Docker, local trusted HTTPS and PG 17.12. The edited JAR
+and Vite bundle were exercised separately with a fresh V1–V142 database on a
+local overlay. The published SHA does not include the uncommitted fixes.
+Local checks passed: 25 Python profile/operation/smoke cases, 110 Kotlin
+billing/subscription and guest-access cases (including PostgreSQL Testcontainers,
+UTC, zero skips), ktlint, installDist, TypeScript/Vite, 9 Chromium billing
+flows, shell/Python syntax and tracked/untracked whitespace. On the untouched
+primary checkout, HEAD/index/refs/diffs/untracked content matched the initial
+fingerprint at 27 modified and 7 untracked entries. Two H2 KPI assertions failed in
+the initial Europe/Moscow run and passed in the workflow's UTC environment. The pilot requires an explicit time-bounded
+owner decision on subscription access, independent recovery custody and a
+future exact-SHA green CI/image after separate publication authorization.
+The disposable VM, recovery key and test archives were removed. The worktree index is
+unchanged, with 11 modified and 16 untracked files including the inherited candidate.
+`READY_FOR_PUBLICATION = NO`.
+
+## HT-PRODUCTION-RELEASE-01-DESIGN-AND-REHEARSAL-02 — isolated production pilot rehearsal
+
+**PRODUCTION_REHEARSAL_READY** (2026-11-20). Hookah_Tootah identity gates passed at the
+primary checkout `98601ff10db87d7acc2a11776293d7d33cfebe08` and the separately authorized
+detached worktree `/private/tmp/HT-PRODUCTION-RELEASE-01-DESIGN-AND-REHEARSAL-02/worktree`.
+One remote main query and one object-only fetch. Implementation base `944efe7c4582a4aff5304c6e08b523c5a6864c45`.
+Primary branch `codex/ht-venue-stats-overview-dashboard`; expected branch/base/parent NOT_SUPPLIED.
+New worktree detached at the target; separate base/parent NOT_SUPPLIED. Common dir is the
+primary `.git`, new git dir/index belong to `.git/worktrees/worktree14`, both origin URLs
+resolve to `github.com/koteev-m/hookah_bot`. Root AGENTS.md identical. Primary refs including
+`origin/main` at `3677fc541a78291cfa1703aed077b8d558e87473`, index, status (27 M / 7 ??),
+diffs and untracked fingerprints preserved; local-only work, no publication.
+
+Disposable Linux arm64 VM, 3 vCPU/4 GiB, Docker 29.5.2, real published linux/amd64 images
+under emulation. Successful main CI/publish artifacts for `fee87e4` (44734125852) and
+`944efe7` (44794569846). Backend-only update from digest
+`sha256:1aba18b483617aef51f8736f28cf71e4d2d8cd8d9b51e56559103ee60cdcc440` to
+`sha256:f1fe19d1206900d92c0ef5f1e7dbf7160748886a23a45d50999a610e6dff5e2f`.
+Official PostgreSQL 17.12 digest `sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b`.
+Direct fresh install of each image on an empty volume. All V1–V142 scripts/checksums and
+success flags matched. API/DB/version/assets/unauthenticated API verified. PostgreSQL ID,
+volume and a synthetic row survived the update. Backups taken before and after the update
+restored to independent network-disabled clusters; row assertions and pg_amcheck passed.
+Corruption refused both by SHA-256 and by age authentication with a recomputed checksum.
+Caddy validated, local trusted-CA HTTPS worked, foreign Origin and private routes denied.
+Gradle installDist and TypeScript/Vite builds passed. All 10 production profile regressions and
+30 selected backend tests (billing/subscriptions, media storage, Telegram traffic) passed with
+no skips. Test VM, encrypted synthetic dumps and disposable keys removed. Docker Desktop remained stopped.
+
+[Operator procedure](docs/PRODUCTION_PILOT.md). Limited pilot uses manual/fake billing,
+private uploads disabled. Owner decisions outstanding: pilot scope, dedicated VPS and secrets,
+recovery custody/off-site qualification, old apex links and a separately authorized DNS/BotFather
+cutover with real-device smoke. No live environment, production token, payment or client used.
+
 ## HT-ACCOUNTING-AUTO-OPEN-MAIN-INTEGRATION-01 — local main integration (2026-11-08)
 
 **AUTO_OPEN_INTEGRATED / READY_FOR_INDEPENDENT_REVIEW=YES / READY_FOR_PUBLICATION=NO / NOT_DEPLOYED**.

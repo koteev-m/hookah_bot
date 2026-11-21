@@ -76,16 +76,18 @@ class TelegramApiClient(
                 StagingMaintenancePolicy.BotGlobalOperation.GET_UPDATES,
             ),
         )
-        val response: TelegramResponse<List<TelegramUpdate>> =
+        val httpResponse =
             client.get("$baseUrl/getUpdates") {
                 offset?.let { parameter("offset", it) }
                 parameter("timeout", timeoutSeconds)
-            }.safeBody()
+            }
+        if (!httpResponse.status.isSuccess()) throw TelegramApiException("Telegram getUpdates failed")
+        val response: TelegramResponse<List<TelegramUpdate>> = httpResponse.safeBody()
         if (response.ok.not()) {
             logApiFailure("getUpdates", response.errorCode, response.parameters?.retryAfterSeconds)
             throw TelegramApiException("Telegram getUpdates failed")
         }
-        return response.result ?: emptyList()
+        return response.result ?: throw TelegramApiException("Missing getUpdates result")
     }
 
     suspend fun getWebhookInfo(): TelegramWebhookInfo {
