@@ -10761,14 +10761,67 @@ test('guest opens my bookings from profile and manages booking actions', async (
   await mixCard.locator('textarea').fill('другой стол')
   await mixCard.getByRole('button', { name: 'Сохранить перенос' }).click()
 
+  await expect(mixCard).toContainText('11.01.2030, 20:30')
   expect(api.getBookingUpdateRequests()).toHaveLength(1)
   expect(api.getBookingUpdateRequests()[0]).toMatchObject({ venueId: 1, bookingId: 501, partySize: 4, comment: 'другой стол' })
-  await expect(rows.filter({ hasText: 'Микс' })).toContainText('11.01.2030, 20:30')
 
   page.once('dialog', (dialog) => void dialog.accept())
-  await rows.filter({ hasText: 'Микс' }).getByRole('button', { name: 'Отменить бронь' }).click()
+  await mixCard.getByRole('button', { name: 'Отменить бронь' }).click()
+  await expect(mixCard).toHaveCount(0)
   expect(api.getBookingCancelRequests()).toEqual([{ venueId: 1, bookingId: 501 }])
-  await expect(rows.filter({ hasText: 'Микс' })).toHaveCount(0)
+})
+
+test('guest booking cancellation respects dismissal and keeps the booking after a rejected request', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { bookings: [buildGuestBooking({ venueId: 1, bookingId: 501 })] })
+
+  const requests: Array<{ method: string; venueId: string | null; bookingId: number }> = []
+  let releaseResponse!: () => void
+  const pendingResponse = new Promise<void>((resolve) => { releaseResponse = resolve })
+  const errorMessage = 'Не удалось отменить бронь. Попробуйте ещё раз.'
+  await page.route('**/api/guest/booking/cancel?*', async (route) => {
+    const request = route.request()
+    requests.push({
+      method: request.method(),
+      venueId: new URL(request.url()).searchParams.get('venueId'),
+      bookingId: request.postDataJSON()?.bookingId
+    })
+    await pendingResponse
+    await route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE', message: errorMessage } }, 503))
+  })
+
+  await page.goto('?mode=guest#/bookings')
+  const card = page.locator('.guest-booking-card').filter({ hasText: 'Микс' })
+  const cancel = card.getByRole('button', { name: 'Отменить бронь' })
+  const prompts: string[] = []
+  page.on('dialog', async (dialog) => {
+    prompts.push(dialog.message())
+    if (prompts.length === 1) await dialog.dismiss()
+    else await dialog.accept()
+  })
+
+  await cancel.click()
+  await Promise.all([
+    page.waitForResponse((response) => new URL(response.url()).pathname === '/api/guest/bookings'),
+    page.getByRole('button', { name: '🔄 Обновить' }).click()
+  ])
+  expect(prompts).toEqual(['Отменить бронь?'])
+  expect(requests).toEqual([])
+
+  const expectedRequest = [{ method: 'POST', venueId: '1', bookingId: 501 }]
+  try {
+    await cancel.click()
+    await expect.poll(() => requests).toEqual(expectedRequest)
+    await cancel.click({ force: true })
+  } finally {
+    releaseResponse()
+  }
+  const error = page.getByText(errorMessage, { exact: true })
+  await expect(error).toBeVisible()
+  await expect(card).toContainText('Бронь подтверждена заведением')
+  await expect(page.getByText('Бронь отменена', { exact: true })).toHaveCount(0)
+  expect(prompts).toEqual(['Отменить бронь?', 'Отменить бронь?'])
+  expect(requests).toEqual(expectedRequest)
 })
 
 test('guest booking cards open stable isolated conversations and preserve messages', async ({ page }) => {

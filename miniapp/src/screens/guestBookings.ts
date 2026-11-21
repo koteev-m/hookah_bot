@@ -264,6 +264,7 @@ function buildDom(root: HTMLDivElement, venueId: number | null): GuestBookingRef
   root.replaceChildren(wrapper)
   if (!venueId) {
     card.hidden = true
+    list.before(status)
   }
 
   return {
