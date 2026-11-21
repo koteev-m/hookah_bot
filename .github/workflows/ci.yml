@@ -115,6 +115,11 @@ jobs:
           python3 scripts/test-accounting-payment-live.py
           python3 scripts/test-accounting-create-replay-live.py build/accounting-create-live-chromium chromium
           python3 scripts/test-accounting-create-replay-live.py build/accounting-create-live-webkit webkit
+      - name: Verify production release and billing contracts
+        env:
+          TZ: UTC
+          JAVA_TOOL_OPTIONS: -Dapi.version=1.44
+        run: python3 -B scripts/test_production_backend.py
       - name: Prepare fresh analytics billing evidence
         run: |
           python3 - <<'PY'
@@ -1801,6 +1806,8 @@ jobs:
           bash -n scripts/deploy-staging-controlmaster.sh
       - name: Check staging release Python whitespace
         run: python3 -m tabnanny scripts/staging_release.py scripts/test_staging_release.py scripts/test_staging_release_docker.py scripts/clean_install_policy.py scripts/test_clean_install_release.py scripts/test_clean_install_postgres.py scripts/clean_install_runtime.py scripts/clean_install_trust.py scripts/test_clean_install_runtime.py scripts/shared_host_scope.py scripts/test_shared_host_scope.py scripts/clean_install_compose.py scripts/test_clean_install_compose.py
+      - name: Test production pilot contracts
+        run: python3 -B -m unittest discover -s scripts -p 'test_production_*.py' -v
       - name: Test staging release controller and executor
         run: python3 -B -m unittest discover -s scripts -p test_staging_release.py -v
       - name: Test CR-1 local transitions and authority fault injection

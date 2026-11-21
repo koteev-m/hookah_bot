@@ -62,6 +62,7 @@ class SupportThreadReadCursorMigrationH2Test {
                     "141" to "V141__accounting_create_result.sql",
                     "142" to "V142__guest_exit_event_id.sql",
                     "143" to "V143__telegram_chat_table_session.sql",
+                    "144" to "V144__billing_courtesy_operation.sql",
                 ),
             ddlFailureContract = MigrationDdlFailureContract.NON_TRANSACTIONAL,
         )

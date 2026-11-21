@@ -396,11 +396,13 @@ export async function venueGetSubscription(
   backendUrl: string,
   venueId: number,
   deps: RequestDependencies,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  outstandingAfterId?: number
 ) {
+  const query = outstandingAfterId === undefined ? '' : `?outstandingAfterId=${outstandingAfterId}`
   return requestApi<OwnerBillingOverviewResponse>(
     backendUrl,
-    `/api/venue/${venueId}/subscription`,
+    `/api/venue/${venueId}/subscription${query}`,
     { signal },
     deps
   )

@@ -23,7 +23,9 @@ fun Route.venueBillingRoutes(
             val userId = call.requireUserId()
             val venueId = call.requireVenueId()
             requireVenueOwner(venueAccessRepository, userId, venueId)
-            val overview = billingOverviewService.readOverview(venueId) ?: throw NotFoundException()
+            val overview =
+                billingOverviewService.readOverview(venueId, call.request.queryParameters["outstandingAfterId"])
+                    ?: throw NotFoundException()
             call.respond(overview.toResponse(billingOverviewService))
         }
 

@@ -3,6 +3,7 @@ package com.hookah.platform.backend.billing
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingConfig
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingEngine
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingHooks
+import com.hookah.platform.backend.billing.subscription.SubscriptionBillingPeriodResolver
 import com.hookah.platform.backend.billing.subscription.SubscriptionBillingVenueRepository
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
@@ -78,6 +79,64 @@ class SubscriptionBillingEngineTest {
             }
         }
     }
+
+    @Test
+    fun `after a paid period skip elapsed free months but keep first positive debt`() {
+        val january = LocalDate.of(2024, 1, 1)
+        val may = LocalDate.of(2024, 5, 1)
+        val start =
+            SubscriptionBillingPeriodResolver.invoicePeriodStart(january, january.plusMonths(1).minusDays(1), may) {
+                if (it.monthValue in 2..3) 0 else 105
+            }
+        assertEquals(LocalDate.of(2024, 4, 1), start)
+    }
+
+    @Test
+    fun `free venue does not interrupt the tick for the paid venue`() =
+        runBlocking {
+            val ids =
+                dataSource.connection.use { connection ->
+                    listOf(0, 105).map { price ->
+                        val id = insertVenue(connection, "Price $price")
+                        connection.prepareStatement(
+                            "INSERT INTO venue_subscription_settings " +
+                                "(venue_id, paid_start_date, base_price_minor, currency, updated_by_user_id) " +
+                                "VALUES (?, DATE '2024-06-01', ?, 'RUB', 1)",
+                        ).use { statement ->
+                            statement.setLong(1, id)
+                            statement.setInt(2, price)
+                            statement.executeUpdate()
+                        }
+                        id
+                    }
+                }
+            val invoices = BillingInvoiceRepository(dataSource)
+            val subscriptions = SubscriptionRepository(dataSource)
+            subscriptions.updateStatus(ids.first(), SubscriptionStatus.SUSPENDED_BY_PLATFORM)
+            SubscriptionBillingEngine(
+                dataSource = dataSource,
+                venueRepository = SubscriptionBillingVenueRepository(dataSource),
+                settingsRepository = PlatformSubscriptionSettingsRepository(dataSource),
+                billingService =
+                    BillingService(
+                        FakeBillingProvider(),
+                        invoices,
+                        BillingPaymentRepository(dataSource),
+                        SubscriptionBillingHooks(subscriptions),
+                    ),
+                invoiceRepository = invoices,
+                notificationRepository = BillingNotificationRepository(dataSource),
+                subscriptionRepository = subscriptions,
+                auditLogRepository = AuditLogRepository(dataSource, Json),
+                config = SubscriptionBillingConfig(ZoneOffset.UTC, 7, 3, 3, 60),
+                platformOwnerUserId = null,
+                json = Json,
+                clock = Clock.fixed(Instant.parse("2024-06-01T00:00:00Z"), ZoneOffset.UTC),
+            ).tick()
+            assertEquals(emptyList<BillingInvoice>(), invoices.listInvoicesByVenue(ids.first(), null, 10, 0))
+            assertEquals(105, invoices.listInvoicesByVenue(ids.last(), null, 10, 0).single().amountMinor)
+            assertEquals(SubscriptionStatus.SUSPENDED_BY_PLATFORM, subscriptions.getSubscriptionStatus(ids.first()))
+        }
 
     @Test
     fun `overdue invoice becomes past due and after grace suspends subscription`() =

@@ -122,6 +122,7 @@ class VenueBillingRoutesTest {
             listOf(ownerUserId, managerUserId, staffUserId).forEach { userId ->
                 val response =
                     client.post("/api/platform/venues/$venueId/billing/courtesy-days") {
+                        headers { append("Idempotency-Key", java.util.UUID.randomUUID().toString()) }
                         headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, userId)}") }
                         contentType(ContentType.Application.Json)
                         setBody(

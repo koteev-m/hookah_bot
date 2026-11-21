@@ -12,6 +12,8 @@ import java.sql.Timestamp
 import java.sql.Types
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 import javax.sql.DataSource
 
 class BillingInvoiceRepository(private val dataSource: DataSource?) {
@@ -129,7 +131,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
                         """.trimIndent(),
                     ).use { statement ->
                         statement.setString(1, InvoiceStatus.PAID.dbValue)
-                        statement.setTimestamp(2, Timestamp.from(paidAt))
+                        statement.setObject(2, LocalDateTime.ofInstant(paidAt, ZoneOffset.UTC))
                         setLongOrNull(statement, 3, actorUserId)
                         statement.setLong(4, invoiceId)
                         statement.setString(5, InvoiceStatus.OPEN.dbValue)
@@ -354,26 +356,33 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        SELECT MAX(period_end)
-                        FROM billing_invoices
-                        WHERE venue_id = ?
-                          AND status = ?
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setString(2, InvoiceStatus.PAID.dbValue)
-                        statement.executeQuery().use { rs ->
-                            rs.next()
-                            rs.getDate(1)?.toLocalDate()
-                        }
-                    }
+                    findLatestPaidInvoicePeriodEnd(connection, venueId)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    internal fun findLatestPaidInvoicePeriodEnd(
+        connection: Connection,
+        venueId: Long,
+    ): LocalDate? {
+        return connection.prepareStatement(
+            """
+            SELECT MAX(period_end)
+            FROM billing_invoices
+            WHERE venue_id = ?
+              AND status = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setString(2, InvoiceStatus.PAID.dbValue)
+            statement.executeQuery().use { rs ->
+                rs.next()
+                rs.getDate(1)?.toLocalDate()
             }
         }
     }
@@ -387,32 +396,41 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        SELECT *
-                        FROM billing_invoices
-                        WHERE venue_id = ?
-                          AND status IN (?, ?)
-                          AND period_start <= ?
-                          AND period_end >= ?
-                        ORDER BY period_start ASC, id ASC
-                        LIMIT 1
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setString(2, InvoiceStatus.OPEN.dbValue)
-                        statement.setString(3, InvoiceStatus.PAST_DUE.dbValue)
-                        statement.setDate(4, java.sql.Date.valueOf(periodEnd))
-                        statement.setDate(5, java.sql.Date.valueOf(periodStart))
-                        statement.executeQuery().use { rs ->
-                            if (rs.next()) mapInvoice(rs) else null
-                        }
-                    }
+                    findOpenOrPastDueInvoiceOverlapping(connection, venueId, periodStart, periodEnd)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    internal fun findOpenOrPastDueInvoiceOverlapping(
+        connection: Connection,
+        venueId: Long,
+        periodStart: LocalDate,
+        periodEnd: LocalDate,
+    ): BillingInvoice? {
+        return connection.prepareStatement(
+            """
+            SELECT *
+            FROM billing_invoices
+            WHERE venue_id = ?
+              AND status IN (?, ?)
+              AND period_start <= ?
+              AND period_end >= ?
+            ORDER BY period_start ASC, id ASC
+            LIMIT 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setString(2, InvoiceStatus.OPEN.dbValue)
+            statement.setString(3, InvoiceStatus.PAST_DUE.dbValue)
+            statement.setDate(4, java.sql.Date.valueOf(periodEnd))
+            statement.setDate(5, java.sql.Date.valueOf(periodStart))
+            statement.executeQuery().use { rs ->
+                if (rs.next()) mapInvoice(rs) else null
             }
         }
     }
@@ -427,48 +445,81 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val sql =
-                        if (status == null) {
-                            """
-                            SELECT *
-                            FROM billing_invoices
-                            WHERE venue_id = ?
-                            ORDER BY period_start DESC, id DESC
-                            LIMIT ?
-                            OFFSET ?
-                            """.trimIndent()
-                        } else {
-                            """
-                            SELECT *
-                            FROM billing_invoices
-                            WHERE venue_id = ?
-                              AND status = ?
-                            ORDER BY period_start DESC, id DESC
-                            LIMIT ?
-                            OFFSET ?
-                            """.trimIndent()
-                        }
-                    connection.prepareStatement(sql).use { statement ->
-                        statement.setLong(1, venueId)
-                        if (status == null) {
-                            statement.setInt(2, limit)
-                            statement.setInt(3, offset)
-                        } else {
-                            statement.setString(2, status.dbValue)
-                            statement.setInt(3, limit)
-                            statement.setInt(4, offset)
-                        }
-                        statement.executeQuery().use { rs ->
-                            buildList {
-                                while (rs.next()) {
-                                    add(mapInvoice(rs))
-                                }
-                            }
-                        }
-                    }
+                    listInvoicesByVenue(connection, venueId, status, limit, offset)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    internal fun listOutstandingAfter(
+        connection: Connection,
+        venueId: Long,
+        afterId: Long,
+        limit: Int,
+    ): List<BillingInvoice> {
+        val sql =
+            """
+            SELECT * FROM billing_invoices
+            WHERE venue_id = ? AND status IN ('OPEN', 'PAST_DUE') AND id > ?
+            ORDER BY id ASC
+            LIMIT ?
+            """.trimIndent()
+        return connection.prepareStatement(sql).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, afterId)
+            statement.setInt(3, limit)
+            statement.executeQuery().use { rows ->
+                buildList { while (rows.next()) add(mapInvoice(rows)) }
+            }
+        }
+    }
+
+    internal fun listInvoicesByVenue(
+        connection: Connection,
+        venueId: Long,
+        status: InvoiceStatus?,
+        limit: Int,
+        offset: Int,
+    ): List<BillingInvoice> {
+        val sql =
+            if (status == null) {
+                """
+                SELECT *
+                FROM billing_invoices
+                WHERE venue_id = ?
+                ORDER BY period_start DESC, id DESC
+                LIMIT ?
+                OFFSET ?
+                """.trimIndent()
+            } else {
+                """
+                SELECT *
+                FROM billing_invoices
+                WHERE venue_id = ?
+                  AND status = ?
+                ORDER BY period_start DESC, id DESC
+                LIMIT ?
+                OFFSET ?
+                """.trimIndent()
+            }
+        return connection.prepareStatement(sql).use { statement ->
+            statement.setLong(1, venueId)
+            if (status == null) {
+                statement.setInt(2, limit)
+                statement.setInt(3, offset)
+            } else {
+                statement.setString(2, status.dbValue)
+                statement.setInt(3, limit)
+                statement.setInt(4, offset)
+            }
+            statement.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(mapInvoice(rs))
+                    }
+                }
             }
         }
     }
@@ -554,7 +605,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
             setStringOrNull(statement, 10, paymentUrl)
             setStringOrNull(statement, 11, providerRawPayload)
             statement.setString(12, status.dbValue)
-            setTimestampOrNull(statement, 13, paidAt)
+            setUtcPaidAt(statement, 13, paidAt)
             setLongOrNull(statement, 14, actorUserId)
             if (isH2) {
                 statement.setLong(15, venueId)
@@ -639,7 +690,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
             status = status,
             createdAt = rs.getTimestamp("created_at").toInstant(),
             updatedAt = rs.getTimestamp("updated_at").toInstant(),
-            paidAt = rs.getTimestamp("paid_at")?.toInstant(),
+            paidAt = rs.getObject("paid_at", LocalDateTime::class.java)?.toInstant(ZoneOffset.UTC),
             updatedByUserId = rs.getLongOrNull("updated_by_user_id"),
         )
     }
@@ -673,7 +724,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun setTimestampOrNull(
+    private fun setUtcPaidAt(
         statement: java.sql.PreparedStatement,
         index: Int,
         value: Instant?,
@@ -681,7 +732,7 @@ class BillingInvoiceRepository(private val dataSource: DataSource?) {
         if (value == null) {
             statement.setNull(index, Types.TIMESTAMP)
         } else {
-            statement.setTimestamp(index, Timestamp.from(value))
+            statement.setObject(index, LocalDateTime.ofInstant(value, ZoneOffset.UTC))
         }
     }
 

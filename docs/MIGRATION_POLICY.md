@@ -16,6 +16,15 @@ HT33 реализует controller transitions; HT34 добавляет disposab
 Документ описывает безопасный процесс валидации и обычного применения миграций без даунтайма;
 контролируемое окно V126 на staging является явно описанным исключением ниже.
 
+## Результат начисления льготных дней
+
+V143 PostgreSQL и V144 H2 добавляют в billing_adjustments nullable operation_key (UUID,
+уникальный при наличии) и operation_response (снимок ответа). Строки прежних версий
+сохраняют NULL. До запуска V143 проверяются backup и восстановление V142 на отдельной БД.
+Переход сохраняет таблицы, суммы и прежние даты. После начала начислений старый backend
+обходит обязательный ключ: возвращать его в трафик нельзя. Используйте согласованный
+forward fix. Восстановление рабочей БД требует отдельного решения владельца.
+
 ## Hall/seating append-only migration candidate (HT-HALLS-SEATING-TABLE-BOOKING-01)
 
 The verified base has PostgreSQL V131 and H2 V132. New tails are PostgreSQL

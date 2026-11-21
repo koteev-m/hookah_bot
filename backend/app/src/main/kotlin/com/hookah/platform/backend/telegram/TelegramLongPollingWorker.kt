@@ -19,6 +19,7 @@ class TelegramLongPollingWorker(
     private val maintenancePolicy: StagingMaintenancePolicy = StagingMaintenancePolicy.off(),
     private val timeoutSeconds: Int,
     private val scope: CoroutineScope,
+    private val onPollingSuccess: () -> Unit = {},
     private val errorDelayMillis: Long = 1_000,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramLongPollingWorker::class.java)
@@ -52,6 +53,7 @@ class TelegramLongPollingWorker(
                             delay(errorDelayMillis)
                             continue
                         }
+                    onPollingSuccess()
                     processBatch(updates)
                 }
             }.also { job ->

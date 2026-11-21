@@ -4,7 +4,9 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.Arrays;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationInfoService;
 
 /** Test-only launcher using the image's actual Flyway and PostgreSQL driver. */
 public final class V126RuntimeFixture {
@@ -16,15 +18,17 @@ public final class V126RuntimeFixture {
             Flyway.configure().dataSource(url, user, password)
                 .locations("classpath:db/migration/postgresql").target("125").load().migrate();
             System.out.println("FIXTURE_MIGRATED_TO_125");
-        } else if (args.length == 1 && args[0].equals("validate142")) {
+        } else if (args.length == 1 && args[0].equals("validateCurrent")) {
             Flyway flyway = Flyway.configure().dataSource(url, user, password)
                 .locations("classpath:db/migration/postgresql").load();
             flyway.validate();
-            if (!flyway.info().current().getVersion().toString().equals("142")
-                || flyway.info().applied().length != 142 || flyway.info().pending().length != 0) {
-                throw new IllegalStateException("Current runtime must have exact validated V142 head");
+            MigrationInfoService info = flyway.info();
+            if (info.current() == null || !info.current().getVersion().toString().equals("143")
+                || info.applied().length != 143 || info.pending().length != 0
+                || Arrays.stream(info.all()).anyMatch(migration -> migration.getState().isFailed())) {
+                throw new IllegalStateException("Current runtime must have exact validated V143 head");
             }
-            System.out.println("FIXTURE_VALIDATED_CURRENT_142");
+            System.out.println("FIXTURE_VALIDATED_CURRENT_143");
         } else if (args.length == 2 && args[0].equals("identity")) {
             // Execute the production identity SQL unchanged through actual backend JDBC.
             try (Connection connection = DriverManager.getConnection(url, user, password);
