@@ -46,31 +46,38 @@ class PlatformSubscriptionSettingsRepository(private val dataSource: DataSource?
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    if (!venueExists(connection, venueId)) {
-                        return@use null
-                    }
-                    val settings =
-                        loadSettings(connection, venueId)
-                            ?: PlatformSubscriptionSettings(
-                                venueId = venueId,
-                                trialEndDate = null,
-                                paidStartDate = null,
-                                basePriceMinor = null,
-                                priceOverrideMinor = null,
-                                currency = DEFAULT_CURRENCY,
-                            )
-                    val schedule = loadSchedule(connection, venueId)
-                    val effectivePriceToday = resolveEffectivePrice(settings, schedule, LocalDate.now())
-                    PlatformSubscriptionSnapshot(
-                        settings = settings,
-                        schedule = schedule,
-                        effectivePriceToday = effectivePriceToday,
-                    )
+                    getSubscriptionSnapshot(connection, venueId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    internal fun getSubscriptionSnapshot(
+        connection: Connection,
+        venueId: Long,
+    ): PlatformSubscriptionSnapshot? {
+        if (!venueExists(connection, venueId)) {
+            return null
+        }
+        val settings =
+            loadSettings(connection, venueId)
+                ?: PlatformSubscriptionSettings(
+                    venueId = venueId,
+                    trialEndDate = null,
+                    paidStartDate = null,
+                    basePriceMinor = null,
+                    priceOverrideMinor = null,
+                    currency = DEFAULT_CURRENCY,
+                )
+        val schedule = loadSchedule(connection, venueId)
+        val effectivePriceToday = resolveEffectivePrice(settings, schedule, LocalDate.now())
+        return PlatformSubscriptionSnapshot(
+            settings = settings,
+            schedule = schedule,
+            effectivePriceToday = effectivePriceToday,
+        )
     }
 
     suspend fun updateSettings(

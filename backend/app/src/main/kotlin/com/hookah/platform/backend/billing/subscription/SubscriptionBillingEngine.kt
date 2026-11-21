@@ -59,7 +59,6 @@ class SubscriptionBillingEngine(
         val today = LocalDate.now(clock.withZone(zone))
         val venueIds = venueRepository.listVenueIds()
         for (venueId in venueIds) {
-            subscriptionRepository.ensureRowExistsForVenue(venueId)
             val snapshot = settingsRepository.getSubscriptionSnapshot(venueId) ?: continue
             val anchor =
                 SubscriptionBillingPeriodResolver.resolvePaidAnchor(
@@ -67,6 +66,9 @@ class SubscriptionBillingEngine(
                     snapshot.settings.paidStartDate,
                 )
             if (anchor == null) {
+                if (snapshot.effectivePriceToday?.priceMinor != 0) {
+                    subscriptionRepository.ensureRowExistsForVenue(venueId)
+                }
                 logger.debug("Subscription billing skipped: venueId={} not configured", venueId)
                 continue
             }
@@ -76,25 +78,23 @@ class SubscriptionBillingEngine(
                 listOfNotNull(basePaidThrough, latestCourtesy?.newPaidThrough)
                     .maxOrNull()
             val periodStart =
-                if (effectivePaidThrough == null) {
-                    SubscriptionBillingPeriodResolver.resolvePeriodStart(anchor, today)
-                } else {
-                    SubscriptionBillingPeriodResolver.resolveNextPeriodStart(effectivePaidThrough)
+                SubscriptionBillingPeriodResolver.invoicePeriodStart(anchor, effectivePaidThrough, today) { date ->
+                    settingsRepository.resolveEffectivePrice(snapshot.settings, snapshot.schedule, date)?.priceMinor
                 }
-            val leadDate = periodStart.minusDays(config.leadDays)
-            if (today.isBefore(leadDate)) {
-                continue
-            }
             val periodEnd = SubscriptionBillingPeriodResolver.resolvePeriodEnd(periodStart)
             val effectivePrice =
                 settingsRepository.resolveEffectivePrice(
                     settings = snapshot.settings,
                     schedule = snapshot.schedule,
                     today = periodStart,
-                ) ?: run {
-                    logger.debug("Subscription billing skipped: venueId={} no price on {}", venueId, periodStart)
-                    continue
-                }
+                )
+            if (effectivePrice?.priceMinor == 0) continue
+            subscriptionRepository.ensureRowExistsForVenue(venueId)
+            if (today.isBefore(periodStart.minusDays(config.leadDays))) continue
+            if (effectivePrice == null) {
+                logger.debug("Subscription billing skipped: venueId={} no price on {}", venueId, periodStart)
+                continue
+            }
             val dueAt = periodStart.atStartOfDay(zone).toInstant()
             val description = SubscriptionBillingPeriodResolver.buildInvoiceDescription(periodStart, periodEnd, zone)
             billingService.createDraftOrOpenInvoice(

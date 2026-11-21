@@ -206,6 +206,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.ApplicationStarted
 import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.application.ApplicationStopping
@@ -310,6 +311,8 @@ private data class VersionResponse(
     val env: String,
     val version: String,
     val time: String,
+    val instance: String? = null,
+    val polling: String? = null,
 )
 
 internal data class ModuleOverrides(
@@ -482,6 +485,16 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         )
     val dbConfig = DbConfig.from(appConfig)
     val appVersion = appConfig.optionalString("app.version") ?: "dev"
+    val productionGate =
+        System.getenv("HOOKAH_PILOT_GATE_DIR")?.let {
+            check(appEnv == "prod")
+            ProductionTrafficGate(
+                java.nio.file.Path.of(it),
+                appVersion,
+                (telegramConfig.longPollingTimeoutSeconds + 15L) * 1_000_000_000L,
+            )
+        }
+
     val miniAppDevServerUrl = appConfig.optionalString("miniapp.devServerUrl")?.takeIf { it.isNotBlank() }
     val miniAppStaticDir = appConfig.optionalString("miniapp.staticDir")?.takeIf { it.isNotBlank() }
     val sessionTokenConfig = SessionTokenConfig.from(appConfig, appEnv)
@@ -649,7 +662,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         genericBillingConfig.validateRequired()
     }
     val billingProvider = resolvedBillingProvider ?: FakeBillingProvider()
-    val subscriptionBillingHooks = SubscriptionBillingHooks(subscriptionRepository)
+    val subscriptionBillingHooks =
+        SubscriptionBillingHooks(subscriptionRepository, Clock.system(subscriptionBillingConfig.timeZone))
     val billingService =
         BillingService(
             provider = billingProvider,
@@ -963,18 +977,20 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         when (telegramConfig.mode) {
             TelegramBotConfig.Mode.LONG_POLLING -> {
                 val router = telegramRouter!!
+                val worker =
+                    TelegramLongPollingWorker(
+                        getUpdates = telegramApiClient::getUpdates,
+                        onPollingSuccess = { productionGate?.pollingSucceeded() },
+                        getWebhookUrl = { telegramApiClient.getWebhookInfo().url },
+                        processUpdate = router::process,
+                        trafficPolicy = telegramTrafficPolicy,
+                        maintenancePolicy = stagingMaintenancePolicy,
+                        timeoutSeconds = telegramConfig.longPollingTimeoutSeconds,
+                        scope = botScope,
+                    )
                 telegramLongPollingWorkerJob =
-                    runBlocking {
-                        TelegramLongPollingWorker(
-                            getUpdates = telegramApiClient::getUpdates,
-                            getWebhookUrl = { telegramApiClient.getWebhookInfo().url },
-                            processUpdate = router::process,
-                            trafficPolicy = telegramTrafficPolicy,
-                            maintenancePolicy = stagingMaintenancePolicy,
-                            timeoutSeconds = telegramConfig.longPollingTimeoutSeconds,
-                            scope = botScope,
-                        ).start()
-                    }
+                    productionGate?.supervise(botScope, polling = true, start = worker::start)
+                        ?: runBlocking { worker.start() }
             }
 
             TelegramBotConfig.Mode.WEBHOOK -> {
@@ -1026,7 +1042,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                             ?: com.hookah.platform.backend.telegram.TelegramCallResult.TrafficDenied
                     },
                 )
-            telegramOutboxWorkerJob = outboxWorker.start()
+            telegramOutboxWorkerJob =
+                productionGate?.supervise(telegramOutboxWorkerScope!!) { outboxWorker.start() } ?: outboxWorker.start()
         } else {
             logger.warn("Telegram outbox worker disabled: database is not configured")
         }
@@ -1089,6 +1106,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             val scope = telegramScope
             if (apiClient != null && scope != null) {
                 scope.launch {
+                    productionGate?.awaitActivation()
                     overrides.telegramCommandMenuConfigurator(apiClient)
                 }
             }
@@ -1121,6 +1139,35 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     }
     monitor.subscribe(ApplicationStopped) {
         logger.info("Application stopped")
+    }
+
+    suspend fun databaseReady(): Boolean =
+        withContext(Dispatchers.IO) { dataSource?.connection?.use { it.isValid(2) } == true }
+
+    if (productionGate != null) {
+        val applicationScope = this
+        launch {
+            while (isActive) {
+                if (productionGate.admitsHttp(telegramConfig.enabled)) {
+                    productionGate.checkDatabase(applicationScope, ::databaseReady)
+                }
+                delay(1_000)
+            }
+        }
+        intercept(ApplicationCallPipeline.Setup) {
+            val publicIngress = call.request.headers["X-Hookah-Pilot-Ingress"] == "public"
+            if (publicIngress &&
+                (
+                    !productionGate.admitsHttp(telegramConfig.enabled) ||
+                        !productionGate.checkDatabase(applicationScope, ::databaseReady) ||
+                        !productionGate.admitsHttp(telegramConfig.enabled)
+                )
+            ) {
+                call.response.headers.append("X-Hookah-Maintenance", "closed")
+                call.respond(HttpStatusCode.ServiceUnavailable)
+                finish()
+            }
+        }
     }
 
     installSafeHttpRequestObservability()
@@ -1273,15 +1320,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
 
             try {
                 val isOk =
-                    withContext(Dispatchers.IO) {
-                        dataSourceToUse.connection.use { connection ->
-                            connection.createStatement().use { statement ->
-                                statement.executeQuery("SELECT 1").use { resultSet ->
-                                    resultSet.next()
-                                }
-                            }
-                        }
-                    }
+                    productionGate?.checkDatabase(this@moduleWithOverrides, ::databaseReady) ?: databaseReady()
 
                 if (isOk) {
                     call.respond(DbHealthResponse(status = "ok"))
@@ -1339,6 +1378,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     env = appEnv,
                     version = appVersion,
                     time = time,
+                    instance = productionGate?.instance,
+                    polling = productionGate?.pollingState(telegramConfig.enabled),
                 ),
             )
         }

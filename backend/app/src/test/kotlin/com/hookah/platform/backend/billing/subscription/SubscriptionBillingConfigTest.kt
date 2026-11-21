@@ -1,8 +1,12 @@
 package com.hookah.platform.backend.billing.subscription
 
 import io.ktor.server.config.MapApplicationConfig
+import io.mockk.mockk
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class SubscriptionBillingConfigTest {
     @Test
@@ -29,6 +33,13 @@ class SubscriptionBillingConfigTest {
         val result = SubscriptionBillingConfig.from(config)
 
         assertEquals(0L, result.intervalSeconds)
+        val parent = Job()
+        try {
+            SubscriptionBillingJob(mockk(), result.intervalSeconds).start(CoroutineScope(parent))
+            assertFalse(parent.children.any(), "Disabled billing must not schedule even an initial tick")
+        } finally {
+            parent.cancel()
+        }
     }
 
     @Test

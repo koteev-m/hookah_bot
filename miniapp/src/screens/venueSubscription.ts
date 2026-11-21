@@ -8,7 +8,8 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
-import { formatBillingDate, formatNextBillingDate } from '../shared/ui/billingDates'
+import { billingCoverage, visibleBillingInvoices, formatBillingDate, freePeriodGuidance } from '../shared/ui/billingDates'
+import { renderBillingInvoices } from '../shared/ui/billingInvoices'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
 
@@ -87,6 +88,8 @@ function paymentReasonLabel(reason?: string | null) {
       return 'Онлайн-оплата не подключена. Оплату ведёт платформа вручную.'
     case 'external_checkout_unavailable':
       return 'Ссылка оплаты пока недоступна. Обратитесь к платформе или оплатите вручную.'
+    case 'free_period':
+      return 'Бесплатный период. Счёт за него не выставляется.'
     case 'missing_price':
       return 'Цена подписки ещё не задана. Обратитесь к платформе.'
     case 'missing_billing_period':
@@ -102,10 +105,6 @@ function paymentReasonLabel(reason?: string | null) {
   }
 }
 
-function formatNextPaymentDate(overview: OwnerBillingOverviewResponse) {
-  if (overview.nextPaymentDate) return formatBillingDate(overview.nextPaymentDate)
-  return formatNextBillingDate(overview.paidThrough)
-}
 
 function safeCheckoutUrl(url?: string | null) {
   if (!url) return null
@@ -118,21 +117,23 @@ function safeCheckoutUrl(url?: string | null) {
 }
 
 function subscriptionNextStep(overview: OwnerBillingOverviewResponse) {
-  if (overview.paidThrough) return `Оплата учтена. Следующая оплата с ${formatNextPaymentDate(overview)}.`
-  if (!overview.priceMinor) return paymentReasonLabel('missing_price')
+  const free = freePeriodGuidance(overview)
+  if (free) return free
+  const due = visibleBillingInvoices(overview).find(invoice => invoice.status === 'OPEN' || invoice.status === 'PAST_DUE')
+  if (due) return `Неоплаченный счёт #${due.id}. ${overview.paymentAvailable ? 'Можно перейти к оплате картой.' : paymentReasonLabel(overview.unavailableReason)}`
+  if (overview.basePaidThrough) {
+    return overview.nextPaymentDate
+      ? `Оплата учтена. Следующая оплата с ${formatBillingDate(overview.nextPaymentDate)}.`
+      : 'Оплата учтена.'
+  }
+  if (overview.priceMinor == null) return paymentReasonLabel('missing_price')
   if (!(overview.settingsPaidStartDate ?? overview.paidStartAt)) return paymentReasonLabel('missing_billing_period')
   if (!overview.paymentAvailable) return paymentReasonLabel(overview.unavailableReason)
   return 'Можно перейти к оплате картой.'
 }
 
 function paidThroughRows(overview: OwnerBillingOverviewResponse) {
-  if (!overview.paidThrough) {
-    return [el('p', { text: 'Оплачено до: —' })]
-  }
-  return [
-    el('p', { text: `Оплачено до ${formatBillingDate(overview.paidThrough)} включительно` }),
-    el('p', { text: `Следующая оплата с ${formatNextPaymentDate(overview)}` })
-  ]
+  return billingCoverage(overview).map(text => el('p', { text }))
 }
 
 function buildDom(root: HTMLDivElement): VenueSubscriptionRefs {
@@ -244,7 +245,10 @@ export function renderVenueSubscriptionScreen(options: VenueSubscriptionOptions)
 
   const updateButtons = () => {
     refs.refreshButton.disabled = inFlight
-    refs.ensureCheckoutButton.disabled = inFlight || ensuring
+    const free = current?.priceMinor === 0
+    refs.ensureCheckoutButton.hidden = free
+    refs.openCheckoutButton.hidden = free && !safeCheckoutUrl(current?.checkoutUrl)
+    refs.ensureCheckoutButton.disabled = inFlight || ensuring || !current?.checkoutEnsureAvailable
     refs.openCheckoutButton.disabled = inFlight || !safeCheckoutUrl(current?.checkoutUrl)
   }
 
@@ -269,6 +273,14 @@ export function renderVenueSubscriptionScreen(options: VenueSubscriptionOptions)
         text: invoice.paidAt ? `Оплачен: ${formatBillingDate(invoice.paidAt)}` : ''
       })
     )
+    const url = safeCheckoutUrl(invoice.checkoutUrl)
+    if (url && (invoice.status === 'OPEN' || invoice.status === 'PAST_DUE')) {
+      const link = el('a', { text: `Открыть оплату счёта #${invoice.id}` })
+      link.href = url
+      link.target = '_blank'
+      link.rel = 'noopener'
+      append(info, link)
+    }
     append(row, info)
     return row
   }
@@ -290,11 +302,8 @@ export function renderVenueSubscriptionScreen(options: VenueSubscriptionOptions)
       ...paidThroughRows(current),
       el('p', { text: subscriptionNextStep(current) })
     )
-    if (!current.invoices.length) {
-      refs.invoices.appendChild(el('p', { className: 'venue-empty', text: 'Счетов пока нет.' }))
-    } else {
-      current.invoices.forEach((invoice) => refs.invoices.appendChild(renderInvoice(invoice)))
-    }
+    renderBillingInvoices(refs.invoices, current, renderInvoice, afterId =>
+      venueGetSubscription(backendUrl, venueId, deps, undefined, afterId))
     updateButtons()
   }
 
@@ -321,8 +330,9 @@ export function renderVenueSubscriptionScreen(options: VenueSubscriptionOptions)
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
       setStatus('')
+      current = null
+      render()
       showError(result.error, load)
-      updateButtons()
       return
     }
     current = result.data

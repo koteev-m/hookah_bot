@@ -1,5 +1,6 @@
 package com.hookah.platform.backend.platform
 
+import com.hookah.platform.backend.api.BillingOperationKeyRequiredException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.billing.BillingInvoiceRepository
@@ -7,7 +8,6 @@ import com.hookah.platform.backend.billing.BillingOverviewService
 import com.hookah.platform.backend.billing.BillingService
 import com.hookah.platform.backend.billing.InvoiceStatus
 import com.hookah.platform.backend.billing.appendBillingCheckoutEnsureAudit
-import com.hookah.platform.backend.billing.appendBillingCourtesyDaysAudit
 import com.hookah.platform.backend.billing.toResponse
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import io.ktor.server.application.call
@@ -21,6 +21,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.Instant
+import java.util.UUID
 
 @Serializable
 data class PlatformInvoiceDto(
@@ -58,6 +59,9 @@ data class PlatformAddCourtesyDaysRequest(
     val reason: String,
 )
 
+@Serializable
+private data class ResumeSubscriptionRequest(val reason: String, val expectedUpdatedAt: String)
+
 fun Route.platformBillingRoutes(
     platformConfig: PlatformConfig,
     billingInvoiceRepository: BillingInvoiceRepository,
@@ -71,7 +75,9 @@ fun Route.platformBillingRoutes(
             val venueId =
                 call.parameters["venueId"]?.toLongOrNull()
                     ?: throw InvalidInputException("venueId must be a number")
-            val overview = billingOverviewService.readOverview(venueId) ?: throw NotFoundException()
+            val overview =
+                billingOverviewService.readOverview(venueId, call.request.queryParameters["outstandingAfterId"])
+                    ?: throw NotFoundException()
             call.respond(overview.toResponse(billingOverviewService))
         }
 
@@ -94,26 +100,37 @@ fun Route.platformBillingRoutes(
             call.respond(overview.toResponse(billingOverviewService))
         }
 
+        post("/{venueId}/billing/resume-subscription") {
+            val actor = call.requirePlatformOwner(platformConfig)
+            val venueId = call.parameters["venueId"]?.toLongOrNull() ?: throw InvalidInputException("Invalid venueId")
+            val request = call.receive<ResumeSubscriptionRequest>()
+            val expected = parseInstant(request.expectedUpdatedAt, "expectedUpdatedAt")
+            call.respond(
+                billingOverviewService.resumeSubscription(venueId, actor, request.reason, expected, auditLogRepository),
+            )
+        }
+
         post("/{venueId}/billing/courtesy-days") {
             val actorUserId = call.requirePlatformOwner(platformConfig)
             val venueId =
                 call.parameters["venueId"]?.toLongOrNull()
                     ?: throw InvalidInputException("venueId must be a number")
+            val rawKey = call.request.headers["Idempotency-Key"] ?: throw BillingOperationKeyRequiredException()
+            val operation = runCatching { UUID.fromString(rawKey) }.getOrNull()
+            if (operation == null || !operation.toString().equals(rawKey, ignoreCase = true)) {
+                throw InvalidInputException("Idempotency-Key must be a UUID")
+            }
             val request = call.receive<PlatformAddCourtesyDaysRequest>()
-            val adjustment =
+            call.respond(
                 billingOverviewService.addCourtesyDays(
-                    venueId = venueId,
-                    days = request.days,
-                    reason = request.reason,
-                    actorUserId = actorUserId,
-                )
-            appendBillingCourtesyDaysAudit(
-                auditLogRepository = auditLogRepository,
-                actorUserId = actorUserId,
-                adjustment = adjustment,
+                    venueId,
+                    request.days,
+                    request.reason,
+                    actorUserId,
+                    operation,
+                    auditLogRepository,
+                ),
             )
-            val overview = billingOverviewService.readOverview(venueId) ?: throw NotFoundException()
-            call.respond(overview.toResponse(billingOverviewService))
         }
 
         get("/{venueId}/invoices") {

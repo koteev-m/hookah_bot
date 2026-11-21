@@ -345,6 +345,8 @@ internal fun Route.platformVenueRoutes(
                 subscriptionSettingsRepository.getSubscriptionSnapshot(venueId)
                     ?: throw NotFoundException()
             val resolvedSettings = applySettingsUpdate(existingSnapshot.settings, update)
+            update.basePriceMinor?.let { validatePrice(it, "basePriceMinor") }
+            update.priceOverrideMinor?.let { validatePrice(it, "priceOverrideMinor") }
             validateSubscriptionSettings(resolvedSettings)
             val updated =
                 subscriptionSettingsRepository.updateSettings(venueId, update, actorUserId)
@@ -781,8 +783,8 @@ private fun parseScheduleItems(
 }
 
 private fun validateSubscriptionSettings(settings: PlatformSubscriptionSettings) {
-    settings.basePriceMinor?.let { validatePrice(it, "basePriceMinor") }
-    settings.priceOverrideMinor?.let { validatePrice(it, "priceOverrideMinor") }
+    settings.basePriceMinor?.takeIf { it != 0 }?.let { validatePrice(it, "basePriceMinor") }
+    settings.priceOverrideMinor?.takeIf { it != 0 }?.let { validatePrice(it, "priceOverrideMinor") }
     if (settings.trialEndDate != null && settings.paidStartDate != null) {
         if (settings.paidStartDate.isBefore(settings.trialEndDate)) {
             throw InvalidInputException("paidStartDate must be after or equal to trialEndDate")

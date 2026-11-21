@@ -55,6 +55,7 @@ class SupportThreadReadCursorMigrationPostgresTest {
                     "140" to "V140__accounting_create_result.sql",
                     "141" to "V141__guest_exit_event_id.sql",
                     "142" to "V142__telegram_chat_table_session.sql",
+                    "143" to "V143__billing_courtesy_operation.sql",
                 ),
             ddlFailureContract = MigrationDdlFailureContract.TRANSACTIONAL,
             close = dataSource::close,

@@ -179,8 +179,8 @@ class SubscriptionBillingPostgresTest {
                     ),
                 )
 
-                val active = subscriptionRepository.getSubscriptionStatus(venueId)
-                assertEquals(SubscriptionStatus.ACTIVE, active)
+                val afterPayment = subscriptionRepository.getSubscriptionStatus(venueId)
+                assertEquals(SubscriptionStatus.SUSPENDED_BY_PLATFORM, afterPayment)
             } finally {
                 dataSource.close()
             }

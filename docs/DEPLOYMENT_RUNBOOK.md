@@ -12,6 +12,13 @@
 
 Статус: **current operations reference / UPDATED**. This document is the canonical deploy, release and operations runbook for the Telegram bot + Mini App platform. Use it together with `docs/TESTING_QA_SMOKE_STRATEGY.md` for validation scope, `docs/STAGING_DEPLOYMENT.md` for one-VPS staging details, `docs/OPERATIONS.md` for metrics/queue incident basics and `docs/MIGRATION_POLICY.md` for Flyway policy.
 
+## Ограниченный production-пилот
+
+Для отдельного VPS, `@hookah_tootah_bot` и apex `hookahtootah.club` подготовлен
+[production-профиль и порядок установки, обновления и восстановления](PRODUCTION_PILOT.md).
+Локальная Linux-репетиция охватывает PostgreSQL 17, переход V142 → V143, закрытие HTTPS при потере БД и повторный допуск JVM.
+Допуск реального хоста, внешние копии, DNS и Telegram остаются решениями владельца.
+
 ## Core Rule
 
 The approved [CLEAN_REINSTALL V126 CR-1](CLEAN_REINSTALL_CONTRACT.md) describes a

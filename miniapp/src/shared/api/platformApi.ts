@@ -412,11 +412,13 @@ export async function platformGetBilling(
   backendUrl: string,
   venueId: number,
   deps: RequestDependencies,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  outstandingAfterId?: number
 ) {
+  const query = outstandingAfterId === undefined ? '' : `?outstandingAfterId=${outstandingAfterId}`
   return requestApi<OwnerBillingOverviewResponse>(
     backendUrl,
-    `/api/platform/venues/${venueId}/billing`,
+    `/api/platform/venues/${venueId}/billing${query}`,
     { signal },
     deps
   )
@@ -442,6 +444,7 @@ export async function platformAddCourtesyDays(
   backendUrl: string,
   venueId: number,
   body: { days: number; reason: string },
+  operationKey: string,
   deps: RequestDependencies
 ) {
   return requestApi<OwnerBillingOverviewResponse>(
@@ -449,11 +452,25 @@ export async function platformAddCourtesyDays(
     `/api/platform/venues/${venueId}/billing/courtesy-days`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
       body: JSON.stringify(body)
     },
     deps
   )
+}
+
+export async function platformResumeSubscription(
+  backendUrl: string,
+  venueId: number,
+  reason: string,
+  expectedUpdatedAt: string,
+  deps: RequestDependencies
+) {
+  return requestApi<OwnerBillingOverviewResponse>(backendUrl, `/api/platform/venues/${venueId}/billing/resume-subscription`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason, expectedUpdatedAt })
+  }, deps)
 }
 
 export async function platformMarkInvoicePaid(

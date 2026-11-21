@@ -1,3 +1,4 @@
+import { getTelegramContext } from '../shared/telegram'
 import { mountVenuePublicLink } from './venuePublicLink'
 import { REQUEST_ABORTED_CODE } from '../shared/api/abort'
 import { clearSession, getAccessToken } from '../shared/api/auth'
@@ -12,6 +13,7 @@ import {
   platformGetSubscription,
   platformGetVenue,
   platformMarkInvoicePaid,
+  platformResumeSubscription,
   platformRevokeOwner,
   platformSearchUsers,
   platformUpdatePriceSchedule,
@@ -29,7 +31,8 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
 import { renderErrorDetails } from '../shared/ui/errorDetails'
-import { formatBillingDate, formatNextBillingDate, isoDateOnly } from '../shared/ui/billingDates'
+import { renderBillingInvoices } from '../shared/ui/billingInvoices'
+import { billingCoverage, formatBillingDate, freePeriodGuidance, isoDateOnly } from '../shared/ui/billingDates'
 import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
 
@@ -74,6 +77,10 @@ type DetailRefs = {
   scheduleList: HTMLDivElement
   addScheduleButton: HTMLButtonElement
   saveScheduleButton: HTMLButtonElement
+  resumeForm: HTMLDivElement
+  resumeReason: HTMLInputElement
+  resumeButton: HTMLButtonElement
+  resumeFeedback: HTMLParagraphElement
   billingSummary: HTMLDivElement
   billingRefreshButton: HTMLButtonElement
   billingEnsureCheckoutButton: HTMLButtonElement
@@ -269,9 +276,18 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
     labeledField('Причина', billingCourtesyReasonInput),
     billingAddCourtesyButton
   )
+  const resumeForm = document.createElement('div')
+  resumeForm.hidden = true
+  const resumeReason = document.createElement('input')
+  resumeReason.className = 'venue-input'
+  resumeReason.required = true
+  const resumeButton = el('button', { className: 'button-small', text: 'Снять блокировку подписки' })
+  const resumeFeedback = el('p')
+  resumeFeedback.setAttribute('role', 'status')
+  append(resumeForm, labeledField('Обоснование восстановления', resumeReason), resumeButton, resumeFeedback)
   const billingInvoices = el('div', { className: 'venue-staff-list' }) as HTMLDivElement
   append(billingActions, billingRefreshButton, billingEnsureCheckoutButton, billingOpenCheckoutButton)
-  append(billingCard, billingTitle, billingSummary, billingActions, courtesyForm, billingInvoices)
+  append(billingCard, billingTitle, billingSummary, billingActions, courtesyForm, resumeForm, billingInvoices)
 
   const status = el('p', { className: 'status', text: '' })
 
@@ -319,6 +335,10 @@ function buildDetailDom(root: HTMLDivElement): DetailRefs {
     scheduleList,
     addScheduleButton,
     saveScheduleButton,
+    resumeForm,
+    resumeReason,
+    resumeButton,
+    resumeFeedback,
     billingSummary,
     billingRefreshButton,
     billingEnsureCheckoutButton,
@@ -345,7 +365,7 @@ function formatMoney(amountMinor?: number | null, currency?: string | null) {
 }
 
 function minorToRublesInput(amountMinor?: number | null) {
-  if (amountMinor === null || amountMinor === undefined || amountMinor <= 0) return ''
+  if (amountMinor === null || amountMinor === undefined || amountMinor < 0) return ''
   const rubles = amountMinor / 100
   return Number.isInteger(rubles) ? String(rubles) : String(rubles).replace('.', ',')
 }
@@ -394,6 +414,8 @@ function paymentReasonLabel(reason?: string | null) {
       return 'Онлайн-оплата не подключена. Можно вести оплату вручную.'
     case 'external_checkout_unavailable':
       return 'Внешняя ссылка оплаты пока недоступна. Проверьте настройки оплаты или ведите оплату вручную.'
+    case 'free_period':
+      return 'Бесплатный период. Счёт за него не выставляется.'
     case 'missing_price':
       return 'Цена не задана. Укажите цену в блоке «Подписка и цены» и сохраните настройки.'
     case 'missing_billing_period':
@@ -433,13 +455,12 @@ function billingDisplayState(overview: OwnerBillingOverviewResponse) {
   if (isBlockingSubscriptionStatus(overview.subscriptionStatus)) {
     return billingStatusLabel(overview.subscriptionStatus)
   }
-  if (overview.paidThrough) {
-    return 'Текущий период оплачен'
-  }
+  if (overview.priceMinor === 0) return billingStatusLabel(overview.subscriptionStatus)
   const invoice = currentPayableInvoice(overview)
   if (invoice) {
     return `Платный период настроен, счёт ${invoiceStatusLabel(invoice.status).toLowerCase()}`
   }
+  if (overview.basePaidThrough) return `Оплата по ${formatBillingDate(overview.basePaidThrough)} включительно`
   if ((overview.settingsPaidStartDate ?? overview.paidStartAt) && overview.priceMinor) {
     return 'Платный период настроен, счёт ещё не создан.'
   }
@@ -469,7 +490,9 @@ function onlinePaymentStateLabel(overview: OwnerBillingOverviewResponse) {
 }
 
 function billingNextStep(overview: OwnerBillingOverviewResponse) {
-  if (!overview.priceMinor) {
+  const free = freePeriodGuidance(overview)
+  if (free) return free
+  if (overview.priceMinor == null) {
     return paymentReasonLabel('missing_price')
   }
   if (!(overview.settingsPaidStartDate ?? overview.paidStartAt)) {
@@ -485,8 +508,10 @@ function billingNextStep(overview: OwnerBillingOverviewResponse) {
     }
     return `Счёт создан. ${paymentReasonLabel(overview.unavailableReason)}`
   }
-  if (overview.paidThrough) {
-    return `Оплата учтена. Следующая оплата с ${formatNextPaymentDate(overview)}.`
+  if (overview.basePaidThrough) {
+    return overview.nextPaymentDate
+      ? `Оплата учтена. Следующая оплата с ${formatBillingDate(overview.nextPaymentDate)}.`
+      : 'Оплата учтена.'
   }
   if (overview.checkoutEnsureAvailable) {
     return 'Настройки заполнены. Создайте счёт для текущего периода.'
@@ -512,21 +537,9 @@ function canEnsureCheckout(overview: OwnerBillingOverviewResponse | null) {
   return true
 }
 
-function formatNextPaymentDate(overview: OwnerBillingOverviewResponse) {
-  if (overview.nextPaymentDate) return formatBillingDate(overview.nextPaymentDate)
-  return formatNextBillingDate(overview.paidThrough)
-}
 
 function paidThroughRows(overview: OwnerBillingOverviewResponse) {
-  if (!overview.paidThrough) {
-    return [el('p', { text: 'Оплачено до: —' })]
-  }
-  return [
-    el('p', { text: `Оплачено до ${formatBillingDate(overview.paidThrough)} включительно` }),
-    el('p', {
-      text: `Следующая оплата с ${formatNextPaymentDate(overview)}`
-    })
-  ]
+  return billingCoverage(overview).map(text => el('p', { text }))
 }
 
 function nextPeriodText(overview: OwnerBillingOverviewResponse) {
@@ -620,7 +633,9 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   let isUpdatingSchedule = false
   let isUpdatingStatus = false
   let isEnsuringCheckout = false
+  let isResuming = false
   let isAddingCourtesyDays = false
+  const courtesyActor = getTelegramContext().telegramUserId
   let isMarkingInvoicePaid = false
   let isInviting = false
   let isRevokingOwner = false
@@ -669,6 +684,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.inviteButton.disabled = value || isInviting
     refs.saveSubscriptionButton.disabled = value || isUpdatingSettings
     refs.saveScheduleButton.disabled = value || isUpdatingSchedule
+    refs.resumeButton.disabled = value || isResuming
     refs.billingRefreshButton.disabled = value
     refs.billingEnsureCheckoutButton.disabled = value || isEnsuringCheckout || !canEnsureCheckout(currentBilling)
     refs.billingOpenCheckoutButton.disabled = value || !safeCheckoutUrl(currentBilling?.checkoutUrl)
@@ -754,10 +770,10 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     if (!currentSubscription) return
     refs.trialEndInput.value = toDateInputValue(currentSubscription.settings.trialEndDate)
     refs.paidStartInput.value = toDateInputValue(currentSubscription.settings.paidStartDate)
-    refs.basePriceInput.value = currentSubscription.settings.basePriceMinor
+    refs.basePriceInput.value = currentSubscription.settings.basePriceMinor != null
       ? minorToRublesInput(currentSubscription.settings.basePriceMinor)
       : ''
-    refs.overridePriceInput.value = currentSubscription.settings.priceOverrideMinor
+    refs.overridePriceInput.value = currentSubscription.settings.priceOverrideMinor != null
       ? minorToRublesInput(currentSubscription.settings.priceOverrideMinor)
       : ''
     refs.currencyLabel.textContent = `Валюта: ${currentSubscription.settings.currency}`
@@ -766,6 +782,9 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   }
 
   const renderBilling = () => {
+    refs.resumeForm.hidden = currentBilling?.subscriptionStatus !== 'suspended_by_platform'
+    refs.billingEnsureCheckoutButton.hidden = currentBilling?.priceMinor === 0
+    refs.billingOpenCheckoutButton.hidden = currentBilling?.priceMinor === 0 && !safeCheckoutUrl(currentBilling.checkoutUrl)
     refs.billingSummary.replaceChildren()
     refs.billingInvoices.replaceChildren()
     refs.billingOpenCheckoutButton.disabled = isLoading || !safeCheckoutUrl(currentBilling?.checkoutUrl)
@@ -803,14 +822,8 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     refs.billingEnsureCheckoutButton.disabled = isLoading || isEnsuringCheckout || !canEnsureCheckout(currentBilling)
     refs.billingAddCourtesyButton.disabled = isLoading || isAddingCourtesyDays || !currentBilling.paidThrough
 
-    if (!currentBilling.invoices.length) {
-      refs.billingInvoices.appendChild(el('p', { className: 'venue-empty', text: 'Счетов пока нет.' }))
-      return
-    }
-
-    currentBilling.invoices.forEach((invoice) => {
-      refs.billingInvoices.appendChild(renderBillingInvoiceRow(invoice))
-    })
+    renderBillingInvoices(refs.billingInvoices, currentBilling, renderBillingInvoiceRow, afterId =>
+      platformGetBilling(backendUrl, venueId, deps, undefined, afterId))
     updateActionButtons()
   }
 
@@ -945,16 +958,20 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
 
   const loadBilling = async () => {
     billingAbort?.abort()
-    billingAbort = new AbortController()
-    const result = await platformGetBilling(backendUrl, venueId, deps, billingAbort.signal)
-    if (disposed) return
+    const controller = new AbortController()
+    billingAbort = controller
+    const result = await platformGetBilling(backendUrl, venueId, deps, controller.signal)
+    if (disposed || billingAbort !== controller) return false
     if (!result.ok) {
-      if (result.error.code === REQUEST_ABORTED_CODE) return
-      showError(result.error, loadBilling)
-      return
+      if (result.error.code === REQUEST_ABORTED_CODE) return false
+      currentBilling = null
+      renderBilling()
+      showError(result.error, () => void loadBilling())
+      return false
     }
     currentBilling = result.data
     renderBilling()
+    return true
   }
 
   const loadAll = async () => {
@@ -1140,11 +1157,13 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     if (!currentSubscription) return
     const basePriceMinor = parseRublesToMinor(refs.basePriceInput.value)
     const priceOverrideMinor = parseRublesToMinor(refs.overridePriceInput.value)
-    if (refs.basePriceInput.value.trim() && basePriceMinor === null) {
+    const savedFreeBase = currentSubscription.settings.basePriceMinor === 0 && refs.basePriceInput.value.trim() === '0'
+    const savedFreeOverride = currentSubscription.settings.priceOverrideMinor === 0 && refs.overridePriceInput.value.trim() === '0'
+    if (!savedFreeBase && refs.basePriceInput.value.trim() && basePriceMinor === null) {
       showToast('Базовая цена в рублях должна быть больше 0')
       return
     }
-    if (refs.overridePriceInput.value.trim() && priceOverrideMinor === null) {
+    if (!savedFreeOverride && refs.overridePriceInput.value.trim() && priceOverrideMinor === null) {
       showToast('Индивидуальная цена в рублях должна быть больше 0')
       return
     }
@@ -1261,6 +1280,44 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     showToast(ensureResultToast(result.data))
   }
 
+  const handleResumeSubscription = async () => {
+    if (isResuming || currentBilling?.subscriptionStatus !== 'suspended_by_platform') return
+    const expectedUpdatedAt = currentBilling.lifecycleUpdatedAt
+    if (!expectedUpdatedAt) {
+      refs.resumeFeedback.textContent = 'Обновите данные подписки перед подтверждением.'
+      return
+    }
+    const reason = refs.resumeReason.value.trim()
+    if (!reason) {
+      refs.resumeFeedback.textContent = 'Укажите причину восстановления подписки.'
+      refs.resumeReason.focus()
+      return
+    }
+    if (!window.confirm(`Снять административную блокировку подписки? У опубликованного заведения откроется гостевой доступ. Причина: ${reason}`)) return
+    isResuming = true
+    refs.resumeButton.disabled = true
+    refs.resumeFeedback.textContent = ''
+    hideError()
+    const result = await platformResumeSubscription(backendUrl, venueId, reason, expectedUpdatedAt, deps)
+    isResuming = false
+    if (disposed) return
+    refs.resumeButton.disabled = isLoading
+    if (!result.ok) {
+      if (result.error.status === 409) {
+        const detail = result.error.code === 'SUBSCRIPTION_RESUME_CONFLICT' ? result.error.message : ''
+        refs.resumeFeedback.textContent = [detail, 'Проверьте статус подписки и действующее основание доступа. Обновите данные перед повтором.'].filter(Boolean).join(' ')
+      } else {
+        showError(result.error, loadBilling)
+      }
+      return
+    }
+    billingAbort?.abort()
+    refs.resumeReason.value = ''
+    currentBilling = result.data
+    renderBilling()
+    showToast('Административная блокировка подписки снята.')
+  }
+
   const handleAddCourtesyDays = async () => {
     if (isAddingCourtesyDays || !currentBilling?.paidThrough) return
     const days = Number(refs.billingCourtesyDaysInput.value.trim())
@@ -1273,16 +1330,56 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
       showToast('Укажите причину')
       return
     }
-    const ok = window.confirm(`Добавить ${days} бесплатных дн. для заведения? Причина: ${reason}`)
-    if (!ok) return
+    if (!courtesyActor || getTelegramContext().telegramUserId !== courtesyActor) {
+      showToast('Пользователь изменился. Откройте заведение заново.')
+      return
+    }
     isAddingCourtesyDays = true
     refs.billingAddCourtesyButton.disabled = true
     hideError()
-    const result = await platformAddCourtesyDays(backendUrl, venueId, { days, reason }, deps)
+    let slot: string
+    let key: string
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([days, reason])))
+      const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+      slot = `courtesy:${backendUrl}:${courtesyActor}:${venueId}:${fingerprint}`
+      const pending = sessionStorage.getItem(slot)
+      const question = pending
+        ? `Повторить прежнее начисление на ${days} дн. с причиной «${reason}»? Если сервер уже принял его, количество дней сохранится.`
+        : `Добавить ${days} бесплатных дн. для заведения? Причина: ${reason}`
+      if (!window.confirm(question)) {
+        isAddingCourtesyDays = false
+        setLoadingState(isLoading)
+        return
+      }
+      key = pending ?? crypto.randomUUID()
+      sessionStorage.setItem(slot, key)
+    } catch {
+      isAddingCourtesyDays = false
+      setLoadingState(isLoading)
+      showToast('Не удалось сохранить операцию для безопасного повтора. Откройте Mini App заново.')
+      return
+    }
+    const result = await platformAddCourtesyDays(backendUrl, venueId, { days, reason }, key, {
+      ...deps,
+      getAccessToken: async () => {
+        const session = await deps.getAccessToken()
+        if (disposed || getTelegramContext().telegramUserId !== courtesyActor) {
+          return { ok: false, error: { status: 409, message: 'Пользователь изменился. Откройте заведение заново.' } }
+        }
+        return session
+      }
+    })
+    if (result.ok && sessionStorage.getItem(slot) === key) sessionStorage.removeItem(slot)
     isAddingCourtesyDays = false
     if (disposed) return
+    if (getTelegramContext().telegramUserId !== courtesyActor) {
+      showToast('Пользователь изменился. Откройте заведение заново.')
+      return
+    }
     if (!result.ok) {
       refs.billingAddCourtesyButton.disabled = isLoading || !currentBilling?.paidThrough
+      if (result.error.status === 428) showToast('Обновите Mini App и повторите начисление льготы.')
       showError(result.error, handleAddCourtesyDays)
       return
     }
@@ -1295,10 +1392,10 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
 
   const handleBillingRefresh = async () => {
     setStatus('Обновление счетов...')
-    await loadBilling()
+    const refreshed = await loadBilling()
     if (disposed) return
     setStatus('')
-    showToast('Счета обновлены')
+    if (refreshed) showToast('Счета обновлены')
   }
 
   const handleOpenCheckout = () => {
@@ -1357,6 +1454,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
   const disposeBillingRefresh = on(refs.billingRefreshButton, 'click', () => void handleBillingRefresh())
   const disposeBillingEnsureCheckout = on(refs.billingEnsureCheckoutButton, 'click', () => void handleEnsureCheckout())
   const disposeBillingOpenCheckout = on(refs.billingOpenCheckoutButton, 'click', () => handleOpenCheckout())
+  const disposeResume = on(refs.resumeButton, 'click', () => void handleResumeSubscription())
   const disposeBillingAddCourtesy = on(refs.billingAddCourtesyButton, 'click', () => void handleAddCourtesyDays())
 
   void loadAll()
@@ -1385,6 +1483,7 @@ export function renderPlatformVenueDetailScreen(options: PlatformVenueDetailOpti
     disposeBillingRefresh()
     disposeBillingEnsureCheckout()
     disposeBillingOpenCheckout()
+    disposeResume()
     disposeBillingAddCourtesy()
   }
 }

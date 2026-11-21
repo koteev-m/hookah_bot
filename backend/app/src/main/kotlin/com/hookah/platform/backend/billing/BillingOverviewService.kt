@@ -6,19 +6,28 @@ import com.hookah.platform.backend.billing.subscription.SubscriptionBillingPerio
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.subscription.db.VenueSubscriptionState
+import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.platform.PlatformEffectivePrice
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettings
 import com.hookah.platform.backend.platform.PlatformSubscriptionSettingsRepository
 import com.hookah.platform.backend.platform.PlatformSubscriptionSnapshot
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.net.URI
+import java.sql.Connection
 import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
+import java.util.UUID
+
+private const val OUTSTANDING_PAGE_SIZE = 50
 
 enum class BillingCheckoutUnavailableReason(val wire: String) {
     PROVIDER_NOT_CONFIGURED("provider_not_configured"),
     EXTERNAL_CHECKOUT_UNAVAILABLE("external_checkout_unavailable"),
     MISSING_PRICE("missing_price"),
+    FREE_PERIOD("free_period"),
     MISSING_BILLING_PERIOD("missing_billing_period"),
     FAKE_PROVIDER_MANUAL_ONLY("fake_provider_manual_only"),
     ALREADY_PAID("already_paid"),
@@ -39,6 +48,7 @@ data class BillingOverview(
     val latestCourtesyAdjustment: BillingAdjustment?,
     val payableInvoice: BillingInvoice?,
     val invoices: List<BillingInvoice>,
+    val outstandingInvoices: OutstandingInvoicePage,
     val checkoutUrl: String?,
     val paymentAvailable: Boolean,
     val platformCheckoutEnsureAvailable: Boolean,
@@ -60,6 +70,13 @@ data class OwnerBillingInvoiceDto(
 )
 
 @Serializable
+data class OutstandingInvoicePage(
+    val items: List<OwnerBillingInvoiceDto>,
+    val hasMore: Boolean,
+    val nextAfterId: Long? = null,
+)
+
+@Serializable
 data class OwnerBillingOverviewResponse(
     val venueId: Long,
     val subscriptionStatus: String,
@@ -75,6 +92,7 @@ data class OwnerBillingOverviewResponse(
     val nextPaymentDate: String? = null,
     val nextInvoicePeriodStart: String? = null,
     val nextInvoicePeriodEnd: String? = null,
+    val courtesyUntil: String? = null,
     val courtesyDays: Int = 0,
     val lastCourtesyDays: Int? = null,
     val lastCourtesyReason: String? = null,
@@ -86,6 +104,7 @@ data class OwnerBillingOverviewResponse(
     val checkoutUrl: String? = null,
     val payableInvoice: OwnerBillingInvoiceDto? = null,
     val invoices: List<OwnerBillingInvoiceDto>,
+    val outstandingInvoices: OutstandingInvoicePage? = null,
 )
 
 class BillingOverviewService(
@@ -98,18 +117,67 @@ class BillingOverviewService(
     private val config: SubscriptionBillingConfig,
     private val clock: Clock = Clock.systemUTC(),
 ) {
-    suspend fun readOverview(venueId: Long): BillingOverview? {
-        val snapshot = settingsRepository.getSubscriptionSnapshot(venueId) ?: return null
-        val basePaidThrough = invoiceRepository.findLatestPaidInvoicePeriodEnd(venueId)
-        val latestCourtesyAdjustment = adjustmentRepository.findLatestCourtesyAdjustment(venueId)
+    suspend fun readOverview(
+        venueId: Long,
+        outstandingAfterId: String? = null,
+    ): BillingOverview? {
+        val afterId =
+            outstandingAfterId?.let { raw ->
+                raw.toLongOrNull()?.takeIf { it > 0 }
+                    ?: throw InvalidInputException("outstandingAfterId must be positive")
+            } ?: 0L
+        return adjustmentRepository.withConnection { connection ->
+            connection.isReadOnly = true
+            connection.transactionIsolation = Connection.TRANSACTION_REPEATABLE_READ
+            connection.autoCommit = false
+            try {
+                readOverview(connection, venueId, afterId).also { connection.commit() }
+            } catch (failure: Throwable) {
+                connection.rollback()
+                throw failure
+            }
+        }
+    }
+
+    private fun readOverview(
+        connection: Connection,
+        venueId: Long,
+        afterId: Long = 0L,
+    ): BillingOverview? {
+        val snapshot = settingsRepository.getSubscriptionSnapshot(connection, venueId) ?: return null
+        val basePaidThrough = invoiceRepository.findLatestPaidInvoicePeriodEnd(connection, venueId)
+        val latestCourtesyAdjustment = adjustmentRepository.findLatestCourtesyAdjustment(connection, venueId)
+        val outstanding =
+            invoiceRepository.listOutstandingAfter(connection, venueId, afterId, OUTSTANDING_PAGE_SIZE + 1)
+        val hasMore = outstanding.size > OUTSTANDING_PAGE_SIZE
+        val items = outstanding.take(OUTSTANDING_PAGE_SIZE).map { it.toOwnerBillingInvoiceDto(this) }
         return buildOverview(
+            outstandingInvoices = OutstandingInvoicePage(items, hasMore, if (hasMore) items.last().id else null),
             venueId = venueId,
             snapshot = snapshot,
-            subscriptionState = subscriptionRepository.findSubscriptionState(venueId),
-            invoices = invoiceRepository.listInvoicesByVenue(venueId, status = null, limit = 50, offset = 0),
+            subscriptionState = subscriptionRepository.findSubscriptionState(connection, venueId),
+            payableInvoice =
+                listOfNotNull(
+                    invoiceRepository.listInvoicesByVenue(connection, venueId, InvoiceStatus.OPEN, 1, 0).firstOrNull(),
+                    invoiceRepository.listInvoicesByVenue(
+                        connection,
+                        venueId,
+                        InvoiceStatus.PAST_DUE,
+                        1,
+                        0,
+                    ).firstOrNull(),
+                ).maxWithOrNull(compareBy<BillingInvoice> { it.periodStart }.thenBy { it.id }),
+            invoices =
+                invoiceRepository.listInvoicesByVenue(
+                    connection,
+                    venueId,
+                    status = null,
+                    limit = 50,
+                    offset = 0,
+                ),
             basePaidThrough = basePaidThrough,
             latestCourtesyAdjustment = latestCourtesyAdjustment,
-            courtesyDays = adjustmentRepository.countCourtesyDays(venueId),
+            courtesyDays = adjustmentRepository.countCourtesyDays(connection, venueId),
         )
     }
 
@@ -118,11 +186,14 @@ class BillingOverviewService(
         allowAdvance: Boolean,
     ): BillingOverview? {
         val snapshot = settingsRepository.getSubscriptionSnapshot(venueId) ?: return null
-        subscriptionRepository.ensureRowExistsForVenue(venueId)
         val basePaidThrough = invoiceRepository.findLatestPaidInvoicePeriodEnd(venueId)
         val latestCourtesyAdjustment = adjustmentRepository.findLatestCourtesyAdjustment(venueId)
         val effectivePaidThrough = effectivePaidThrough(basePaidThrough, latestCourtesyAdjustment)
-        val period = resolveBillablePeriod(snapshot, effectivePaidThrough, enforceLeadWindow = !allowAdvance)
+        val next = resolveBillablePeriod(snapshot, effectivePaidThrough, enforceLeadWindow = false)
+        if ((next?.price ?: snapshot.effectivePriceToday)?.priceMinor == 0) return readOverview(venueId)
+        subscriptionRepository.ensureRowExistsForVenue(venueId)
+        val period =
+            if (allowAdvance) next else resolveBillablePeriod(snapshot, effectivePaidThrough, enforceLeadWindow = true)
         if (period != null) {
             val existing =
                 invoiceRepository.getInvoiceByPeriod(
@@ -160,55 +231,82 @@ class BillingOverviewService(
         return readOverview(venueId)
     }
 
+    suspend fun resumeSubscription(
+        venueId: Long,
+        actor: Long,
+        reason: String,
+        expectedUpdatedAt: Instant,
+        audit: AuditLogRepository,
+    ): OwnerBillingOverviewResponse {
+        val explanation = reason.trim()
+        if (explanation.isEmpty()) throw InvalidInputException("Укажите причину восстановления подписки.")
+        return adjustmentRepository.withVenueTransaction(venueId) { connection ->
+            val basis =
+                subscriptionRepository.resumeSuspended(
+                    connection,
+                    venueId,
+                    expectedUpdatedAt,
+                    clock.withZone(config.timeZone),
+                )
+            audit.appendJson(
+                connection = connection,
+                actorUserId = actor,
+                action = "BILLING_SUBSCRIPTION_RESUMED",
+                entityType = "venue",
+                entityId = venueId,
+                payload =
+                    buildJsonObject {
+                        put("reason", explanation)
+                        put("basis", basis.name.lowercase())
+                        put("previousStatus", SubscriptionStatus.SUSPENDED_BY_PLATFORM.wire)
+                        put("newStatus", basis.status.wire)
+                    },
+            )
+            checkNotNull(readOverview(connection, venueId)).toResponse(this)
+        }
+    }
+
     suspend fun addCourtesyDays(
         venueId: Long,
         days: Int,
         reason: String,
         actorUserId: Long,
-    ): BillingAdjustment {
-        if (days <= 0) {
-            throw InvalidInputException("days must be greater than 0")
+        operation: UUID,
+        audit: AuditLogRepository,
+    ): OwnerBillingOverviewResponse {
+        val trimmed = reason.trim()
+        return adjustmentRepository.withVenueTransaction(venueId) { connection ->
+            adjustmentRepository.replay(connection, operation, venueId, actorUserId, days, reason)?.let {
+                return@withVenueTransaction it
+            }
+            if (days <= 0 || trimmed.isEmpty()) throw InvalidInputException("Positive days and a reason are required")
+            val previous =
+                effectivePaidThrough(
+                    invoiceRepository.findLatestPaidInvoicePeriodEnd(connection, venueId),
+                    adjustmentRepository.findLatestCourtesyAdjustment(connection, venueId),
+                ) ?: throw InvalidInputException("NO_PAID_PERIOD_TO_EXTEND")
+            val until = previous.plusDays(days.toLong())
+            val overlapping =
+                invoiceRepository.findOpenOrPastDueInvoiceOverlapping(connection, venueId, previous.plusDays(1), until)
+            if (overlapping != null) throw InvalidInputException("OPEN_INVOICE_OVERLAPS_COURTESY_PERIOD")
+            val grant =
+                adjustmentRepository.createCourtesyDaysAdjustment(
+                    connection,
+                    venueId,
+                    days,
+                    trimmed,
+                    previous,
+                    until,
+                    actorUserId,
+                )
+            if (until >= LocalDate.now(clock.withZone(config.timeZone))) {
+                subscriptionRepository.activatePastDueForCourtesy(connection, venueId)
+            }
+            appendBillingCourtesyDaysAudit(connection, audit, actorUserId, grant)
+            val response = checkNotNull(readOverview(connection, venueId)).toResponse(this)
+            adjustmentRepository.recordResponse(connection, grant.id, operation, reason, response)
+            response
         }
-        val trimmedReason = reason.trim()
-        if (trimmedReason.isEmpty()) {
-            throw InvalidInputException("reason must not be blank")
-        }
-        val snapshot =
-            settingsRepository.getSubscriptionSnapshot(venueId)
-                ?: throw InvalidInputException("venue not found")
-        val basePaidThrough = invoiceRepository.findLatestPaidInvoicePeriodEnd(venueId)
-        val latestCourtesyAdjustment = adjustmentRepository.findLatestCourtesyAdjustment(venueId)
-        val previousPaidThrough =
-            effectivePaidThrough(basePaidThrough, latestCourtesyAdjustment)
-                ?: throw InvalidInputException("NO_PAID_PERIOD_TO_EXTEND")
-        val newPaidThrough = previousPaidThrough.plusDays(days.toLong())
-        val overlapping =
-            invoiceRepository.findOpenOrPastDueInvoiceOverlapping(
-                venueId = venueId,
-                periodStart = previousPaidThrough.plusDays(1),
-                periodEnd = newPaidThrough,
-            )
-        if (overlapping != null) {
-            throw InvalidInputException("OPEN_INVOICE_OVERLAPS_COURTESY_PERIOD")
-        }
-        val adjustment =
-            adjustmentRepository.createCourtesyDaysAdjustment(
-                venueId = venueId,
-                days = days,
-                reason = trimmedReason,
-                previousPaidThrough = previousPaidThrough,
-                newPaidThrough = newPaidThrough,
-                actorUserId = actorUserId,
-            )
-        val today = LocalDate.now(clock.withZone(config.timeZone))
-        if (!newPaidThrough.isBefore(today)) {
-            subscriptionRepository.updateStatusIfCurrentIn(
-                venueId = snapshot.settings.venueId,
-                allowedCurrentStatuses = setOf(SubscriptionStatus.PAST_DUE),
-                nextStatus = SubscriptionStatus.ACTIVE,
-            )
-        }
-        return adjustment
     }
 
     private fun buildOverview(
@@ -216,14 +314,12 @@ class BillingOverviewService(
         snapshot: PlatformSubscriptionSnapshot,
         subscriptionState: VenueSubscriptionState?,
         invoices: List<BillingInvoice>,
+        outstandingInvoices: OutstandingInvoicePage,
+        payableInvoice: BillingInvoice?,
         basePaidThrough: LocalDate?,
         latestCourtesyAdjustment: BillingAdjustment?,
         courtesyDays: Int,
     ): BillingOverview {
-        val payableInvoice =
-            invoices.firstOrNull {
-                it.status == InvoiceStatus.OPEN || it.status == InvoiceStatus.PAST_DUE
-            }
         val paidThrough = effectivePaidThrough(basePaidThrough, latestCourtesyAdjustment)
         val platformPeriod = resolveBillablePeriod(snapshot, paidThrough, enforceLeadWindow = false)
         val venuePeriod = resolveBillablePeriod(snapshot, paidThrough, enforceLeadWindow = true)
@@ -232,12 +328,17 @@ class BillingOverviewService(
             when {
                 checkoutUrl != null -> null
                 payableInvoice != null -> resolveCheckoutUnavailableReason(payableInvoice)
+                platformPeriod?.price?.priceMinor == 0 -> BillingCheckoutUnavailableReason.FREE_PERIOD
                 platformPeriod == null -> resolveBillablePeriodUnavailableReason(snapshot, paidThrough)
                 venuePeriod == null -> BillingCheckoutUnavailableReason.ADVANCE_WINDOW_NOT_OPEN
                 !provider.ownerCheckoutAvailable() -> providerUnavailableReason()
                 else -> BillingCheckoutUnavailableReason.EXTERNAL_CHECKOUT_UNAVAILABLE
             }
-        val nextPaymentDate = paidThrough?.plusDays(1)
+        val nextPaymentDate =
+            when {
+                paidThrough == null || platformPeriod?.price?.priceMinor == 0 -> null
+                else -> platformPeriod?.periodStart ?: paidThrough.plusDays(1)
+            }
 
         return BillingOverview(
             venueId = venueId,
@@ -253,10 +354,11 @@ class BillingOverviewService(
             latestCourtesyAdjustment = latestCourtesyAdjustment,
             payableInvoice = payableInvoice,
             invoices = invoices,
+            outstandingInvoices = outstandingInvoices,
             checkoutUrl = checkoutUrl,
             paymentAvailable = checkoutUrl != null,
-            platformCheckoutEnsureAvailable = platformPeriod != null,
-            checkoutEnsureAvailable = venuePeriod != null,
+            platformCheckoutEnsureAvailable = platformPeriod != null && platformPeriod.price.priceMinor > 0,
+            checkoutEnsureAvailable = venuePeriod != null && venuePeriod.price.priceMinor > 0,
             unavailableReason = unavailableReason,
         )
     }
@@ -280,10 +382,8 @@ class BillingOverviewService(
             ) ?: return null
         val today = LocalDate.now(clock.withZone(config.timeZone))
         val periodStart =
-            if (paidThrough == null) {
-                SubscriptionBillingPeriodResolver.resolvePeriodStart(anchor, today)
-            } else {
-                SubscriptionBillingPeriodResolver.resolveNextPeriodStart(paidThrough)
+            SubscriptionBillingPeriodResolver.invoicePeriodStart(anchor, paidThrough, today) { date ->
+                settingsRepository.resolveEffectivePrice(snapshot.settings, snapshot.schedule, date)?.priceMinor
             }
         val leadDate = periodStart.minusDays(config.leadDays)
         if (enforceLeadWindow && today.isBefore(leadDate)) {
@@ -315,10 +415,8 @@ class BillingOverviewService(
             ) ?: return BillingCheckoutUnavailableReason.MISSING_BILLING_PERIOD
         val today = LocalDate.now(clock.withZone(config.timeZone))
         val periodStart =
-            if (paidThrough == null) {
-                SubscriptionBillingPeriodResolver.resolvePeriodStart(anchor, today)
-            } else {
-                SubscriptionBillingPeriodResolver.resolveNextPeriodStart(paidThrough)
+            SubscriptionBillingPeriodResolver.invoicePeriodStart(anchor, paidThrough, today) { date ->
+                settingsRepository.resolveEffectivePrice(snapshot.settings, snapshot.schedule, date)?.priceMinor
             }
         val price =
             settingsRepository.resolveEffectivePrice(
@@ -439,6 +537,7 @@ fun BillingOverview.toResponse(service: BillingOverviewService): OwnerBillingOve
         priceMinor = effectivePrice?.priceMinor,
         currency = effectivePrice?.currency ?: settings.currency,
         basePaidThrough = basePaidThrough?.toString(),
+        courtesyUntil = latestCourtesyAdjustment?.newPaidThrough?.toString(),
         paidThrough = paidThrough?.toString(),
         nextPaymentDate = nextPaymentDate?.toString(),
         nextInvoicePeriodStart = nextInvoicePeriodStart?.toString(),
@@ -454,6 +553,7 @@ fun BillingOverview.toResponse(service: BillingOverviewService): OwnerBillingOve
         checkoutUrl = checkoutUrl,
         payableInvoice = payableInvoice?.toOwnerBillingInvoiceDto(service),
         invoices = invoices.map { it.toOwnerBillingInvoiceDto(service) },
+        outstandingInvoices = outstandingInvoices,
     )
 
 fun BillingInvoice.toOwnerBillingInvoiceDto(service: BillingOverviewService): OwnerBillingInvoiceDto =

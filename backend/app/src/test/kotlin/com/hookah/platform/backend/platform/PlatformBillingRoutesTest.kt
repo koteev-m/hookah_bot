@@ -37,6 +37,67 @@ class PlatformBillingRoutesTest {
     private val appEnv = "test"
 
     @Test
+    fun `date edit preserves stored free price`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("free-period")
+            val config = buildConfig(jdbcUrl, 5151L)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venueId = seedVenue(jdbcUrl)
+            seedSubscriptionSettings(jdbcUrl, venueId, priceMinor = 0)
+            val token = issueToken(config, userId = 5151L)
+            val response =
+                client.put("/api/platform/venues/$venueId/subscription") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"paidStartDate":"2027-01-01"}""")
+                }
+            assertEquals(HttpStatusCode.OK, response.status)
+        }
+
+    @Test
+    fun `free period does not create an invoice or grant trial access`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("free-period")
+            val config = buildConfig(jdbcUrl, 5151L)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venueId = seedVenue(jdbcUrl)
+            seedSubscriptionSettings(jdbcUrl, venueId, priceMinor = 0)
+            val token = issueToken(config, userId = 5151L)
+            val response =
+                client.post("/api/platform/venues/$venueId/billing/checkout") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, response.status)
+            val overview = json.decodeFromString(OwnerBillingOverviewResponse.serializer(), response.bodyAsText())
+            assertEquals("free_period", overview.unavailableReason)
+            assertEquals("unknown", overview.subscriptionStatus)
+            assertFalse(overview.checkoutEnsureAvailable)
+            assertFalse(overview.platformCheckoutEnsureAvailable)
+            assertFalse(overview.paymentAvailable)
+            assertEquals(0, countSubscriptionRows(jdbcUrl, venueId))
+            assertEquals(0, countInvoices(jdbcUrl, venueId))
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                val sql = "UPDATE venue_subscription_settings SET paid_start_date = NULL WHERE venue_id = ?"
+                connection.prepareStatement(sql).use {
+                    it.setLong(1, venueId)
+                    it.executeUpdate()
+                }
+            }
+            val withoutPeriod =
+                client.post("/api/platform/venues/$venueId/billing/checkout") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }
+            assertEquals(HttpStatusCode.OK, withoutPeriod.status)
+            assertEquals(0, countSubscriptionRows(jdbcUrl, venueId))
+            assertEquals(0, countInvoices(jdbcUrl, venueId))
+        }
+
+    @Test
     fun `billing overview is read only and hides fake checkout URLs`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("platform-billing-overview-read-only")
@@ -315,6 +376,7 @@ class PlatformBillingRoutesTest {
 
             val courtesyResponse =
                 client.post("/api/platform/venues/$venueId/billing/courtesy-days") {
+                    headers { append("Idempotency-Key", java.util.UUID.randomUUID().toString()) }
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                     contentType(ContentType.Application.Json)
                     setBody(
@@ -398,6 +460,7 @@ class PlatformBillingRoutesTest {
 
             val missingReasonResponse =
                 client.post("/api/platform/venues/$paidVenueId/billing/courtesy-days") {
+                    headers { append("Idempotency-Key", java.util.UUID.randomUUID().toString()) }
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                     contentType(ContentType.Application.Json)
                     setBody(
@@ -414,6 +477,7 @@ class PlatformBillingRoutesTest {
 
             val missingPaidThroughResponse =
                 client.post("/api/platform/venues/$unpaidVenueId/billing/courtesy-days") {
+                    headers { append("Idempotency-Key", java.util.UUID.randomUUID().toString()) }
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                     contentType(ContentType.Application.Json)
                     setBody(
@@ -466,6 +530,7 @@ class PlatformBillingRoutesTest {
 
             val response =
                 client.post("/api/platform/venues/$venueId/billing/courtesy-days") {
+                    headers { append("Idempotency-Key", java.util.UUID.randomUUID().toString()) }
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                     contentType(ContentType.Application.Json)
                     setBody(
@@ -555,6 +620,7 @@ class PlatformBillingRoutesTest {
 
             val courtesyResponse =
                 client.post("/api/platform/venues/$venueId/billing/courtesy-days") {
+                    headers { append("Idempotency-Key", java.util.UUID.randomUUID().toString()) }
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                     contentType(ContentType.Application.Json)
                     setBody(
@@ -797,6 +863,7 @@ class PlatformBillingRoutesTest {
         jdbcUrl: String,
         venueId: Long,
         paidStart: LocalDate = LocalDate.now().minusDays(1),
+        priceMinor: Int = 15000,
     ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
@@ -816,7 +883,7 @@ class PlatformBillingRoutesTest {
                 statement.setLong(1, venueId)
                 statement.setDate(2, java.sql.Date.valueOf(paidStart.minusDays(14)))
                 statement.setDate(3, java.sql.Date.valueOf(paidStart))
-                statement.setInt(4, 15000)
+                statement.setInt(4, priceMinor)
                 statement.setLong(5, 1L)
                 statement.executeUpdate()
             }
