@@ -3,6 +3,7 @@ package com.hookah.platform.backend.miniapp.guest
 import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.billing.OwnerBillingOverviewResponse
 import com.hookah.platform.backend.miniapp.guest.api.ActiveOrderResponse
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchItemDto
 import com.hookah.platform.backend.miniapp.guest.api.AddBatchRecalculationResponse
@@ -6187,7 +6188,7 @@ class GuestOrderRoutesTest {
         }
 
     @Test
-    fun `mark paid unblocks add-batch`() =
+    fun `mark paid keeps add-batch blocked until platform owner resumes with current coverage`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-order-mark-paid")
             val ownerId = 5151L
@@ -6201,7 +6202,8 @@ class GuestOrderRoutesTest {
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
             val tableId = seedTable(jdbcUrl, venueId, 6)
             seedTableToken(jdbcUrl, tableId, "paid-token")
-            seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
+            val expiredTrial = Instant.now().minus(1, ChronoUnit.DAYS)
+            seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM", trialEnd = expiredTrial)
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Cappuccino")
@@ -6218,17 +6220,47 @@ class GuestOrderRoutesTest {
                     items = listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
                     comment = "test",
                 )
-            val blockedResponse =
+
+            suspend fun addBatch() =
                 client.post("/api/guest/order/add-batch") {
                     contentType(ContentType.Application.Json)
                     headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
                     setBody(json.encodeToString(AddBatchRequest.serializer(), request))
                 }
 
-            assertEquals(HttpStatusCode.Locked, blockedResponse.status)
-            assertApiErrorEnvelope(blockedResponse, ApiErrorCodes.SUBSCRIPTION_BLOCKED)
+            suspend fun assertBlocked() {
+                val response = addBatch()
+                assertEquals(HttpStatusCode.Locked, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.SUBSCRIPTION_BLOCKED)
+            }
 
             val ownerToken = issueToken(config, ownerId)
+            val billingPath = "/api/platform/venues/$venueId/billing"
+
+            suspend fun overview(): OwnerBillingOverviewResponse {
+                val response =
+                    client.get(billingPath) {
+                        headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
+                    }
+                assertEquals(HttpStatusCode.OK, response.status)
+                return json.decodeFromString<OwnerBillingOverviewResponse>(response.bodyAsText())
+            }
+
+            val stamp = assertNotNull(overview().lifecycleUpdatedAt)
+
+            suspend fun resume(token: String) =
+                client.post("$billingPath/resume-subscription") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"reason":"Current coverage verified","expectedUpdatedAt":"$stamp"}""")
+                }
+
+            assertBlocked()
+            val noCoverage = resume(ownerToken)
+            assertEquals(HttpStatusCode.Conflict, noCoverage.status)
+            assertApiErrorEnvelope(noCoverage, "SUBSCRIPTION_RESUME_CONFLICT")
+            assertBlocked()
+
             val markPaidResponse =
                 client.post("/api/platform/invoices/$invoiceId/mark-paid") {
                     headers { append(HttpHeaders.Authorization, "Bearer $ownerToken") }
@@ -6243,13 +6275,21 @@ class GuestOrderRoutesTest {
 
             assertEquals(HttpStatusCode.OK, markPaidResponse.status)
 
-            val unblockedResponse =
-                client.post("/api/guest/order/add-batch") {
-                    contentType(ContentType.Application.Json)
-                    headers { append(HttpHeaders.Authorization, "Bearer $guestToken") }
-                    setBody(json.encodeToString(AddBatchRequest.serializer(), request))
-                }
+            val paid = overview()
+            assertEquals("PAID", paid.invoices.single { it.id == invoiceId }.status)
+            assertEquals("suspended_by_platform", paid.subscriptionStatus)
+            assertEquals(1, countAuditActions(jdbcUrl, "BILLING_MARK_PAID"))
+            assertEquals(HttpStatusCode.Forbidden, resume(guestToken).status)
+            assertEquals(0, countAuditActions(jdbcUrl, "BILLING_SUBSCRIPTION_RESUMED"))
+            assertBlocked()
 
+            val resumed = resume(ownerToken)
+            assertEquals(HttpStatusCode.OK, resumed.status)
+            val restored = json.decodeFromString<OwnerBillingOverviewResponse>(resumed.bodyAsText())
+            assertEquals("active", restored.subscriptionStatus)
+            assertEquals(1, countAuditActions(jdbcUrl, "BILLING_SUBSCRIPTION_RESUMED"))
+
+            val unblockedResponse = addBatch()
             assertEquals(HttpStatusCode.OK, unblockedResponse.status)
             val payload = json.decodeFromString(AddBatchResponse.serializer(), unblockedResponse.bodyAsText())
             assertNotNull(payload.orderId)
@@ -7045,9 +7085,9 @@ class GuestOrderRoutesTest {
         jdbcUrl: String,
         venueId: Long,
         status: String,
+        trialEnd: Instant = Instant.now().plus(14, ChronoUnit.DAYS),
     ) {
         val now = Instant.now()
-        val trialEnd = now.plus(14, ChronoUnit.DAYS)
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             connection.prepareStatement(
                 """
@@ -7090,7 +7130,7 @@ class GuestOrderRoutesTest {
                 """.trimIndent(),
                 Statement.RETURN_GENERATED_KEYS,
             ).use { statement ->
-                val today = LocalDate.now()
+                val today = LocalDate.now(ZoneOffset.UTC)
                 statement.setLong(1, venueId)
                 statement.setDate(2, java.sql.Date.valueOf(today))
                 statement.setDate(3, java.sql.Date.valueOf(today.plusDays(30)))
