@@ -105,6 +105,14 @@ class TelegramApiClient(
         return response.result ?: throw TelegramApiException("Telegram getWebhookInfo returned no result")
     }
 
+    internal suspend fun recoveryPollingState(): String {
+        val webhook = getWebhookInfo()
+        if (webhook.url.isNotEmpty()) return "webhook"
+        if (webhook.pendingUpdateCount != 0) return "backlog"
+        // No offset acknowledges any update. Never route this batch or carry an offset into the worker.
+        return if (getUpdates(null, 0).isEmpty()) "empty" else "backlog"
+    }
+
     suspend fun sendMessage(
         chatId: Long,
         text: String,
@@ -534,6 +542,7 @@ class TelegramApiException(message: String) : RuntimeException(message)
 @Serializable
 data class TelegramWebhookInfo(
     val url: String,
+    @SerialName("pending_update_count") val pendingUpdateCount: Int? = null,
 )
 
 @Serializable

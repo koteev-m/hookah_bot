@@ -2,7 +2,9 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 from html.parser import HTMLParser
 import re
@@ -71,17 +73,21 @@ def image_assets(plan):
     return manifest
 
 
-def probe(sha, manifest):
+def probe(sha, manifest, *, recovery=False, on_backlog=None):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
     def get(path, status=200):
         try:
-            response = opener.open("http://127.0.0.1:18080" + path, timeout=4)
+            url = "http://127.0.0.1:18080" + path
+            request = urllib.request.Request(url, headers={"X-Hookah-Recovery-Probe": "1"}) if recovery else url
+            response = opener.open(request, timeout=4)
         except urllib.error.HTTPError as exc:
             response = exc
         with response:
             if response.status != status:
                 raise ValueError(f"{path}: HTTP {response.status}")
+            if status == 503 and response.headers.get("X-Hookah-Maintenance") != "closed":
+                raise ValueError(f"{path}: recovery gate did not confirm maintenance")
             expected = manifest.get(path)
             body = response.read(expected[0] + 1 if expected else 2 * 1024 * 1024)
             length = response.headers.get("Content-Length")
@@ -95,6 +101,8 @@ def probe(sha, manifest):
     ver = json.loads(get("/version")[0])
     if (ver.get("service"), ver.get("env"), ver.get("version")) != ("backend", "prod", sha):
         raise ValueError("/version: identity mismatch")
+    if recovery and ver.get("polling") == "backlog" and on_backlog is not None:
+        on_backlog()
     html, kind = get("/miniapp/")
     entry = entry_assets(html)
     if kind != "text/html" or set(manifest) != set(entry.assets) | {"/miniapp/"}:
@@ -109,13 +117,35 @@ def probe(sha, manifest):
             body = data.removeprefix(b"\xef\xbb\xbf").lstrip()
             if kind not in allowed or not body or body.startswith(b"<"):
                 raise ValueError(f"{path}: invalid {extension} response")
-    get("/api/guest/catalog", status=401)
+    get("/api/guest/catalog", status=503 if recovery or ver.get("recoveryGateClosed") is True else 401)
     return ver
+
+
+def signed_auth(plan, source):
+    from production_traffic import check_edge_closed
+    check_edge_closed()
+    env = json.loads(plan.read_bytes())["services"]["backend"]["environment"]
+    if env.get("TELEGRAM_BOT_ENABLED") != "true":
+        raise ValueError("signed smoke requires the token-enabled production plan")
+    mode = source.lstat()
+    if not stat.S_ISREG(mode.st_mode) or mode.st_uid != os.geteuid() or mode.st_mode & 0o077 or mode.st_size > 16384:
+        raise ValueError("expected private fresh owner initData")
+    payload = json.dumps({"initData": source.read_text().strip()}).encode()
+    request = urllib.request.Request("http://127.0.0.1:18080/api/auth/telegram", data=payload,
+                                     headers={"Content-Type": "application/json"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    with opener.open(request, timeout=5) as response:
+        result = json.load(response)
+        if (response.status != 200 or not result.get("token") or
+                str(result.get("user", {}).get("telegramUserId")) != env["PLATFORM_OWNER_TELEGRAM_ID"]):
+            raise ValueError("private signed owner authentication failed")
+    check_edge_closed()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plan", type=Path, help="admitted Compose JSON")
+    parser.add_argument("--owner-init-data", type=Path, help="private file with fresh signed owner initData")
     args = parser.parse_args()
     sha = json.loads(args.plan.read_bytes())["services"]["backend"]["environment"]["APP_VERSION"]
     if not re.fullmatch("[0-9a-f]{40}", sha):
@@ -131,3 +161,8 @@ if __name__ == "__main__":
             if time.monotonic() >= deadline:
                 raise SystemExit(f"Readiness failed: {exc}") from None
             time.sleep(2)
+    if args.owner_init_data:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+        signed_auth(args.plan, args.owner_init_data)
+        print("OK private readiness, signed owner login and closed HTTPS")

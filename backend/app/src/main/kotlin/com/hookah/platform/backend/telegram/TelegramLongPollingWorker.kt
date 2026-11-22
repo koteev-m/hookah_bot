@@ -21,6 +21,7 @@ class TelegramLongPollingWorker(
     private val scope: CoroutineScope,
     private val onPollingSuccess: () -> Unit = {},
     private val errorDelayMillis: Long = 1_000,
+    private val canDispatch: () -> Boolean = { true },
 ) {
     private val logger = LoggerFactory.getLogger(TelegramLongPollingWorker::class.java)
     private var offset: Long? = null
@@ -33,6 +34,7 @@ class TelegramLongPollingWorker(
             verifyWebhookIsDisabled()
             scope.launch {
                 while (isActive) {
+                    val dispatch = canDispatch()
                     val updates =
                         try {
                             retryWithBackoff(
@@ -41,7 +43,12 @@ class TelegramLongPollingWorker(
                                 jitterRatio = 0.2,
                                 shouldRetry = { error -> error !is CancellationException },
                             ) {
-                                getUpdates(offset, timeoutSeconds)
+                                if (dispatch && canDispatch()) {
+                                    getUpdates(offset, timeoutSeconds)
+                                } else {
+                                    getUpdates(null, 0)
+                                    emptyList()
+                                }
                             }
                         } catch (e: CancellationException) {
                             throw e
@@ -54,7 +61,7 @@ class TelegramLongPollingWorker(
                             continue
                         }
                     onPollingSuccess()
-                    processBatch(updates)
+                    if (dispatch && canDispatch()) processBatch(updates) else delay(200)
                 }
             }.also { job ->
                 job.invokeOnCompletion { pollerLease.set(false) }
@@ -80,6 +87,7 @@ class TelegramLongPollingWorker(
 
     internal suspend fun processBatch(updates: List<TelegramUpdate>) {
         updates.sortedBy { it.updateId }.forEach { update ->
+            if (!canDispatch()) return
             try {
                 when (val maintenanceDecision = maintenancePolicy.evaluateInbound(update)) {
                     StagingMaintenancePolicy.InboundDecision.Allowed -> Unit

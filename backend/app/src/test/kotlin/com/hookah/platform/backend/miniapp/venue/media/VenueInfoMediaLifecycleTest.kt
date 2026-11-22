@@ -18,8 +18,13 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayOutputStream
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.test.assertEquals
@@ -392,6 +397,108 @@ open class VenueInfoMediaLifecycleH2Test {
 
 class VenueInfoMediaLifecyclePostgresTest : VenueInfoMediaLifecycleH2Test() {
     override fun source() = photoTestDataSource(true)
+
+    private fun MediaFixture.backupInventory(): String {
+        val relative = "deploy/production/media-inventory.sql"
+        val file = listOf(Path.of(relative), Path.of("../..", relative)).first(Files::isRegularFile)
+        return ds.connection.use { c ->
+            c.createStatement().use { s ->
+                s.executeQuery(Files.readString(file)).use { rows ->
+                    check(rows.next())
+                    rows.getString(1)
+                }
+            }
+        }
+    }
+
+    @Test fun `production recovery filters hall section and venue access changes independently`() =
+        runBlocking {
+            MediaFixture(source()).use { f ->
+                f.init()
+                f.upload()
+                val plan = UUID.randomUUID().toString()
+                val hall =
+                    f.seed.insert("INSERT INTO venue_halls (venue_id,name,plan_id) VALUES (${f.venue},'Hall','$plan')")
+                f.sql(
+                    """
+                    INSERT INTO venue_subscriptions (venue_id,status) VALUES (${f.venue},'ACTIVE')
+                    ON CONFLICT (venue_id) DO UPDATE SET status='ACTIVE';
+                    INSERT INTO venue_seating_rules (venue_id,use_plan,guest_table_choice) VALUES (${f.venue},TRUE,TRUE)
+                    ON CONFLICT (venue_id) DO UPDATE SET use_plan=TRUE,guest_table_choice=TRUE;
+                    INSERT INTO hall_plan_media (id,venue_id,hall_id,actor_user_id,request_id,object_key,checksum_sha256,
+                    input_sha256,mime_type,size_bytes,width,height,status) VALUES ('$plan',${f.venue},$hall,101,'$plan',
+                    'venue-info/$plan.jpg',repeat('a',64),repeat('b',64),'image/jpeg',12,1,1,'READY')
+                    """.trimIndent(),
+                )
+
+                fun candidates() =
+                    Json.parseToJsonElement(f.backupInventory()).jsonArray.map { it.jsonArray }
+                        .associate { it[0].jsonPrimitive.content to it.last().toString() }
+                val all = candidates()
+                val planKey = "venue-info/$plan.jpg"
+                assertEquals(listOf("true", "true"), all.values.sorted())
+                f.sql("UPDATE venue_seating_rules SET guest_table_choice=FALSE WHERE venue_id=${f.venue}")
+                assertEquals(all + (planKey to "false"), candidates())
+                f.sql("UPDATE venue_seating_rules SET guest_table_choice=TRUE WHERE venue_id=${f.venue}")
+                f.sql("UPDATE venue_info_sections SET is_visible=FALSE WHERE id=${f.section}")
+                assertEquals("true", candidates()[planKey])
+                assertEquals("false", candidates().filterKeys { it != planKey }.values.single())
+                f.sql("UPDATE venue_subscriptions SET status='SUSPENDED_BY_PLATFORM' WHERE venue_id=${f.venue}")
+                assertEquals(listOf("false", "false"), candidates().values.sorted())
+            }
+        }
+
+    @Test fun `production backup inventory observes visibility and keeps deleted bytes out of recovery`() =
+        runBlocking {
+            MediaFixture(source()).use { f ->
+                f.init()
+
+                fun inventory() = f.backupInventory()
+                assertEquals("[]", inventory())
+                f.upload()
+                val id = f.current().media.single().id
+                val shown = inventory()
+                assertTrue(shown.contains("venue-info/"))
+                f.action(id, "hide")
+                assertNotEquals(shown, inventory())
+                f.sql(
+                    "INSERT INTO venue_subscriptions (venue_id,status) VALUES (${f.venue},'ACTIVE') " +
+                        "ON CONFLICT (venue_id) DO UPDATE SET status='ACTIVE'",
+                )
+                val profile = f.seed.display
+                f.sql(
+                    "INSERT INTO staff_shifts (venue_id,staff_profile_id,shift_date,status,created_by_user_id) " +
+                        "VALUES (${f.venue},$profile,CURRENT_DATE,'active',101)",
+                )
+                f.seed.upload()
+
+                fun photo() =
+                    Json.parseToJsonElement(inventory()).jsonArray.map { it.jsonArray }
+                        .single { it[0].jsonPrimitive.content.startsWith("staff-photos/") }
+                val initial = photo()
+                assertEquals("true", initial.last().toString())
+                val restrictions =
+                    listOf(
+                        "venue_settings SET guest_team_visible" to "venue_id=${f.venue}",
+                        "venue_settings SET team_schedule_module_enabled" to "venue_id=${f.venue}",
+                        "staff_profiles SET is_guest_visible" to "id=$profile",
+                        "staff_shifts SET is_guest_visible" to "staff_profile_id=$profile",
+                    )
+                for ((setting, where) in restrictions) {
+                    f.sql("UPDATE $setting=FALSE WHERE $where")
+                    assertNotEquals(initial[3], photo()[3])
+                    assertEquals("false", photo().last().toString())
+                    f.sql("UPDATE $setting=TRUE WHERE $where")
+                    assertEquals(initial, photo())
+                }
+                f.seed.upload()
+                assertNotEquals(initial[0], photo()[0])
+                f.seed.action("delete")
+                f.action(id, "delete")
+                assertEquals("[]", inventory())
+                assertTrue(f.count("SELECT count(*) FROM venue_info_media_cleanup WHERE due_at IS NOT NULL") > 0)
+            }
+        }
 }
 
 class VenueInfoMediaValidationTest {

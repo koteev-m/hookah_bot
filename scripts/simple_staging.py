@@ -307,7 +307,104 @@ def validate_config(c):
                 'R2_INPUT_LIMIT_INVALID')
 
 
-class Staging:
+def add_pdf_worker(doc, image, platform):
+    doc['volumes']['pdf_ipc'] = {'driver': 'local', 'driver_opts': PDF_VOLUME_OPTIONS}
+    doc['services']['backend'].setdefault('volumes', []).append(
+        {'type': 'volume', 'source': 'pdf_ipc', 'target': PDF_IPC, 'read_only': True})
+    doc['services']['pdf-worker'] = {
+        'image': image, 'platform': platform, 'restart': 'unless-stopped',
+        'user': '10001:10001', 'entrypoint': ['/app/app/bin/pdf-worker'], 'command': [],
+        'network_mode': 'none', 'read_only': True, 'cap_drop': ['ALL'],
+        'security_opt': ['no-new-privileges:true'], 'init': True,
+        'ulimits': {'core': {'soft': 0, 'hard': 0}},
+        'mem_limit': PDF_MEMORY, 'memswap_limit': PDF_MEMORY, 'cpus': 1.0, 'pids_limit': 64,
+        # runc/cgroups otherwise omits explicit zero from the systemd scope;
+        # daemon-reload can then undo the cgroupfs zero-swap limit.
+        'annotations': dict(PDF_SYSTEMD_ANNOTATIONS),
+        'volumes': [{'type': 'volume', 'source': 'pdf_ipc', 'target': PDF_IPC}],
+        'healthcheck': {'test': ['CMD', '/app/app/bin/pdf-worker', 'probe'],
+                        'interval': '10s', 'timeout': '3s', 'retries': 3, 'start_period': '5s'}}
+
+
+class PdfWorkerAdmission:
+    def pdf_mount(self, mounts, *, writable):
+        require(len(mounts) == 1 and mounts[0].get('Type') == 'volume'
+                and mounts[0].get('Name') == self.project + '_pdf_ipc'
+                and mounts[0].get('Destination') == PDF_IPC and mounts[0].get('RW') is writable
+                and not mounts[0].get('SubPath'),
+                'PDF_IPC_MOUNT_MISMATCH')
+        volume = json.loads(self.run(['docker', 'volume', 'inspect', self.project + '_pdf_ipc']))[0]
+        require(volume.get('Driver') == 'local' and volume.get('Options') == PDF_VOLUME_OPTIONS
+                and volume.get('Labels', {}).get('com.docker.compose.project') == self.project
+                and volume.get('Labels', {}).get('com.docker.compose.volume') == 'pdf_ipc', 'PDF_IPC_VOLUME_MISMATCH')
+
+    def pdf_host_mount(self, host, *, writable):
+        # Compose may encode a named volume in Binds rather than HostConfig.Mounts.
+        # Accept only the exact project-owned volume/path/mode in either representation.
+        mounts = host.get('Mounts') or []
+        binds = host.get('Binds') or []
+        if binds:
+            mode = 'rw' if writable else 'ro'
+            require(not mounts and binds == [self.project + '_pdf_ipc:' + PDF_IPC + ':' + mode],
+                    'PDF_IPC_HOST_MOUNT_MISMATCH')
+        else:
+            require(len(mounts) == 1 and mounts[0].get('Type') == 'volume'
+                    and mounts[0].get('Source') == self.project + '_pdf_ipc'
+                    and mounts[0].get('Target') == PDF_IPC and bool(mounts[0].get('ReadOnly')) is not writable
+                    and not (mounts[0].get('VolumeOptions') or {}).get('Subpath'), 'PDF_IPC_HOST_MOUNT_MISMATCH')
+
+    def observe_pdf_worker(self, worker, image):
+        require(worker['Image'] == image['id'] and worker['State']['Running']
+                and worker['State'].get('Health', {}).get('Status') == 'healthy', 'PDF_WORKER_NOT_HEALTHY')
+        cfg, host = worker['Config'], worker['HostConfig']
+        require(cfg.get('User') == '10001:10001' and cfg.get('Entrypoint') == ['/app/app/bin/pdf-worker']
+                and not cfg.get('Cmd') and digest(sorted(cfg.get('Env', []))) == image.get('pdf_worker_env_hash'),
+                'PDF_WORKER_CONFIG_MISMATCH')
+        require(host.get('NetworkMode') == 'none' and set(worker['NetworkSettings']['Networks']) == {'none'}
+                and not host.get('PortBindings') and not host.get('PublishAllPorts')
+                and host.get('ReadonlyRootfs') is True and host.get('Privileged') is False
+                and host.get('CapDrop') == ['ALL'] and not host.get('CapAdd') and not host.get('Devices')
+                and host.get('SecurityOpt') == ['no-new-privileges:true'] and host.get('Init') is True
+                and host.get('Memory') == PDF_MEMORY and host.get('MemorySwap') == PDF_MEMORY
+                and host.get('NanoCpus') == 1000000000 and host.get('PidsLimit') == 64
+                and host.get('Ulimits') == [{'Name': 'core', 'Soft': 0, 'Hard': 0}]
+                and host.get('RestartPolicy') == {'Name': 'unless-stopped', 'MaximumRetryCount': 0}
+                and host.get('PidMode', '') == '' and host.get('IpcMode') == 'private'
+                and not host.get('Tmpfs'), 'PDF_WORKER_ISOLATION_MISMATCH')
+        self.pdf_host_mount(host, writable=True)
+        self.pdf_mount(worker['Mounts'], writable=True)
+        require(cfg.get('Labels', {}).get('com.docker.compose.project.working_dir') == str(self.root),
+                'COMPOSE_DIRECTORY_MISMATCH')
+        # Old managed Compose hashes remain valid before an ordinary update. Only
+        # the declared old absence is compatible; an annotated worker must match
+        # exactly, and every worker must enforce zero swap in the kernel now.
+        expected = PDF_SYSTEMD_ANNOTATIONS
+        if self.compose_file.exists():
+            expected = private_json(self.compose_file)['services']['pdf-worker'].get('annotations', {})
+        require(expected in ({}, PDF_SYSTEMD_ANNOTATIONS)
+                and (host.get('Annotations') or {}) == expected, 'PDF_WORKER_ANNOTATIONS_MISMATCH')
+        limits = self.pdf_swap_state(worker)
+        require(limits['cgroup'] == '0', 'PDF_WORKER_SWAP_NOT_ZERO')
+        if expected and limits['driver'] == 'systemd':
+            require(limits['systemd'] == '0', 'PDF_WORKER_SYSTEMD_SWAP_NOT_ZERO')
+
+    def pdf_swap_state(self, worker):
+        # Read only a fixed kernel file in the exact inspected worker; never run
+        # a shell or modify its cgroup. This also catches a stale healthy status.
+        cid = worker.get('Id', '')
+        require(isinstance(cid, str) and re.fullmatch(r'[0-9a-f]{64}', cid), 'PDF_WORKER_ID_INVALID')
+        driver = self.run(['docker', 'info', '--format', '{{.CgroupDriver}}'], timeout=10).decode().strip()
+        require(driver in ('systemd', 'cgroupfs'), 'PDF_WORKER_CGROUP_DRIVER_UNKNOWN')
+        actual = self.run(['docker', 'exec', cid, '/bin/cat', '/sys/fs/cgroup/memory.swap.max'], timeout=5).decode().strip()
+        systemd = None
+        if driver == 'systemd':
+            systemd = self.run(['systemctl', 'show', 'docker-' + cid + '.scope',
+                                '--property=MemorySwapMax', '--value'], timeout=5).decode().strip()
+            require(systemd != '', 'PDF_WORKER_SYSTEMD_SCOPE_UNKNOWN')
+        return {'driver': driver, 'cgroup': actual, 'systemd': systemd}
+
+
+class Staging(PdfWorkerAdmission):
     project = 'hookah-bot'
     port = 8080
     readiness_seconds = 120
@@ -355,21 +452,7 @@ class Staging:
                         'depends_on': {'postgres': {'condition': 'service_healthy'}}}},
             'volumes': {'pgdata': {}}, 'networks': {'default': {}}}
         if self.config['runtime'].get(PDF_FLAG) == 'true':
-            doc['volumes']['pdf_ipc'] = {'driver': 'local', 'driver_opts': PDF_VOLUME_OPTIONS}
-            doc['services']['backend']['volumes'] = [{'type': 'volume', 'source': 'pdf_ipc', 'target': PDF_IPC, 'read_only': True}]
-            doc['services']['pdf-worker'] = {
-                'image': image['image'], 'platform': 'linux/' + c['architecture'], 'restart': 'unless-stopped',
-                'user': '10001:10001', 'entrypoint': ['/app/app/bin/pdf-worker'], 'command': [],
-                'network_mode': 'none', 'read_only': True, 'cap_drop': ['ALL'],
-                'security_opt': ['no-new-privileges:true'], 'init': True,
-                'ulimits': {'core': {'soft': 0, 'hard': 0}},
-                'mem_limit': PDF_MEMORY, 'memswap_limit': PDF_MEMORY, 'cpus': 1.0, 'pids_limit': 64,
-                # runc/cgroups otherwise omits explicit zero from the systemd scope;
-                # daemon-reload can then undo the cgroupfs zero-swap limit.
-                'annotations': dict(PDF_SYSTEMD_ANNOTATIONS),
-                'volumes': [{'type': 'volume', 'source': 'pdf_ipc', 'target': PDF_IPC}],
-                'healthcheck': {'test': ['CMD', '/app/app/bin/pdf-worker', 'probe'],
-                                'interval': '10s', 'timeout': '3s', 'retries': 3, 'start_period': '5s'}}
+            add_pdf_worker(doc, image['image'], 'linux/' + c['architecture'])
         return doc
 
     def inspect_image(self, ref, *, pull=True):
@@ -473,82 +556,6 @@ class Staging:
         require({k: v for k, v in actual.items() if k in OPTIONAL_RUNTIME_KEYS}
                 == {k: v for k, v in self.config['runtime'].items() if k in OPTIONAL_RUNTIME_KEYS},
                 'BACKEND_RUNTIME_CONFIG_MISMATCH')
-
-    def pdf_mount(self, mounts, *, writable):
-        require(len(mounts) == 1 and mounts[0].get('Type') == 'volume'
-                and mounts[0].get('Name') == self.project + '_pdf_ipc'
-                and mounts[0].get('Destination') == PDF_IPC and mounts[0].get('RW') is writable
-                and not mounts[0].get('SubPath'),
-                'PDF_IPC_MOUNT_MISMATCH')
-        volume = json.loads(self.run(['docker', 'volume', 'inspect', self.project + '_pdf_ipc']))[0]
-        require(volume.get('Driver') == 'local' and volume.get('Options') == PDF_VOLUME_OPTIONS
-                and volume.get('Labels', {}).get('com.docker.compose.project') == self.project
-                and volume.get('Labels', {}).get('com.docker.compose.volume') == 'pdf_ipc', 'PDF_IPC_VOLUME_MISMATCH')
-
-    def pdf_host_mount(self, host, *, writable):
-        # Compose may encode a named volume in Binds rather than HostConfig.Mounts.
-        # Accept only the exact project-owned volume/path/mode in either representation.
-        mounts = host.get('Mounts') or []
-        binds = host.get('Binds') or []
-        if binds:
-            mode = 'rw' if writable else 'ro'
-            require(not mounts and binds == [self.project + '_pdf_ipc:' + PDF_IPC + ':' + mode],
-                    'PDF_IPC_HOST_MOUNT_MISMATCH')
-        else:
-            require(len(mounts) == 1 and mounts[0].get('Type') == 'volume'
-                    and mounts[0].get('Source') == self.project + '_pdf_ipc'
-                    and mounts[0].get('Target') == PDF_IPC and bool(mounts[0].get('ReadOnly')) is not writable
-                    and not (mounts[0].get('VolumeOptions') or {}).get('Subpath'), 'PDF_IPC_HOST_MOUNT_MISMATCH')
-
-    def observe_pdf_worker(self, worker, image):
-        require(worker['Image'] == image['id'] and worker['State']['Running']
-                and worker['State'].get('Health', {}).get('Status') == 'healthy', 'PDF_WORKER_NOT_HEALTHY')
-        cfg, host = worker['Config'], worker['HostConfig']
-        require(cfg.get('User') == '10001:10001' and cfg.get('Entrypoint') == ['/app/app/bin/pdf-worker']
-                and not cfg.get('Cmd') and digest(sorted(cfg.get('Env', []))) == image.get('pdf_worker_env_hash'),
-                'PDF_WORKER_CONFIG_MISMATCH')
-        require(host.get('NetworkMode') == 'none' and set(worker['NetworkSettings']['Networks']) == {'none'}
-                and not host.get('PortBindings') and not host.get('PublishAllPorts')
-                and host.get('ReadonlyRootfs') is True and host.get('Privileged') is False
-                and host.get('CapDrop') == ['ALL'] and not host.get('CapAdd') and not host.get('Devices')
-                and host.get('SecurityOpt') == ['no-new-privileges:true'] and host.get('Init') is True
-                and host.get('Memory') == PDF_MEMORY and host.get('MemorySwap') == PDF_MEMORY
-                and host.get('NanoCpus') == 1000000000 and host.get('PidsLimit') == 64
-                and host.get('Ulimits') == [{'Name': 'core', 'Soft': 0, 'Hard': 0}]
-                and host.get('RestartPolicy') == {'Name': 'unless-stopped', 'MaximumRetryCount': 0}
-                and host.get('PidMode', '') == '' and host.get('IpcMode') == 'private'
-                and not host.get('Tmpfs'), 'PDF_WORKER_ISOLATION_MISMATCH')
-        self.pdf_host_mount(host, writable=True)
-        self.pdf_mount(worker['Mounts'], writable=True)
-        require(cfg.get('Labels', {}).get('com.docker.compose.project.working_dir') == str(self.root),
-                'COMPOSE_DIRECTORY_MISMATCH')
-        # Old managed Compose hashes remain valid before an ordinary update. Only
-        # the declared old absence is compatible; an annotated worker must match
-        # exactly, and every worker must enforce zero swap in the kernel now.
-        expected = PDF_SYSTEMD_ANNOTATIONS
-        if self.compose_file.exists():
-            expected = private_json(self.compose_file)['services']['pdf-worker'].get('annotations', {})
-        require(expected in ({}, PDF_SYSTEMD_ANNOTATIONS)
-                and (host.get('Annotations') or {}) == expected, 'PDF_WORKER_ANNOTATIONS_MISMATCH')
-        limits = self.pdf_swap_state(worker)
-        require(limits['cgroup'] == '0', 'PDF_WORKER_SWAP_NOT_ZERO')
-        if expected and limits['driver'] == 'systemd':
-            require(limits['systemd'] == '0', 'PDF_WORKER_SYSTEMD_SWAP_NOT_ZERO')
-
-    def pdf_swap_state(self, worker):
-        # Read only a fixed kernel file in the exact inspected worker; never run
-        # a shell or modify its cgroup. This also catches a stale healthy status.
-        cid = worker.get('Id', '')
-        require(isinstance(cid, str) and re.fullmatch(r'[0-9a-f]{64}', cid), 'PDF_WORKER_ID_INVALID')
-        driver = self.run(['docker', 'info', '--format', '{{.CgroupDriver}}'], timeout=10).decode().strip()
-        require(driver in ('systemd', 'cgroupfs'), 'PDF_WORKER_CGROUP_DRIVER_UNKNOWN')
-        actual = self.run(['docker', 'exec', cid, '/bin/cat', '/sys/fs/cgroup/memory.swap.max'], timeout=5).decode().strip()
-        systemd = None
-        if driver == 'systemd':
-            systemd = self.run(['systemctl', 'show', 'docker-' + cid + '.scope',
-                                '--property=MemorySwapMax', '--value'], timeout=5).decode().strip()
-            require(systemd != '', 'PDF_WORKER_SYSTEMD_SCOPE_UNKNOWN')
-        return {'driver': driver, 'cgroup': actual, 'systemd': systemd}
 
     def ready(self, image):
         deadline = time.monotonic() + self.readiness_seconds

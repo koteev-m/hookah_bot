@@ -1,4 +1,5 @@
 """Restore an encrypted pilot backup into one journaled, network-disabled Docker attempt."""
+import argparse
 import fcntl
 import hashlib
 import json
@@ -8,6 +9,7 @@ import re
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import uuid
@@ -15,6 +17,7 @@ import uuid
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "scripts"))
 from production_profile import Refused, check_history, require
+import media_backup
 
 LABEL = "club.hookahtootah.production.restore-attempt"
 PG_REF = r"postgres@sha256:[a-f0-9]{64}"
@@ -73,7 +76,7 @@ def cleanup(journal, daemon):
     synced(journal.parent)
 
 
-def verify_archive(point, image):
+def verify_archive(point, image, pin=None):
     require(re.fullmatch(PG_REF, image) and (point / "postgres-image").read_text().strip() == image,
             "backup PostgreSQL reference mismatch")
     sums = []
@@ -81,16 +84,36 @@ def verify_archive(point, image):
     if (point / "schema-version").exists():
         require((point / "schema-version").read_text().strip() in ("142", "143"), "unknown backup schema")
         members.append("schema-version")
+    if (point / "media.tar.age").exists():
+        members.append("media.tar.age")
+    if (point / "source-coordinate").exists():
+        members.append("source-coordinate")
     for name in members:
         digest = hashlib.sha256()
         with (point / name).open("rb") as member:
             for chunk in iter(lambda: member.read(1024 * 1024), b""):
                 digest.update(chunk)
         sums.append(f"{digest.hexdigest()}  {name}\n")
-    require((point / "SHA256SUMS").read_text() == "".join(sums), "backup integrity mismatch")
+    manifest = (point / "SHA256SUMS").read_bytes()
+    require(manifest == "".join(sums).encode(), "backup integrity mismatch")
+    if pin is not None:
+        require(hashlib.sha256(manifest).hexdigest() == pin, "backup differs from custody receipt")
 
 
-def restore(point, identity, image, assertions, attempt):
+def coordinate(point):
+    raw = (point / "source-coordinate").read_text().strip()
+    match = re.fullmatch(r"([1-9][0-9]*\|[1-9][0-9]*\|[1-9][0-9]*)\|([0-9A-F]{1,8})/([0-9A-F]{1,8})", raw)
+    require(match, "invalid backup source coordinate")
+    return match[1], (int(match[2], 16) << 32) + int(match[3], 16)
+
+
+def check_pair(point, metadata):
+    source, start = coordinate(point)
+    target, end = coordinate(metadata)
+    require(source == target and start < end, "recovery points are unordered or belong to different sources")
+
+
+def restore(point, identity, image, assertions, attempt, metadata=None, keep=False):
     name = "ht-restore-" + attempt
     volume = name + "-data"
     label = LABEL + "=" + attempt
@@ -114,13 +137,56 @@ def restore(point, identity, image, assertions, attempt):
         require(time.monotonic() < deadline, "restore database startup timeout")
         time.sleep(0.5)
     sql = ["exec", "-i", cid, "psql", "-XqAtw", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "hookah_prod"]
-    docker(*sql, payload=b"CREATE ROLE hookah_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;\n"
+    docker(*sql, payload=b"CREATE ROLE hookah_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;\n"
                          b"ALTER DATABASE hookah_prod OWNER TO hookah_app;")
+    require(docker(*sql, payload=b"SELECT current_setting('server_version_num')::int / 10000") == "17",
+            "PostgreSQL 17 required")
+    if metadata:
+        docker(*sql, payload=b"CREATE DATABASE archive_index OWNER hookah_app")
+        source_sql = [*sql[:-1], "archive_index"]
+        load_database(point, identity, cid, "archive_index", source_sql)
+        archived = media_backup.inventory(docker(*source_sql, payload=media_backup.INVENTORY.read_bytes()))
+        docker(*sql, payload=b"DROP DATABASE archive_index")
+    load_database(metadata or point, identity, cid, "hookah_prod", sql)
+    if assertions:
+        with open(assertions, "rb") as f:
+            subprocess.run(["docker", *sql], stdin=f, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    rows = media_backup.inventory(docker(*sql, payload=media_backup.INVENTORY.read_bytes()))
+    if not metadata:
+        archived = rows
+    store = None
+    if keep:
+        docker(*sql, payload=b"CREATE SCHEMA hookah_recovery AUTHORIZATION postgres; "
+               b"REVOKE ALL ON SCHEMA hookah_recovery FROM PUBLIC, hookah_app; "
+               b"CREATE TABLE hookah_recovery.objects(object_key text PRIMARY KEY, content bytea NOT NULL);")
+
+        def store(key, data):
+            # Keys came from the fixed-format inventory, never from a caller-supplied path.
+            copy_input = (b"COPY hookah_recovery.objects FROM STDIN;\n" + key.encode("ascii") + b"\t" +
+                          b"\\\\x" + data.hex().encode("ascii") + b"\n\\.\n")
+            # Validate PostgreSQL's stored bytea before handing over the retained volume.
+            verify = f"SELECT encode(sha256(content),'hex') FROM hookah_recovery.objects WHERE object_key='{key}'"
+            require(docker(*sql, payload=copy_input + verify.encode("ascii")) == rows[key][1],
+                    "quarantine stored checksum mismatch")
+    if (point / "media.tar.age").exists():
+        counts = media_backup.restore(point, identity, archived, rows, store)
+    else:
+        require(not archived, "missing media recovery archive")
+        counts = {"selected": 0, "excluded": 0, "newer_without_bytes": len(rows)}
+    if keep:
+        result = docker(*sql, payload=b"SELECT count(*), current_setting('listen_addresses') = '', "
+                        b"NOT (SELECT rolcanlogin FROM pg_roles WHERE rolname='hookah_app'), "
+                        b"NOT has_schema_privilege('hookah_app','hookah_recovery','USAGE') FROM hookah_recovery.objects")
+        require(result == f"{counts['selected']}|t|t|t", "recovered database isolation or object count mismatch")
+    return counts
+
+
+def load_database(point, identity, cid, database, sql):
     with subprocess.Popen(["age", "-d", "-i", identity, point / "database.dump.age"], stdout=subprocess.PIPE,
                           stderr=subprocess.DEVNULL) as decrypt:
         try:
             subprocess.run(["docker", "exec", "-i", cid, "pg_restore", "-w", "--single-transaction", "--exit-on-error",
-                            "-U", "postgres", "-d", "hookah_prod"], stdin=decrypt.stdout, stdout=subprocess.DEVNULL,
+                            "-U", "postgres", "-d", database], stdin=decrypt.stdout, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, check=True)
         finally:
             decrypt.stdout.close()
@@ -128,15 +194,21 @@ def restore(point, identity, image, assertions, attempt):
     schema = point / "schema-version"
     check_history(docker(*sql, payload=(HERE / "history.sql").read_bytes()),
                   [int(schema.read_text()) if schema.exists() else 142])
-    docker("exec", cid, "pg_amcheck", "--install-missing", "-U", "postgres", "-d", "hookah_prod")
-    if assertions:
-        with open(assertions, "rb") as f:
-            subprocess.run(["docker", *sql], stdin=f, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    docker("exec", cid, "pg_amcheck", "--install-missing", "-U", "postgres", "-d", database)
 
 
 def main():
-    require(len(sys.argv) in (4, 5), "expected backup directory, recovery identity, approved PG digest and optional SQL")
-    point, identity, image = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("point", type=Path)
+    parser.add_argument("identity", type=Path)
+    parser.add_argument("image")
+    parser.add_argument("assertions", nargs="?")
+    parser.add_argument("--metadata-point", type=Path)
+    parser.add_argument("--point-sha256")
+    parser.add_argument("--metadata-sha256")
+    parser.add_argument("--keep-quarantine", action="store_true")
+    args = parser.parse_args()
+    point, identity, image = args.point, args.identity, args.image
     state = Path(os.getenv("XDG_STATE_HOME", Path.home() / ".local/state")) / "hookah-production-restore"
     prepare_state_directory(state)
     mode = state.lstat()
@@ -149,28 +221,44 @@ def main():
         journal = state / "attempt.json"
         if journal.exists():
             cleanup(journal, daemon)
-        verify_archive(point, image)
+        if args.keep_quarantine or args.metadata_point:
+            require(args.point_sha256 and not args.assertions, "custody checksum required; custom SQL disallowed")
+        require(bool(args.metadata_sha256) == bool(args.metadata_point), "metadata point and custody checksum required together")
+        verify_archive(point, image, args.point_sha256)
+        if args.metadata_point:
+            verify_archive(args.metadata_point, image, args.metadata_sha256)
+            check_pair(point, args.metadata_point)
         attempt = uuid.uuid4().hex
         name = "ht-restore-" + attempt
         require(not docker("ps", "-aq", "--filter", "name=^/" + name + "$") and
                 not docker("volume", "ls", "-q", "--filter", "name=^" + name + "-data$"), "restore name occupied")
         with tempfile.NamedTemporaryFile(dir=state) as f:
-            f.write(json.dumps(dict(attempt=attempt, image=image, daemon=daemon)).encode())
+            record = dict(attempt=attempt, image=image, daemon=daemon)
+            if args.keep_quarantine:
+                record.update(point_sha256=args.point_sha256, metadata_sha256=args.metadata_sha256 or args.point_sha256)
+            f.write(json.dumps(record).encode())
             f.flush()
             os.fsync(f.fileno())
             os.link(f.name, journal)
             synced(state)
         try:
-            restore(point, identity, image, sys.argv[4] if len(sys.argv) == 5 else None, attempt)
+            counts = restore(point, identity, image, args.assertions, attempt, args.metadata_point, args.keep_quarantine)
+            if args.keep_quarantine:
+                receipt = state / (attempt + "-quarantine.json")
+                journal.rename(receipt)
+                synced(state)
+                print("Private PostgreSQL retained:", name, "database hookah_prod;", counts, "receipt:", receipt)
+                return
         finally:
-            cleanup(journal, daemon)
+            if journal.exists():
+                cleanup(journal, daemon)
     print("Isolated restore, integrity and cleanup passed")
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (Refused, OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+    except (Refused, OSError, ValueError, KeyError, tarfile.TarError, subprocess.SubprocessError) as exc:
         # SQL, filenames, connection parameters and restored values are private.
         reason = str(exc) if isinstance(exc, Refused) else type(exc).__name__
         sys.exit("Restore refused: " + reason)

@@ -111,7 +111,7 @@ class PublicationTests(unittest.TestCase):
                     self.gate()
 
     def test_exact_clean_checkout(self):
-        checkout = JOB['steps'][0]
+        checkout, = [step for step in JOB['steps'] if step.get('name') == 'Checkout exact release SHA']
         self.assertEqual(checkout['with'], {'ref': '${{ github.sha }}', 'persist-credentials': 'false'})
         with self.assertRaisesRegex(SystemExit, 'SHA mismatch'):
             self.gate(head='d' * 40)
@@ -148,12 +148,39 @@ class PublicationTests(unittest.TestCase):
         self.assertNotIn('VITE_BACKEND_PUBLIC_URL', (ROOT / 'scripts/build-simple-staging-image.sh').read_text())
         self.assertIn('RUN NODE_ENV=production npm run build', (ROOT / 'backend/Dockerfile').read_text())
         self.assertEqual(STEPS['candidate']['env']['BUILD_DIGEST'], '${{ steps.build.outputs.digest }}')
-        upload = JOB['steps'][-1]['with']
+        self.assert_publication_steps(JOB['steps'])
+
+    def assert_publication_steps(self, steps):
+        def named(name):
+            found = [step for step in steps if step.get('name') == name]
+            self.assertEqual(len(found), 1, name)
+            return found[0]
+
+        upload_step = named('Upload immutable candidate')
+        verified = named('Record verified image ${{ steps.build.outputs.digest }}')
+        self.assertLess(steps.index(STEPS['candidate']), steps.index(upload_step))
+        self.assertLess(steps.index(upload_step), steps.index(verified))
+        for required in (upload_step, verified):
+            self.assertNotIn('if', required)
+            self.assertNotIn('continue-on-error', required)
+        self.assertEqual(verified.get('run'), 'true')
+        self.assertRegex(upload_step['uses'], r'^actions/upload-artifact@[0-9a-f]{40}$')
+        upload = upload_step['with']
         self.assertEqual(upload['name'], 'ghcr-candidate-${{ github.sha }}-${{ github.run_attempt }}')
         self.assertEqual(upload['path'].splitlines(), [
             '${{ runner.temp }}/ghcr-candidate/candidate.json',
             '${{ runner.temp }}/ghcr-candidate/build-metadata.json'])
         self.assertEqual(upload['if-no-files-found'], 'error')
+        self.assertEqual(upload['retention-days'], '30')
+
+    def test_publication_steps_survive_independent_reordering_and_require_both_records(self):
+        steps = list(JOB['steps'])
+        independent = {'name': 'Independent diagnostic', 'run': 'true'}
+        for index in range(len(steps) + 1):
+            self.assert_publication_steps(steps[:index] + [independent] + steps[index:])
+        for name in ('Upload immutable candidate', 'Record verified image ${{ steps.build.outputs.digest }}'):
+            with self.subTest(missing=name), self.assertRaises(AssertionError):
+                self.assert_publication_steps([step for step in steps if step.get('name') != name])
 
     def test_registry_digest_not_image_id_and_safe_metadata(self):
         self.execute('candidate', self.registry)

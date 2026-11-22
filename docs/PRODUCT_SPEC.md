@@ -79,8 +79,8 @@ Venue media storage/upload source of truth:
   staging R2 bucket, using `venue-info/` and the existing metadata registry. PDF Inline UX is
   `USER_CONFIRMED_PASS / STAGING-SMOKE-PASSED` on release
   `099a5b7a9ab3d8e9a03b352daf548b5858d056ec`, with owner-confirmed iPhone acceptance on 2026-11-01.
-  Production admission, backup/restore, physical cleanup and unreported R2/device/error cases
-  remain open; no container filesystem storage is authorized. See the bounded evidence and
+  The production profile and local recovery procedure are documented in `PRODUCTION_PILOT.md`.
+  Live production admission, operator restore acceptance, physical cleanup and unreported R2/device/error cases remain open; no container filesystem storage is authorized. See the bounded evidence and
   contract in `MEDIA_STORAGE_UPLOAD.md` and `TESTING_QA_SMOKE_STRATEGY.md`.
 
 Security/RBAC source of truth:

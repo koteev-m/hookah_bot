@@ -1,5 +1,43 @@
 # Testing / QA Smoke Strategy
 
+## Production R2, PDF worker and media recovery
+
+Run the production Python contracts and the existing PDF admission contracts. The PG media lifecycle
+suite executes the production inventory against migrated PostgreSQL and checks hide and delete.
+Both SDK storage tests send signed requests to a loopback S3 fixture. Use synthetic fixtures only.
+On a Linux Docker host, verify the same-image worker on its private IPC volume, read the effective
+cgroup v2 limits and submit one valid synthetic PDF before and after stopping the worker.
+Exercise the encrypted restore in a network-disabled PostgreSQL 17 container with an independently
+pinned byte point and a later pinned PostgreSQL point on the same timeline. Retain the private DB,
+restart it, verify tombstones and SHA-256 for the matching objects, and check that the application
+cannot log in. Deletion, replacement, hidden profiles, team flags and new keys must leave other
+candidates recoverable. Test rejected receipts, corrupt age ciphertext and strict open after a
+worker-independent close. CI requires executed StaffPhotoStorageTest JUnit cases and the real age test.
+For the synthetic two-point Linux Docker regression, build `:backend:app:installDist`, then run
+`python3 -B scripts/test-production-media-restore.py "$APPROVED_PG_DIGEST"` with Java 21, age and
+a locally cached PostgreSQL 17 linux/amd64 image. The fixture removes its source before recovery
+and checks retained bytes and refused application login after restart. Repeat with only the stale
+pre-revocation point. Exercise replacement admission, stale grants, and closed guest/owner HTTP
+paths for staff photos, photo/PDF sections and hall plans. Check the new session/role, upload and
+explicit guest publication. The Compose cutover CI job runs both backup scenarios. The mandatory
+PostgreSQL media route test covers guest and authenticated reads and explicit publication.
+Production CI requires the exact disaster hold JUnit testcase and a successful Python first-open
+test, including SIGKILL with both tickets prepared. Exercise the empty Telegram queue boundary
+without acknowledgements, closed historical tabs, a concurrent write between inventory and
+pg_dump, and the same-container cold backup restart. Check the named recovery, polling,
+booking-command and PostgreSQL outbox cases in JUnit and the named successful Python cases.
+Include deferred bot enablement and a backlog that expires before operator reconciliation.
+With the source database intact, the two-point fixture also repairs a missing object
+and rejects overwrite, wrong bytes, hidden records and tombstones. For the offline first-install
+and compatible rollback rehearsal, run `python3 -B scripts/test-production-first-launch.py
+"$LOCAL_AMD64_BACKEND" "$APPROVED_PG_DIGEST" "$LOCAL_CADDY_DIGEST"` after installDist.
+The rehearsal requires a free loopback port 18080. It uses a test CA and synthetic
+signed Telegram login. It runs the traffic CLI against disposable Compose releases,
+including a NEW worker that fails its healthcheck before OLD backend replacement.
+Require rollback to reject a mismatched image and incompatible schema, restore the
+compatible pair, and retain the same PostgreSQL and closed HTTPS.
+[Production operator procedure](PRODUCTION_PILOT.md#копия-и-восстановление-production-media).
+
 ## Portable Mini App release — HT-PORTABLE-RELEASE-SAME-ORIGIN-01
 
 Release auth/API/media resolve against `window.location.origin`; launch/query parameters and

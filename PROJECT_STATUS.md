@@ -1,5 +1,148 @@
 # Project Status
 
+## HT-PRODUCTION-MEDIA-POSTFIX-02 — исправления заключительного ревью
+
+Основной checkout, ветка `codex/ht-production-media-ready-01-primary`,
+HEAD `b0c0ff2b655fbf5d1d6f31d84ed22b4766bb8cc1`. Локальный diff готов к PR.
+GHCR-контракт перешёл от воспроизведённого `KeyError` к 12 успешным тестам.
+В локальном Compose команда rollback вернула OLD backend и PDF worker после
+отказа NEW worker до замены backend. PostgreSQL сохранился, HTTPS ответил 503.
+Неверная пара образов и несовместимая схема остановили rollback.
+
+Маркер Telegram сохраняется до проверки ресурсов Mini App. PostgreSQL-тест
+подтвердил закрытый гостевой доступ при штатной замене скрытого вложения OWNER
+и MANAGER. Ограничение замены скрытой фотографии в видимой карточке сотрудника
+описано в [production runbook](docs/PRODUCTION_PILOT.md).
+Прошли 62 production- и 17 PDF-тестов Python, 17 адресных Kotlin-тестов,
+ktlint и installDist. Следующий этап — отдельно разрешённая публикация и CI
+на точном SHA. Staging и production в этой задаче не использовались.
+
+## HT-PRODUCTION-READINESS-FIX-01 — допуск Telegram, первый запуск и восстановление
+
+**READY_FOR_PR локально.** Основной каталог `hookah_bot_ANT`, ветка
+`codex/ht-production-media-ready-01-primary`, HEAD `b0c0ff2b655fbf5d1d6f31d84ed22b4766bb8cc1`.
+До появления обоих билетов этой JVM Telegram читает очередь без подтверждения.
+Роутер и outbox ожидают допуска. После disaster recovery отложенное первое
+включение требует пустой очереди. Обнаруженный backlog переживает рестарт и
+истечение очереди, требует подтверждённой сверки владельца и повторной проверки.
+Первый recovery open подтверждает рабочий polling и состояние HTTPS после принятия решения.
+
+Первый запуск включает закрытый TLS, готовый PDF worker и подписанный вход до
+публичного открытия. Срок CI artifact больше не ограничивает повторный допуск
+при наличии квитанции хранителя, независимого SHA-256 и доступного подтверждения
+digest в успешном publishing job нужной попытки. LSN остаётся строгим.
+Ремонт одного приватного объекта использует действующую БД. Для совместимой
+схемы предусмотрен возврат прежней пары backend/worker за закрытым ingress.
+
+Проверено локально: 55 Kotlin-тестов в пяти классах, точные JUnit testcase,
+ktlint и installDist; 60 Python production-тестов и 17 PDF-контрактов.
+На PostgreSQL 17 прошли обе аварийные репетиции и ремонт с fake S3. В Docker
+прошли TLS с локальным CA и HTTP 503, подписанный вход с синтетическим токеном,
+холодный backup и запуск того же контейнера, переход и возврат между двумя
+локальными образами с проверками IPC/cgroup v2 и сохранением PostgreSQL.
+
+Файлы этой задачи:
+
+- JVM: `Application.kt`, `ProductionTrafficGate.kt`, `telegram/TelegramLongPollingWorker.kt`,
+  `telegram/TelegramOutboxWorker.kt` в `backend/app/src/main/kotlin/com/hookah/platform/backend/`
+  и `ProductionTrafficGateTest.kt` в соответствующем тестовом пакете.
+- Production: `scripts/production_profile.py`, `scripts/production_traffic.py`,
+  `deploy/production/media_backup.py`, `deploy/production/smoke.py`, `deploy/production/runtime.env.example`.
+- CI и проверки: `.github/workflows/ci.yml`, `scripts/test_production_backend.py`,
+  `scripts/test_production_operations.py`, `scripts/test_production_profile.py`,
+  `scripts/test_production_smoke.py`, `scripts/test-production-media-restore.py`,
+  `scripts/test-production-first-launch.py`.
+- Документы: `docs/PRODUCTION_PILOT.md`, `docs/TESTING_QA_SMOKE_STRATEGY.md`, `PROJECT_STATUS.md`.
+
+Следующий этап требует отдельной публикации и CI на точном SHA. DNS/ACME,
+реальные реквизиты Telegram и R2, фактический publishing job и целевой Linux VPS
+проверяются владельцем в согласованном окне. Публикации и deploy в этой задаче не было.
+
+## HT-PRODUCTION-MEDIA-FINAL-FIX-01 — допуск после аварии и холодная копия
+
+**READY_FOR_PR локально.** Основной checkout, `codex/ht-production-media-ready-01-primary`, HEAD
+`b0c0ff2b655fbf5d1d6f31d84ed22b4766bb8cc1`. Все шесть замечаний исправлены
+локально. Первое открытие расходует решение владельца, проверяет пустую очередь
+Telegram без подтверждения updates и сохраняет запрет до финального снятия маркера.
+Старая БД остаётся закрытой. Рабочая БД может содержать сверенные закрытые заказы
+и счета. Привязки прежних участников и владельцев счетов остаются в архиве.
+При обнаружении очереди владелец отдельно решает её судьбу.
+
+На PostgreSQL 17 прошли восстановление из двух точек и из одной устаревшей копии,
+конкурентное изменение после экспорта снимка и проверка доступа через контекст заказа.
+Пройдены 24 адресных Kotlin-теста, ktlint, installDist, 52 production-теста Python и 17 проверок PDF worker.
+Операторский тест завершал процесс через SIGKILL в четырёх точках до открытия.
+Caddy с обоими билетами и удержанием вернул 503. Обычное возобновление привязано
+к записанному перед backup полному ID контейнера. Следующий шаг — локальный diff
+готов к публикации PR по отдельному разрешению. Внешней приёмки и деплоя не было.
+
+### Файлы этого исправления
+
+- Допуск и копирование — `scripts/production_traffic.py`, `deploy/production/backup.sh`,
+  `deploy/production/media_backup.py`, `deploy/production/smoke.py`, `deploy/production/recovery-admission.sql`.
+- Backend — `Application.kt`, `ProductionTrafficGate.kt`, `telegram/TelegramApiClient.kt`.
+  Kotlin-регрессии — `ProductionTrafficGateTest.kt`, `VenueInfoMediaRoutesPostgresTest.kt`.
+- CI и проверки — `.github/workflows/ci.yml`, `scripts/test_production_backend.py`,
+  `scripts/test_production_operations.py`, `scripts/test_production_profile.py`,
+  `scripts/test_production_smoke.py`, `scripts/test_production_media_backup.py`,
+  `scripts/test-production-media-restore.py`.
+- Документация — этот checkpoint, [production runbook](docs/PRODUCTION_PILOT.md#катастрофическая-потеря-primary-и-последнего-состояния-прав)
+  и [проверки media recovery](docs/TESTING_QA_SMOKE_STRATEGY.md#production-r2-pdf-worker-and-media-recovery).
+
+## HT-PRODUCTION-MEDIA-RECOVERY-FINAL-01 — выдача медиа после потери VPS
+
+**READY_FOR_PR локально.** Основной checkout, `codex/ht-production-media-ready-01-primary`,
+HEAD `b0c0ff2b655fbf5d1d6f31d84ed22b4766bb8cc1`. При потере последнего состояния
+прав восстановленная БД и исторические байты навсегда остаются в закрытом архиве.
+Открыть трафик можно на чистой рабочей БД того же стека после отдельной сверки владельцев,
+пользователей, заказов, броней, биллинга и внешних эффектов. Старые роли и публикации
+не переносятся. Без доказательств сверки приложение остаётся закрытым.
+
+На PostgreSQL 17 прошли репетиции с двумя точками и только с устаревшей копией после
+уничтожения исходной БД. Проверены закрытый архив после рестарта, отказ старым ролям,
+новая загрузка и явная публикация. Прошли 12 Kotlin-тестов, ktlint, installDist,
+48 production-проверок Python и 17 проверок PDF worker. В изолированном Caddy
+маркер аварийного режима перекрыл действующий upstream. Дальнейший шаг — ревью
+локального diff. Публикация и внешняя приёмка требуют отдельного решения.
+[Процедура и границы восстановления](docs/PRODUCTION_PILOT.md#катастрофическая-потеря-primary-и-последнего-состояния-прав).
+
+## HT-PRODUCTION-MEDIA-REVIEW-FIX-01 — восстановление в карантине
+
+**PARTIAL.** Основной checkout, `codex/ht-production-media-ready-01-primary`,
+HEAD `b0c0ff2b655fbf5d1d6f31d84ed22b4766bb8cc1`. Профиль восстанавливает PostgreSQL 17
+и сверенные байты приватно. Открытие после потери primary заблокировано до решения
+владельца о независимом хранении всех подтверждённых изменений прав и удалений.
+Порядок точек и квитанции хранителя устанавливают происхождение копий и их
+последовательность. Полнота изменений после последней точки требует отдельного источника.
+
+В локальной репетиции двух точек один объект пережил рестарт, три исключены, для
+одного нового ключа байты отсутствовали, две записи удаления сохранились.
+Прошли 24 адресных Kotlin-теста, ktlint, 46 Python-проверок production и 17 проверок
+PDF-контракта. Проверены `close` при отказе worker и обязательные JUnit/age-проверки.
+Работа локальная, внешняя приёмка и публикация не проводились.
+[Порядок восстановления и граница открытия](docs/PRODUCTION_PILOT.md#копия-и-восстановление-production-media).
+
+## HT-PRODUCTION-MEDIA-READY-01 — приватные production-медиа
+
+Основной checkout, ветка `codex/ht-production-media-ready-01-primary`, база PR #272
+`b0c0ff2b655fbf5d1d6f31d84ed22b4766bb8cc1`. Исходные 27 изменённых и 5 новых файлов
+сверены по blob и mode в stash `b2c49014`. Предыдущий stash `da15ee37` сохранён.
+Локальный профиль допускает отдельный EU R2 bucket и same-image PDF-worker через
+штатный production admission. Холодная копия включает PostgreSQL и отдельный
+зашифрованный архив объектов. Первоначальный порядок экспорта пересмотрен в HT-PRODUCTION-MEDIA-REVIEW-FIX-01.
+
+В локальной Linux-репетиции worker принял синтетический PDF и отказал после остановки.
+Фактические memory/swap/CPU/PID — 384 МиБ / 0 / 1 / 64. Проверены Compose и Unix IPC,
+SDK с loopback S3 и RBAC. Прошли 104 Kotlin-теста (46 на PostgreSQL 17), ktlint,
+installDist, 42 production-теста Python, 17 проверок PDF-контракта, Vite и 15 сценариев Chromium. Изолированная
+репетиция восстановила V143 из pg_dump и байты из age. Проверка того этапа обнаруживала удаление,
+когда оно присутствовало в переданной описи.
+[Порядок допуска, копирования и восстановления](docs/PRODUCTION_PILOT.md#приватные-фото-планы-залов-и-pdf).
+
+Изменения локальные. Реальный bucket, область действия credentials, systemd на целевом
+VPS, внешняя копия и устройства требуют операторской приёмки. Следующий шаг —
+ревью локального diff до отдельного решения о публикации и работе с провайдером.
+
 ## HT-PRODUCTION-RELEASE-01-BILLING-SNAPSHOT-FIX-01 — согласованное чтение счетов
 
 **BILLING_SNAPSHOT_FIXED · READY_FOR_PUBLICATION = NO** (2026-11-21).
