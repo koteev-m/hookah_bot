@@ -23,6 +23,7 @@ import java.time.Duration
 const val STAFF_PHOTO_MAX_INPUT_BYTES = 5 * 1024 * 1024
 const val STAFF_PHOTO_MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 const val STAFF_PHOTO_STAGING_BUCKET = "hookah-tootah-media-staging-eu"
+const val STAFF_PHOTO_PRODUCTION_BUCKET = "hookah-tootah-media-production-eu"
 
 interface StaffPhotoStorage : AutoCloseable {
     val available: Boolean
@@ -115,11 +116,18 @@ class StaffPhotoStorageConfig private constructor(
             val bucket = value("bucket")
             val accessKey = value("accessKey")
             val secretKey = value("secretKey")
+            val allowedStorage =
+                if (appEnv.trim().lowercase() in setOf("prod", "production")) {
+                    bucket == STAFF_PHOTO_PRODUCTION_BUCKET && jurisdiction == "eu" &&
+                        endpoint != null && endpoint.toString() == "https://${endpoint.host}" &&
+                        accessKey?.matches(Regex("[a-f0-9]{32}")) == true &&
+                        secretKey?.matches(Regex("[a-f0-9]{64}")) == true
+                } else {
+                    bucket == STAFF_PHOTO_STAGING_BUCKET && accessKey != null && secretKey != null
+                }
             val enabled =
                 config.propertyOrNull(enabledPath)?.getString() == "true" &&
-                    appEnv.lowercase() !in setOf("prod", "production") &&
-                    validEndpoint && value("region") == "auto" && bucket == STAFF_PHOTO_STAGING_BUCKET &&
-                    accessKey != null && secretKey != null
+                    validEndpoint && value("region") == "auto" && allowedStorage
             return StaffPhotoStorageConfig(
                 enabled,
                 endpoint,

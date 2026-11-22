@@ -313,10 +313,12 @@ private data class VersionResponse(
     val time: String,
     val instance: String? = null,
     val polling: String? = null,
+    val recoveryGateClosed: Boolean? = null,
 )
 
 internal data class ModuleOverrides(
     val tableSessionCleanupEnabled: Boolean = true,
+    val productionTrafficGate: ProductionTrafficGate? = null,
     val tableTokenResolver: (suspend (String) -> TableContext?)? = null,
     val telegramFileDownloader: (suspend (String) -> TelegramDownloadedFile?)? = null,
     val staffChatNotifier: StaffChatNotifier? = null,
@@ -486,7 +488,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val dbConfig = DbConfig.from(appConfig)
     val appVersion = appConfig.optionalString("app.version") ?: "dev"
     val productionGate =
-        System.getenv("HOOKAH_PILOT_GATE_DIR")?.let {
+        overrides.productionTrafficGate ?: System.getenv("HOOKAH_PILOT_GATE_DIR")?.let {
             check(appEnv == "prod")
             ProductionTrafficGate(
                 java.nio.file.Path.of(it),
@@ -980,6 +982,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 val worker =
                     TelegramLongPollingWorker(
                         getUpdates = telegramApiClient::getUpdates,
+                        canDispatch = { productionGate?.telegramDispatchAllowed() != false },
                         onPollingSuccess = { productionGate?.pollingSucceeded() },
                         getWebhookUrl = { telegramApiClient.getWebhookInfo().url },
                         processUpdate = router::process,
@@ -1031,6 +1034,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 TelegramOutboxWorker(
                     repository = telegramOutboxRepository,
                     apiClientProvider = { telegramApiClient },
+                    canDispatch = { productionGate?.telegramDispatchAllowed() != false },
                     json = telegramJson,
                     rateLimiter = outboxRateLimiter,
                     config = telegramConfig.outbox,
@@ -1052,38 +1056,41 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     monitor.subscribe(ApplicationStarted) {
         if (dataSource != null) {
             if (stagingMaintenancePolicy.allowsAutonomousWrites) {
-                if ((staffPhotoStorage.available || infoMediaStorage.available) && appEnv != "test") {
-                    staffPhotoJob =
-                        staffPhotoScope.launch {
-                            while (isActive) {
-                                try {
-                                    staffPhotoService.cleanup()
-                                    infoMediaService.cleanup()
-                                } catch (
-                                    e: CancellationException,
-                                ) {
-                                    throw e
-                                } catch (_: Exception) {
-                                    logger.warn("Staff photo cleanup deferred")
+                fun startWriters() {
+                    if ((staffPhotoStorage.available || infoMediaStorage.available) && appEnv != "test") {
+                        staffPhotoJob =
+                            staffPhotoScope.launch {
+                                while (isActive) {
+                                    try {
+                                        staffPhotoService.cleanup()
+                                        infoMediaService.cleanup()
+                                    } catch (
+                                        e: CancellationException,
+                                    ) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        logger.warn("Staff photo cleanup deferred")
+                                    }
+                                    delay(60_000)
                                 }
-                                delay(60_000)
                             }
-                        }
+                    }
+                    subscriptionBillingJob.start(subscriptionBillingScope)
+                    if (overrides.isTableSessionCleanupEnabled(appEnv)) {
+                        tableSessionCleanupJob = tableSessionCleanupWorker.start()
+                    }
+                    if (bookingExpiryWorkerConfig.enabled) {
+                        bookingExpiryJob = bookingExpiryWorker.start()
+                    } else {
+                        logger.info("Booking expiry worker disabled by config")
+                    }
+                    if (bookingReminderWorkerConfig.enabled) {
+                        bookingReminderJob = bookingReminderWorker.start()
+                    } else {
+                        logger.info("Booking reminder worker disabled by config")
+                    }
                 }
-                subscriptionBillingJob.start(subscriptionBillingScope)
-                if (overrides.isTableSessionCleanupEnabled(appEnv)) {
-                    tableSessionCleanupJob = tableSessionCleanupWorker.start()
-                }
-                if (bookingExpiryWorkerConfig.enabled) {
-                    bookingExpiryJob = bookingExpiryWorker.start()
-                } else {
-                    logger.info("Booking expiry worker disabled by config")
-                }
-                if (bookingReminderWorkerConfig.enabled) {
-                    bookingReminderJob = bookingReminderWorker.start()
-                } else {
-                    logger.info("Booking reminder worker disabled by config")
-                }
+                productionGate?.startDatabaseWriters(this, telegramConfig.enabled, ::startWriters) ?: startWriters()
             } else {
                 logger.info("Autonomous application writers disabled by staging maintenance policy")
             }
@@ -1156,8 +1163,12 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         }
         intercept(ApplicationCallPipeline.Setup) {
             val publicIngress = call.request.headers["X-Hookah-Pilot-Ingress"] == "public"
-            if (publicIngress &&
-                (
+            val recoveryProbe =
+                !publicIngress &&
+                    productionGate.recoveryProbeAllowed(call.request.httpMethod.value, call.request.path()) &&
+                    (!productionGate.recoveryHeld() || call.request.headers["X-Hookah-Recovery-Probe"] == "1")
+            if (productionGate.recoveryHeld() && !recoveryProbe ||
+                (publicIngress || productionGate.recoveryInstallation() && !recoveryProbe) && (
                     !productionGate.admitsHttp(telegramConfig.enabled) ||
                         !productionGate.checkDatabase(applicationScope, ::databaseReady) ||
                         !productionGate.admitsHttp(telegramConfig.enabled)
@@ -1372,6 +1383,22 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
 
         get("/version") {
             val time = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
+            val polling =
+                if (telegramConfig.enabled && productionGate != null &&
+                    (productionGate.recoveryHeld() || productionGate.telegramRecoveryPending()) &&
+                    call.request.headers["X-Hookah-Recovery-Probe"] == "1"
+                ) {
+                    val api = checkNotNull(telegramApiClient)
+                    productionGate.recordRecoveryPoll(api.recoveryPollingState())
+                } else {
+                    productionGate?.pollingState(telegramConfig.enabled)
+                }
+            val recoveryClosed =
+                if (productionGate?.recoveryInstallation() == true) {
+                    !productionGate.admitsHttp(telegramConfig.enabled)
+                } else {
+                    null
+                }
             call.respond(
                 VersionResponse(
                     service = "backend",
@@ -1379,7 +1406,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     version = appVersion,
                     time = time,
                     instance = productionGate?.instance,
-                    polling = productionGate?.pollingState(telegramConfig.enabled),
+                    polling = polling,
+                    recoveryGateClosed = recoveryClosed,
                 ),
             )
         }

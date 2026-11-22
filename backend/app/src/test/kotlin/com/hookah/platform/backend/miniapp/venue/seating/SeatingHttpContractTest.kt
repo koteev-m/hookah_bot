@@ -123,15 +123,19 @@ class SeatingHttpContractTest {
                 send(cmd("HALL").copy(name = "Forbidden"), STAFF, HttpStatusCode.Forbidden)
                 val hall = send(cmd("HALL").copy(name = "Main"))!!.id
                 send(cmd("HALL").copy(name = "Main"), OWNER, HttpStatusCode.Conflict)
-                val uploaded =
-                    client.post("$root/$hall/plans") {
-                        bearerAuth(token(OWNER))
-                        contentType(ContentType.Image.PNG)
-                        header("Idempotency-Key", UUID.randomUUID().toString())
-                        setBody(syntheticPhoto())
-                    }
-                assertEquals(HttpStatusCode.OK, uploaded.status, uploaded.bodyAsText())
-                val image = seatingJson.decodeFromString<HallPlanUpload>(uploaded.bodyAsText())
+
+                suspend fun uploadPlan(): HallPlanUpload {
+                    val uploaded =
+                        client.post("$root/$hall/plans") {
+                            bearerAuth(token(OWNER))
+                            contentType(ContentType.Image.PNG)
+                            header("Idempotency-Key", UUID.randomUUID().toString())
+                            setBody(syntheticPhoto())
+                        }
+                    assertEquals(HttpStatusCode.OK, uploaded.status, uploaded.bodyAsText())
+                    return seatingJson.decodeFromString<HallPlanUpload>(uploaded.bodyAsText())
+                }
+                val image = uploadPlan()
                 send(cmd("PLAN").copy(id = hall, revision = 0, planId = image.id, confirmPlanReplacement = true))
                 for ((index, table) in tables.withIndex()) send(
                     cmd(
@@ -183,6 +187,12 @@ class SeatingHttpContractTest {
                         "/api/guest/venues/$venue/hall/$hall/plans/${image.id}",
                     ) { bearerAuth(token(1003)) }
                 assertEquals(HttpStatusCode.OK, imageResponse.status)
+                val staged = uploadPlan()
+                assertTrue(staged.id != image.id)
+                val privatePath = "$root/$hall/plans/${staged.id}"
+                val guestPath = "/api/guest/venues/$venue/hall/$hall/plans/${staged.id}"
+                assertEquals(HttpStatusCode.OK, client.get(privatePath) { bearerAuth(token(OWNER)) }.status)
+                assertEquals(HttpStatusCode.NotFound, client.get(guestPath) { bearerAuth(token(1003)) }.status)
                 val ready = seatingJson.decodeFromJsonElement(HallState.serializer(), read())
                 send(cmd("RULES").copy(revision = ready.rules.revision, rules = ready.rules.copy(usePlan = false)))
                 assertEquals(

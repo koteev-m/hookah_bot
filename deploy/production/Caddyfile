@@ -3,9 +3,15 @@ hookahtootah.club {
 		root /var/lib/hookah-production/ingress
 		try_files /open
 	}
+	@recovery file {
+		root /var/lib/hookah-production/ingress
+		try_files /recovery-hold
+	}
 	@foreign expression `{http.request.header.Origin} != "" && {http.request.header.Origin} != "https://hookahtootah.club"`
 	@internal path /api/billing/webhook /api/billing/webhook/* /telegram/webhook /metrics /db/health /telegram/queue/health
 	route {
+		header @recovery X-Hookah-Maintenance closed
+		respond @recovery 503
 		header @drained X-Hookah-Maintenance closed
 		respond @drained 503
 		respond @foreign 403

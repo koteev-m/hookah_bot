@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.miniapp.venue.media
 
 import com.hookah.platform.backend.api.VenueInfoMediaUnavailableException
+import com.hookah.platform.backend.miniapp.venue.staff.STAFF_PHOTO_PRODUCTION_BUCKET
 import com.hookah.platform.backend.miniapp.venue.staff.STAFF_PHOTO_STAGING_BUCKET
 import com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoStorageConfig
 import com.hookah.platform.backend.miniapp.venue.staff.privateR2Client
@@ -8,6 +9,8 @@ import com.sun.net.httpserver.HttpServer
 import io.ktor.server.config.MapApplicationConfig
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.net.InetSocketAddress
 import java.net.URI
 import java.util.UUID
@@ -18,7 +21,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class VenueInfoMediaStorageTest {
-    @Test fun `independent opt in uses existing private staging connection and production remains disabled`() {
+    @Test fun `independent opt in accepts the staging bucket only outside production`() {
         val config =
             MapApplicationConfig(
                 "venue.infoMedia.enabled" to "true",
@@ -57,14 +60,16 @@ class VenueInfoMediaStorageTest {
         )
     }
 
-    @Test fun `SDK sends normalized MIME Standard private keys and confirms deletion without provider leaks`() =
+    @ParameterizedTest
+    @ValueSource(strings = [STAFF_PHOTO_STAGING_BUCKET, STAFF_PHOTO_PRODUCTION_BUCKET])
+    fun `SDK preserves MIME and private keys and confirms deletion`(bucket: String) =
         runBlocking<Unit> {
             val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
             val objects = mutableMapOf<String, ByteArray>()
             var expected = "application/pdf"
             var fail = false
             server.createContext("/") { exchange ->
-                assertTrue(exchange.requestURI.path.startsWith("/$STAFF_PHOTO_STAGING_BUCKET/venue-info/"))
+                assertTrue(exchange.requestURI.path.startsWith("/$bucket/venue-info/"))
                 assertTrue(exchange.requestHeaders.getFirst("Authorization").startsWith("AWS4-HMAC-SHA256"))
                 if (fail) {
                     val error =
@@ -108,7 +113,7 @@ class VenueInfoMediaStorageTest {
                         "synthetic-access",
                         "synthetic-secret",
                     ),
-                    STAFF_PHOTO_STAGING_BUCKET,
+                    bucket,
                 ).use {
                         storage ->
                     for (mime in listOf("image/jpeg", "image/png", "application/pdf")) {

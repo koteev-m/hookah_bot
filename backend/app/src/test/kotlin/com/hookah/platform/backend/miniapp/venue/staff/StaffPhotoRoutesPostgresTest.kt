@@ -239,6 +239,7 @@ class StaffPhotoRoutesPostgresTest {
                 assertEquals(HttpStatusCode.Forbidden, action("consent", 103).status)
                 // Published photo still requires the existing Today/MANUAL resolver.
                 assertEquals(HttpStatusCode.NotFound, client.get(guest) { bearerAuth(token(104)) }.status)
+                f.sql("UPDATE venue_settings SET timezone='UTC' WHERE venue_id=${f.venue}")
                 val today = LocalDate.now(ZoneId.of("UTC"))
                 f.sql(
                     """
@@ -272,6 +273,7 @@ class StaffPhotoRoutesPostgresTest {
                     WHERE venue_id=${f.venue}
                     """.trimIndent(),
                 )
+                assertEquals(HttpStatusCode.NotFound, client.get(guest) { bearerAuth(token(104)) }.status)
                 repeat(120) { abuse.tryStaffPhotoUpload((it / 30 + 1000).toLong(), f.venue) }
                 assertEquals(HttpStatusCode.Forbidden, action("revoke", 103).status)
                 assertEquals(HttpStatusCode.OK, action("delete", 102).status)

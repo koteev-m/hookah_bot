@@ -30,6 +30,7 @@ class TelegramOutboxWorker(
     private val nowProvider: () -> Instant = Instant::now,
     private val metrics: AppMetrics? = null,
     private val recipientLocks: TelegramRecipientLockRegistry = TelegramRecipientLockRegistry(),
+    private val canDispatch: () -> Boolean = { true },
     private val venueInfoDispatch: (
         suspend (TelegramOutboxMessage, JsonElement, TelegramApiClient) -> TelegramCallResult
     )? = null,
@@ -51,6 +52,7 @@ class TelegramOutboxWorker(
         }
 
     suspend fun processOnce() {
+        if (!canDispatch()) return
         val now = nowProvider()
         val batch =
             try {
@@ -70,7 +72,7 @@ class TelegramOutboxWorker(
         for (message in batch) {
             try {
                 recipientLocks.withRecipientLock(message.chatId) {
-                    processMessage(message)
+                    if (canDispatch()) processMessage(message)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -102,6 +104,7 @@ class TelegramOutboxWorker(
             return
         }
 
+        if (!canDispatch()) return
         val result =
             try {
                 if (message.method == "venueInfo") {

@@ -1,6 +1,16 @@
 # Venue Media Storage And Upload
 
 
+## Production profile
+
+The production profile admits the private EU bucket `hookah-tootah-media-production-eu`.
+Staff photos, venue information images/PDFs and hall plans use their existing backend endpoints,
+registries, authorization and deletion rules. New PDFs require the same-image isolated worker.
+Encrypted PostgreSQL and byte backups can be recovered together into a network-disabled quarantine.
+Old media and grants remain permanently offline after a catastrophic restore. The replacement requires
+separate business reconciliation, verified owners, fresh uploads and explicit publication. See the [production runbook](PRODUCTION_PILOT.md#приватные-фото-планы-залов-и-pdf).
+Provider provisioning, real credentials and operator recovery acceptance require a separate live operation.
+
 ## Hall plans (HT-HALLS-SEATING-TABLE-BOOKING-01)
 
 Hall plans reuse `VenueInfoMediaStorage`, its configured private R2 bucket and existing JPEG/PNG
@@ -421,9 +431,9 @@ Server-only configuration: `STAFF_PHOTOS_R2_ENABLED` (default false),
 `STAFF_PHOTOS_R2_SECRET_KEY`, `STAFF_PHOTOS_R2_REGION` (`auto`),
 `STAFF_PHOTOS_R2_JURISDICTION` (`default` or `eu`, explicitly verified),
 `STAFF_PHOTOS_MAX_INPUT_BYTES` (may lower but not raise 5 MiB). Invalid/incomplete configuration
-safely disables uploads while other backend functions keep working. Production configuration is
-explicitly disabled until a separate admission change. Configured bucket must equal the staging
-bucket above; endpoint must be the verified account's HTTPS R2 endpoint, without arbitrary paths.
+safely disables uploads while other backend functions keep working. Staging uses the staging
+bucket above. Production requires its own EU bucket, credentials and private runtime admission.
+The endpoint must be the verified account's HTTPS R2 endpoint without additional paths.
 
 ### Separate staging configuration and acceptance checklist
 

@@ -193,6 +193,8 @@ jobs:
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaRoutesPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorageTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoStorageTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoRoutesPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaValidationTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaConcurrencyPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaPdfSecurityTest" \
@@ -275,6 +277,12 @@ jobs:
           }
           strict_classes = billing_classes | {"com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest", "com.hookah.platform.backend.analytics.VenueOperationsPostgresHttpTest", "com.hookah.platform.backend.analytics.VenueBookingAttentionPostgresHttpTest"}
           strict_classes |= {"com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultH2Test", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultPostgresTest", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateReplayPostgresHttpTest", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingMigrationTest", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentH2Test", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresTest", "com.hookah.platform.backend.miniapp.venue.accounting.AccountingSplitPaymentPostgresHttpTest"}
+          strict_classes |= {
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoStorageTest",
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoRoutesPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorageTest",
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest",
+          }
           report_dir = Path("backend/app/build/test-results/test")
           expected_classes = [
               "com.hookah.platform.backend.analytics.VenueProductsCategoryPostgresHttpTest",
@@ -328,6 +336,8 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaRoutesPostgresTest",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorageTest",
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoStorageTest",
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoRoutesPostgresTest",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaValidationTest",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaConcurrencyPostgresTest",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaPdfSecurityTest",
@@ -432,10 +442,12 @@ jobs:
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixHttpTest": 1,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixTest": 3,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecycleH2Test": 12,
-              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest": 12,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest": 14,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest": 1,
-              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaRoutesPostgresTest": 2,
-              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorageTest": 3,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaRoutesPostgresTest": 3,
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorageTest": 4,
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoStorageTest": 4,
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoRoutesPostgresTest": 2,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaValidationTest": 4,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaConcurrencyPostgresTest": 1,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaPdfSecurityTest": 1,
@@ -475,6 +487,24 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramKeyboardsTest": 169,
           }
           required_test_names = {
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaRoutesPostgresTest": {
+                  "recovery blocks all media surfaces and requires new authority upload and explicit publication(Path)",
+              },
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoRoutesPostgresTest": {
+                  "authenticated direct photo API visibility privacy and safe failures",
+              },
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaStorageTest": {
+                  "[1] hookah-tootah-media-staging-eu", "[2] hookah-tootah-media-production-eu",
+              },
+              "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest": {
+                  "production backup inventory observes visibility and keeps deleted bytes out of recovery",
+                  "production recovery filters hall section and venue access changes independently",
+              },
+              "com.hookah.platform.backend.miniapp.venue.staff.StaffPhotoStorageTest": {
+                  "[1] hookah-tootah-media-staging-eu", "[2] hookah-tootah-media-production-eu",
+                  "explicit staging config fails closed on missing foreign public or production settings",
+                  "upload exhaustion does not consume privacy withdrawal quota",
+              },
               "com.hookah.platform.backend.miniapp.venue.accounting.AccountingCreateResultH2Test": {
                   "CREATE identity survives reload and identical concurrent sale",
                   "CREATE receipt is actor payload and venue bound with fresh access check and no duplicate",
@@ -1714,7 +1744,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-common ca-certificates curl
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 postgresql-client-18 openssh-server 'libpq5=18.*'
+          sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 postgresql-client-18 openssh-server age 'libpq5=18.*'
           echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
           mkdir -m 0700 "$RUNNER_TEMP/v126-caddy-package"
           cd "$RUNNER_TEMP/v126-caddy-package"
@@ -1807,7 +1837,36 @@ jobs:
       - name: Check staging release Python whitespace
         run: python3 -m tabnanny scripts/staging_release.py scripts/test_staging_release.py scripts/test_staging_release_docker.py scripts/clean_install_policy.py scripts/test_clean_install_release.py scripts/test_clean_install_postgres.py scripts/clean_install_runtime.py scripts/clean_install_trust.py scripts/test_clean_install_runtime.py scripts/shared_host_scope.py scripts/test_shared_host_scope.py scripts/clean_install_compose.py scripts/test_clean_install_compose.py
       - name: Test production pilot contracts
-        run: python3 -B -m unittest discover -s scripts -p 'test_production_*.py' -v
+        run: |
+          age --version
+          age-keygen --version
+          python3 -B - <<'PY'
+          import unittest
+          class Result(unittest.TextTestResult):
+              def addSuccess(self, test):
+                  super().addSuccess(test)
+                  passed.add(test.id())
+          passed = set()
+          suite = unittest.defaultTestLoader.discover("scripts", "test_production_*.py")
+          result = unittest.TextTestRunner(verbosity=2, resultclass=Result).run(suite)
+          required = {
+              "test_production_media_backup.ProductionMediaBackupTest.test_authenticated_recovery_and_incomplete_ciphertext",
+              "test_production_operations.PilotOperationsTest.test_disaster_acceptance_is_bound_to_reviewed_database_and_first_open",
+              "test_production_operations.PilotOperationsTest.test_open_requires_same_final_process_ready_and_polling_before_public_marker",
+              "test_production_operations.PilotOperationsTest.test_killed_normal_open_leaves_only_a_probe_permission",
+              "test_production_operations.PilotOperationsTest.test_recorded_telegram_backlog_requires_owner_review_even_after_expiry",
+              "test_production_operations.PilotOperationsTest.test_deferred_telegram_open_preserves_backlog_and_checks_real_poller_and_edge",
+          }
+          if not result.wasSuccessful() or result.skipped or not required <= passed:
+              raise SystemExit(f"Production recovery checks failed; missing successes: {sorted(required - passed)}")
+          PY
+      - name: Rehearse production media recovery after loss of the source database
+        env:
+          RECOVERY_TEST_PG: postgres@sha256:1eada89ec2521ae0f61125f6bdaf83bbbf88a43fecda48d112a83bb92df75c36
+        run: |
+          ./gradlew --no-daemon --max-workers=1 :backend:app:installDist --console=plain
+          docker pull --platform linux/amd64 "$RECOVERY_TEST_PG"
+          python3 -B scripts/test-production-media-restore.py "$RECOVERY_TEST_PG"
       - name: Test staging release controller and executor
         run: python3 -B -m unittest discover -s scripts -p test_staging_release.py -v
       - name: Test CR-1 local transitions and authority fault injection
@@ -2877,3 +2936,5 @@ jobs:
             ${{ runner.temp }}/ghcr-candidate/build-metadata.json
           if-no-files-found: error
           retention-days: 30
+      - name: Record verified image ${{ steps.build.outputs.digest }}
+        run: 'true'

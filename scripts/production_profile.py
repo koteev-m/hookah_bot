@@ -1,5 +1,6 @@
 """Check a pilot configuration, or admit an immutable release to a private Compose file."""
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -12,10 +13,13 @@ import tempfile
 import urllib.request
 import zipfile
 
-from simple_staging import IMAGE_RE, REPO, SOURCE, Refused, history_for, manifest, require
+from simple_staging import (IMAGE_RE, PDF_FLAG, PDF_IPC, R2_CONNECTION_KEYS, REPO, SOURCE,
+                            PdfWorkerAdmission, Refused, add_pdf_worker, digest, history_for, manifest, require)
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / "deploy/production"
+PRODUCTION_PROJECT = "hookah_production"
+GATE = Path("/var/lib/hookah-production/ingress/open")
 SECRET_KEYS = {
     "POSTGRES_ADMIN_PASSWORD", "DB_PASSWORD", "API_SESSION_JWT_SECRET", "BILLING_WEBHOOK_SECRET",
     "TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER", "VENUE_STAFF_INVITE_SECRET_PEPPER",
@@ -24,6 +28,25 @@ KEYS = SECRET_KEYS | {
     "POSTGRES_IMAGE", "TELEGRAM_BOT_ENABLED", "TELEGRAM_BOT_TOKEN",
     "PLATFORM_OWNER_TELEGRAM_ID", "TELEGRAM_MAIN_MINI_APP_CONFIGURED",
 }
+MEDIA_FLAG = "PRODUCTION_MEDIA_ENABLED"
+MEDIA_KEYS = {MEDIA_FLAG} | R2_CONNECTION_KEYS
+PRODUCTION_BUCKET = "hookah-tootah-media-production-eu"
+
+
+def check_media(values):
+    require(values.get(MEDIA_FLAG, "false") in ("true", "false"), "invalid production media flag")
+    if values.get(MEDIA_FLAG) != "true":
+        require(not any(values.get(key) for key in R2_CONNECTION_KEYS), "disabled media requires empty R2 settings")
+        return
+    require(values.get("STAFF_PHOTOS_R2_BUCKET") == PRODUCTION_BUCKET and
+            values.get("STAFF_PHOTOS_R2_REGION") == "auto" and values.get("STAFF_PHOTOS_R2_JURISDICTION") == "eu",
+            "production EU bucket and region required")
+    require(re.fullmatch(r"https://[a-f0-9]{32}\.eu\.r2\.cloudflarestorage\.com", values.get("STAFF_PHOTOS_R2_ENDPOINT", "")),
+            "invalid production EU R2 endpoint")
+    require(re.fullmatch("[a-f0-9]{32}", values.get("STAFF_PHOTOS_R2_ACCESS_KEY", "")) and
+            re.fullmatch("[a-f0-9]{64}", values.get("STAFF_PHOTOS_R2_SECRET_KEY", "")) and
+            values["STAFF_PHOTOS_R2_SECRET_KEY"] not in (values.get(key) for key in SECRET_KEYS),
+            "invalid or reused production R2 credentials")
 
 
 def runtime(path):
@@ -35,9 +58,10 @@ def runtime(path):
         if not line or line.startswith("#"):
             continue
         key, sep, value = line.partition("=")
-        require(sep and key in KEYS and key not in values, "unknown, malformed or duplicate runtime setting")
+        require(sep and key in KEYS | MEDIA_KEYS and key not in values, "unknown, malformed or duplicate runtime setting")
         values[key] = value
-    require(values.keys() == KEYS, "incomplete runtime settings")
+    require(KEYS <= values.keys(), "incomplete runtime settings")
+    check_media(values)
     require(re.fullmatch(r"postgres@sha256:[a-f0-9]{64}", values["POSTGRES_IMAGE"]), "official PG digest required")
     for key in SECRET_KEYS:
         require(re.fullmatch("[a-f0-9]{64}", values[key]) and len(set(values[key])) >= 8,
@@ -69,9 +93,24 @@ def render(values, release):
     # Compose interpolates the invoking shell before an env file. Pass only reviewed inputs.
     env = {k: os.environ[k] for k in ("PATH", "HOME", "DOCKER_CONFIG", "DOCKER_HOST") if k in os.environ}
     env.update(values, RELEASE_SHA=release["revision"], BACKEND_IMAGE=release["image"])
-    return subprocess.check_output(
-        ["docker", "compose", "--env-file", "/dev/null", "-p", "hookah_production",
-         "-f", str(PROFILE / "compose.yaml"), "config", "--format", "json"], env=env)
+    args = ["docker", "compose", "--env-file", "/dev/null", "-p", PRODUCTION_PROJECT, "-f", str(PROFILE / "compose.yaml")]
+    overlay = None
+    if values.get(MEDIA_FLAG) == "true":
+        media = {k: values[k] for k in R2_CONNECTION_KEYS}
+        media.update(STAFF_PHOTOS_R2_ENABLED="true", VENUE_INFO_MEDIA_R2_ENABLED="true", VENUE_INFO_PDF_WORKER_ENABLED="true")
+        doc = {"services": {"backend": {"environment": media}}, "volumes": {}}
+        add_pdf_worker(doc, release["image"], "linux/amd64")
+        overlay = json.dumps(doc).encode()
+        args.extend(["-f", "-"])
+    raw = subprocess.check_output(args + ["config", "--format", "json"], input=overlay, env=env)
+    if overlay is not None:
+        doc = json.loads(raw)
+        limits = doc["services"]["pdf-worker"]["ulimits"]
+        # Compose omits both zero fields in its JSON output. Persist an executable plan.
+        require(limits.get("core") in ({}, {"soft": 0, "hard": 0}, 0), "unexpected core dump limit")
+        limits["core"] = {"soft": 0, "hard": 0}
+        return json.dumps(doc).encode()
+    return raw
 
 
 def source_manifest():
@@ -85,7 +124,7 @@ def source_manifest():
     return rows
 
 
-def verify_published(release):
+def verify_published(release, evidence=None, pinned=None):
     run_id = str(release["ci_run"])
     data = json.loads(subprocess.check_output(["gh", "api", f"repos/{REPO}/actions/runs/{run_id}"]))
     require(data["id"] == release["ci_run"] and data["repository"]["full_name"] == REPO
@@ -93,10 +132,31 @@ def verify_published(release):
             and data["head_branch"] == "main" and data["head_sha"] == release["revision"]
             and data["path"] == ".github/workflows/ci.yml" and data["status"] == "completed"
             and data["conclusion"] == "success", "successful exact main CI required")
+    attempt = data["run_attempt"]
+    require(type(attempt) is int and attempt > 0, "invalid CI attempt")
+    receipt = {"repository": REPO, "workflow": data["path"], "attempt": attempt, "candidate": release}
+    # Match the verified publisher's retained step, independent of both the candidate and custodian file.
+    pages = json.loads(subprocess.check_output(["gh", "api", "--paginate", "--slurp",
+                       f"repos/{REPO}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"]))
+    publishers = [job for page in pages for job in page["jobs"] if job["name"] == "publish-ghcr"]
+    step = "Record verified image " + release["image"].split("@")[1]
+    require(len(publishers) == 1 and publishers[0].get("conclusion") == "success" and
+            publishers[0].get("head_sha") == release["revision"] and publishers[0].get("run_id") == release["ci_run"] and
+            publishers[0].get("run_attempt", attempt) == attempt and
+            sum(s.get("name") == step and s.get("conclusion") == "success" for s in publishers[0]["steps"]) == 1,
+            "no independently verified image digest in this publisher attempt")
+    if evidence is not None or pinned is not None:
+        require(evidence is not None and isinstance(pinned, str) and re.fullmatch("[a-f0-9]{64}", pinned),
+                "release evidence requires its independently held SHA-256")
+        raw = evidence.read_bytes()
+        require(hashlib.sha256(raw).hexdigest() == pinned and json.loads(raw) == receipt,
+                "release evidence differs from custodian pin or successful CI attempt")
+        return receipt
     name = f"ghcr-candidate-{release['revision']}-{data['run_attempt']}"
     with tempfile.TemporaryDirectory() as folder:
         subprocess.run(["gh", "run", "download", run_id, "--repo", REPO, "-n", name, "-D", folder], check=True)
         require(candidate(Path(folder) / "candidate.json") == release, "published candidate differs")
+    return receipt
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -144,8 +204,13 @@ def verify_images(values, release):
     require(re.fullmatch(r"postgres \(PostgreSQL\) 17\.\d+[^\n]*\n?", pg_version), "PostgreSQL 17 required")
     jar = subprocess.check_output(probe + ["--entrypoint", "cat", release["image"], "/app/app/lib/app-0.1.0.jar"])
     with zipfile.ZipFile(io.BytesIO(jar)) as package:
-        require("com/hookah/platform/backend/ProductionTrafficGate.class" in package.namelist(),
+        require(b"telegramDispatchAllowed" in package.read("com/hookah/platform/backend/ProductionTrafficGate.class"),
                 "backend does not support process-bound production admission")
+        if values.get(MEDIA_FLAG) == "true":
+            require(package.read("pdf-worker-protocol.txt") == b"HTPDF1\n" and
+                    PRODUCTION_BUCKET.encode() in package.read(
+                        "com/hookah/platform/backend/miniapp/venue/staff/StaffPhotoStorageKt.class"),
+                    "image lacks the production R2 or PDF worker contract")
     require(manifest(jar) == source_manifest(), "packaged migrations differ from approved V1–V143")
 
 
@@ -165,7 +230,11 @@ def compare_update(previous, desired):
     for doc in (old, new):
         doc.pop("x-hookah-transition", None)
         doc.pop("x-hookah-schema", None)
+        doc.pop("x-hookah-release-evidence", None)
         backend = doc["services"]["backend"]
+        if "pdf-worker" in doc["services"]:
+            worker = doc["services"]["pdf-worker"]
+            require(worker.pop("image") == backend["image"], "worker must use the admitted backend digest")
         del backend["image"], backend["environment"]["APP_VERSION"]
     require(old == new, "update permits only the backend digest and revision to change")
     return previous_sha
@@ -196,6 +265,7 @@ def check_target_image(plan):
             and labels.get("org.opencontainers.image.source") == SOURCE
             and labels.get("org.opencontainers.image.revision") == identity["revision"],
             "target image no longer matches the admitted revision and digest")
+    return image
 
 
 def verify_forward(previous, desired):
@@ -215,12 +285,31 @@ def matches_running_image(data, ref, image):
             and (data.get("ImageManifestDescriptor") or {}).get("digest") == child)
 
 
+class ProductionWorker(PdfWorkerAdmission):
+    run = staticmethod(subprocess.check_output)
+
+    def __init__(self, plan):
+        self.project = PRODUCTION_PROJECT
+        self.compose_file = plan
+        self.root = plan.resolve().parent
+
+    def verify_backend_socket(self, data):
+        self.pdf_mount([m for m in data["Mounts"] if m["Type"] == "volume"], writable=False)
+        host = data["HostConfig"]
+        self.pdf_host_mount({
+            "Mounts": [m for m in host.get("Mounts") or [] if m.get("Target") == PDF_IPC],
+            "Binds": [b for b in host.get("Binds") or [] if PDF_IPC in b.split(":")[1:2]],
+        }, writable=False)
+
+
 def verify_running(plan, *, database_only=False):
     doc = json.loads(plan.read_bytes())
-    compose = ["docker", "compose", "-p", "hookah_production", "--env-file", "/dev/null", "-f", str(plan)]
+    compose = ["docker", "compose", "-p", PRODUCTION_PROJECT, "--env-file", "/dev/null", "-f", str(plan)]
     hashes = dict(line.split() for line in subprocess.check_output(compose + ["config", "--hash", "*"],
                                                                  text=True).splitlines())
-    require(doc["name"] == "hookah_production" and set(hashes) == {"postgres", "backend"}, "wrong topology")
+    media = doc["services"]["backend"].get("environment", {}).get(PDF_FLAG) == "true"
+    services = {"postgres", "backend", "pdf-worker"} if media else {"postgres", "backend"}
+    require(doc["name"] == PRODUCTION_PROJECT and set(hashes) == services, "wrong topology")
     postgres_id = None
     for service, config_hash in hashes.items():
         if database_only and service != "postgres":
@@ -242,12 +331,20 @@ def verify_running(plan, *, database_only=False):
             postgres_id = data["Id"]
             volumes = [m for m in data["Mounts"] if m["Destination"] == "/var/lib/postgresql/data"]
             require(len(volumes) == 1 and volumes[0]["Type"] == "volume"
-                    and volumes[0]["Name"] == "hookah_production_pgdata" and volumes[0]["RW"]
-                    and nets == {"hookah_production_database"} and not data["HostConfig"]["PortBindings"],
+                    and volumes[0]["Name"] == f"{PRODUCTION_PROJECT}_pgdata" and volumes[0]["RW"]
+                    and nets == {f"{PRODUCTION_PROJECT}_database"} and not data["HostConfig"]["PortBindings"],
                     "unexpected database binding")
+        elif service == "pdf-worker":
+            require(ref == doc["services"]["backend"]["image"], "unexpected PDF image")
+            require(subprocess.check_output(["docker", "info", "--format", "{{.CgroupVersion}}"]).strip() == b"2",
+                    "PDF worker requires cgroup v2")
+            ProductionWorker(plan).observe_pdf_worker(data, {
+                "id": data["Image"], "pdf_worker_env_hash": digest(sorted(image["Config"].get("Env", [])))})
         else:
+            if media:
+                ProductionWorker(plan).verify_backend_socket(data)
             require(data["State"].get("Health", {}).get("Status", "healthy") == "healthy"
-                    and nets == {"hookah_production_database", "hookah_production_outbound"}
+                    and nets == {f"{PRODUCTION_PROJECT}_database", f"{PRODUCTION_PROJECT}_outbound"}
                     and data["HostConfig"]["PortBindings"] == {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18080"}]},
                     "unexpected backend network binding")
 
@@ -266,23 +363,30 @@ def plan_schema(document):
     return version
 
 
-def database_identity(plan, transition_from=None):
+def cluster_identity(plan):
     cid = verify_running(plan, database_only=True)
-    network = json.loads(subprocess.check_output(["docker", "network", "inspect", "hookah_production_database"]))[0]
-    volume = json.loads(subprocess.check_output(["docker", "volume", "inspect", "hookah_production_pgdata"]))[0]
+    network = json.loads(subprocess.check_output(["docker", "network", "inspect", f"{PRODUCTION_PROJECT}_database"]))[0]
+    volume = json.loads(subprocess.check_output(["docker", "volume", "inspect", f"{PRODUCTION_PROJECT}_pgdata"]))[0]
     require(network["Internal"] and cid in network["Containers"] and volume["Driver"] == "local" and not volume.get("Options")
-            and all((r.get("Labels") or {}).get("com.docker.compose.project") == "hookah_production"
+            and all((r.get("Labels") or {}).get("com.docker.compose.project") == PRODUCTION_PROJECT
                     for r in (network, volume)), "database network or volume is not project-owned")
     identity = pg_query(cid, "postgres", "SELECT system_identifier, oid FROM pg_control_system(), pg_database "
                         "WHERE datname=current_database() AND current_database()='hookah_prod' "
+                        "AND to_regnamespace('hookah_recovery') IS NULL "
+                        "AND (SELECT rolcanlogin FROM pg_roles WHERE rolname='hookah_app') "
                         "AND pg_get_userbyid(datdba)='hookah_app' AND current_setting('server_version_num')::int/10000=17;")
     require(re.fullmatch(r"[1-9][0-9]*\|[1-9][0-9]*", identity), "unexpected PostgreSQL database identity")
+    return {"container": cid, "cluster_and_db": identity, "network": network["Id"],
+            "volume": volume["Name"], "volume_created": volume["CreatedAt"]}
+
+
+def database_identity(plan, transition_from=None):
+    identity = cluster_identity(plan)
     allowed = [plan_schema(json.loads(plan.read_bytes()))]
     if transition_from is not None:
         allowed.append(plan_schema(json.loads(transition_from.read_bytes())))
-    check_history(pg_query(cid, "hookah_app", (PROFILE / "history.sql").read_text()), allowed)
-    return {"container": cid, "cluster_and_db": identity, "network": network["Id"],
-            "volume": volume["Name"], "volume_created": volume["CreatedAt"]}
+    check_history(pg_query(identity["container"], "hookah_app", (PROFILE / "history.sql").read_text()), allowed)
+    return identity
 
 
 def verified_database(plan, recipient=None, transition_from=None):
@@ -294,10 +398,31 @@ def verified_database(plan, recipient=None, transition_from=None):
     return observed["container"]
 
 
-def enroll_database(plan, recipient):
+def require_empty_enrollment(cid):
+    # First enrollment is documented before customer data. An ordinary bind must never
+    # legitimize a raw pg_restore that predates the recovery schema marker.
+    require(pg_query(cid, "postgres", "SELECT NOT EXISTS (SELECT FROM users) "
+                     "AND NOT EXISTS (SELECT FROM venues) AND NOT EXISTS (SELECT FROM orders) "
+                     "AND NOT EXISTS (SELECT FROM bookings) AND NOT EXISTS (SELECT FROM invoices)") == "t" and
+            pg_query(cid, "postgres", (PROFILE / "recovery-admission.sql").read_text()),
+            "first enrollment requires a clean installation before business data or grants")
+
+
+def enroll_database(plan, recipient, *, first_install=False):
     require(re.fullmatch(r"age1[ac-hj-np-z02-9]{58}", recipient), "a native public age recipient is required")
     subprocess.run(["age", "-r", recipient], input=b"", stdout=subprocess.DEVNULL, check=True)
-    record = dict(database_identity(plan), recipient=recipient)
+    target = database_identity(plan)
+    hold = GATE.with_name("recovery-hold")
+    if os.path.lexists(hold):
+        incident = json.loads(hold.read_bytes())
+        require(not first_install and incident.get("target") == target and
+                incident.get("plan_sha256") == hashlib.sha256(plan.read_bytes()).hexdigest(),
+                "first binding must match the enrolled recovery target")
+    else:
+        require(first_install and not os.path.lexists(GATE.with_name("recovery-accepted")),
+                "confirm a genuine first installation or enroll the replacement through recovery-begin")
+    record = dict(target, recipient=recipient)
+    require_empty_enrollment(record["container"])
     with tempfile.NamedTemporaryFile(dir=plan.parent) as f:
         f.write(json.dumps(record).encode())
         f.flush()
@@ -314,12 +439,16 @@ def main():
         cmd = actions.add_parser(name)
         cmd.add_argument("plan", type=Path)
         cmd.add_argument("recipient")
+        if name == "bind-db":
+            cmd.add_argument("--first-install", action="store_true", help="operator confirmed this is the first production installation")
     for name in ("check", "admit"):
         cmd = actions.add_parser(name)
         cmd.add_argument("runtime", type=Path)
         cmd.add_argument("candidate", type=Path)
         if name == "admit":
             cmd.add_argument("output", type=Path)
+            cmd.add_argument("--evidence", type=Path, help="previously qualified release receipt from custody")
+            cmd.add_argument("--evidence-sha256", help="independent pin recorded at live admission")
             cmd.add_argument("--previous", type=Path, help="current admitted Compose file for an update")
     args = parser.parse_args()
     if args.action == "history":
@@ -327,7 +456,7 @@ def main():
     elif args.action == "running":
         verify_running(args.plan)
     elif args.action == "bind-db":
-        enroll_database(args.plan, args.recipient)
+        enroll_database(args.plan, args.recipient, first_install=args.first_install)
     elif args.action == "backup-db":
         print(verified_database(args.plan, args.recipient))
         return
@@ -347,9 +476,13 @@ def main():
                                               "to": release_identity(plan)}
                 document = json.dumps(plan).encode()
                 confirm_transition(args.previous, document)
-            verify_published(release)
+            receipt = verify_published(release, args.evidence, args.evidence_sha256)
             verify_images(values, release)
             verify_bot(values)
+            # Bind provenance to the private plan without placing runtime secrets in custody evidence.
+            plan = json.loads(document)
+            plan["x-hookah-release-evidence"] = receipt
+            document = json.dumps(plan).encode()
             # Publish a complete private plan once, after all checks; never overwrite a running plan.
             with tempfile.NamedTemporaryFile(dir=args.output.parent) as tmp:
                 tmp.write(document)

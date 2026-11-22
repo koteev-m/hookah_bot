@@ -7,6 +7,8 @@ import com.sun.net.httpserver.HttpServer
 import io.ktor.server.config.MapApplicationConfig
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.net.InetSocketAddress
 import java.net.URI
 import java.util.UUID
@@ -35,6 +37,19 @@ class StaffPhotoStorageTest {
         }
         assertTrue(StaffPhotoStorageConfig.from(config(), "staging").enabled)
         assertFalse(StaffPhotoStorageConfig.from(config(), "production").enabled)
+        val production =
+            config(
+                "bucket" to STAFF_PHOTO_PRODUCTION_BUCKET,
+                "accessKey" to "a".repeat(32),
+                "secretKey" to "b".repeat(64),
+            )
+        production.put("venue.infoMedia.enabled", "true")
+        for (flag in listOf("venue.staffPhotos.enabled", "venue.infoMedia.enabled")) {
+            assertTrue(StaffPhotoStorageConfig.from(production, "prod", flag).enabled)
+            assertFalse(StaffPhotoStorageConfig.from(production, "staging", flag).enabled)
+        }
+        production.put("venue.staffPhotos.endpoint", "https://example.r2.dev")
+        assertFalse(StaffPhotoStorageConfig.from(production, "prod").enabled)
         for (change in listOf(
             "secretKey" to "",
             "enabled" to "false",
@@ -50,7 +65,9 @@ class StaffPhotoStorageTest {
         assertFalse(StaffPhotoStorageConfig.from(config(), "staging").toString().contains("synthetic"))
     }
 
-    @Test fun `SDK signed PUT GET HEAD DELETE use isolated keys bounded body and safe errors`() =
+    @ParameterizedTest
+    @ValueSource(strings = [STAFF_PHOTO_STAGING_BUCKET, STAFF_PHOTO_PRODUCTION_BUCKET])
+    fun `SDK signed PUT GET HEAD DELETE use isolated keys bounded body and safe errors`(bucket: String) =
         runBlocking<Unit> {
             val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
             val key = "staff-photos/${UUID.randomUUID()}.jpg"
@@ -60,7 +77,7 @@ class StaffPhotoStorageTest {
             val methods = mutableListOf<String>()
             server.createContext("/") { exchange ->
                 methods.add(exchange.requestMethod)
-                assertEquals("/$STAFF_PHOTO_STAGING_BUCKET/$key", exchange.requestURI.path)
+                assertEquals("/$bucket/$key", exchange.requestURI.path)
                 assertTrue(exchange.requestHeaders.getFirst("Authorization").startsWith("AWS4-HMAC-SHA256"))
                 if (fail) {
                     val error =
@@ -99,7 +116,7 @@ class StaffPhotoStorageTest {
             try {
                 R2StaffPhotoStorage(
                     URI("http://127.0.0.1:${server.address.port}"),
-                    STAFF_PHOTO_STAGING_BUCKET,
+                    bucket,
                     "synthetic-access",
                     "synthetic-secret",
                 ).use {
