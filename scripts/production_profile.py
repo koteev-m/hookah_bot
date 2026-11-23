@@ -450,6 +450,17 @@ def database_identity(plan, transition_from=None):
 def verified_database(plan, recipient=None, transition_from=None):
     record = json.loads((plan.parent / "postgres-binding.json").read_bytes())
     expected_recipient = record.pop("recipient")
+    pending = GATE.with_name(".install-intent")
+    decision = record.pop("successor_review_sha256", None)
+    require(decision is None or os.path.lexists(pending), "missing successor enrollment receipt")
+    if os.path.lexists(pending):
+        intent = json.loads(pending.read_bytes())
+        if decision is not None or intent["mode"] == "install-successor":
+            require(intent["mode"] == "install-successor" and intent.get("registered") is True and
+                    isinstance(decision, str) and re.fullmatch("[0-9a-f]{64}", decision) and
+                    intent["retirement_review_sha256"] == decision and intent["pristine"] == record and
+                    intent["recipient"] == expected_recipient and Path(intent["target"]["path"]).parent == plan.resolve().parent,
+                    "database binding differs from completed successor enrollment")
     require(recipient is None or recipient == expected_recipient, "backup recipient differs from enrolled recovery key")
     observed = database_identity(plan, transition_from)
     require(observed == record, "PostgreSQL differs from installation binding")
@@ -466,9 +477,22 @@ def require_empty_enrollment(cid):
             "first enrollment requires a clean installation before business data or grants")
 
 
-def enroll_database(plan, recipient, *, first_install=False):
+def check_recipient(recipient):
     require(re.fullmatch(r"age1[ac-hj-np-z02-9]{58}", recipient), "a native public age recipient is required")
     subprocess.run(["age", "-r", recipient], input=b"", stdout=subprocess.DEVNULL, check=True)
+
+
+def publish_binding(plan, record):
+    with tempfile.NamedTemporaryFile(dir=plan.parent) as f:
+        f.write(json.dumps(record).encode())
+        f.flush()
+        os.fsync(f.fileno())
+        os.link(f.name, plan.parent / "postgres-binding.json")
+    sync_directory(plan.parent)
+
+
+def enroll_database(plan, recipient, *, first_install=False):
+    check_recipient(recipient)
     target = database_identity(plan)
     hold = GATE.with_name("recovery-hold")
     if os.path.lexists(hold):
@@ -482,17 +506,13 @@ def enroll_database(plan, recipient, *, first_install=False):
     pending = GATE.with_name(".install-intent")
     if os.path.lexists(pending):
         verify_plan_pin(plan)
-        installed = json.loads(pending.read_bytes())["target"]
+        intent = json.loads(pending.read_bytes())
+        require(intent.get("mode") != "install-successor", "clean successor requires its signed enrollment")
+        installed = intent["target"]
         require(installed["path"] == str(plan.resolve()) and installed["sha256"] == hashlib.sha256(plan.read_bytes()).hexdigest(),
                 "cannot enroll a different pending installation")
-    record = dict(target, recipient=recipient)
-    require_empty_enrollment(record["container"])
-    with tempfile.NamedTemporaryFile(dir=plan.parent) as f:
-        f.write(json.dumps(record).encode())
-        f.flush()
-        os.fsync(f.fileno())
-        os.link(f.name, plan.parent / "postgres-binding.json")
-    sync_directory(plan.parent)
+    require_empty_enrollment(target["container"])
+    publish_binding(plan, dict(target, recipient=recipient))
     if os.path.lexists(pending):
         pending.unlink()
         sync_directory(GATE.parent)

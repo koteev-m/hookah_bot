@@ -1,6 +1,6 @@
 """Operate the durable production traffic gate on the production Docker/Caddy host."""
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import hashlib
 import io
 import json
@@ -223,6 +223,9 @@ RECOVERY_SCOPES = {"owners_and_grants", "users", "orders", "bookings", "billing"
 def begin_recovery(args, hold):
     require(re.fullmatch("[0-9a-f]{64}", args.point_sha256), "custodian manifest digest required")
     require(not os.path.lexists(GATE) and not os.path.lexists(GATE.with_name("activate")), "close ingress first")
+    intent = GATE.with_name(".install-intent")
+    require(not os.path.lexists(intent) or read_install(intent)["mode"] != "install-successor",
+            "clean successor cannot be converted into a recovery attempt")
     require(not compose(args.plan, "ps", "-aq", "backend"), "begin before creating the replacement backend")
     # Record the hold before the first database probe. A failed or interrupted probe leaves ingress closed.
     record = {"source_manifest": args.point_sha256}
@@ -247,13 +250,17 @@ def begin_recovery(args, hold):
     print("Replacement enrolled. Ingress held; DB identity", db["cluster_and_db"], "review challenge", record["challenge"])
 
 
-def owner_review(args):
+def owner_review_bytes(args):
     mode = args.review.lstat()
     require(stat.S_ISREG(mode.st_mode) and mode.st_uid == os.geteuid() and not mode.st_mode & 0o077,
             "private operator review required")
     raw = args.review.read_bytes()
     require(hashlib.sha256(raw).hexdigest() == args.review_sha256, "review differs from owner's approved digest")
-    review = json.loads(raw)
+    return raw
+
+
+def owner_review(args):
+    review = json.loads(owner_review_bytes(args))
     require(isinstance(review, dict), "expected an owner decision document")
     return review
 
@@ -417,6 +424,155 @@ def save_install(record):
     flush_dir()
 
 
+def read_install(path):
+    st = path.lstat()
+    require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and st.st_nlink == 1 and not st.st_mode & 0o077,
+            "invalid installation record")
+    return json.loads(path.read_bytes())
+
+
+def install_target(plan):
+    daemon = subprocess.check_output(["docker", "info", "--format", "{{.ID}}"], text=True).strip()
+    require(daemon, "unknown Docker daemon")
+    return {"daemon": daemon, "path": str(plan.resolve()), "sha256": hashlib.sha256(plan.read_bytes()).hexdigest()}
+
+
+def check_retired_project():
+    # A stopped archive can remain on this daemon if Docker cannot restart it.
+    candidates = set()
+    for selector in ("label=com.docker.compose.project=hookah-production", "name=^/hookah-production([-_].*|$)"):
+        candidates.update(subprocess.check_output(["docker", "ps", "-aq", "--no-trunc", "--filter", selector],
+                                                  text=True).splitlines())
+    for cid in candidates:
+        require(re.fullmatch("[0-9a-f]{64}", cid), "unknown predecessor container")
+        state = subprocess.check_output(["docker", "inspect", "--format",
+                                         "{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}", cid], text=True)
+        require(state.strip() == "exited no", "historical production is active or can restart")
+
+
+def successor_database_sql(pristine):
+    return (r"\set pristine " + ("true" if pristine else "false") + "\n" +
+            (PROFILE / "clean-successor.sql").read_text())
+
+
+def check_successor_database(cid, *, pristine):
+    sql = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\n" + successor_database_sql(pristine)
+    require(pg_query(cid, "postgres", sql + "\nCOMMIT;") == "t",
+            "successor database contains unexpected data, objects or authority")
+
+
+@contextmanager
+def successor_binding_window(cid):
+    # Wait out earlier writes, then take the validation snapshot. Keep every application
+    # table write-locked until the binding is durable; connection loss releases the locks.
+    locks = r"""BEGIN;
+SET LOCAL lock_timeout='5s';
+SET LOCAL search_path=pg_catalog;
+SELECT format('LOCK TABLE %s IN SHARE MODE', oid::regclass) FROM pg_catalog.pg_class
+WHERE relnamespace='public'::regnamespace AND relkind IN ('r','p') ORDER BY oid \gexec
+"""
+    with subprocess.Popen(["docker", "exec", "-i", cid, "psql", "-XqAtw", "-v", "ON_ERROR_STOP=1",
+                           "-U", "postgres", "-d", "hookah_prod"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          text=True, **host.lock_args()) as session:
+        try:
+            session.stdin.write(locks + successor_database_sql(False) + "\n")
+            session.stdin.flush()
+            require(session.stdout.readline().strip() == "t", "successor no longer clean at binding")
+            yield
+        finally:
+            session.stdin.close()  # EOF rolls back the lock-only transaction.
+        require(session.wait() == 0, "successor validation session failed")
+
+
+def verify_retirement(args, target):
+    def unique_fields(pairs):
+        fields = dict(pairs)
+        require(len(fields) == len(pairs), "duplicate field in successor decision")
+        return fields
+
+    raw = owner_review_bytes(args)
+    review = json.loads(raw, object_pairs_hook=unique_fields)
+    fields = {"target", "decision", "predecessor", "data_disposition", "owner", "custodian",
+              "history", "custodian_key", "retirement_evidence_sha256"}
+    require(isinstance(review, dict) and set(review) == fields, "incomplete retirement approval")
+    require(review["target"] == target, "different successor target")
+    evidence = review["retirement_evidence_sha256"]
+    require(review["decision"] == "RETIRE_AND_ENROLL_CLEAN_SUCCESSOR" and review["predecessor"] == "hookah-production" and
+            review["data_disposition"] == "RETAIN_ARCHIVES_AND_RECEIPTS_WITHOUT_RESTORE" and
+            all(isinstance(review[k], str) and review[k].strip() for k in ("owner", "custodian", "history")) and
+            isinstance(evidence, str) and re.fullmatch("[0-9a-f]{64}", evidence), "incomplete retirement approval")
+    key = review["custodian_key"]
+    require(isinstance(key, str) and re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/]{68}", key),
+            "owner must pin the custodian's Ed25519 public signing key")
+    require(args.signature.is_file() and not args.signature.is_symlink(), "custodian signature file required")
+    with tempfile.NamedTemporaryFile(mode="w") as signers:
+        signers.write("custodian " + key + "\n")
+        signers.flush()
+        subprocess.run(["ssh-keygen", "-Y", "verify", "-f", signers.name, "-I", "custodian",
+                        "-n", "hookah-tootah-clean-successor-v1", "-s", str(args.signature)], input=raw, check=True)
+
+
+def successor_enrollment(args):
+    plan = args.plan
+    profile.verify_plan_pin(plan)
+    pending = GATE.with_name(".install-intent")
+    binding = plan.parent / "postgres-binding.json"
+    require({p.name for p in GATE.parent.iterdir()} <=
+            {".operator.lock", pending.name, pending.with_suffix(".pending").name}, "conflicting production decisions")
+    record = read_install(pending)
+    require("registered" not in record, "database already enrolled; retain the successor receipt")
+    finish = os.path.lexists(binding)
+    if finish:
+        require(args.action == "bind-successor" and record.get("retirement_review_sha256") == args.review_sha256,
+                "database already enrolled")
+    installation = install_target(plan)
+    require(record["mode"] == "install-successor" and record["target"] == installation,
+            "different installation or daemon")
+    check_edge_closed()
+    check_retired_project()
+    doc = json.loads(plan.read_bytes())
+    images = {doc["services"]["backend"]["image"]: check_target_image(plan)}
+    pg_image = doc["services"]["postgres"]["image"]
+    images[pg_image] = profile.check_postgres_image(pg_image)
+    resources, running = install_inventory(plan, doc, record["allowed"], images)
+    require(resources == record["resources"] and running == set(doc["services"]), "successor installation changed")
+    profile.check_recipient(args.recipient)
+    pg = verify_running(plan)
+    db = profile.database_identity(plan)
+    require(record.get("pristine") == db and pg == db["container"] == record["resources"]["postgres"],
+            "not the freshly initialized successor cluster")
+    profile.require_empty_enrollment(pg)
+    target = {"installation": installation, "release": profile.release_identity(doc),
+              "database": db, "recipient": args.recipient}
+    if args.action == "successor-target":
+        check_successor_database(pg, pristine=False)
+        print(json.dumps(target, sort_keys=True))
+        return
+
+    verify_retirement(args, target)
+    # Seal the install intent before the no-replace binding. After interruption only this
+    # exact countersigned decision can finish. Retain the intent as the host's receipt.
+    require(record.get("retirement_review_sha256", args.review_sha256) == args.review_sha256,
+            "different successor decision already recorded")
+    record["retirement_review_sha256"] = args.review_sha256
+    record["recipient"] = args.recipient
+    expected_binding = dict(db, recipient=args.recipient, successor_review_sha256=args.review_sha256)
+    with successor_binding_window(pg):
+        require(profile.database_identity(plan) == db, "successor changed before binding publication")
+        check_edge_closed()
+        if finish:
+            st = binding.lstat()
+            require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and not st.st_mode & 0o077 and
+                    json.loads(binding.read_bytes()) == expected_binding,
+                    "interrupted successor binding differs; refusing replacement")
+            profile.sync_directory(plan.parent)
+        else:
+            save_install(record)
+            profile.publish_binding(plan, expected_binding)
+        record["registered"] = True
+        save_install(record)
+
+
 def install_closed(action, plan):
     profile.verify_plan_pin(plan)
     doc = json.loads(plan.read_bytes())
@@ -434,23 +590,22 @@ def install_closed(action, plan):
     if action != "close":
         require(not any(os.path.lexists(GATE.with_name(n)) for n in ("open", "activate")), "close production ingress first")
         check_edge_closed()
+    if action == "install-successor":
+        require("x-hookah-transition" not in doc and plan_schema(doc) == 143, "new admitted V143 plan required")
+        check_retired_project()
     images = {identity["image"]: check_target_image(plan), pg["image"]: profile.check_postgres_image(pg["image"])}
     pending = GATE.with_name(".install-intent")
     hold = GATE.with_name("recovery-hold")
     binding = plan.parent / "postgres-binding.json"
     require(not os.path.lexists(binding), "database already enrolled; use normal production commands")
-    daemon = subprocess.check_output(["docker", "info", "--format", "{{.ID}}"], text=True).strip()
-    require(daemon, "unknown Docker daemon")
-    target = {"daemon": daemon, "path": str(plan.resolve()), "sha256": hashlib.sha256(plan.read_bytes()).hexdigest()}
+    target = install_target(plan)
     if os.path.lexists(pending):
-        metadata = pending.lstat()
-        require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.geteuid() and metadata.st_nlink == 1
-                and not metadata.st_mode & 0o077, "invalid installation record")
-        record = json.loads(pending.read_bytes())
+        record = read_install(pending)
+        require("registered" not in record or action == "close", "successor already registered; investigate the binding")
         require(record["target"] == target and (record["mode"] == action or action == "close" or
                 action == "recovery-start" and record["mode"] == "install-db"), "different pending installation")
     else:
-        require(action in ("install", "install-db") and set(p.name for p in GATE.parent.iterdir()) <=
+        require(action in ("install", "install-db", "install-successor") and set(p.name for p in GATE.parent.iterdir()) <=
                 {".operator.lock", pending.with_suffix(".pending").name}, "existing production decisions")
         record = {"target": target, "mode": action, "allowed": [], "resources": {}}
 
@@ -512,6 +667,15 @@ def install_closed(action, plan):
             cid = verify_running(plan, database_only=True)
             require(cid == record["resources"][service], "unexpected PostgreSQL container")
             host.verify_container(service, json.loads(subprocess.check_output(["docker", "inspect", cid]))[0])
+            if action == "install-successor":
+                db = cluster_identity(plan)
+                require(db["container"] == cid, "different successor PostgreSQL container")
+                if "pristine" not in record:
+                    require(record["allowed"] == ["postgres"], "cannot establish pre-migration identity")
+                    check_successor_database(cid, pristine=True)
+                    record["pristine"] = db
+                    save_install(record)
+                require(record["pristine"] == db, "successor PostgreSQL identity changed")
     if action != "install-db":
         verify_running(plan)
     check_edge_closed()
@@ -720,7 +884,7 @@ def operate(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
-    for name in ("install", "install-db", "recovery-start", "close", "stage", "resume", "inspect", "rollback", "open", "start-closed"):
+    for name in ("install", "install-db", "install-successor", "recovery-start", "close", "stage", "resume", "inspect", "rollback", "open", "start-closed"):
         cmd = sub.add_parser(name)
         if name in ("stage", "resume", "inspect", "rollback"):
             cmd.add_argument("previous", type=Path)
@@ -730,6 +894,14 @@ def main():
     begin = sub.add_parser("recovery-begin")
     begin.add_argument("plan", type=Path)
     begin.add_argument("point_sha256")
+    for name in ("successor-target", "bind-successor"):
+        cmd = sub.add_parser(name)
+        cmd.add_argument("plan", type=Path)
+        cmd.add_argument("recipient")
+        if name == "bind-successor":
+            cmd.add_argument("review", type=Path)
+            cmd.add_argument("review_sha256", help="digest independently received from the owner")
+            cmd.add_argument("signature", type=Path, help="custodian SSH signature of the same review bytes")
     for name in ("recovery-accept", "recovery-telegram-reviewed"):
         accept = sub.add_parser(name)
         accept.add_argument("plan", type=Path)
@@ -746,7 +918,11 @@ def main():
             raise
         pending_close = (args.action == "close" and os.path.lexists(GATE.with_name(".install-intent")) and
                          not os.path.lexists(args.plan.parent / "postgres-binding.json"))
-        if pending_close or args.action in ("install", "install-db", "recovery-start"):
+        if args.action in ("successor-target", "bind-successor"):
+            successor_enrollment(args)
+            if args.action == "successor-target":
+                return
+        elif pending_close or args.action in ("install", "install-db", "install-successor", "recovery-start"):
             install_closed(args.action, args.plan)
         else:
             if args.action in ("stage", "resume", "rollback", "start-closed"):
