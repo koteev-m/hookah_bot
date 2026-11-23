@@ -7,6 +7,7 @@ exercise the same operations in uniquely named disposable Compose projects.
 import argparse
 import contextlib
 import fcntl
+from functools import partial
 import hashlib
 import http.client
 import io
@@ -94,13 +95,18 @@ def private_json(path):
     return json.loads(path.read_text())
 
 
-def run(argv, *, timeout=60, payload=None):
+def run(argv, *, timeout=60, payload=None, lease=None):
     env = {k: v for k, v in os.environ.items() if not k.startswith(('COMPOSE_', 'DOCKER_'))}
     # Do not let .env or ambient Compose settings select another project/daemon.
     env['DOCKER_HOST'] = 'unix:///var/run/docker.sock'
+    inherited = ()
+    if lease is not None and argv[0] == "docker":
+        fd, validate = lease
+        validate()
+        inherited = (fd,)
     try:
         p = subprocess.run(argv, input=payload, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           timeout=timeout, env=env)
+                           timeout=timeout, env=env, pass_fds=inherited)
     except subprocess.TimeoutExpired as exc:
         raise Refused('COMMAND_TIMEOUT_OUTCOME_UNKNOWN') from exc
     require(p.returncode == 0, 'COMMAND_FAILED_' + Path(argv[0]).name)
@@ -259,7 +265,7 @@ def shared_lock(path=LOCK, wait=30):
                 require(time.monotonic() < deadline, 'SHARED_DOCKER_LOCK_BUSY')
                 time.sleep(0.1)
         check()
-        yield
+        yield fd, check
         check()
     finally:
         os.close(fd)
@@ -743,7 +749,7 @@ def main():
         else:
             require(args.directory is not None, 'DIRECTORY_REQUIRED')
             require(sys.platform == 'linux' and os.geteuid() == 0, 'LINUX_TRUSTED_SYSTEM_OPERATOR_REQUIRED')
-            with shared_lock(wait=args.lock_wait):
+            with shared_lock(wait=args.lock_wait) as lease:
                 if args.action == 'init-config':
                     require(args.directory.is_dir() and args.directory.resolve() == args.directory
                             and args.directory.stat().st_uid == 0
@@ -761,7 +767,7 @@ def main():
                     atomic(args.directory / 'config.json', c)
                     print(json.dumps({'status': 'CONFIG_CREATED', 'telegram': 'false'}))
                     return 0
-                runtime = Staging(args.directory)
+                runtime = Staging(args.directory, runner=partial(run, lease=lease))
                 record = private_json(args.candidate) if args.candidate else None
                 review = private_json(args.compatibility_review) if args.compatibility_review else None
                 require(args.action not in ('install', 'deploy') or record is not None, 'CANDIDATE_REQUIRED')

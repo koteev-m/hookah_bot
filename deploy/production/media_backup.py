@@ -1,18 +1,20 @@
 """Encrypted private media backup and isolated recovery for the production profile."""
 from contextlib import closing, contextmanager
-import fcntl
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import re
+import resource
+import signal
 import subprocess
 import sys
 import tarfile
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "scripts"))
+import production_host as host
 from production_profile import MEDIA_FLAG, PRODUCTION_BUCKET, Refused, check_media, require, verified_database
 
 INVENTORY = HERE / "media-inventory.sql"
@@ -97,11 +99,11 @@ def storage_client(env):
 
 
 @contextmanager
-def snapshot(cid, *, repair=False):
+def snapshot(cid, *, repair=False, pass_fds=()):
     # Keep the exporting transaction alive until pg_dump finishes importing its MVCC snapshot.
     with subprocess.Popen(["docker", "exec", "-i", cid, "psql", "-XqAtw", "-v", "ON_ERROR_STOP=1",
                            "-U", "hookah_app", "-d", "hookah_prod"], stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, text=True) as session:
+                          stdout=subprocess.PIPE, text=True, pass_fds=pass_fds) as session:
         try:
             if repair:
                 session.stdin.write("BEGIN; SET LOCAL lock_timeout='5s'; LOCK TABLE venues, venue_settings, "
@@ -123,20 +125,58 @@ def snapshot(cid, *, repair=False):
         require(session.wait() == 0, "snapshot transaction failed")
 
 
-def capture(cid, env, point, recipient, media, metadata_only):
-    with snapshot(cid) as (token, rows):
+def backup_space(point, storage, rows):
+    pgdata, db, wal = storage
+    # One short USTAR name per object, each body padded to 512, two end blocks.
+    tar_bytes = 0
+    if rows is not None:
+        blocks = 1024 + sum(512 + ((row[0] + 511) // 512) * 512 for row in rows.values())
+        tar_bytes = ((blocks + 10239) // 10240) * 10240
+    # pg_database_size is a sizing input, not a hard limit on a logical dump.
+    # Budget double DB size plus framing overhead for the streamed age files.
+    def encrypted_size(size):
+        return size + (size // 65536 + 1) * 16 + 4096
+
+    dump_limit = encrypted_size(2 * db)
+    media_limit = encrypted_size(tar_bytes) if rows is not None else 0
+    host.check_space([(pgdata, wal), (point, dump_limit + media_limit)])
+    return dump_limit, media_limit
+
+
+def file_limit(size):
+    # Applied only in the age child. An underestimated dump must fail before consuming the neighbours' reserve.
+    if size is None:
+        return None
+
+    def apply():
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        limit = min(n for n in (size, soft, hard) if n != resource.RLIM_INFINITY)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+
+    return apply
+
+
+def capture(cid, env, point, recipient, media, metadata_only, *, storage=None, pass_fds=()):
+    with snapshot(cid, pass_fds=pass_fds) as (token, rows):
         require(media or not rows, "database snapshot contains media without admitted R2")
+        dump_limit = media_limit = None
+        if storage is not None:
+            dump_limit, media_limit = backup_space(point, storage, rows if media and not metadata_only else None)
         with subprocess.Popen(["docker", "exec", cid, "pg_dump", "-w", "-U", "hookah_app", "-d", "hookah_prod",
-                               "-Fc", "--snapshot", token], stdout=subprocess.PIPE) as dump:
+                               "-Fc", "--snapshot", token], stdout=subprocess.PIPE, pass_fds=pass_fds) as dump:
             try:
-                subprocess.run(["age", "-r", recipient, "-o", point / "database.dump.age"], stdin=dump.stdout, check=True)
+                subprocess.run(["age", "-r", recipient, "-o", point / "database.dump.age"], stdin=dump.stdout, check=True,
+                               preexec_fn=file_limit(dump_limit), pass_fds=pass_fds)
             finally:
                 dump.stdout.close()
             require(dump.wait() == 0, "database dump failed")
     if not media or metadata_only:
         return
     client = storage_client(env)
-    with subprocess.Popen(["age", "-r", recipient, "-o", point / "media.tar.age"], stdin=subprocess.PIPE) as encrypt:
+    with subprocess.Popen(["age", "-r", recipient, "-o", point / "media.tar.age"], stdin=subprocess.PIPE,
+                          preexec_fn=file_limit(media_limit), pass_fds=pass_fds) as encrypt:
         try:
             archive(rows, client, encrypt.stdin)
         finally:
@@ -168,14 +208,13 @@ def backup_target(plan, recipient):
 def repair_object(plan, recipient, key, source):
     from production_traffic import GATE, check_edge_closed
     require(KEY.fullmatch(key), "invalid object key")
-    with (GATE.parent / ".operator.lock").open("ab") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with host.operator_lock(GATE):
         require(not any(os.path.lexists(GATE.with_name(name)) for name in ("open", "activate", "recovery-hold")),
                 "private repair requires closed ingress and the authoritative database")
         check_edge_closed()
         cid, _, mode = backup_target(plan, recipient)
         require(mode == "true", "private media required")
-        with snapshot(cid, repair=True) as (_, rows):
+        with snapshot(cid, repair=True, **host.lock_args()) as (_, rows):
             row = rows.get(key)
             require(row and row[3], "key no longer current or eligible for repair")
             with source.open("rb") as original:
@@ -187,20 +226,55 @@ def repair_object(plan, recipient, key, source):
                 verified_bytes(actual, row)
 
 
+def backup(plan, point, recipient, metadata_only):
+    from production_profile import PRODUCTION_PROJECT, pg_query, plan_schema
+
+    def cold():
+        require(not any(os.path.lexists(host.GATE.with_name(n)) for n in ("open", "activate")) and
+                not subprocess.check_output(["docker", "ps", "-q", "--filter", "label=com.docker.compose.project=" +
+                                             PRODUCTION_PROJECT, "--filter", "label=com.docker.compose.service=backend"]).strip(),
+                "close traffic and stop the production backend before media backup")
+
+    with host.operator_lock():
+        binding = backup_target(plan, recipient)
+        cid, _, mode = binding
+        media = mode == "true"
+        require(media or not metadata_only, "metadata-only requires media mode")
+        if media:
+            cold()
+        storage = host.database_space(cid)
+        point.mkdir(mode=0o700)
+        doc = json.loads(plan.read_bytes())
+        (point / "schema-version").write_text(str(plan_schema(doc)) + "\n")
+        (point / "postgres-image").write_bytes(subprocess.check_output(["docker", "inspect", "--format", "{{.Config.Image}}", cid]))
+        require(backup_target(plan, recipient) == binding, "backup target changed before snapshot")
+        capture(cid, doc["services"]["backend"]["environment"], point, recipient, media, metadata_only, storage=storage, **host.lock_args())
+        members = ["database.dump.age", "postgres-image", "schema-version"]
+        if media:
+            if not metadata_only:
+                members.append("media.tar.age")
+            coordinate = pg_query(cid, "postgres", "SELECT system_identifier, oid, timeline_id, pg_current_wal_insert_lsn() "
+                                  "FROM pg_control_system(), pg_control_checkpoint(), pg_database WHERE datname=current_database()")
+            (point / "source-coordinate").write_text(coordinate + "\n")
+            members.append("source-coordinate")
+            cold()
+        require(backup_target(plan, recipient) == binding, "backup target changed during capture")
+        host.check_space([(point, 0), (storage[0], 0)])
+        partial = point / "SHA256SUMS.partial"
+        with partial.open("xb") as output:
+            subprocess.run(["shasum", "-a", "256", *members], cwd=point, stdout=output, check=True)
+        partial.rename(point / "SHA256SUMS")
+        print("Encrypted backup written")
+
+
 def main():
-    action, plan, recipient = sys.argv[1:4]
-    plan = Path(plan)
-    if action == "repair-object" and len(sys.argv) == 6:
-        return repair_object(plan, recipient, sys.argv[4], Path(sys.argv[5]))
-    cid, backend_id, mode = backup_target(plan, recipient)
-    if action == "target":
-        print(cid, backend_id, mode)
-        return
-    require(action == "capture", "unexpected backup operation")
-    require(sys.argv[4] == " ".join((cid, backend_id, mode)), "backup target changed before snapshot")
-    point = Path(sys.argv[5])
-    capture(cid, json.loads(plan.read_bytes())["services"]["backend"]["environment"], point, recipient,
-            mode == "true", sys.argv[6:] == ["--metadata-only"])
+    args = sys.argv[1:]
+    if len(args) == 5 and args[0] == "repair-object":
+        return repair_object(Path(args[1]), args[2], args[3], Path(args[4]))
+    require(len(args) in (4, 5) and args[0] == "backup" and (len(args) == 4 or args[4] == "--metadata-only"),
+            "expected admitted compose file, new directory, recipient and optional --metadata-only")
+    os.umask(0o077)
+    backup(Path(args[1]), Path(args[2]), args[3], len(args) == 5)
 
 
 if __name__ == "__main__":

@@ -157,9 +157,11 @@ def rehearse(root, image):
             raise AssertionError("ordinary bind accepted an unmarked populated database")
         export_snapshot = media_backup.snapshot
         @contextmanager
-        def concurrent_change(target):
-            with export_snapshot(target) as frozen:
+        def concurrent_change(target, *, pass_fds):
+            with export_snapshot(target, pass_fds=pass_fds) as frozen:
                 sql(target, f"UPDATE venue_info_section_media SET is_visible=false WHERE object_key='{keys[0]}'")
+                require(sql(target, f"SELECT is_visible FROM venue_info_section_media WHERE object_key='{keys[0]}'") == "f",
+                        "concurrent transaction did not commit the visibility change")
                 yield frozen
         with patch.object(media_backup, "snapshot", concurrent_change):
             old_pin = capture(byte_point, cid, recipient, image, include_bytes=True)

@@ -1862,10 +1862,15 @@ jobs:
           PY
       - name: Rehearse production media recovery after loss of the source database
         env:
+          DOCKER_HOST: unix:///var/run/docker.sock
           RECOVERY_TEST_PG: postgres@sha256:1eada89ec2521ae0f61125f6bdaf83bbbf88a43fecda48d112a83bb92df75c36
         run: |
           ./gradlew --no-daemon --max-workers=1 :backend:app:installDist --console=plain
           docker pull --platform linux/amd64 "$RECOVERY_TEST_PG"
+          # The disposable runner plays the shared production host during the repair-object test.
+          if ! test -e /run/lock/shared-staging-docker.lock; then
+            sudo install -o root -g "$(id -gn)" -m 0660 /dev/null /run/lock/shared-staging-docker.lock
+          fi
           python3 -B scripts/test-production-media-restore.py "$RECOVERY_TEST_PG"
       - name: Test staging release controller and executor
         run: python3 -B -m unittest discover -s scripts -p test_staging_release.py -v

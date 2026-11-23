@@ -1,5 +1,19 @@
 # Project Status
 
+## HT-PRODUCTION-SHARED-HOST-ADAPT-02 — общий VPS
+
+Основной checkout, ветка `codex/ht-production-media-ready-01-primary` и локальная
+`main` обновлены fast-forward до `37f3d645ddf892fe3c0aa216356e41c146f0a23f`.
+Локальный diff связывает production с общей блокировкой Docker и отдельной slice
+1,25 CPU, ограничивает память сервисов и проверяет место для образов, БД/WAL и копий.
+[Порядок подключения apex и закрытой установки](docs/PRODUCTION_PILOT.md).
+
+На macOS проверены Compose, Caddy с двумя staging-сайтами и wildcard, JVM 21 с
+тестовой PostgreSQL 17 и адресные регрессии. Для подтверждения трёх контейнеров под
+реальными лимитами остаётся Linux-репетиция с systemd/cgroup v2. Перед закрытой
+установкой нужно подтвердить участие Clubs в том же flock и свежий запас ресурсов.
+Серверных действий и публикации не было.
+
 ## HT-PRODUCTION-MEDIA-POSTFIX-02 — исправления заключительного ревью
 
 Основной checkout, ветка `codex/ht-production-media-ready-01-primary`,

@@ -1,6 +1,6 @@
-"""Operate the durable production traffic gate on the dedicated Docker/Caddy host."""
+"""Operate the durable production traffic gate on the production Docker/Caddy host."""
 import argparse
-import fcntl
+from contextlib import ExitStack
 import hashlib
 import io
 import json
@@ -15,6 +15,8 @@ import tempfile
 import time
 import zipfile
 
+import production_host as host
+import production_profile as profile
 from production_profile import PRODUCTION_PROJECT, ProductionWorker, GATE, IMAGE_RE, PROFILE, SOURCE, Refused, check_target_image, cluster_identity, confirm_transition, matches_running_image, pg_query, plan_schema, require, verified_database, verify_running
 
 sys.path.insert(0, str(PROFILE))
@@ -22,7 +24,8 @@ from smoke import image_assets, probe
 
 def compose(plan, *args):
     return subprocess.check_output(["docker", "compose", "--env-file", "/dev/null", "-p", PRODUCTION_PROJECT,
-                                    "-f", str(plan), *args], text=True).strip()
+                                    "-f", str(plan), *args], text=True,
+                                   **({} if args[0] in ("ps", "config") else host.lock_args())).strip()
 
 
 def start_release(plan):
@@ -123,9 +126,9 @@ def rollback_worker(old, new):
 
 
 def check_gate_binary(plan):
-    jar = subprocess.check_output(["docker", "run", "--rm", "--pull", "never", "--platform", "linux/amd64",
+    jar = subprocess.check_output(["docker", "run", "--rm", "--cgroup-parent", host.SLICE, "--pull", "never", "--platform", "linux/amd64",
                                    "--network", "none", "--read-only", "--entrypoint", "cat", backend(plan)["image"],
-                                   "/app/app/lib/app-0.1.0.jar"])
+                                   "/app/app/lib/app-0.1.0.jar"], **host.lock_args())
     with zipfile.ZipFile(io.BytesIO(jar)) as package:
         gate_class = package.read("com/hookah/platform/backend/ProductionTrafficGate.class")
         require(b"recovery-hold" in gate_class and b"telegramDispatchAllowed" in gate_class,
@@ -155,8 +158,24 @@ def check_edge_open(sha, instance, polling):
     require(status == "401", "public guest API did not enforce authentication")
 
 
+def recovery_scratch(*, create=False):
+    directory = GATE.with_name(".recovery-write")
+    if create:
+        directory.mkdir(mode=0o700, exist_ok=True)
+    st = directory.lstat()
+    require(stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) == 0o700
+            and st.st_dev == GATE.parent.stat().st_dev, "untrusted recovery write directory")
+    return directory
+
+
 def publish(path, value, mode=0o644):
-    with tempfile.NamedTemporaryFile(dir=GATE.parent, delete=False) as f:
+    directory = GATE.parent
+    if path == GATE.with_name("recovery-hold"):
+        host.lock_args()  # Validate both leases before publishing or retrying a recovery decision.
+        # A killed writer can leave its unique file here. Each retry recomputes the
+        # decision and exclusively creates a fresh file; no abandoned bytes are adopted.
+        directory = recovery_scratch(create=True)
+    with tempfile.NamedTemporaryFile(dir=directory, delete=False) as f:
         tmp = Path(f.name)
         try:
             f.write((value + "\n").encode())
@@ -290,6 +309,214 @@ def accept_recovery(args, hold):
     publish(hold, json.dumps(record, sort_keys=True))
 
 
+def install_inventory(plan, doc, allowed, images):
+    """Identify even stopped containers and allocated resources before adopting an interrupted up."""
+    project = PRODUCTION_PROJECT
+    label = "label=com.docker.compose.project=" + project
+
+    def lines(*args):
+        return subprocess.check_output(["docker", *args], text=True).splitlines()
+
+    def inspect(*args):
+        data, = json.loads(subprocess.check_output(["docker", *args]))
+        return data
+
+    hashes = dict(line.split() for line in compose(plan, "config", "--hash", "*").splitlines())
+    found = {}
+    running = set()
+    owned_ids = set()
+    attached_networks = {}
+    ids = set(lines("ps", "-aq", "--no-trunc", "--filter", label))
+    # A reserved name with foreign labels must not be handed to Compose.
+    for line in lines("ps", "-a", "--no-trunc", "--format", "{{.ID}} {{.Names}}"):
+        cid, name = line.split()
+        if name.startswith(project + "-") or name.startswith(project + "_"):
+            require(cid in ids, "foreign container occupies the production namespace")
+    for cid in ids:
+        c = inspect("inspect", cid)
+        labels = c["Config"]["Labels"]
+        service = labels.get("com.docker.compose.service")
+        require(service in allowed and service not in found and re.fullmatch("[0-9a-f]{64}", cid) and
+                c["Id"] == cid and c["Name"] == f"/{project}-{service}-1" and
+                labels.get("com.docker.compose.project") == project and
+                labels.get("com.docker.compose.container-number") == "1" and
+                labels.get("com.docker.compose.oneoff", "").lower() == "false" and
+                labels.get("com.docker.compose.project.working_dir") == str(plan.resolve().parent) and
+                labels.get("com.docker.compose.project.config_files") == str(plan.resolve()) and
+                labels.get("com.docker.compose.config-hash") == hashes[service],
+                "unrecognized partial installation container")
+        config = doc["services"][service]
+        require(matches_running_image(c, config["image"], images[config["image"]]), "partial container image mismatch")
+        actual = {(m["Type"], m["Destination"], m["Source"] if m["Type"] == "bind" else m.get("Name"), m["RW"])
+                  for m in c["Mounts"] if m["Type"] in ("bind", "volume")}
+        expected = {(m["type"], m["target"], m["source"] if m["type"] == "bind" else doc["volumes"][m["source"]]["name"],
+                     not m.get("read_only", False)) for m in config.get("volumes", []) if m["type"] in ("bind", "volume")}
+        require(actual == expected, "partial container storage differs from plan")
+        limits = c["HostConfig"]
+        memory, cpu = host.LIMITS[service]
+        ports = {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18080"}]} if service == "backend" else {}
+        require((limits.get("PortBindings") or {}) == ports and limits.get("CgroupParent") == host.SLICE and
+                limits.get("Memory") == limits.get("MemorySwap") == memory * host.MIB and
+                limits.get("NanoCpus") == cpu and (service != "pdf-worker" or limits.get("NetworkMode") == "none"),
+                "partial container ports or isolation differ from plan")
+        networks = c["NetworkSettings"]["Networks"]
+        expected_networks = ({"none"} if service == "pdf-worker" else
+                             {doc["networks"][key]["name"] for key in config["networks"]})
+        require(isinstance(networks, dict) and set(networks) == expected_networks
+                and limits.get("NetworkMode") in expected_networks,
+                "partial container network attachments differ from plan: " + service)
+        for name, endpoint in networks.items():
+            if name != "none":
+                attached_networks.setdefault(name, set()).add(endpoint.get("NetworkID") or "")
+        found[service] = cid
+        owned_ids.add(cid)
+        if c["State"]["Running"]:
+            running.add(service)
+    for kind in ("volume", "network"):
+        declared = {v["name"]: key for key, v in doc[kind + "s"].items()}
+        tagged = set(lines(kind, "ls", "--filter", label, "--format", "{{.Name}}"))
+        named = set(lines(kind, "ls", "--format", "{{.Name}}"))
+        require(tagged == named.intersection(declared) and (allowed or not tagged), "unowned production " + kind)
+        if kind == "network":
+            require(attached_networks.keys() <= tagged, "container uses a network outside the production project")
+        for name in tagged:
+            data = inspect(kind, "inspect", name)
+            key = declared[name]
+            labels = data.get("Labels") or {}
+            require(data["Name"] == name and labels.get("com.docker.compose.project") == project and
+                    labels.get("com.docker.compose." + kind) == key and
+                    (data.get("Options") or {}) == doc[kind + "s"][key].get("driver_opts", {}),
+                    "unexpected production " + kind)
+            if kind == "network":
+                require(data["Driver"] == "bridge" and data["Internal"] == doc["networks"][key].get("internal", False)
+                        and set(data.get("Containers") or {}) <= owned_ids and
+                        attached_networks.get(name, set()) <= {"", data["Id"]}, "unexpected network attachment")
+                identity = data["Id"]
+            else:
+                require(data["Driver"] == "local" and set(lines("ps", "-aq", "--no-trunc", "--filter", "volume=" + name))
+                        <= owned_ids, "unexpected volume attachment")
+                identity = [data["CreatedAt"], data["Mountpoint"]]
+            found[kind + "/" + key] = identity
+    return found, running
+
+
+def save_install(record):
+    # Fixed scratch name makes a kill before rename safely retryable under both locks.
+    path = GATE.with_name(".install-intent")
+    tmp = path.with_suffix(".pending")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    with os.fdopen(fd, "w") as f:
+        st = os.fstat(fd)
+        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and st.st_nlink == 1 and
+                not st.st_mode & 0o077, "invalid installation scratch file")
+        f.truncate(0)
+        json.dump(record, f)
+        f.flush()
+        os.fsync(fd)
+    os.replace(tmp, path)
+    flush_dir()
+
+
+def install_closed(action, plan):
+    profile.verify_plan_pin(plan)
+    doc = json.loads(plan.read_bytes())
+    release = doc["x-hookah-release-evidence"]["candidate"]
+    identity = profile.release_identity(doc)
+    require(all(release.get(k) == v for k, v in identity.items()), "plan differs from admitted candidate")
+    pg = doc["services"]["postgres"]
+    env = doc["services"]["backend"]["environment"]
+    values = {k: env[k] for k in (profile.KEYS | profile.R2_CONNECTION_KEYS) if k in env}
+    values.update(POSTGRES_IMAGE=pg["image"], POSTGRES_ADMIN_PASSWORD=pg["environment"]["POSTGRES_PASSWORD"],
+                  PRODUCTION_MEDIA_ENABLED=env["VENUE_INFO_MEDIA_R2_ENABLED"])
+    profile.check_media(values)
+    require(json.loads(profile.render(values, release)) == {k: v for k, v in doc.items() if not k.startswith("x-hookah-")},
+            "plan differs from the production Compose profile")
+    if action != "close":
+        require(not any(os.path.lexists(GATE.with_name(n)) for n in ("open", "activate")), "close production ingress first")
+        check_edge_closed()
+    images = {identity["image"]: check_target_image(plan), pg["image"]: profile.check_postgres_image(pg["image"])}
+    pending = GATE.with_name(".install-intent")
+    hold = GATE.with_name("recovery-hold")
+    binding = plan.parent / "postgres-binding.json"
+    require(not os.path.lexists(binding), "database already enrolled; use normal production commands")
+    daemon = subprocess.check_output(["docker", "info", "--format", "{{.ID}}"], text=True).strip()
+    require(daemon, "unknown Docker daemon")
+    target = {"daemon": daemon, "path": str(plan.resolve()), "sha256": hashlib.sha256(plan.read_bytes()).hexdigest()}
+    if os.path.lexists(pending):
+        metadata = pending.lstat()
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.geteuid() and metadata.st_nlink == 1
+                and not metadata.st_mode & 0o077, "invalid installation record")
+        record = json.loads(pending.read_bytes())
+        require(record["target"] == target and (record["mode"] == action or action == "close" or
+                action == "recovery-start" and record["mode"] == "install-db"), "different pending installation")
+    else:
+        require(action in ("install", "install-db") and set(p.name for p in GATE.parent.iterdir()) <=
+                {".operator.lock", pending.with_suffix(".pending").name}, "existing production decisions")
+        record = {"target": target, "mode": action, "allowed": [], "resources": {}}
+
+    if action != "close":
+        permitted = {".operator.lock", pending.name, pending.with_suffix(".pending").name}
+        if record["mode"] == "install-db":
+            permitted.add("recovery-hold")
+            if os.path.lexists(GATE.with_name(".recovery-write")):
+                permitted.add(recovery_scratch().name)
+        require(all(p.name in permitted for p in GATE.parent.iterdir()), "conflicting production decisions")
+
+    def observe():
+        found, running = install_inventory(plan, doc, record["allowed"], images)
+        require(all(found.get(k) == v for k, v in record["resources"].items()), "partial installation resource replaced")
+        record["resources"] = found
+        return running
+
+    running = observe()
+    if action == "close":
+        GATE.unlink(missing_ok=True)
+        GATE.with_name("activate").unlink(missing_ok=True)
+        flush_dir()
+        save_install(record)
+        for service in ("backend", "pdf-worker", "postgres"):
+            if service in running:
+                cid = record["resources"][service]
+                subprocess.run(["docker", "stop", cid], check=True, stdout=subprocess.DEVNULL, **host.lock_args())
+        require(not observe(), "partial production installation did not stop")
+        check_edge_closed()
+        return
+    require(action != "install" or not os.path.lexists(hold), "recovery enrollment required")
+    require("backend" in running or not subprocess.check_output(["ss", "-Hlt", "sport = :18080"]).strip(),
+            "production port already in use")
+    host.verify_slice()
+    allocation = host.bootstrap_space(plan, doc, record["resources"].get("volume/pgdata"))
+    host.image_space(images, allocations=[allocation], reserve_release=True)
+    if action == "recovery-start":
+        require(json.loads(hold.read_bytes()).get("plan_sha256") == target["sha256"], "enroll the replacement database first")
+    services = ["postgres"]
+    if action != "install-db":
+        if "pdf-worker" in doc["services"]:
+            services.append("pdf-worker")
+        services.append("backend")
+    for service in services:
+        profile.verify_plan_pin(plan)
+        if action == "recovery-start" and service != "postgres":
+            incident = json.loads(hold.read_bytes())
+            require(incident.get("plan_sha256") == target["sha256"] and incident.get("target") == cluster_identity(plan),
+                    "enroll the replacement database first")
+        if service not in record["allowed"]:
+            record["allowed"].append(service)
+        save_install(record)
+        wait = ["--wait", "--wait-timeout", "180" if service == "postgres" else "120"] if service != "backend" else []
+        compose(plan, "up", "-d", "--no-recreate", "--pull", "never", "--no-deps", *wait, service)
+        observe()
+        require(service in record["resources"], "expected production container after up")
+        save_install(record)
+        if service == "postgres":
+            cid = verify_running(plan, database_only=True)
+            require(cid == record["resources"][service], "unexpected PostgreSQL container")
+            host.verify_container(service, json.loads(subprocess.check_output(["docker", "inspect", cid]))[0])
+    if action != "install-db":
+        verify_running(plan)
+    check_edge_closed()
+
+
 def operate(args):
     hold = GATE.with_name("recovery-hold")
     if args.action == "recovery-begin":
@@ -324,7 +551,7 @@ def operate(args):
         cid = compose(args.plan, "ps", "--no-trunc", "-aq", "backend")
         require(re.fullmatch(r"[0-9a-f]{64}", cid) and cid == args.backend_id and
                 state(args.plan, args.plan, cid) == "OLD stopped", "expected the stopped backend pinned before close")
-        subprocess.run(["docker", "start", cid], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(["docker", "start", cid], check=True, stdout=subprocess.DEVNULL, **host.lock_args())
         require(state(args.plan, args.plan, cid) == "OLD running", "started backend changed identity")
         verify_running(args.plan)
         verified_database(args.plan)
@@ -350,7 +577,7 @@ def operate(args):
         if "pdf-worker" in new_doc["services"]:
             worker_id, installed = rollback_worker(old, new)
             if installed == new:
-                subprocess.run(["docker", "stop", worker_id], check=True, stdout=subprocess.DEVNULL)
+                subprocess.run(["docker", "stop", worker_id], check=True, stdout=subprocess.DEVNULL, **host.lock_args())
                 require(rollback_worker(old, new) == (worker_id, new) and
                         subprocess.check_output(["docker", "inspect", "--format", "{{.State.Status}}", worker_id],
                                                 text=True).strip() in ("created", "exited"),
@@ -377,7 +604,7 @@ def operate(args):
             require(cid and state(args.previous, args.plan, cid) == "NEW stopped", "NEW identity changed")
             activation.unlink(missing_ok=True)
             flush_dir()
-            subprocess.run(["docker", "start", cid], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["docker", "start", cid], check=True, stdout=subprocess.DEVNULL, **host.lock_args())
             await_readiness(sha, image_assets(args.plan))
             verify_running(args.plan)
             verified_database(args.plan)
@@ -401,7 +628,7 @@ def operate(args):
         cid = compose(args.plan, "ps", "-aq", "backend")
         require(cid and state(args.plan, args.plan, cid) in ("OLD running", "OLD stopped"),
                 "cannot identify backend to close")
-        subprocess.run(["docker", "stop", cid], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(["docker", "stop", cid], check=True, stdout=subprocess.DEVNULL, **host.lock_args())
         require(compose(args.plan, "ps", "-aq", "backend") == cid and
                 state(args.plan, args.plan, cid) == "OLD stopped", "backend did not drain")
         check_edge_closed()
@@ -493,7 +720,7 @@ def operate(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
-    for name in ("close", "stage", "resume", "inspect", "rollback", "open", "start-closed"):
+    for name in ("install", "install-db", "recovery-start", "close", "stage", "resume", "inspect", "rollback", "open", "start-closed"):
         cmd = sub.add_parser(name)
         if name in ("stage", "resume", "inspect", "rollback"):
             cmd.add_argument("previous", type=Path)
@@ -509,9 +736,29 @@ def main():
         accept.add_argument("review", type=Path)
         accept.add_argument("review_sha256")
     args = parser.parse_args()
-    with (GATE.parent / ".operator.lock").open("ab") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        operate(args)
+    with ExitStack() as locks:
+        try:
+            locks.enter_context(host.operator_lock(GATE))
+        except (Refused, OSError) as error:
+            if args.action == "close":
+                raise Refused(f"close could not acquire operator locks ({error}); traffic may still be open. "
+                              "Retry close after lock release and confirm HTTPS 503.") from error
+            raise
+        pending_close = (args.action == "close" and os.path.lexists(GATE.with_name(".install-intent")) and
+                         not os.path.lexists(args.plan.parent / "postgres-binding.json"))
+        if pending_close or args.action in ("install", "install-db", "recovery-start"):
+            install_closed(args.action, args.plan)
+        else:
+            if args.action in ("stage", "resume", "rollback", "start-closed"):
+                host.verify_slice()
+                base = getattr(args, "previous", args.plan)
+                path, db, wal = host.database_space(verified_database(base, transition_from=args.plan))
+                target = base if args.action == "rollback" else args.plan
+                services = json.loads(target.read_bytes())["services"]
+                release = args.action in ("stage", "rollback")
+                host.image_space(host.plan_images(services), allocations=[(path, db + wal if release else 0)],
+                                 reserve_release=release)
+            operate(args)
     print("OK", args.action)
 
 

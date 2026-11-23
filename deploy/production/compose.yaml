@@ -1,6 +1,12 @@
 name: hookah_production
 services:
   postgres:
+    cgroup_parent: hookahproduction.slice
+    annotations:
+      org.systemd.property.MemorySwapMax: "uint64 0"
+    cpus: 0.5
+    mem_limit: 512m
+    memswap_limit: 512m
     image: ${POSTGRES_IMAGE:?select verified PostgreSQL 17 digest}
     platform: linux/amd64
     restart: unless-stopped
@@ -26,6 +32,12 @@ services:
       retries: 40
 
   backend:
+    cgroup_parent: hookahproduction.slice
+    annotations:
+      org.systemd.property.MemorySwapMax: "uint64 0"
+    cpus: 0.75
+    mem_limit: 768m
+    memswap_limit: 768m
     image: ${BACKEND_IMAGE:?select verified GHCR digest}
     platform: linux/amd64
     restart: unless-stopped

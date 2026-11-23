@@ -29,6 +29,18 @@ def command(*args, **options):
     return subprocess.check_output(args, **options)
 
 
+def require_isolated_daemon(project=None):
+    if os.getenv("DOCKER_HOST") != "unix:///var/run/docker.sock" or os.getenv("DOCKER_CONTEXT"):
+        raise ValueError("rehearsal needs an explicitly selected local system Docker daemon")
+    if os.path.lexists(profile.host.GATE.parent):
+        raise ValueError("production decision directory present; use an isolated rehearsal host")
+    for cmd in (("ps", "-aq"), ("volume", "ls", "-q"), ("network", "ls", "--filter", "type=custom", "-q")):
+        ids = set(command("docker", *cmd).split())
+        owned = set(command("docker", *cmd, "--filter", "label=com.docker.compose.project=" + project).split()) if project else set()
+        if ids != owned:
+            raise ValueError("rehearsal needs an isolated daemon without other containers, volumes or custom networks")
+
+
 def derived_image(base, tag, revision, *, broken_worker=False):
     jar = profile.ROOT / "backend/app/build/install/app/lib/app-0.1.0.jar"
     archive = io.BytesIO()
@@ -64,6 +76,7 @@ def fixture_operator(project, root, port, argv):
             or not root.name.startswith(project) or root.stat().st_uid != os.geteuid() or root.stat().st_mode & 0o077
             or any(Path(arg).resolve().parent != root for arg in argv[1:])):
         raise ValueError("operator rehearsal requires its disposable project and private fixture plans")
+    require_isolated_daemon(project)
     profile.PRODUCTION_PROJECT = traffic.PRODUCTION_PROJECT = project
     profile.GATE = traffic.GATE = root / "gate" / "open"
     traffic.check_edge_closed = lambda: check_fixture_edge(root, port)
@@ -124,8 +137,12 @@ def exercise(root, project, images, pg, caddy):
         admission = profile.ProductionWorker(plan)
         admission.project = project
         assert command("docker", "info", "--format", "{{.CgroupVersion}}", text=True).strip() == "2"
-        for service in ("backend", "pdf-worker"):
+        for service in ("postgres", "backend", "pdf-worker"):
             data = json.loads(command("docker", "inspect", compose(plan, "ps", "-q", service)))[0]
+            profile.host.verify_container(service, data)
+            if service == "postgres":
+                assert data["State"]["Health"]["Status"] == "healthy"
+                continue
             assert data["Config"]["Image"] == image and data["State"]["Running"]
             assert data["Image"] in (manifest["Id"], index_id)
             if data["Image"] != manifest["Id"]:
@@ -257,6 +274,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if not __debug__:
         parser.error("rehearsal requires Python assertions")
+    # Fail before creating fixture images on a daemon that cannot exercise the real contract.
+    require_isolated_daemon()
+    profile.host.verify_slice()
     for image in (args.backend, args.postgres, args.caddy):
         command("docker", "image", "inspect", image)
     name = "ht-pilot-fixture-" + uuid.uuid4().hex[:12]
