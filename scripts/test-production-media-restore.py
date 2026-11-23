@@ -49,6 +49,15 @@ def migrated_source(root, image):
     try:
         wait_postgres(cid, tcp=True)
         sql(cid, "CREATE ROLE hookah_app LOGIN PASSWORD 'synthetic-app'; ALTER DATABASE hookah_prod OWNER TO hookah_app")
+        traffic.check_successor_database(cid, pristine=True)
+        sql(cid, "CREATE ROLE obsolete_custodian NOLOGIN")
+        try:
+            traffic.check_successor_database(cid, pristine=True)
+        except Refused:
+            pass
+        else:
+            raise AssertionError("successor accepted an inherited role")
+        sql(cid, "DROP ROLE obsolete_custodian")
         port = recovery.docker("port", cid, "5432/tcp").removeprefix("127.0.0.1:")
         require(port.isdecimal(), "source fixture must bind to loopback")
         java = root / "Migrate.java"
@@ -61,6 +70,22 @@ class Migrate {
 }""")
         subprocess.run(["java", "-cp", str(libs / "*"), java, f"jdbc:postgresql://127.0.0.1:{port}/hookah_prod"],
                        check=True, stdout=subprocess.DEVNULL)
+        traffic.check_successor_database(cid, pristine=False)
+        with traffic.host.operator_lock(root / "open"), traffic.successor_binding_window(cid):
+            writer = subprocess.run(["docker", "exec", "-i", cid, "psql", "-XqAtw", "-v", "ON_ERROR_STOP=1",
+                                     "-v", "VERBOSITY=verbose", "-U", "hookah_app", "-d", "hookah_prod"],
+                                    input="SET lock_timeout='250ms'; UPDATE loyalty_payment_policy SET first_item_id=2;",
+                                    capture_output=True, text=True, timeout=10)
+            require(writer.returncode and "55P03" in writer.stderr and "lock timeout" in writer.stderr,
+                    "concurrent writer was not fenced by successor registration")
+        sql(cid, "UPDATE loyalty_payment_policy SET first_item_id=2")
+        try:
+            traffic.check_successor_database(cid, pristine=False)
+        except Refused:
+            pass
+        else:
+            raise AssertionError("successor accepted a non-bootstrap loyalty policy")
+        sql(cid, "UPDATE loyalty_payment_policy SET first_item_id=1")
         yield cid
     finally:
         recovery.docker("rm", "-f", cid)

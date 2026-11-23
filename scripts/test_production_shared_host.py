@@ -1,6 +1,7 @@
 """Regression tests for the shared host, using only fixture state."""
 from contextlib import ExitStack, contextmanager, nullcontext
 import fcntl
+import hashlib
 import http.client
 import json
 import os
@@ -117,6 +118,7 @@ class SharedProductionTest(unittest.TestCase):
 
     def test_operator_commands_refuse_before_docker_on_busy_lock(self):
         actions = {"install": ["p"], "install-db": ["p"], "recovery-start": ["p"], "stage": ["old","new"],
+                   "install-successor": ["p"], "successor-target": ["p","r"], "bind-successor": ["p","r","d","pin","sig"],
                    "resume": ["old","new"], "rollback": ["old","new"], "open": ["p"], "close": ["p"],
                    "start-closed": ["p","id"], "recovery-begin": ["p","pin"], "recovery-accept": ["p","r","pin"],
                    "recovery-telegram-reviewed": ["p","r","pin"]}
@@ -331,6 +333,7 @@ class SharedProductionTest(unittest.TestCase):
                       STAFF_PHOTOS_R2_ENDPOINT="https://" + "d"*32 + ".eu.r2.cloudflarestorage.com",
                       STAFF_PHOTOS_R2_ACCESS_KEY="a"*32, STAFF_PHOTOS_R2_SECRET_KEY="b"*64)
         doc = json.loads(profile.render(values, fixture.release))
+        doc["x-hookah-schema"] = 143
         doc["x-hookah-release-evidence"] = {"candidate": fixture.release}
         plan = root / "plan"
         original = json.dumps(doc).encode()
@@ -342,8 +345,8 @@ class SharedProductionTest(unittest.TestCase):
         model = root / "engine"
         model.write_text("{}")
 
-        def operator(action, *, fault="", success=True):
-            result = subprocess.run([sys.executable, "-B", __file__, "install-fixture", str(root), action, fault],
+        def operator(action, *args, fault="", success=True):
+            result = subprocess.run([sys.executable, "-B", __file__, "install-fixture", str(root), action, fault, *args],
                                     capture_output=True, text=True, timeout=30)
             if success:
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -352,6 +355,121 @@ class SharedProductionTest(unittest.TestCase):
             return result
 
         return root, plan, doc, original, budget, qualification, model, operator
+
+    def test_successor_install_records_pristine_identity_before_backend(self):
+        root, _, _, _, budget, qualification, model, op = self.install_fixture()
+        budget.write_text(json.dumps(qualification))
+        self.assertIn("historical production", op("install-successor", fault="legacy-active", success=False).stderr)
+        self.assertFalse((root / "mutations").exists())
+        self.assertIn("unexpected data", op("install-successor", fault="dirty", success=False).stderr)
+        self.assertEqual(json.loads(model.read_bytes()), {"postgres": True})
+        self.assertNotIn("pristine", json.loads((root / "ingress/.install-intent").read_bytes()))
+        self.assertIn("different pending", op("install", success=False).stderr)
+        self.assertIn("cannot be converted", op("recovery-begin", success=False).stderr)
+        op("install-successor")
+        intent = json.loads((root / "ingress/.install-intent").read_bytes())
+        self.assertEqual(intent["pristine"]["container"], intent["resources"]["postgres"])
+        self.assertEqual(set(json.loads(model.read_bytes())), {"postgres", "backend", "pdf-worker"})
+        self.assertIn("identity changed", op("install-successor", fault="other-db", success=False).stderr)
+
+    def test_successor_preserves_inactive_predecessor_and_refuses_restartable_container(self):
+        cid = "9"*64
+        for state in ("exited no", "running no", "exited always", "paused unless-stopped"):
+            with self.subTest(state=state), patch.object(subprocess, "check_output", side_effect=[cid, cid, state]) as cli:
+                if state == "exited no":
+                    traffic.check_retired_project()
+                else:
+                    with self.assertRaisesRegex(Refused, "historical production"):
+                        traffic.check_retired_project()
+                self.assertEqual([c.args[0][1] for c in cli.call_args_list], ["ps", "ps", "inspect"])
+
+    def test_successor_binding_requires_owner_pin_custodian_signature_and_exact_live_target(self):
+        root, plan, _, _, budget, qualification, _, op = self.install_fixture()
+        budget.write_text(json.dumps(qualification))
+        op("install-successor")
+        key = root / "test-custodian"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
+        age = root / "test-age"
+        subprocess.run(["age-keygen", "-o", age], stderr=subprocess.DEVNULL, check=True)
+        recipient = subprocess.check_output(["age-keygen", "-y", age], text=True).strip()
+        target = json.loads(op("successor-target", recipient).stdout)
+        review = {"target": target, "owner": "fixture owner", "custodian": "fixture custodian",
+                  "custodian_key": " ".join(key.with_suffix(".pub").read_text().split()[:2]),
+                  "history": "Synthetic experimental installation was retired",
+                  "retirement_evidence_sha256": hashlib.sha256(b"fixture retirement evidence").hexdigest(),
+                  "predecessor": "hookah-production", "data_disposition": "RETAIN_ARCHIVES_AND_RECEIPTS_WITHOUT_RESTORE",
+                  "decision": "RETIRE_AND_ENROLL_CLEAN_SUCCESSOR"}
+        decision = root / "retirement.json"
+        signature = root / "retirement.json.sig"
+        def write_decision(document):
+            decision.write_text(json.dumps(document))
+            decision.chmod(0o600)
+            return hashlib.sha256(decision.read_bytes()).hexdigest()
+
+        def bind(pin, **kw):
+            return op("bind-successor", recipient, decision, pin, signature, **kw)
+
+        pin = write_decision(review)
+        self.assertIn("custodian signature file required", bind(pin, success=False).stderr)
+        subprocess.run(["ssh-keygen", "-Y", "sign", "-f", key, "-n", "hookah-tootah-clean-successor-v1", decision],
+                       check=True, stderr=subprocess.DEVNULL)
+        outsider = root / "other-signer"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", outsider], check=True)
+        bad_sig = root / "other.sig"
+        signed = subprocess.check_output(["ssh-keygen", "-Y", "sign", "-f", outsider, "-n", "hookah-tootah-clean-successor-v1"],
+                                         input=decision.read_bytes(), stderr=subprocess.DEVNULL)
+        bad_sig.write_bytes(signed)
+        self.assertIn("verify", op("bind-successor", recipient, decision, pin, bad_sig, success=False).stderr)
+        self.assertIn("approved digest", bind("0"*64, success=False).stderr)
+        duplicate = '{"owner":"another owner",' + decision.read_text()[1:]
+        decision.write_text(duplicate)
+        self.assertIn("duplicate field", bind(hashlib.sha256(decision.read_bytes()).hexdigest(), success=False).stderr)
+        for field in ("history", "custodian", "retirement_evidence_sha256", "data_disposition"):
+            with self.subTest(field=field):
+                self.assertIn("incomplete retirement", bind(write_decision(dict(review, **{field: ""})), success=False).stderr)
+        self.assertIn("different successor", bind(write_decision(dict(review, target=dict(target, recipient="other"))),
+                                                  success=False).stderr)
+        self.assertIn("verify", bind(write_decision(dict(review, history="changed after signature")), success=False).stderr)
+        self.assertEqual(write_decision(review), pin)
+        for marker in ("open", "activate", "recovery-hold", "recovery-accepted"):
+            latch = root / "ingress" / marker
+            latch.touch()
+            self.assertIn("conflicting production decisions", bind(pin, success=False).stderr)
+            self.assertTrue(latch.exists())
+            latch.unlink()
+        for fault, message in (("legacy-active", "historical production"), ("other-db", "freshly initialized"),
+                               ("dirty", "no longer clean"), ("bad-edge", "edge closed")):
+            self.assertIn(message, bind(pin, fault=fault, success=False).stderr)
+        binding = root / "postgres-binding.json"
+        self.assertFalse(binding.exists())
+        self.assertEqual(bind(pin, fault="kill-before-binding", success=False).returncode, -signal.SIGKILL)
+        self.assertFalse(binding.exists())
+        self.assertEqual(bind(pin, fault="kill-after-binding", success=False).returncode, -signal.SIGKILL)
+        published = binding.stat().st_ino
+        with patch.object(profile, "GATE", root / "ingress/open"), self.assertRaisesRegex(Refused, "completed successor"):
+            profile.verified_database(plan)
+        bind(pin)
+        self.assertEqual(binding.stat().st_ino, published)
+        self.assertEqual(json.loads(binding.read_bytes()), dict(target["database"], recipient=recipient, successor_review_sha256=pin))
+        self.assertEqual(json.loads((root / "ingress/.install-intent").read_bytes())["retirement_review_sha256"], pin)
+        before = binding.read_bytes()
+        self.assertIn("already enrolled", bind(pin, success=False).stderr)
+        self.assertEqual(binding.read_bytes(), before)
+        with patch.object(profile, "GATE", root / "ingress/open"), patch.object(profile, "database_identity", return_value=target["database"]):
+            self.assertEqual(profile.verified_database(plan, recipient), target["database"]["container"])
+            intent = root / "ingress/.install-intent"
+            intent.rename(root / "custody-copy")
+            with self.assertRaisesRegex(Refused, "missing successor"):
+                profile.verified_database(plan)
+            (root / "custody-copy").rename(intent)
+            with self.assertRaisesRegex(Refused, "signed enrollment"):
+                profile.enroll_database(plan, recipient, first_install=True)
+            binding.write_text(json.dumps(dict(target["database"], recipient="different")))
+            with self.assertRaisesRegex(Refused, "completed successor"):
+                profile.verified_database(plan)
+        binding.unlink()  # Loss of the fixture binding cannot be repaired by replaying approval.
+        self.assertIn("already enrolled", bind(pin, success=False).stderr)
+        self.assertFalse((root / "ingress/open").exists())
 
     def test_recovery_begin_retries_killed_hold_publications_without_using_foreign_files(self):
         root, plan, _, _, budget, qualification, _, operator = self.install_fixture()
@@ -641,7 +759,7 @@ class SharedProductionTest(unittest.TestCase):
                         edge.terminate()
 
 
-def run_install_fixture(root, action, fault):
+def run_install_fixture(root, action, fault, *cli_args):
     """Exercise argparse → operator → inventory/stop/up against a persistent synthetic Docker Engine."""
     plan = root / "plan"
     doc = json.loads(plan.read_bytes())
@@ -708,6 +826,8 @@ def run_install_fixture(root, action, fault):
                 data["RepoDigests"] = ["postgres@sha256:" + "f"*64]
             return json.dumps([data])
         if cmd[:2] == ["docker", "ps"]:
+            if cmd[-1] in ("label=com.docker.compose.project=hookah-production", "name=^/hookah-production([-_].*|$)"):
+                return "e"*64 if fault == "legacy-active" else ""
             if "--format" in cmd:
                 return "\n".join([ids[s] + " " + project + "-" + s + "-1" for s in services] +
                                   ["a" * 64 + " hookah-bot-backend-1", "f" * 64 + " clubs-bot-stage-backend-1"])
@@ -715,6 +835,8 @@ def run_install_fixture(root, action, fault):
                 return ids["postgres"] if "postgres" in services and cmd[-1].endswith("_pgdata") else ""
             return "\n".join(ids[s] for s in services)
         if cmd[:2] == ["docker", "inspect"]:
+            if "--format" in cmd and cmd[-1] == "e"*64:
+                return "running unless-stopped"
             service, = [s for s in services if ids[s] == cmd[-1]]
             return json.dumps([container(service)])
         if cmd[1] in ("volume", "network"):
@@ -739,6 +861,8 @@ def run_install_fixture(root, action, fault):
         raise AssertionError("unhandled fixture operation: " + str(cmd[:3]))
 
     def stop(cmd, **options):
+        if cmd[0] in ("age", "ssh-keygen"):
+            return orig_run(cmd, **options)
         assert cmd[:2] == ["docker", "stop"] and len(cmd) == 3
         service, = [s for s in services if ids[s] == cmd[-1]]
         services[service] = False
@@ -757,12 +881,31 @@ def run_install_fixture(root, action, fault):
     def free(path):
         return Mock(free=host.RESERVE + (1199 if path is volumes_fs and fault == "full-volume" else 10000))
 
+    db = {"container": ids["postgres"], "cluster_and_db": "18|42" if fault == "other-db" else "17|42"}
+    def check_edge():
+        if fault == "bad-edge":
+            raise Refused("fixture cannot confirm edge closed")
+
+    def window(cid):
+        if fault == "dirty":
+            raise Refused("successor no longer clean at binding")
+        return nullcontext()
+
     with ExitStack() as stack:
+        if fault == "kill-before-binding":
+            stack.enter_context(patch.object(profile, "publish_binding", side_effect=lambda *a: os.kill(os.getpid(), signal.SIGKILL)))
+        if fault == "kill-after-binding":
+            write_binding = profile.publish_binding
+            def write_then_kill(*args):
+                write_binding(*args)
+                os.kill(os.getpid(), signal.SIGKILL)
+            stack.enter_context(patch.object(profile, "publish_binding", write_then_kill))
         for owner, name, value in (
-                (traffic, "GATE", root / "ingress/open"), (traffic, "check_edge_closed", lambda: None),
+                (traffic, "GATE", root / "ingress/open"), (traffic, "check_edge_closed", check_edge),
                 (os, "replace", publish), (traffic, "check_gate_binary", lambda p: None),
-                (traffic, "pg_query", lambda *a: "t"),
-                (traffic, "cluster_identity", lambda p: {"container": ids["postgres"], "cluster_and_db": "17|42"}),
+                (traffic, "pg_query", lambda *a: "f" if fault == "dirty" else "t"),
+                (traffic, "cluster_identity", lambda p: db), (profile, "database_identity", lambda p: db),
+                (traffic, "successor_binding_window", window), (profile, "pg_query", lambda *a: "t"),
                 (traffic, "check_target_image", lambda p: image(doc["services"]["backend"]["image"])),
                 (traffic, "verify_running", lambda p, **kw: ids["postgres"]),
                 (host, "verify_slice", lambda: None), (host, "verify_container", lambda *a: None),
@@ -770,7 +913,7 @@ def run_install_fixture(root, action, fault):
                 (host, "local_volume_path", lambda name, existing: volumes_fs), (shutil, "disk_usage", free),
                 (host, "lock_args", lambda: {}),
                 (host, "operator_lock", lambda *a: nullcontext()), (subprocess, "run", stop),
-                (subprocess, "check_output", output), (sys, "argv", ["production_traffic.py", action, str(plan)] + (["e"*64] if action == "recovery-begin" else []))):
+                (subprocess, "check_output", output), (sys, "argv", ["production_traffic.py", action, str(plan), *cli_args] + (["e"*64] if action == "recovery-begin" else []))):
             stack.enter_context(patch.object(owner, name, value))
         traffic.main()
 
