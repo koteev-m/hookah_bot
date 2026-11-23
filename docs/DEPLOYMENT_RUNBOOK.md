@@ -14,7 +14,7 @@
 
 ## Ограниченный production-пилот
 
-Для отдельного VPS, `@hookah_tootah_bot` и apex `hookahtootah.club` подготовлен
+Для общего VPS с Hookah и Clubs staging, `@hookah_tootah_bot` и apex `hookahtootah.club` подготовлен
 [production-профиль и порядок установки, обновления и восстановления](PRODUCTION_PILOT.md).
 Локальная Linux-репетиция охватывает PostgreSQL 17, переход V142 → V143, закрытие HTTPS при потере БД и повторный допуск JVM.
 Допуск реального хоста, внешние копии, DNS и Telegram остаются решениями владельца.

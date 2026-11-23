@@ -22,6 +22,10 @@ import restore_test
 
 class PilotOperationsTest(unittest.TestCase):
     def setUp(self):
+        # These tests call operate directly with mocked Docker; CLI lock lifetime has process tests.
+        lease = patch.object(traffic.host, "lock_args", return_value={})
+        lease.start()
+        self.addCleanup(lease.stop)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         fence = patch.object(traffic, "check_gate_binary")
@@ -698,7 +702,7 @@ class PilotOperationsTest(unittest.TestCase):
             with self.assertRaises(profile.Refused):
                 restore_test.cleanup(journal, "foreign-daemon")
             docker.assert_not_called()
-            docker.side_effect = ["", name, json.dumps([dict(Name=name, Driver="local", Labels={})])]
+            docker.side_effect = ["", name, "", "", name, json.dumps([dict(Name=name, Driver="local", Labels={})])]
             with self.assertRaises(profile.Refused):
                 restore_test.cleanup(journal, "test-daemon")
             self.assertFalse(any("rm" in c.args for c in docker.call_args_list))
@@ -714,7 +718,7 @@ class PilotOperationsTest(unittest.TestCase):
         state = self.folder / "hookah-production-restore"
         for fault in (profile.Refused("incomplete age ciphertext"), None):
             with patch.dict(os.environ, XDG_STATE_HOME=str(self.folder)), patch.object(sys, "argv", args), \
-                    patch.object(restore_test, "docker", side_effect=["daemon", "", ""]), \
+                    patch.object(restore_test, "docker", side_effect=lambda *a: "daemon" if a[0] == "info" else ""), \
                     patch.object(restore_test, "verify_archive") as verify, patch.object(restore_test, "check_pair") as pair, \
                     patch.object(restore_test, "restore", side_effect=fault, return_value={"selected": 1}) as load, \
                     patch.object(restore_test, "cleanup", side_effect=lambda journal, _: journal.unlink()) as cleanup, \
@@ -754,7 +758,7 @@ class PilotOperationsTest(unittest.TestCase):
 
         with patch.dict(os.environ, XDG_STATE_HOME=str(self.folder)), \
                 patch.object(sys, "argv", ["restore", "point", "identity", "image"]), \
-                patch.object(restore_test, "docker", side_effect=["daemon", "", ""]), \
+                patch.object(restore_test, "docker", side_effect=lambda *a: "daemon" if a[0] == "info" else ""), \
                 patch.object(restore_test, "verify_archive"), patch.object(restore_test, "cleanup", side_effect=cleanup), \
                 patch.object(restore_test, "restore", side_effect=lambda *args: events.append("restore")), \
                 patch("sys.stdout", new_callable=io.StringIO) as output, self.assertRaises(profile.Refused):

@@ -1,4 +1,5 @@
 """Media backup contracts with synthetic objects and no provider access."""
+from contextlib import nullcontext
 import hashlib
 import io
 import json
@@ -44,9 +45,12 @@ class ProductionMediaBackupTest(unittest.TestCase):
                 plan.write_text(json.dumps({"services": {"backend": {"environment": dict.fromkeys(flags, wanted)}}}))
                 inspect.return_value = json.dumps([{"Id": "backend", "Config": {"Env": [f"{k}={actual}" for k in flags]}}])
                 if wanted != actual:
-                    with patch.object(sys, "argv", ["backup", "capture", str(plan), "recipient", "pg backend " + wanted, str(point)]), \
-                            patch.object(media, "capture") as dump, self.assertRaises(Refused):
+                    with patch.object(sys, "argv", ["media_backup.py", "backup", str(plan), str(point), "recipient"]), \
+                            patch.object(media.host, "operator_lock", return_value=nullcontext()), patch.object(media.os, "umask"), \
+                            patch.object(media, "capture") as dump, \
+                            self.assertRaisesRegex(Refused, "^installed media mode differs from backup plan$"):
                         media.main()
+                    inspect.assert_called_with(["docker", "inspect", "backend"])
                     dump.assert_not_called()
                     self.assertFalse((point / "SHA256SUMS").exists())
                 else:
@@ -83,9 +87,9 @@ class ProductionMediaBackupTest(unittest.TestCase):
             recovery.verify_archive(root, image, hashlib.sha256(manifest.encode()).hexdigest())
             with self.assertRaises(Refused):
                 recovery.verify_archive(root, image, "f"*64)
-            with patch.dict(recovery.os.environ, XDG_STATE_HOME=folder), patch.object(recovery, "docker", return_value="daemon"), \
+            with patch.dict(recovery.os.environ, XDG_STATE_HOME=folder), patch.object(recovery, "docker", side_effect=lambda *cmd: "daemon" if cmd[0] == "info" else ""), \
                     patch.object(sys, "argv", ["restore", folder, "key", image, "--keep-quarantine"]), \
-                    patch.object(recovery, "restore") as run, self.assertRaises(Refused):
+                    patch.object(recovery, "restore") as run, self.assertRaisesRegex(Refused, "custody checksum required"):
                 recovery.main()
             run.assert_not_called()
             later = root / "later"

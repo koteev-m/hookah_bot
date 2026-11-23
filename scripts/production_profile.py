@@ -13,13 +13,14 @@ import tempfile
 import urllib.request
 import zipfile
 
+import production_host as host
 from simple_staging import (IMAGE_RE, PDF_FLAG, PDF_IPC, R2_CONNECTION_KEYS, REPO, SOURCE,
                             PdfWorkerAdmission, Refused, add_pdf_worker, digest, history_for, manifest, require)
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / "deploy/production"
 PRODUCTION_PROJECT = "hookah_production"
-GATE = Path("/var/lib/hookah-production/ingress/open")
+GATE = host.GATE
 SECRET_KEYS = {
     "POSTGRES_ADMIN_PASSWORD", "DB_PASSWORD", "API_SESSION_JWT_SECRET", "BILLING_WEBHOOK_SECRET",
     "TELEGRAM_STAFF_CHAT_LINK_SECRET_PEPPER", "VENUE_STAFF_INVITE_SECRET_PEPPER",
@@ -100,6 +101,7 @@ def render(values, release):
         media.update(STAFF_PHOTOS_R2_ENABLED="true", VENUE_INFO_MEDIA_R2_ENABLED="true", VENUE_INFO_PDF_WORKER_ENABLED="true")
         doc = {"services": {"backend": {"environment": media}}, "volumes": {}}
         add_pdf_worker(doc, release["image"], "linux/amd64")
+        doc["services"]["pdf-worker"]["cgroup_parent"] = host.SLICE
         overlay = json.dumps(doc).encode()
         args.extend(["-f", "-"])
     raw = subprocess.check_output(args + ["config", "--format", "json"], input=overlay, env=env)
@@ -180,16 +182,17 @@ def verify_bot(values):
             and bot.get("username", "").lower() == "hookah_tootah_bot", "token does not belong to production bot")
 
 
-def verify_images(values, release):
-    for ref in (values["POSTGRES_IMAGE"], release["image"]):
+def verify_images(values, release, measurements=None, allocations=()):
+    host.verify_slice()
+    refs = (values["POSTGRES_IMAGE"], release["image"])
+    missing = host.image_space(refs, measurements, allocations, reserve_release=True)
+    for ref in refs:
         inspect = ["docker", "image", "inspect", "--platform", "linux/amd64", ref]
-        cached = subprocess.run(inspect, capture_output=True)
-        if cached.returncode:
-            subprocess.run(["docker", "pull", "--quiet", "--platform", "linux/amd64", ref], check=True)
-            raw = subprocess.check_output(inspect)
-        else:
-            raw = cached.stdout
-        info = json.loads(raw)[0]
+        if ref in missing:
+            subprocess.run(["docker", "pull", "--quiet", "--platform", "linux/amd64", ref], check=True, **host.lock_args())
+            missing = host.image_space(refs, measurements, allocations, reserve_release=True)
+            require(ref not in missing, "pulled image not fully cached/unpacked")
+        info = json.loads(subprocess.check_output(inspect))[0]
         digests = [s.removeprefix("docker.io/library/") for s in info["RepoDigests"]]
         require(ref in digests and (info["Os"], info["Architecture"]) == ("linux", "amd64"), "image identity mismatch")
         if ref == release["image"]:
@@ -197,12 +200,12 @@ def verify_images(values, release):
             require(labels.get("org.opencontainers.image.source") == SOURCE
                     and labels.get("org.opencontainers.image.revision") == release["revision"]
                     and not info["Config"].get("Volumes"), "unexpected backend image")
-    probe = ["docker", "run", "--rm", "--network", "none", "--read-only", "--platform", "linux/amd64"]
+    probe = ["docker", "run", "--rm", "--pull", "never", "--cgroup-parent", host.SLICE, "--network", "none", "--read-only", "--platform", "linux/amd64"]
     # Override the official image's data volume with disposable tmpfs.
     pg_version = subprocess.check_output(probe + ["--tmpfs", "/var/lib/postgresql/data", "--entrypoint", "postgres",
-                                                   values["POSTGRES_IMAGE"], "--version"], text=True)
+                                                   values["POSTGRES_IMAGE"], "--version"], text=True, **host.lock_args())
     require(re.fullmatch(r"postgres \(PostgreSQL\) 17\.\d+[^\n]*\n?", pg_version), "PostgreSQL 17 required")
-    jar = subprocess.check_output(probe + ["--entrypoint", "cat", release["image"], "/app/app/lib/app-0.1.0.jar"])
+    jar = subprocess.check_output(probe + ["--entrypoint", "cat", release["image"], "/app/app/lib/app-0.1.0.jar"], **host.lock_args())
     with zipfile.ZipFile(io.BytesIO(jar)) as package:
         require(b"telegramDispatchAllowed" in package.read("com/hookah/platform/backend/ProductionTrafficGate.class"),
                 "backend does not support process-bound production admission")
@@ -254,6 +257,57 @@ def confirm_transition(previous, desired):
     predecessor, target = release_identity(old), release_identity(new)
     require(predecessor["revision"] != target["revision"] and predecessor["image"] != target["image"]
             and new.get("x-hookah-transition") == {"from": predecessor, "to": target}, "update lacks this admitted forward transition")
+
+
+def admission_pin(plan):
+    return plan.with_name(plan.name + ".admitted-sha256")
+
+
+def verify_plan_pin(plan):
+    pin = admission_pin(plan)
+    for path in (plan, pin):
+        st = path.lstat()
+        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and not st.st_mode & 0o077,
+                "owner-private admitted plan and receipt required")
+    require(pin.read_text() == hashlib.sha256(plan.read_bytes()).hexdigest() + "\n",
+            "plan differs from its independent admission receipt")
+
+
+def sync_directory(directory):
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def publish_plan(plan, document):
+    directory = plan.parent.stat()
+    require(directory.st_uid == os.geteuid() and not directory.st_mode & 0o077, "private plan directory required")
+    require(not os.path.lexists(plan), "refusing to replace an admitted plan")
+    pin = admission_pin(plan)
+    checksum = (hashlib.sha256(document).hexdigest() + "\n").encode()
+    # An interruption after publishing the receipt may be retried with the same bytes.
+    for path, content in ((pin, checksum), (plan, document)):
+        with tempfile.NamedTemporaryFile(dir=plan.parent) as tmp:
+            tmp.write(content)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            try:
+                os.link(tmp.name, path)
+            except FileExistsError:
+                require(path == pin and stat.S_ISREG(pin.lstat().st_mode) and pin.read_bytes() == checksum,
+                        "conflicting admission receipt")
+        sync_directory(plan.parent)
+    verify_plan_pin(plan)
+
+
+def check_postgres_image(ref):
+    require(re.fullmatch(r"postgres@sha256:[0-9a-f]{64}", ref), "approved official PostgreSQL digest required")
+    image, = json.loads(subprocess.check_output(["docker", "image", "inspect", "--platform", "linux/amd64", ref]))
+    require(ref in [name.removeprefix("docker.io/library/") for name in image["RepoDigests"]] and
+            (image["Os"], image["Architecture"]) == ("linux", "amd64"), "admitted PostgreSQL image identity changed")
+    return image
 
 
 def check_target_image(plan):
@@ -310,6 +364,8 @@ def verify_running(plan, *, database_only=False):
     media = doc["services"]["backend"].get("environment", {}).get(PDF_FLAG) == "true"
     services = {"postgres", "backend", "pdf-worker"} if media else {"postgres", "backend"}
     require(doc["name"] == PRODUCTION_PROJECT and set(hashes) == services, "wrong topology")
+    if not database_only:
+        host.verify_slice()
     postgres_id = None
     for service, config_hash in hashes.items():
         if database_only and service != "postgres":
@@ -324,6 +380,8 @@ def verify_running(plan, *, database_only=False):
                 and labels.get("com.docker.compose.config-hash") == config_hash
                 and labels.get("com.docker.compose.service") == service
                 and labels.get("com.docker.compose.project") == doc["name"], f"{service} differs from release")
+        if not database_only:
+            host.verify_container(service, data)
         nets = set(data["NetworkSettings"]["Networks"])
         if service == "postgres":
             require(re.fullmatch(r"postgres@sha256:[0-9a-f]{64}", ref) and
@@ -421,6 +479,12 @@ def enroll_database(plan, recipient, *, first_install=False):
     else:
         require(first_install and not os.path.lexists(GATE.with_name("recovery-accepted")),
                 "confirm a genuine first installation or enroll the replacement through recovery-begin")
+    pending = GATE.with_name(".install-intent")
+    if os.path.lexists(pending):
+        verify_plan_pin(plan)
+        installed = json.loads(pending.read_bytes())["target"]
+        require(installed["path"] == str(plan.resolve()) and installed["sha256"] == hashlib.sha256(plan.read_bytes()).hexdigest(),
+                "cannot enroll a different pending installation")
     record = dict(target, recipient=recipient)
     require_empty_enrollment(record["container"])
     with tempfile.NamedTemporaryFile(dir=plan.parent) as f:
@@ -428,6 +492,10 @@ def enroll_database(plan, recipient, *, first_install=False):
         f.flush()
         os.fsync(f.fileno())
         os.link(f.name, plan.parent / "postgres-binding.json")
+    sync_directory(plan.parent)
+    if os.path.lexists(pending):
+        pending.unlink()
+        sync_directory(GATE.parent)
 
 
 def main():
@@ -447,10 +515,18 @@ def main():
         cmd.add_argument("candidate", type=Path)
         if name == "admit":
             cmd.add_argument("output", type=Path)
+            cmd.add_argument("--image-sizes", type=Path, help="qualified packed and unpacked bounds per missing linux/amd64 digest and storage driver")
             cmd.add_argument("--evidence", type=Path, help="previously qualified release receipt from custody")
             cmd.add_argument("--evidence-sha256", help="independent pin recorded at live admission")
             cmd.add_argument("--previous", type=Path, help="current admitted Compose file for an update")
     args = parser.parse_args()
+    if args.action in ("admit", "bind-db"):
+        with host.operator_lock():
+            return execute(args)
+    return execute(args)
+
+
+def execute(args):
     if args.action == "history":
         check_history(sys.stdin.buffer.read())
     elif args.action == "running":
@@ -477,18 +553,21 @@ def main():
                 document = json.dumps(plan).encode()
                 confirm_transition(args.previous, document)
             receipt = verify_published(release, args.evidence, args.evidence_sha256)
-            verify_images(values, release)
+            allocations = []
+            if args.previous:
+                host.image_space(host.plan_images(json.loads(args.previous.read_bytes())["services"]))
+                path, db, wal = host.database_space(verified_database(args.previous))
+                allocations.append((path, db + wal))
+            verify_images(values, release, args.image_sizes, allocations)
+            if args.previous:
+                host.image_space(host.plan_images(json.loads(args.previous.read_bytes())["services"]))
             verify_bot(values)
             # Bind provenance to the private plan without placing runtime secrets in custody evidence.
             plan = json.loads(document)
             plan["x-hookah-release-evidence"] = receipt
             document = json.dumps(plan).encode()
             # Publish a complete private plan once, after all checks; never overwrite a running plan.
-            with tempfile.NamedTemporaryFile(dir=args.output.parent) as tmp:
-                tmp.write(document)
-                tmp.flush()
-                os.fsync(tmp.fileno())
-                os.link(tmp.name, args.output)
+            publish_plan(args.output, document)
     print("OK", args.action)
 
 

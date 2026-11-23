@@ -94,7 +94,7 @@ class SmokeTest(unittest.TestCase):
         import production_traffic as traffic
 
         doc = (traffic.PROFILE.parents[1] / "docs/PRODUCTION_PILOT.md").read_text().split("## Первая установка и проверка", 1)[1]
-        steps = ["curl --noproxy", "--wait --wait-timeout", 'running "$plan"', 'bind-db "$plan"',
+        steps = ["curl --noproxy", 'install "$plan"', 'running "$plan"', 'bind-db "$plan"',
                  '--owner-init-data "$P/owner-init-data"', 'open "$plan"']
         self.assertEqual(sorted(doc.index(step) for step in steps), [doc.index(step) for step in steps])
         with tempfile.TemporaryDirectory() as folder, patch.object(traffic, "check_edge_closed") as edge, \

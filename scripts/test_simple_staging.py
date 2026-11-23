@@ -363,7 +363,7 @@ class R2ConfigTests(unittest.TestCase):
         with patch.object(sys, 'argv', ['simple_staging', 'deploy', '--directory', '/synthetic']), \
                 patch.object(s.sys, 'platform', 'linux'), patch.object(s.os, 'geteuid', return_value=0), \
                 patch.object(s, 'shared_lock', return_value=contextlib.nullcontext()), \
-                patch.object(s, 'Staging', side_effect=lambda _: s.validate_config(c)), contextlib.redirect_stdout(out):
+                patch.object(s, 'Staging', side_effect=lambda _, **kw: s.validate_config(c)), contextlib.redirect_stdout(out):
             self.assertEqual(s.main(), 1)
         self.assertEqual(json.loads(out.getvalue())['reason'], 'R2_CREDENTIALS_INVALID')
         self.assertNotIn('fixture-access', out.getvalue()); self.assertNotIn('fixture-secret', out.getvalue())
@@ -951,6 +951,63 @@ finally:
         after = self.path.stat()
         self.assertEqual((before.st_dev, before.st_ino), (after.st_dev, after.st_ino))
         self.assertEqual(stat.S_IMODE(after.st_mode), 0o660)
+
+    def test_operator_sigkill_keeps_shared_inode_locked_until_compose_finishes(self):
+        root = self.path.parent
+        fake = root / "docker"
+        fake.write_text("#!" + sys.executable + "\nimport sys,time,pathlib\nr=pathlib.Path(__file__).parent\n"
+                        "assert sys.argv[1]=='compose' and sys.argv[-2:]==['stop','backend']\n"
+                        "(r/'started').touch()\nwhile not (r/'finish').exists(): time.sleep(.02)\n")
+        fake.chmod(0o700)
+        # Exercise main's actual lock/runner wiring. Replace only the deployment
+        # inventory and the daemon with a harmless blocking CLI on our temporary PATH.
+        child = """import os,sys
+from pathlib import Path
+from unittest.mock import patch
+import simple_staging as s
+root=Path(sys.argv[1])
+class Fixture(s.Staging):
+    def __init__(self, directory, runner=s.run):
+        self.root, self.compose_file, self.run = root, root/'plan', runner
+    def apply(self,*args): self.compose('stop','backend')
+lease=s.shared_lock
+fstat=os.fstat
+def provisioned(fd):
+    st=list(fstat(fd))
+    st[4]=0
+    return os.stat_result(st)
+sys.argv=['staging','backup','--directory',str(root)]
+with patch.object(s,'Staging',Fixture), patch.object(s,'shared_lock',lambda **kw:lease(root/'shared.lock',0)), patch.object(sys,'platform','linux'), patch.object(os,'geteuid',return_value=0), patch.object(os,'fstat',provisioned), patch.object(os,'listxattr',return_value=[],create=True):
+    sys.exit(s.main())
+"""
+        env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                   PYTHONPATH=str(Path(s.__file__).parent))
+        with subprocess.Popen([sys.executable, "-B", "-c", child, str(root)], env=env) as operator:
+            try:
+                deadline = time.monotonic() + 10
+                while not (root / "started").exists():
+                    self.assertIsNone(operator.poll())
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.02)
+                operator.kill()
+                operator.wait(timeout=5)
+                self.assertEqual(self.probe(), 75)
+            finally:
+                (root / "finish").touch()
+                if operator.poll() is None:
+                    operator.kill()
+        deadline = time.monotonic() + 5
+        while self.probe() == 75:
+            self.assertLess(time.monotonic(), deadline)
+        self.assertEqual(self.probe(), 0)
+
+    def test_lease_is_not_inherited_by_other_executables(self):
+        with s.shared_lock(self.path, 0) as lease, patch.object(s.subprocess, 'run') as child:
+            child.return_value.returncode = 0
+            s.run(['docker', 'pull', 'fixture'], lease=lease)
+            self.assertEqual(child.call_args.kwargs['pass_fds'], (lease[0],))
+            s.run(['systemctl', 'show', 'fixture'], lease=lease)
+            self.assertEqual(child.call_args.kwargs['pass_fds'], ())
 
     def test_exception_releases_lock(self):
         with self.assertRaisesRegex(RuntimeError, 'operation failed'):

@@ -1,0 +1,9 @@
+[Unit]
+Description=Hookah production containers
+
+[Slice]
+CPUAccounting=yes
+CPUQuota=125%
+
+[Install]
+WantedBy=slices.target

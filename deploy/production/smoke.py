@@ -8,9 +8,14 @@ import stat
 import subprocess
 from html.parser import HTMLParser
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import production_host as host
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -64,12 +69,12 @@ def image_assets(plan):
     ref = app["image"]
     if not re.fullmatch(r"ghcr\.io/koteev-m/hookah_bot/backend@sha256:[0-9a-f]{64}", ref):
         raise ValueError("expected a pinned production backend")
-    run = ["docker", "run", "--rm", "--network", "none", "--pull", "never", "--platform", "linux/amd64",
+    run = ["docker", "run", "--rm", "--cgroup-parent", host.SLICE, "--network", "none", "--pull", "never", "--platform", "linux/amd64",
            "--read-only", "--entrypoint", "cat", ref]
-    html = subprocess.check_output(run + ["/app/miniapp/index.html"])
+    html = subprocess.check_output(run + ["/app/miniapp/index.html"], **host.lock_args())
     manifest = {"/miniapp/": fingerprint(html)}
     for url in entry_assets(html).assets:
-        manifest[url] = fingerprint(subprocess.check_output(run + ["/app" + url]))
+        manifest[url] = fingerprint(subprocess.check_output(run + ["/app" + url], **host.lock_args()))
     return manifest
 
 
@@ -142,7 +147,7 @@ def signed_auth(plan, source):
     check_edge_closed()
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plan", type=Path, help="admitted Compose JSON")
     parser.add_argument("--owner-init-data", type=Path, help="private file with fresh signed owner initData")
@@ -162,7 +167,10 @@ if __name__ == "__main__":
                 raise SystemExit(f"Readiness failed: {exc}") from None
             time.sleep(2)
     if args.owner_init_data:
-        import sys
-        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         signed_auth(args.plan, args.owner_init_data)
         print("OK private readiness, signed owner login and closed HTTPS")
+
+
+if __name__ == "__main__":
+    with host.operator_lock():
+        main()

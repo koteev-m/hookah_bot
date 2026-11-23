@@ -16,7 +16,7 @@ import uuid
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "scripts"))
-from production_profile import Refused, check_history, require
+from production_profile import GATE, Refused, check_history, require
 import media_backup
 
 LABEL = "club.hookahtootah.production.restore-attempt"
@@ -43,6 +43,15 @@ def prepare_state_directory(path):
     synced(path.parent)
 
 
+def require_isolated(name=None):
+    require(not os.path.lexists(GATE.parent), "use an isolated restore host without production ingress")
+    containers = set(docker("ps", "-a", "--format", "{{.Names}}").splitlines())
+    volumes = set(docker("volume", "ls", "-q").splitlines())
+    networks = docker("network", "ls", "-q", "--filter", "type=custom")
+    require(containers <= ({name} if name else set()) and volumes <= ({name + "-data"} if name else set())
+            and not networks, "isolated restore daemon required: foreign container, volume or network")
+
+
 def cleanup(journal, daemon):
     record = json.loads(journal.read_bytes())
     attempt, image = record["attempt"], record["image"]
@@ -50,6 +59,7 @@ def cleanup(journal, daemon):
             and record["daemon"] == daemon, "restore journal identity mismatch")
     name = "ht-restore-" + attempt
     volume = name + "-data"
+    require_isolated(name)
     cid = docker("ps", "-aq", "--no-trunc", "--filter", "name=^/" + name + "$")
     present = docker("volume", "ls", "-q", "--filter", "name=^" + volume + "$")
     if present:
@@ -221,6 +231,7 @@ def main():
         journal = state / "attempt.json"
         if journal.exists():
             cleanup(journal, daemon)
+        require_isolated()
         if args.keep_quarantine or args.metadata_point:
             require(args.point_sha256 and not args.assertions, "custody checksum required; custom SQL disallowed")
         require(bool(args.metadata_sha256) == bool(args.metadata_point), "metadata point and custody checksum required together")
