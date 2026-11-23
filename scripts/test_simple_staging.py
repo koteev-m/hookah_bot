@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import urllib.error
 import urllib.response
 import zipfile
@@ -86,6 +86,8 @@ class MemoryStaging(s.Staging):
     def binding(self):
         s.require(self.pg is not None, 'POSTGRES_IDENTITY_UNKNOWN')
         return copy.deepcopy(self.pg)
+    def binding_matches(self, recorded):
+        return self.binding() == recorded
     def history(self): return copy.deepcopy(self.rows)
     def observe(self, target, binding):
         s.require(self.binding() == binding, 'POSTGRES_BINDING_CHANGED')
@@ -135,6 +137,123 @@ class RuntimeStaging(MemoryStaging):
                'NetworkSettings': {'Networks': {'hookah-bot_default': {}}}}
         with patch.object(self, 'containers', return_value=[app]):
             s.Staging.observe(self, target, binding)
+
+
+class PostgresBindingTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name).resolve()
+        s.atomic(root / 'config.json', config())
+        self.r = s.Staging(root, runner=Mock(side_effect=AssertionError('unexpected external command')))
+        self.target = image()
+        doc = self.r.document(self.target)
+        s.atomic(self.r.compose_file, doc)
+        self.pg = {
+            'Id': 'fixture-container', 'Image': 'fixture-postgres', 'State': {'Running': True},
+            'Config': {'Labels': {'com.docker.compose.service': 'postgres',
+                                  'com.docker.compose.project.working_dir': str(root)}},
+            'HostConfig': {'Dns': None, 'DnsOptions': None, 'DnsSearch': None, 'Privileged': False,
+                           'Memory': 0, 'NanoCpus': 0, 'PortBindings': {}},
+            'Mounts': [{'Name': 'hookah-bot_pgdata', 'Destination': '/var/lib/postgresql/data', 'RW': True}],
+            'NetworkSettings': {'Networks': {'hookah-bot_default': {'NetworkID': 'fixture-network'}}},
+        }
+        app = {'Image': self.target['id'], 'State': {'Running': True}, 'Mounts': [],
+               'Config': {'Labels': {'com.docker.compose.service': 'backend'},
+                          'Env': [k + '=' + v for k, v in doc['services']['backend']['environment'].items()]},
+               'HostConfig': {'PortBindings': {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '8080'}]}},
+               'NetworkSettings': {'Networks': {'hookah-bot_default': {}}}}
+        self.r.containers = Mock(return_value=[self.pg, app])
+        self.r.db = Mock(return_value='fixture-system')
+        self.r.history = Mock(return_value=s.history_for(self.target['manifest']))
+        self.r.compose = Mock(return_value=b'fixture dump')
+        self.r.host_check = Mock()
+        self.r.ready = Mock()
+        self.r.candidate = Mock(return_value=self.target)
+
+        self.saved = copy.deepcopy(self.r.binding())
+        self.r.save({'status': 'SUCCESS', 'operation': 'fixture-install', 'target': self.target,
+                     'previous': self.target, 'binding': self.saved, 'runtime_hash': s.digest(self.r.config['runtime']),
+                     'previous_runtime_hash': s.digest(self.r.config['runtime']),
+                     'config_binding': self.r.config_binding(), 'compose_hash': s.digest(doc)})
+        self.pg['HostConfig'].update(Dns=[], DnsOptions=[], DnsSearch=[])
+
+    def test_exact_current_digest_precedes_dns_fallback(self):
+        current = self.r.binding()
+        self.assertEqual(current['host_config'], s.digest(self.pg['HostConfig']))
+        self.assertNotEqual(current['host_config'], self.saved['host_config'])
+        historical = dict(self.pg['HostConfig'], Dns=None, DnsOptions=None, DnsSearch=None)
+        with patch.object(s, 'digest', wraps=s.digest) as hashed:
+            self.r.observe(self.target, current)
+        self.assertNotIn((historical,), [c.args for c in hashed.call_args_list])
+
+    def test_historical_binding_survives_all_operator_paths(self):
+        host = copy.deepcopy(self.pg['HostConfig'])
+        receipt = self.r.root / 'operation-fixture-install.json'
+        original = receipt.read_bytes()
+        self.r.observe(self.target, self.saved)
+        backup = self.r.apply('backup')
+        self.assertEqual(backup['status'], 'BACKUP_VERIFIED')
+        self.assertEqual(s.private_json(Path(backup['path']).with_suffix('.json'))['binding'], self.saved)
+        for action, options in [('deploy', {}), ('deploy', {'apply_config': True}), ('reconcile', {}), ('rollback', {})]:
+            with self.subTest(action=action, options=options):
+                self.assertEqual(self.r.apply(action, record(self.target), **options)['status'], 'SUCCESS')
+                self.assertEqual(self.r.state()['binding'], self.saved)
+        self.assertEqual(receipt.read_bytes(), original)
+        self.assertEqual(self.saved, json.loads(original)['binding'])
+        self.assertEqual(self.pg['HostConfig'], host)
+
+    def test_changed_host_config_is_rejected(self):
+        host = self.pg['HostConfig']
+        for key, value in [('Dns', ['192.0.2.1']), ('DnsOptions', ['ndots:2']), ('DnsSearch', ['example.test']),
+                           ('PortBindings', {'5432/tcp': [{'HostPort': '15432'}]}), ('Privileged', True),
+                           ('NanoCpus', 500000000), ('Memory', 256 << 20), ('ExtraHosts', ['fixture:192.0.2.2'])]:
+            reason = 'POSTGRES_NOT_PRIVATE_OR_RUNNING' if key == 'PortBindings' else 'POSTGRES_BINDING_CHANGED'
+            with self.subTest(key=key), patch.dict(host, {key: value}), self.assertRaisesRegex(s.Refused, reason):
+                self.r.observe(self.target, self.saved)
+
+    def test_fallback_requires_all_three_present_as_empty_lists_and_exact_historical_hash(self):
+        host = self.pg['HostConfig']
+        for key in ('Dns', 'DnsOptions', 'DnsSearch'):
+            for invalid in (None, {}, '', False):
+                with self.subTest(key=key, value=invalid), patch.dict(host, {key: invalid}):
+                    self.assertFalse(self.r.binding_matches(self.saved))
+            with self.subTest(missing=key), patch.dict(host):
+                del host[key]
+                self.assertFalse(self.r.binding_matches(self.saved))
+        self.assertFalse(self.r.binding_matches(dict(self.saved, host_config='f' * 64)))
+        mixed = dict(host, Dns=None, DnsOptions=None)
+        self.assertFalse(self.r.binding_matches(dict(self.saved, host_config=s.digest(mixed))))
+        current = self.r.binding()
+        with patch.dict(host, Dns=None, DnsOptions=None, DnsSearch=None):
+            self.assertFalse(self.r.binding_matches(current))
+            self.assertTrue(self.r.binding_matches(self.saved))
+
+    def test_other_binding_fields_still_identify_the_exact_database(self):
+        for changes, reason in [
+                ({'Id': 'other-container'}, 'POSTGRES_BINDING_CHANGED'),
+                ({'Image': 'other-image'}, 'POSTGRES_BINDING_CHANGED'),
+                ({'Mounts': [dict(self.pg['Mounts'][0], Name='other-volume')]}, 'POSTGRES_VOLUME_MISMATCH'),
+                ({'Mounts': [dict(self.pg['Mounts'][0], RW=False)]}, 'POSTGRES_BINDING_CHANGED'),
+                ({'Mounts': [dict(self.pg['Mounts'][0], RW=1)]}, 'POSTGRES_BINDING_CHANGED'),
+                ({'NetworkSettings': {'Networks': {'extra': {}, 'hookah-bot_default': {}}}}, 'POSTGRES_NETWORK_MISMATCH'),
+                ({'NetworkSettings': {'Networks': {'hookah-bot_default': {'NetworkID': 'other'}}}}, 'POSTGRES_BINDING_CHANGED')]:
+            with self.subTest(changes=changes), patch.dict(self.pg, changes), self.assertRaisesRegex(s.Refused, reason):
+                self.r.observe(self.target, self.saved)
+        self.r.db.return_value = 'different-cluster'
+        with self.assertRaisesRegex(s.Refused, 'POSTGRES_BINDING_CHANGED'):
+            self.r.observe(self.target, self.saved)
+
+    def test_drift_blocks_each_operator_path_before_writes(self):
+        before = self.r.state_file.read_bytes()
+        self.pg['HostConfig']['Privileged'] = True
+        for action in ('backup', 'deploy', 'reconcile', 'rollback'):
+            reason = 'ROLLBACK_DATABASE_NOT_PROVEN' if action == 'rollback' else 'POSTGRES_BINDING_CHANGED'
+            with self.subTest(action=action), self.assertRaisesRegex(s.Refused, reason):
+                self.r.apply(action, record(self.target))
+        self.r.compose.assert_not_called()
+        self.assertEqual(self.r.state_file.read_bytes(), before)
+        self.assertFalse(list(self.r.root.glob('backup-*')))
 
 
 class PublicLinkOriginTests(unittest.TestCase):

@@ -516,7 +516,7 @@ class Staging(PdfWorkerAdmission):
         require(all(r['success'] and str(r['version']).isdigit() for r in rows), 'FLYWAY_FAILED_OR_UNKNOWN_HISTORY')
         return [{'version': int(r['version']), 'script': r['script'], 'checksum': r['checksum']} for r in rows]
 
-    def binding(self):
+    def _inspect_binding(self):
         items = self.containers()
         allowed = {'backend', 'postgres'} | ({'pdf-worker'} if self.config['runtime'].get(PDF_FLAG) == 'true' else set())
         services = [i['Config']['Labels'].get('com.docker.compose.service') for i in items]
@@ -535,13 +535,32 @@ class Staging(PdfWorkerAdmission):
                 and pg['Mounts'][0]['Destination'] == '/var/lib/postgresql/data', 'POSTGRES_VOLUME_MISMATCH')
         require(set(pg['NetworkSettings']['Networks']) == {self.project + '_default'}, 'POSTGRES_NETWORK_MISMATCH')
         require(pg['Config']['Labels'].get('com.docker.compose.project.working_dir') == str(self.root), 'COMPOSE_DIRECTORY_MISMATCH')
-        return {'container': pg['Id'], 'image': pg['Image'], 'mounts': pg['Mounts'],
-                'config': digest(pg['Config']), 'host_config': digest(pg['HostConfig']),
-                'network': pg['NetworkSettings']['Networks'][self.project + '_default']['NetworkID'],
-                'system_id': self.db('SELECT system_identifier FROM pg_control_system()')}
+        host_config = pg['HostConfig']
+        observed = {'container': pg['Id'], 'image': pg['Image'], 'mounts': pg['Mounts'],
+                    'config': digest(pg['Config']), 'host_config': digest(host_config),
+                    'network': pg['NetworkSettings']['Networks'][self.project + '_default']['NetworkID'],
+                    'system_id': self.db('SELECT system_identifier FROM pg_control_system()')}
+        return observed, host_config
+
+    def binding(self):
+        observed, _ = self._inspect_binding()
+        return observed
+
+    def binding_matches(self, recorded):
+        observed, host_config = self._inspect_binding()
+        if not isinstance(recorded, dict):
+            return False
+        if observed['host_config'] != recorded.get('host_config'):
+            # Moby can reload the three unset DNS fields as empty lists.
+            dns_fields = ('Dns', 'DnsOptions', 'DnsSearch')
+            if not all(host_config.get(key) == [] for key in dns_fields):
+                return False
+            observed['host_config'] = digest({**host_config, **dict.fromkeys(dns_fields)})
+        # Compare every receipt field, including JSON types (e.g. mount RW=true versus 1).
+        return json.dumps(observed, sort_keys=True) == json.dumps(recorded, sort_keys=True)
 
     def observe(self, image, binding):
-        require(self.binding() == binding, 'POSTGRES_BINDING_CHANGED')
+        require(self.binding_matches(binding), 'POSTGRES_BINDING_CHANGED')
         require(self.history() == history_for(image['manifest']), 'DATABASE_HISTORY_MISMATCH')
         apps = [i for i in self.containers() if i['Config']['Labels'].get('com.docker.compose.service') == 'backend']
         require(len(apps) == 1, 'BACKEND_IDENTITY_UNKNOWN')
@@ -595,7 +614,7 @@ class Staging(PdfWorkerAdmission):
         raise Refused('READINESS_FAILED')
 
     def backup(self, binding):
-        require(self.binding() == binding, 'POSTGRES_BINDING_CHANGED')
+        require(self.binding_matches(binding), 'POSTGRES_BINDING_CHANGED')
         path = self.root / ('backup-' + time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-' + uuid.uuid4().hex[:8] + '.dump')
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -646,7 +665,7 @@ class Staging(PdfWorkerAdmission):
         if action == 'rollback':
             require(state.get('previous') and state['previous']['manifest'] == state['target']['manifest'], 'SCHEMA_ROLLBACK_FORBIDDEN')
             require(state['runtime_hash'] == state.get('previous_runtime_hash'), 'CONFIG_ROLLBACK_REQUIRES_MANUAL_REVIEW')
-            require(self.binding() == state['binding'] and self.history() == history_for(state['previous']['manifest']), 'ROLLBACK_DATABASE_NOT_PROVEN')
+            require(self.binding_matches(state['binding']) and self.history() == history_for(state['previous']['manifest']), 'ROLLBACK_DATABASE_NOT_PROVEN')
             target = self.candidate({k: state['previous'][k] for k in ('image', 'revision', 'ci_run')})
             require(target == state['previous'], 'ROLLBACK_IMAGE_CHANGED')
         else:
