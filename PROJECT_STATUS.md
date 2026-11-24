@@ -1,5 +1,16 @@
 # Project Status
 
+## HT-PRODUCTION-BACKUP-AUTOMATION-01 — плановые онлайн-копии
+
+Основной checkout, ветка `codex/ht-production-media-ready-01-primary`, база
+`b0cc37cd45b8029fca8b50cb0f33b388e8bce514`. Локально подготовлены онлайн-режим,
+четыре серверных слота в сутки и перенос проверенных точек на TOSHIBA. На изолированном
+PostgreSQL 17.11 с V143 восстановлен зашифрованный снимок при конкурентной записи;
+синтетическое объектное хранилище воспроизвело повреждение, удаление и замену.
+Прошли 17 адресных тестов. VPS и установленный LaunchAgent не менялись.
+Перед включением требуются проверка Linux units и один полный цикл через целевой
+read-only SSH и внешний диск с отдельным restore-test. [Операторская процедура](docs/PRODUCTION_PILOT.md#плановые-копии-работающего-production).
+
 ## HT-PRODUCTION-SHARED-HOST-ADAPT-02 — общий VPS
 
 Основной checkout, ветка `codex/ht-production-media-ready-01-primary` и локальная

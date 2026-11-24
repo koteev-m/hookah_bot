@@ -692,7 +692,8 @@ class SharedProductionTest(unittest.TestCase):
             root = Path(td)
             plan = root / "plan"
             plan.write_text(json.dumps({"x-hookah-schema": 143, "services": {"backend": {"environment": {}}}}))
-            def capture(cid, env, point, recipient, media_enabled, metadata_only, *, storage):
+            def capture(cid, env, point, recipient, media_enabled, metadata_only, *, storage, online):
+                self.assertFalse(online)
                 self.assertEqual((cid, media_enabled, metadata_only, storage), ("pg", True, False, (root, 1024, 512)))
                 for file in ("database.dump.age", "media.tar.age"):
                     (point / file).write_bytes(b"fixture cipher " + file.encode())

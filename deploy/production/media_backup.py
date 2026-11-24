@@ -43,12 +43,16 @@ def verified_bytes(stream, row):
     return data
 
 
-def archive(rows, client, output):
+def archive(rows, client, output, *, etags=None):
     with tarfile.open(fileobj=output, mode="w|") as tar:
         for key, row in rows.items():
             result = client.get_object(Bucket=PRODUCTION_BUCKET, Key=key)
             with closing(result["Body"]) as body:
                 data = verified_bytes(body, row)
+            if etags is not None:
+                tag = result.get("ETag")
+                require(isinstance(tag, str) and re.fullmatch(r'"[^"\r\n]+"', tag), "missing object validator")
+                etags[key] = tag
             member = tarfile.TarInfo(key)
             member.size = len(data)
             tar.addfile(member, io.BytesIO(data))
@@ -99,12 +103,14 @@ def storage_client(env):
 
 
 @contextmanager
-def snapshot(cid, *, repair=False, pass_fds=()):
+def snapshot(cid, *, repair=False, online=False, pass_fds=()):
     # Keep the exporting transaction alive until pg_dump finishes importing its MVCC snapshot.
     with subprocess.Popen(["docker", "exec", "-i", cid, "psql", "-XqAtw", "-v", "ON_ERROR_STOP=1",
                            "-U", "hookah_app", "-d", "hookah_prod"], stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, text=True, pass_fds=pass_fds) as session:
         try:
+            if online:
+                session.stdin.write("SELECT pg_current_wal_insert_lsn();\n")
             if repair:
                 session.stdin.write("BEGIN; SET LOCAL lock_timeout='5s'; LOCK TABLE venues, venue_settings, "
                                     "venue_subscriptions, staff_shifts, staff_profile_photos, staff_profile_photo_state, "
@@ -113,13 +119,19 @@ def snapshot(cid, *, repair=False, pass_fds=()):
             else:
                 session.stdin.write("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; ")
             session.stdin.write("SELECT pg_export_snapshot();\n")
+            if online:
+                session.stdin.write("SELECT pg_current_wal_insert_lsn();\n")
             session.stdin.flush()
+            wal = session.stdout.readline().strip() if online else None
             token = session.stdout.readline().strip()
             require(re.fullmatch(r"[0-9A-Fa-f]+-[0-9A-Fa-f]+-[0-9]+", token), "cannot export PostgreSQL snapshot")
+            if online:
+                require(re.fullmatch(r"[0-9A-F]{1,8}/[0-9A-F]{1,8}", wal) and session.stdout.readline().strip() == wal,
+                        "WAL advanced while acquiring the online snapshot")
             query = INVENTORY.read_text().strip().removesuffix(";")
             session.stdin.write("SELECT rows::jsonb::text FROM (" + query + ") AS captured(rows);\n")
             session.stdin.flush()
-            yield token, inventory(session.stdout.readline())
+            yield token, inventory(session.stdout.readline()), wal
         finally:
             session.stdin.close()
         require(session.wait() == 0, "snapshot transaction failed")
@@ -158,8 +170,8 @@ def file_limit(size):
     return apply
 
 
-def capture(cid, env, point, recipient, media, metadata_only, *, storage=None, pass_fds=()):
-    with snapshot(cid, pass_fds=pass_fds) as (token, rows):
+def capture(cid, env, point, recipient, media, metadata_only, *, storage=None, pass_fds=(), online=False):
+    with snapshot(cid, online=online, pass_fds=pass_fds) as (token, rows, wal):
         require(media or not rows, "database snapshot contains media without admitted R2")
         dump_limit = media_limit = None
         if storage is not None:
@@ -175,18 +187,35 @@ def capture(cid, env, point, recipient, media, metadata_only, *, storage=None, p
     if not media or metadata_only:
         return
     client = storage_client(env)
+    etags = {} if online else None
     with subprocess.Popen(["age", "-r", recipient, "-o", point / "media.tar.age"], stdin=subprocess.PIPE,
                           preexec_fn=file_limit(media_limit), pass_fds=pass_fds) as encrypt:
         try:
-            archive(rows, client, encrypt.stdin)
+            archive(rows, client, encrypt.stdin, etags=etags)
         finally:
             encrypt.stdin.close()
         require(encrypt.wait() == 0, "media encryption failed")
+    if online:
+        return wal, rows, etags
 
 
-def backup_target(plan, recipient):
+def verify_online_media(cid, env, rows, etags):
+    from production_profile import pg_query
+    client = storage_client(env)
+    for key, tag in etags.items():
+        current = client.head_object(Bucket=PRODUCTION_BUCKET, Key=key, IfMatch=tag)
+        require(current.get("ETag") == tag and current.get("ContentLength") == rows[key][0],
+                "R2 object changed during backup")
+    latest = inventory(pg_query(cid, "hookah_app", INVENTORY.read_text()))
+    require(all(latest.get(key) == row for key, row in rows.items()), "required media changed during backup")
+
+
+def backup_target(plan, recipient, *, online=False):
     from production_traffic import compose, state
+    from production_profile import verify_plan_pin
 
+    if online:
+        verify_plan_pin(plan)
     cid = verified_database(plan, recipient)
     backend_id = compose(plan, "ps", "-aq", "backend")
     require(backend_id, "cannot establish installed media mode without the admitted backend")
@@ -200,7 +229,10 @@ def backup_target(plan, recipient):
     require(all(runtime.get(k) == mode for k in flags), "installed media mode differs from backup plan")
     status = state(plan, plan, backend_id)
     require(status in ("OLD stopped", "OLD running"), "backend differs from backup plan")
-    if mode == "true":
+    if online:
+        require(mode == "true" and status == "OLD running", "online backup requires the running admitted media backend")
+        require(not os.path.lexists(host.GATE.with_name("recovery-hold")), "online backup refused during recovery")
+    elif mode == "true":
         require(status == "OLD stopped", "media backup requires the stopped admitted backend")
     return cid, observed["Id"], mode
 
@@ -214,7 +246,7 @@ def repair_object(plan, recipient, key, source):
         check_edge_closed()
         cid, _, mode = backup_target(plan, recipient)
         require(mode == "true", "private media required")
-        with snapshot(cid, repair=True, **host.lock_args()) as (_, rows):
+        with snapshot(cid, repair=True, **host.lock_args()) as (_token, rows, _wal):
             row = rows.get(key)
             require(row and row[3], "key no longer current or eligible for repair")
             with source.open("rb") as original:
@@ -226,7 +258,7 @@ def repair_object(plan, recipient, key, source):
                 verified_bytes(actual, row)
 
 
-def backup(plan, point, recipient, metadata_only):
+def backup(plan, point, recipient, metadata_only, *, online=False):
     from production_profile import PRODUCTION_PROJECT, pg_query, plan_schema
 
     def cold():
@@ -236,33 +268,48 @@ def backup(plan, point, recipient, metadata_only):
                 "close traffic and stop the production backend before media backup")
 
     with host.operator_lock():
-        binding = backup_target(plan, recipient)
+        require(not (online and metadata_only), "online backup must include media")
+        binding = backup_target(plan, recipient, online=online)
         cid, _, mode = binding
         media = mode == "true"
         require(media or not metadata_only, "metadata-only requires media mode")
-        if media:
+        if media and not online:
             cold()
         storage = host.database_space(cid)
         point.mkdir(mode=0o700)
         doc = json.loads(plan.read_bytes())
         (point / "schema-version").write_text(str(plan_schema(doc)) + "\n")
         (point / "postgres-image").write_bytes(subprocess.check_output(["docker", "inspect", "--format", "{{.Config.Image}}", cid]))
-        require(backup_target(plan, recipient) == binding, "backup target changed before snapshot")
-        capture(cid, doc["services"]["backend"]["environment"], point, recipient, media, metadata_only, storage=storage, **host.lock_args())
+        require(backup_target(plan, recipient, online=online) == binding, "backup target changed before snapshot")
+        source = (" FROM pg_control_system(), pg_control_checkpoint(), pg_database "
+                  "WHERE datname=current_database()")
+        lineage_sql = "SELECT system_identifier, oid, timeline_id"
+        if online:
+            lineage = pg_query(cid, "postgres", lineage_sql + source)
+        env = doc["services"]["backend"]["environment"]
+        captured = capture(cid, env, point, recipient, media, metadata_only, storage=storage, online=online, **host.lock_args())
         members = ["database.dump.age", "postgres-image", "schema-version"]
         if media:
             if not metadata_only:
                 members.append("media.tar.age")
-            coordinate = pg_query(cid, "postgres", "SELECT system_identifier, oid, timeline_id, pg_current_wal_insert_lsn() "
-                                  "FROM pg_control_system(), pg_control_checkpoint(), pg_database WHERE datname=current_database()")
+            if online:
+                # A later WAL position would misdate the exported MVCC snapshot for two-point recovery.
+                wal, rows, etags = captured
+                require(pg_query(cid, "postgres", lineage_sql + source) == lineage, "online source lineage changed")
+                coordinate = lineage + "|" + wal
+            else:
+                coordinate = pg_query(cid, "postgres", lineage_sql + ", pg_current_wal_insert_lsn()" + source)
             (point / "source-coordinate").write_text(coordinate + "\n")
             members.append("source-coordinate")
-            cold()
-        require(backup_target(plan, recipient) == binding, "backup target changed during capture")
-        host.check_space([(point, 0), (storage[0], 0)])
+            if not online:
+                cold()
         partial = point / "SHA256SUMS.partial"
         with partial.open("xb") as output:
             subprocess.run(["shasum", "-a", "256", *members], cwd=point, stdout=output, check=True)
+        require(backup_target(plan, recipient, online=online) == binding, "backup target changed during capture")
+        host.check_space([(point, 0), (storage[0], 0)])
+        if online:
+            verify_online_media(cid, env, rows, etags)
         partial.rename(point / "SHA256SUMS")
         print("Encrypted backup written")
 
@@ -271,10 +318,10 @@ def main():
     args = sys.argv[1:]
     if len(args) == 5 and args[0] == "repair-object":
         return repair_object(Path(args[1]), args[2], args[3], Path(args[4]))
-    require(len(args) in (4, 5) and args[0] == "backup" and (len(args) == 4 or args[4] == "--metadata-only"),
-            "expected admitted compose file, new directory, recipient and optional --metadata-only")
+    require(len(args) in (4, 5) and args[0] == "backup" and (len(args) == 4 or args[4] in ("--metadata-only", "--online")),
+            "expected admitted compose file, new directory, recipient and optional --metadata-only or --online")
     os.umask(0o077)
-    backup(Path(args[1]), Path(args[2]), args[3], len(args) == 5)
+    backup(Path(args[1]), Path(args[2]), args[3], args[4:] == ["--metadata-only"], online=args[4:] == ["--online"])
 
 
 if __name__ == "__main__":
