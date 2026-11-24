@@ -3401,6 +3401,7 @@ async function mockVenueShiftExtensionApi(
         return
       }
       const body = (await route.request().postDataJSON()) as {
+        name?: string
         city?: string | null
         address?: string | null
         countryCode?: string | null
@@ -3419,6 +3420,7 @@ async function mockVenueShiftExtensionApi(
         formattedAddress?.replace(/^Россия,\s*/, '') || [city, address].filter(Boolean).join(', ') || null
       publicCardSettings = {
         ...publicCardSettings,
+        name: body.name?.trim() ?? publicCardSettings.name,
         city,
         address,
         countryCode: body.countryCode?.trim().toUpperCase() || null,
@@ -9044,7 +9046,7 @@ test('owner UX mobile long settings form remains editable with a reduced viewpor
   })).toBe(true)
   await expectNoHorizontalOverflow(page)
   await save.click()
-  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
   expect(api.getPublicCardSettings().cardDescription).toBe('Новое описание из мобильного кабинета.')
   await page.setViewportSize({ width: 390, height: 844 })
   await openVenueSection(page, 'Обзор')
@@ -16879,9 +16881,11 @@ test('venue manager configures public profile card settings', async ({ page }) =
   await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
   const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
   await expect(publicCard).toContainText('В предпросмотре отображаются только сохранённые данные.')
-  await expect(publicCard).toContainText('Микс')
+  const name = publicCard.getByRole('textbox', { name: 'Название заведения' })
+  await expect(name).toHaveValue('Микс')
   await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeDisabled()
 
+  await name.fill('Микс на Литейном')
   const cityInput = publicCard.getByPlaceholder('Начните вводить город')
   await cityInput.focus()
   const focusStyle = await cityInput.evaluate((input) => {
@@ -16909,10 +16913,11 @@ test('venue manager configures public profile card settings', async ({ page }) =
   await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeEnabled()
   await publicCard.getByRole('button', { name: 'Сохранить' }).click()
 
-  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
   await expect(publicCard.getByRole('button', { name: '✓ Сохранено' })).toBeDisabled()
   expect(api.getUpdatePublicCardSettingsCalls()).toBe(1)
   expect(api.getPublicCardSettings()).toMatchObject({
+    name: 'Микс на Литейном',
     city: 'Санкт-Петербург',
     address: 'Литейный проспект, 7',
     countryCode: 'RU',
@@ -17017,8 +17022,8 @@ test('venue public card failed save preserves manual location draft', async ({ p
 
   const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
   // Hold the first GET: no editable draft may be overwritten by the server snapshot.
-  await expect(publicCard.locator('input, textarea, button')).toHaveCount(8)
-  for (const input of await publicCard.locator('input, textarea, button').all()) {
+  await expect(publicCard.locator('.venue-form-grid').first().locator('input, textarea, button')).toHaveCount(9)
+  for (const input of await publicCard.locator('.venue-form-grid').first().locator('input, textarea, button').all()) {
     await expect(input).toBeDisabled()
   }
   expect(api.getUpdatePublicCardSettingsCalls()).toBe(0)
@@ -17031,7 +17036,7 @@ test('venue public card failed save preserves manual location draft', async ({ p
   await expect(publicCard.getByText('Маршрут будет построен по указанному адресу.')).toBeVisible()
   await publicCard.getByRole('button', { name: 'Сохранить' }).click()
 
-  await expect(page.locator('p.status')).toContainText('Не удалось сохранить публичную карточку.')
+  await expect(page.locator('.venue-card-save-status')).toContainText('Не удалось сохранить публичную карточку.')
   await expect(publicCard.getByPlaceholder('Начните вводить город')).toHaveValue('Иннополис')
   await expect(publicCard.getByPlaceholder('Улица, дом')).toHaveValue('Баумана, 7')
   await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeEnabled()
@@ -17039,8 +17044,8 @@ test('venue public card failed save preserves manual location draft', async ({ p
   expect(api.getPublicCardSettings().city).toBe('Москва')
 
   await publicCard.getByRole('button', { name: 'Сохранить' }).click()
-  await expect(publicCard.getByRole('button', { name: 'Сохранить' })).toBeDisabled()
-  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await expect(publicCard.getByRole('button', { name: '✓ Сохранено' })).toBeDisabled()
+  await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
   expect(updates).toEqual([updates[0], updates[0]])
   expect(api.getPublicCardSettings()).toMatchObject({ city: 'Иннополис', address: 'Баумана, 7' })
 })
@@ -17057,8 +17062,8 @@ test('venue public card initial read failure keeps unloaded fields disabled', as
   await page.goto('?mode=venue#/settings/card')
   await expect(page.locator('p.status')).toContainText('Публичная карточка недоступна.')
   const publicCard = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
-  await expect(publicCard.locator('input, textarea, button')).toHaveCount(8)
-  for (const input of await publicCard.locator('input, textarea, button').all()) {
+  await expect(publicCard.locator('.venue-form-grid').first().locator('input, textarea, button')).toHaveCount(9)
+  for (const input of await publicCard.locator('.venue-form-grid').first().locator('input, textarea, button').all()) {
     await expect(input).toBeDisabled()
   }
   expect(api.getUpdatePublicCardSettingsCalls()).toBe(0)
@@ -23465,7 +23470,7 @@ test('owner UX02 unsaved card blocks navigation, history and venue switch until 
   await expect(page).toHaveURL(/venueId=1/)
   await expect(description).toHaveValue('Несохранённое первое')
   await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
   expect(api.getPublicCardSettings().cardDescription).toBe('Несохранённое первое')
   await page.locator('.venue-select').selectOption('2')
   await expect(description).toHaveValue('Описание второго')
@@ -23502,7 +23507,7 @@ test('owner UX02 cancelled browser Back preserves subsequent Back and Forward hi
   await expect(description).toHaveValue('История без потерь')
   expect(writes).toHaveLength(0)
   await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
   expect(api.getPublicCardSettings().cardDescription).toBe('История без потерь')
   expect(writes).toHaveLength(1)
   for (let cycle = 0; cycle < 2; cycle++) {
@@ -23565,7 +23570,7 @@ for (const index of [null, 'invalid']) {
     await page.goForward()
     await expect(description).toHaveValue('Неразмеченная история')
     await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
-    await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+    await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
     await page.goBack()
     await expect(page.locator('.venue-settings-catalog')).toBeVisible()
     expect(await page.evaluate(() => history.state)).toEqual({ legacy: 'settings', ...(index === null ? {} : { hookahVenueHistoryIndex: index }) })
@@ -23614,7 +23619,7 @@ test('owner UX02 harden overlapping Back never submits compensation and retains 
   await expect(page).toHaveURL(/#\/settings\/card$/)
   await expect(description).toHaveValue('Два перехода назад')
   await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
   await page.getByRole('button', { name: 'Главная', exact: true }).click()
   await expect(page).toHaveURL(/#\/dashboard$/)
   await expect(page.locator('.venue-settings')).toHaveCount(0)
@@ -23640,7 +23645,7 @@ for (const traversal of ['double-back', 'multi-entry'] as const) {
     await page.evaluate(() => history.go(2))
     await expect(description).toHaveValue('Сразу на две записи')
     await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
-    await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+    await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
     await page.evaluate(() => history.go(-2))
     await expect(page).toHaveURL(/#\/dashboard$/)
     await expect(page.locator('.venue-settings')).toHaveCount(0)
@@ -23697,7 +23702,7 @@ test('owner UX02 direct form and cancelled Forward preserve subsection history',
   }
   // This path saves explicitly; the separate discard regression checks confirmed exit.
   await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
   await page.goForward()
   await expect(page.locator('.venue-settings-catalog')).toBeVisible()
   await page.goForward()
@@ -23748,7 +23753,7 @@ test('owner UX02 saved preview returns to the exact settings subsection', async 
   await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
   await expect(page.locator('p.status')).toHaveText(unsavedPreviewMessage)
   await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+  await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
   await page.getByRole('button', { name: 'Предпросмотр для гостя', exact: true }).click()
   await expect(page).toHaveURL(/#\/guest-preview\?from=settings&section=card$/)
   await expect(page.locator('.screen-root')).toContainText('Изменённая карточка')
@@ -24173,7 +24178,7 @@ test('owner UX02 compat failed save retains draft and full reload does not persi
   await expect(description).toHaveValue('')
   await description.fill('Только в памяти окна')
   await page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) }).getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await expect(page.locator('p.status')).toHaveText('Сохранение не выполнено')
+  await expect(page.locator('.venue-card-save-status')).toHaveText('Сохранение не выполнено')
   await page.evaluate(() => { location.hash = '#/settings' })
   await expect(page.locator('.venue-settings-catalog')).toBeVisible()
   await page.goBack()
@@ -26877,7 +26882,7 @@ for (const role of ['OWNER', 'MANAGER'] as const) {
     expect(popups).toEqual([])
     const card = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка', exact: true }) })
     await card.getByRole('button', { name: 'Сохранить', exact: true }).click()
-    await expect(page.locator('p.status')).toHaveText('Публичная карточка сохранена.')
+    await expect(page.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
     await clickTelegramBackButton(page)
     await expect(page.locator('.venue-settings-catalog')).toBeVisible()
     await page.getByRole('link', { name: 'Карточка заведения', exact: true }).click()
@@ -27032,6 +27037,64 @@ for (const role of ['OWNER', 'MANAGER'] as const) {
     await page.screenshot({ path: testInfo.outputPath(`direct-media-${role}.png`), fullPage: true })
   })
 }
+
+test('saved venue card review link and JPEG leave no draft on Back or reopen', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const cardApi = await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
+  const media = await mockDirectVenueInfoMedia(page)
+  let finishUpload!: () => void
+  const pending = new Promise<void>(resolve => { finishUpload = resolve })
+  await page.route('**/api/venue/1/info-sections/10/media', async route => {
+    await pending
+    await route.fallback()
+  })
+  await page.goto('?mode=venue#/settings')
+  const openCard = page.getByRole('link', { name: 'Карточка заведения', exact: true })
+  await openCard.click()
+  const card = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Публичная карточка' }) })
+  const description = card.getByPlaceholder(/авторские чаши/)
+  const name = card.getByRole('textbox', { name: 'Название заведения' })
+  await name.fill('  Новое название  ')
+  await description.fill('Новый текст карточки')
+  await card.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(name).toHaveValue('Новое название')
+  await expect(description).toHaveValue('Новый текст карточки')
+  await expect.poll(() => cardApi.getPublicCardSettings().cardDescription).toBe('Новый текст карточки')
+  await expect(card.locator('.venue-card-save-status')).toHaveText('Публичная карточка сохранена.')
+  await expect(page.locator('.venue-header')).toContainText('Новое название')
+  const review = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Ссылка для отзывов' }) })
+  await review.getByRole('textbox').fill('https://yandex.ru/maps/org/test/reviews')
+  await review.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(review).toContainText('Текущая ссылка: https://yandex.ru/maps/org/test/reviews')
+  await page.getByText('Управлять фотографиями и PDF', { exact: true }).click()
+  const editor = page.locator('.venue-info-editor')
+  const jpeg = await page.evaluate(() => document.createElement('canvas').toDataURL('image/jpeg').split(',')[1])
+  await page.route('**/api/venue/1/info-sections/10/media/*/content', route => {
+    expect(route.request().headers().authorization).toBe('Bearer e2e-session-token')
+    return route.fulfill({ contentType: 'image/jpeg', body: Buffer.from(jpeg, 'base64') })
+  })
+  await editor.getByLabel('Добавить файлы: О заведении').setInputFiles({
+    name: 'photo.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(jpeg, 'base64')
+  })
+  await expect(editor.getByRole('progressbar')).toBeVisible()
+  await card.getByRole('heading', { name: 'Публичная карточка' }).click()
+  finishUpload()
+  await expect(editor.locator('.venue-info-result')).toContainText('Изображение загружено')
+  expect(media.uploads.map(file => file.mime)).toEqual(['image/jpeg'])
+  await expect(page.getByRole('region', { name: 'Несохранённые черновики', includeHidden: true })).toBeHidden()
+  await expect(card.getByRole('button', { name: '✓ Сохранено' })).toBeDisabled()
+  await page.goBack()
+  await expect(openCard).toBeVisible()
+  await openCard.click()
+  await expect(name).toHaveValue('Новое название')
+  await expect(description).toHaveValue('Новый текст карточки')
+  await expect(review.getByRole('textbox')).toHaveValue('https://yandex.ru/maps/org/test/reviews')
+  await page.getByRole('button', { name: 'Посмотреть материалы: О заведении (1)' }).click()
+  const preview = editor.locator('.venue-info-attachment img')
+  await expect(preview).toBeVisible()
+  await expect.poll(() => preview.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+  expect(media.uploads).toHaveLength(1)
+})
 
 test('direct venue info media lost response retries same operation without a duplicate', async ({ page }) => {
   await installTelegramWebApp(page, 123456789); await mockVenueShiftExtensionApi(page, { role: 'MANAGER', permissions: [] })
@@ -27839,8 +27902,15 @@ test('PDF inline P2 focus refresh replacement deletion and closed editor', async
   await expect.poll(() => started).toBe(true)
   await editor.evaluate((node) => { (node as HTMLDetailsElement).open = false })
   release()
-  await expect(editor.getByRole('button', { name: 'Показать раздел', exact: true, includeHidden: true })).toBeEnabled()
+  const showSection = editor.getByRole('button', { name: 'Показать раздел', exact: true, includeHidden: true })
+  await expect(showSection).toBeEnabled()
+  await expect(editor).not.toHaveAttribute('open', '')
   expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('BUTTON')
+  const summary = editor.locator('summary')
+  await summary.focus(); await page.keyboard.press('Enter')
+  await expect(showSection).toBeVisible()
+  await expect(showSection).toBeEnabled()
+  await expect(summary).toBeFocused()
 })
 
 test('PDF inline P2 focus refuses disabled and removed actions', async ({ page }) => {
@@ -28179,14 +28249,14 @@ test('personal links owner copies the selected venue and manager sees read only 
     const id = Number(new URL(route.request().url()).pathname.match(/venue\/(\d+)/)?.[1])
     if (route.request().method() === 'PUT') updates.push(route.request().postDataJSON())
     await route.fulfill(jsonResponse({ venueId: id, name: 'Микс', address: id === 1 ? 'Москва, Арбат, 1' : 'Казань, Баумана, 2',
-      slug: id === 1 ? 'mix' : 'mix-kazan', catalogListed: true, canManage: true, guestAvailable: id === 2,
+      slug: id === 1 ? 'mix' : 'mix-kazan', catalogListed: true, canManage: true, guestAvailable: id === 2, guestUnavailableReason: id === 1 ? 'PUBLICATION' : null,
       url: `https://stage.example.org/v/${id === 1 ? 'mix' : 'mix-kazan'}`,
       telegramUrl: `https://t.me/hookah_tootah_bot?startapp=venue_${id}` }))
   })
   await page.goto('?mode=venue&venueId=1#/settings/card')
   const block = page.locator('.venue-public-link')
   await expect(block).toContainText('Москва, Арбат, 1')
-  await expect(block).toContainText('Создание ссылки не публикует заведение.')
+  await expect(block).toContainText('Гостевой доступ появится после публикации')
   await expect(block.getByRole('button', { name: 'Скопировать ссылку', exact: true })).toBeDisabled()
   await expect(block.getByRole('button', { name: /^Скопировать/ })).toHaveCount(1)
   expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBeUndefined()
@@ -28237,7 +28307,7 @@ test('personal links copy only the confirmed Telegram link for each selected ven
     await page.goto(`?mode=venue&venueId=${id}#/settings/card`)
     const block = page.locator('.venue-public-link')
     const telegramUrl = `https://t.me/hookah_tootah_bot?startapp=venue_${id}`
-    await expect(block.getByLabel('Прямая ссылка для Telegram')).toHaveValue(telegramUrl)
+    await expect(block.getByLabel('Персональная ссылка в Telegram')).toHaveValue(telegramUrl)
     await block.getByRole('button', { name: 'Скопировать ссылку', exact: true }).click()
     expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBe(telegramUrl)
     await expect(block.getByRole('button', { name: /^Скопировать/ })).toHaveCount(1)
@@ -28249,7 +28319,7 @@ test('personal links copy only the confirmed Telegram link for each selected ven
   }
 })
 
-test('personal links single copy waits for server activation without falling back to HTTPS', async ({ page }) => {
+test('personal links explain missing server configuration without falling back to HTTPS', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await mockGuestApi(page)
   await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
@@ -28259,25 +28329,34 @@ test('personal links single copy waits for server activation without falling bac
       writeText: async (text: string) => { (window as any).__copiedPersonalLink = text }
     } })
   })
-  let omitField = true
+  let reason: string | undefined
+  let telegramUrl: string | null | undefined
   await page.route('**/api/venue/1/public-link', route => route.fulfill(jsonResponse({
     venueId: 1, name: 'Микс', address: 'Москва', slug: 'miks', catalogListed: true, canManage: true,
-    guestAvailable: true, url: 'https://miks.hookahtootah.club', ...(omitField ? {} : { telegramUrl: null })
+    guestAvailable: true, url: 'https://miks.hookahtootah.club', telegramUrl, telegramUnavailableReason: reason
   })))
-  for (const omit of [true, false]) {
-    omitField = omit
-    await page.goto('?mode=venue&venueId=1#/settings/card')
+  for (const [issue, url, message] of [
+    [undefined, undefined, 'Сервер не вернул прямую ссылку'],
+    [undefined, 'https://t.me/h_t_stage_bot?start=venue_1', 'Сервер не вернул прямую ссылку'],
+    [undefined, 'https://t.me/h_t_stage_bot?startapp=venue_2', 'Сервер не вернул прямую ссылку'],
+    ['ENVIRONMENT', null, 'не настроена корректная пара Telegram-бота'],
+    ['MAIN_MINI_APP_UNCONFIRMED', null, 'включить TELEGRAM_MAIN_MINI_APP_CONFIGURED']
+  ] as const) {
+    reason = issue
+    telegramUrl = url
+    if (page.url().includes('#/settings/card')) await page.reload()
+    else await page.goto('?mode=venue&venueId=1#/settings/card')
     const block = page.locator('.venue-public-link')
     const copy = block.getByRole('button', { name: 'Скопировать ссылку', exact: true })
     await expect(copy).toBeDisabled()
     await expect(block.getByRole('button', { name: /^Скопировать/ })).toHaveCount(1)
-    await expect(block.getByLabel('Прямая ссылка для Telegram')).toBeHidden()
+    await expect(block.getByLabel('Персональная ссылка в Telegram')).toBeHidden()
     await expect(block.getByLabel('Персональная ссылка заведения')).toHaveCount(0)
-    await expect(block).toContainText('Ссылка для гостей ещё не активирована.')
+    await expect(block).toContainText(message)
     await copy.dispatchEvent('click')
     expect(await page.evaluate(() => (window as any).__copiedPersonalLink)).toBeUndefined()
     await expectNoHorizontalOverflow(page)
-    if (omit) await block.screenshot({ path: test.info().outputPath('single-link-pending-activation.png') })
+    if (!issue) await block.screenshot({ path: test.info().outputPath('single-link-pending-activation.png') })
   }
 })
 
@@ -28340,7 +28419,7 @@ for (const reason of ['DRAFT', 'SUBSCRIPTION_SUSPENDED']) {
   })
 }
 
-test('personal links Telegram copy stays disabled for closed venue and clipboard failure selects exact link', async ({ page }) => {
+test('personal links disable draft copy and select the exact staging startapp link on clipboard failure', async ({ page }) => {
   await mockGuestApi(page)
   await mockVenueShiftExtensionApi(page, { role: 'OWNER', permissions: ownerUxPermissions })
   await mockOwnerUx(page)
@@ -28350,20 +28429,21 @@ test('personal links Telegram copy stays disabled for closed venue and clipboard
     } })
   })
   let available = false
-  const telegramUrl = 'https://t.me/hookah_tootah_bot?startapp=venue_1'
+  const telegramUrl = 'https://t.me/h_t_stage_bot?startapp=venue_1'
   await page.route('**/api/venue/1/public-link', route => route.fulfill(jsonResponse({
     venueId: 1, name: 'Микс', address: 'Москва', slug: 'miks', catalogListed: false, canManage: true,
-    guestAvailable: available, url: 'https://miks.hookahtootah.club', telegramUrl
+    guestAvailable: available, guestUnavailableReason: available ? null : 'PUBLICATION', url: 'https://miks.hookahtootah.club', telegramUrl
   })))
   await page.goto('?mode=venue&venueId=1#/settings/card')
   const block = page.locator('.venue-public-link')
   await expect(block.getByRole('button', { name: 'Скопировать ссылку', exact: true })).toBeDisabled()
-  await expect(block).toContainText('Ссылка для Telegram станет доступна, когда откроется гостевой доступ')
+  await expect(block).toContainText('Гостевой доступ появится после публикации')
   available = true
   await page.reload()
+  await expect(block).toContainText('прямо в Mini App')
   await block.getByRole('button', { name: 'Скопировать ссылку', exact: true }).click()
   await expect(block.getByRole('status')).toContainText('Выделили ссылку.')
-  const input = block.getByLabel('Прямая ссылка для Telegram')
+  const input = block.getByLabel('Персональная ссылка в Telegram')
   await expect(input).toBeFocused()
   expect(await input.evaluate((element: HTMLInputElement) => element.value.slice(element.selectionStart!, element.selectionEnd!))).toBe(telegramUrl)
 })
@@ -28566,7 +28646,7 @@ test('venue publication mobile owner checks saved data previews confirms and ref
   const link = page.locator('.venue-public-link')
   await expect(link).toContainText('Гости могут открыть заведение по ссылке')
   await expect(link.getByRole('button', { name: 'Скопировать ссылку' })).toBeEnabled()
-  await expect(link.getByLabel('Прямая ссылка для Telegram')).toHaveValue('https://t.me/hookah_tootah_bot?startapp=venue_1')
+  await expect(link.getByLabel('Персональная ссылка в Telegram')).toHaveValue('https://t.me/hookah_tootah_bot?startapp=venue_1')
   await expect(page).toHaveURL(/#\/settings\/card$/)
   expect(posts).toEqual([{ confirmed: true }])
   expect(checks).toEqual(['GET', 'GET', 'GET'])

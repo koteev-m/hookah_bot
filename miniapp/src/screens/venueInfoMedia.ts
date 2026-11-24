@@ -12,12 +12,14 @@ type Upload = { progress: UploadProgress; file: File; section: number; revision:
 
 export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean, venueId: number, onChange?: () => void) {
   const element = el('details', { className: 'venue-info-editor' })
+  const savedMaterials = el('div', { className: 'venue-info-saved' })
   const content = el('div')
   const status = el('p', { className: 'venue-info-result', text: '' }); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite')
   append(element, el('summary', { text: 'Управлять фотографиями и PDF' }), status, content)
   const deps = { isDebug, getAccessToken, clearSession }
   const path = `/api/venue/${venueId}`
   let state: VenueInfoMediaState | null = null
+  let readingList = false
   let busy = false; let disposed = false; let uncertain = false
   let pending: Upload[] = []
   let outcome: 'UNKNOWN' | 'FAILED' | 'SUCCESS' = 'UNKNOWN'
@@ -42,10 +44,10 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
   }
   const refresh = async () => {
     if (busy || disposed) return
-    busy = true; render(); status.textContent = 'Загружаем материалы…'
+    readingList = true; busy = true; render(); status.textContent = 'Загружаем материалы…'
     const result = await requestApi<VenueInfoMediaState>(backendUrl, `${path}/info-media`, { signal: controller.signal }, deps)
     if (disposed) return
-    busy = false
+    readingList = false; busy = false
     if (result.ok) {
       state = result.data
       if (pending.length) {
@@ -100,7 +102,8 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
     }
     busy = false; render()
     const saved = progress.filter((item) => item.status === 'SUCCESS')
-    status.textContent = `${saved.length === 1 ? (saved[0].pdf ? 'PDF загружен' : 'Изображение загружено') : `Загружено файлов: ${saved.length} из ${progress.length}`}. Сохранённые материалы показаны ниже в своих разделах.`
+    const sectionTitle = state.sections.find(item => item.id === saved[0]?.section)?.title
+    status.textContent = `${saved.length === 1 ? (saved[0].pdf ? 'PDF загружен' : 'Изображение загружено') : `Загружено файлов: ${saved.length} из ${progress.length}`}. ${sectionTitle ? `Материалы сохранены в разделе «${sectionTitle}».` : 'Материалы сохранены.'}`
   }
   const select = (section: Section, files: File[], replace?: string) => {
     if (busy || uncertain || pending.length) return
@@ -155,6 +158,24 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
     return label
   }
   const renderContents = () => {
+    savedMaterials.replaceChildren()
+    for (const section of state?.sections ?? []) {
+      const ready = section.media.filter(item => item.status === 'READY')
+      if (!ready.length) continue
+      const open = button(`Посмотреть материалы: ${section.title} (${ready.length})`, () => {
+        element.open = true
+        renderContents()
+        const attachment = sections.get(section.id)?.items.get(ready[0].id)?.element
+        if (attachment) {
+          attachment.tabIndex = -1
+          attachment.focus()
+          attachment.scrollIntoView({ block: 'center' })
+        }
+      }, false)
+      savedMaterials.appendChild(open)
+    }
+    // Defer creating the controls until first open, then keep them in sync with server responses.
+    if (!element.open && !controls.hasChildNodes()) return
     controls.replaceChildren()
     append(controls, button('Обновить список', () => void refresh(), busy), ...(pending.length ? [button(outcome === 'FAILED' ? 'Начать новую загрузку' : 'Повторить загрузку', () => {
       if (outcome === 'FAILED' && state) {
@@ -243,12 +264,17 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
     if (busy) return
     const key = focusTarget
     focusTarget = null
-    if (!key || disposed || document.activeElement !== document.body) return
+    if (!key || !element.open || disposed || document.activeElement !== document.body) return
     const target = Array.from(element.querySelectorAll<HTMLElement>('[data-media-focus]')).find((node) => node.dataset.mediaFocus === key)
     if (target && !target.matches(':disabled') && target.getClientRects().length && getComputedStyle(target).visibility !== 'hidden') {
       target.focus({ preventScroll: true })
     }
   }
-  element.addEventListener('toggle', () => { if ((element as HTMLDetailsElement).open && !state) void refresh() })
-  return { element, busy: () => busy, pending: () => pending.length > 0, dispose: () => { disposed = true; controller.abort(); pending = []; clearPreviews() } }
+  element.addEventListener('toggle', () => {
+    if (!element.open) return
+    if (!state && !busy) void refresh()
+    else render()
+  })
+  void refresh()
+  return { element, savedMaterials, busy: () => busy && !readingList, pending: () => pending.length > 0, dispose: () => { disposed = true; controller.abort(); pending = []; clearPreviews() } }
 }

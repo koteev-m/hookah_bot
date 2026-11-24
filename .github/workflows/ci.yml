@@ -188,6 +188,11 @@ jobs:
             --tests "com.hookah.platform.backend.telegram.TelegramQuickOrderConcurrencyPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixHttpTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixTest" \
+            --tests "com.hookah.platform.backend.venue.links.VenuePublicLinksTest" \
+            --tests "com.hookah.platform.backend.venue.links.VenuePublicLinksRoutesTest" \
+            --tests "com.hookah.platform.backend.venue.links.VenuePublicLinksPostgresTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.VenuePublicationRoutesTest" \
+            --tests "com.hookah.platform.backend.miniapp.venue.VenuePublicationPostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecycleH2Test" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest" \
             --tests "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest" \
@@ -331,6 +336,11 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramQuickOrderConcurrencyPostgresTest",
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixHttpTest",
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixTest",
+              "com.hookah.platform.backend.venue.links.VenuePublicLinksTest",
+              "com.hookah.platform.backend.venue.links.VenuePublicLinksRoutesTest",
+              "com.hookah.platform.backend.venue.links.VenuePublicLinksPostgresTest",
+              "com.hookah.platform.backend.miniapp.venue.VenuePublicationRoutesTest",
+              "com.hookah.platform.backend.miniapp.venue.VenuePublicationPostgresTest",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecycleH2Test",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest",
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest",
@@ -441,6 +451,11 @@ jobs:
               "com.hookah.platform.backend.telegram.TelegramQuickOrderConcurrencyPostgresTest": 6,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixHttpTest": 1,
               "com.hookah.platform.backend.miniapp.venue.seating.SeatingCheckoutFixTest": 3,
+              "com.hookah.platform.backend.venue.links.VenuePublicLinksTest": 8,
+              "com.hookah.platform.backend.venue.links.VenuePublicLinksRoutesTest": 4,
+              "com.hookah.platform.backend.venue.links.VenuePublicLinksPostgresTest": 3,
+              "com.hookah.platform.backend.miniapp.venue.VenuePublicationRoutesTest": 1,
+              "com.hookah.platform.backend.miniapp.venue.VenuePublicationPostgresTest": 3,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecycleH2Test": 12,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaLifecyclePostgresTest": 14,
               "com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaMigrationPostgresTest": 1,

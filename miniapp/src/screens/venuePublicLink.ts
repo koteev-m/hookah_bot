@@ -5,6 +5,8 @@ import { append, el } from '../shared/ui/dom'
 type LinkSettings = {
   venueId: number; name: string; address: string; slug: string | null
   catalogListed: boolean; canManage: boolean; guestAvailable: boolean; url: string | null
+  telegramUnavailableReason?: string | null
+  guestUnavailableReason?: string | null
   telegramUrl?: string | null
 }
 
@@ -16,7 +18,7 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
   const telegramLink = document.createElement('input')
   telegramLink.readOnly = true
   telegramLink.className = 'venue-input'
-  telegramLink.setAttribute('aria-label', 'Прямая ссылка для Telegram')
+  telegramLink.setAttribute('aria-label', 'Персональная ссылка в Telegram')
   const copyTelegram = el('button', { text: 'Скопировать ссылку' })
   const telegramHint = el('p')
   const status = el('p', { text: 'Загружаем ссылку…' })
@@ -46,18 +48,37 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
   const deps = { isDebug, getAccessToken, clearSession }
   const path = `/api/venue/${venueId}/public-link`
   const showAvailability = (data: LinkSettings) => {
+    const reasons: Record<string, string> = {
+      PUBLICATION: 'Гостевой доступ появится после публикации при действующей подписке. Проверьте статус в разделе «Публикация заведения».',
+      SUBSCRIPTION: 'Гостевой доступ закрыт по подписке. Проверьте её статус в разделе «Подписка».',
+      MAINTENANCE: 'Гостевой доступ временно закрыт на время обслуживания.',
+      UNVERIFIED: 'Не удалось проверить гостевой доступ. Повторите проверку позже.'
+    }
     availability.textContent = !data.guestAvailable
-      ? 'Гостевой доступ сейчас закрыт. Создание ссылки не публикует заведение.'
+      ? reasons[data.guestUnavailableReason ?? ''] ?? 'Гостевой доступ сейчас закрыт. Проверьте публикацию и подписку.'
       : data.catalogListed ? 'Заведение доступно гостям и показывается в каталоге.' : 'Не показывать в каталоге. Гости могут открыть заведение по ссылке.'
   }
+  const directLink = (data: LinkSettings) => {
+    const url = data.telegramUrl ?? ''
+    const match = /^https:\/\/t\.me\/[a-zA-Z0-9_]{5,32}\?startapp=venue_([0-9a-z]+)$/.exec(url)
+    return data.venueId === venueId && match?.[1] === venueId.toString(36) ? url : ''
+  }
   const showLinks = (data: LinkSettings) => {
-    telegramLink.value = data.telegramUrl ?? ''
-    telegramLink.hidden = !data.telegramUrl
-    copyTelegram.disabled = !data.telegramUrl || !data.guestAvailable
-    telegramHint.textContent = !data.telegramUrl
-      ? 'Ссылка для гостей ещё не активирована. Администратор платформы включит её после обновления приложения.'
-      : !data.guestAvailable ? 'Ссылка для Telegram станет доступна, когда откроется гостевой доступ к заведению.'
-        : 'Открывает это заведение прямо в Mini App внутри Telegram.'
+    const url = directLink(data)
+    telegramLink.value = url
+    telegramLink.hidden = !url
+    copyTelegram.disabled = !url || !data.guestAvailable
+    if (url) {
+      telegramHint.textContent = data.guestAvailable
+        ? 'Открывает это заведение прямо в Mini App внутри Telegram.'
+        : 'Ссылку можно будет скопировать, когда откроется гостевой доступ.'
+    } else if (data.telegramUnavailableReason === 'MAIN_MINI_APP_UNCONFIRMED') {
+      telegramHint.textContent = 'Прямой запуск выключен в настройках этого окружения. Для его включения нужно подтвердить адрес Main Mini App у бота и включить TELEGRAM_MAIN_MINI_APP_CONFIGURED.'
+    } else if (data.telegramUnavailableReason === 'ENVIRONMENT') {
+      telegramHint.textContent = 'Для этого окружения не настроена корректная пара Telegram-бота и HTTPS-адреса Mini App.'
+    } else {
+      telegramHint.textContent = 'Сервер не вернул прямую ссылку на это заведение. Проверьте настройку Main Mini App для этого окружения.'
+    }
   }
   const show = (data: LinkSettings) => {
     settings = data
@@ -82,7 +103,9 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
     }
   }
   copyTelegram.addEventListener('click', async () => {
-    if (settings?.telegramUrl && settings.guestAvailable) await copyUrl(settings.telegramUrl, telegramLink)
+    if (!settings?.guestAvailable) return
+    const url = directLink(settings)
+    if (url) await copyUrl(url, telegramLink)
   })
   save.addEventListener('click', async () => {
     if (!settings?.canManage || saving) return
@@ -109,13 +132,15 @@ export function mountVenuePublicLink(root: HTMLElement, backendUrl: string, isDe
     if (controller.signal.aborted || id !== requestId || saving) return
     if (result.ok) {
       if (settings) {
-        settings = { ...settings, url: result.data.url, telegramUrl: result.data.telegramUrl, guestAvailable: result.data.guestAvailable }
+        settings = { ...settings, telegramUrl: result.data.telegramUrl, guestAvailable: result.data.guestAvailable, venueId: result.data.venueId }
         showLinks(result.data)
         showAvailability(result.data)
       }
       else show(result.data)
     } else if (settings) {
-      availability.textContent = 'Не удалось обновить доступность ссылки.'
+      settings = { ...settings, guestAvailable: false }
+      showLinks(settings)
+      availability.textContent = 'Не удалось обновить доступность ссылки. Откройте карточку ещё раз.'
     } else {
       status.textContent = 'Не удалось загрузить ссылку выбранного заведения. Обновите страницу и повторите.'
     }

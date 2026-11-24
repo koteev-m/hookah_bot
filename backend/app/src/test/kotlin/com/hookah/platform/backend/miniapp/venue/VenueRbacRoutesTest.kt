@@ -467,6 +467,103 @@ class VenueRbacRoutesTest {
         }
 
     @Test
+    fun `public card rename requires own venue owner or manager and preserves the issued address`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("venue-public-card-rename")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+
+            val venueId = seedVenueMembership(jdbcUrl, TELEGRAM_USER_ID, "OWNER", VenueStatus.DRAFT)
+            val manager = TELEGRAM_USER_ID + 1
+            val callId = seedStaffCall(jdbcUrl, venueId, "NEW")
+            seedUser(jdbcUrl, manager)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use {
+                    it.executeUpdate(
+                        "INSERT INTO table_tokens (token, table_id) " +
+                            "SELECT 'issued-qr', table_id FROM staff_calls WHERE id = $callId",
+                    )
+                    it.executeUpdate(
+                        "INSERT INTO venue_public_addresses (slug, venue_id) VALUES ('old-address', $venueId)",
+                    )
+                    it.executeUpdate("INSERT INTO venue_subscriptions (venue_id, status) VALUES ($venueId, 'ACTIVE')")
+                    it.executeUpdate("UPDATE venues SET public_slug = 'issued-test' WHERE id = $venueId")
+                    it.executeUpdate(
+                        "INSERT INTO venue_members (venue_id, user_id, role) VALUES ($venueId, $manager, 'MANAGER')",
+                    )
+                }
+            }
+
+            suspend fun save(
+                user: Long,
+                name: String,
+            ) = client.put("/api/venue/$venueId/public-card") {
+                headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config, user)}") }
+                contentType(ContentType.Application.Json)
+                val request = VenuePublicCardSettingsUpdateRequest(name = name, city = "Новый город")
+                setBody(json.encodeToString(VenuePublicCardSettingsUpdateRequest.serializer(), request))
+            }
+
+            val staff = manager + 1
+            seedUser(jdbcUrl, staff)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use {
+                    it.executeUpdate(
+                        "INSERT INTO venue_members (venue_id, user_id, role) VALUES ($venueId, $staff, 'STAFF')",
+                    )
+                }
+            }
+            val foreign = staff + 1
+            seedVenueMembership(jdbcUrl, foreign, "OWNER")
+            assertEquals(HttpStatusCode.Forbidden, save(foreign, "Чужое имя").status)
+            assertEquals(HttpStatusCode.Forbidden, save(staff, "Сотрудник").status)
+            for (invalid in listOf("  ", "x".repeat(201))) {
+                assertEquals(HttpStatusCode.BadRequest, save(TELEGRAM_USER_ID, invalid).status)
+            }
+            val before =
+                client.get("/api/venue/$venueId/public-card") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config)}") }
+                }
+            val original = json.decodeFromString(VenuePublicCardSettingsResponse.serializer(), before.bodyAsText())
+            assertEquals("City", original.city)
+            assertEquals("Venue", original.name)
+            val managed = save(manager, "Имя от менеджера")
+            assertEquals(HttpStatusCode.OK, managed.status)
+            val managedCard = json.decodeFromString(VenuePublicCardSettingsResponse.serializer(), managed.bodyAsText())
+            assertEquals("Имя от менеджера", managedCard.name)
+            val saved = save(TELEGRAM_USER_ID, "  Новое имя  ")
+            assertEquals(HttpStatusCode.OK, saved.status)
+            val card = json.decodeFromString(VenuePublicCardSettingsResponse.serializer(), saved.bodyAsText())
+            assertEquals(venueId, card.venueId)
+            assertEquals("Новое имя", card.name)
+            assertEquals("Новый город", card.city)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use {
+                    it.executeQuery(
+                        """
+                        SELECT v.public_slug, v.status, v.name, vs.status AS subscription_status
+                        FROM venues v
+                        JOIN venue_subscriptions vs ON vs.venue_id = v.id
+                        JOIN venue_public_addresses a ON a.venue_id = v.id AND a.slug = 'old-address'
+                        JOIN staff_calls sc ON sc.venue_id = v.id AND sc.id = $callId
+                        JOIN venue_tables t ON t.id = sc.table_id AND t.venue_id = v.id
+                        JOIN table_tokens qr ON qr.table_id = t.id AND qr.token = 'issued-qr' AND qr.is_active
+                        WHERE v.id = $venueId
+                        """.trimIndent(),
+                    ).use { row ->
+                        assertTrue(row.next())
+                        assertEquals("issued-test", row.getString("public_slug"))
+                        assertEquals("DRAFT", row.getString("status"))
+                        assertEquals(card.name, row.getString("name"))
+                        assertEquals("ACTIVE", row.getString("subscription_status"))
+                    }
+                }
+            }
+        }
+
+    @Test
     fun `manager can update public card settings and guest card reflects them`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("venue-public-card-manager-update")

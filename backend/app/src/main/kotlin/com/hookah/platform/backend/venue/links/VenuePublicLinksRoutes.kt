@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
 import com.hookah.platform.backend.miniapp.guest.ensureGuestBrowseAvailableReadOnly
+import com.hookah.platform.backend.miniapp.guest.ensureVenuePublishedForGuest
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
 import io.ktor.http.ContentType
@@ -92,6 +93,14 @@ data class VenuePublicLinkConfig(
             }
             if (miniAppOrigin == null) return null
             val bot = username?.removePrefix("@")?.takeIf { Regex("[A-Za-z0-9_]{5,32}").matches(it) } ?: return null
+            val matchesEnvironment =
+                when (appEnv) {
+                    "staging" -> bot.equals("h_t_stage_bot", true) && webAppUrl == "$STAGING_MINIAPP_ORIGIN/miniapp/"
+                    "prod", "production" ->
+                        bot.equals("hookah_tootah_bot", true) && webAppUrl == "https://$VENUE_ZONE/miniapp/"
+                    else -> true
+                }
+            if (!matchesEnvironment) return null
             return VenuePublicLinkConfig(
                 brandedOrigin ?: miniAppOrigin,
                 bot,
@@ -221,47 +230,54 @@ fun Route.venuePublicLinkApiRoutes(
         ensureGuestBrowseAvailableReadOnly(id, venues, subscriptions)
         call.respond(mapOf("venueId" to id))
     }
-    get("/venue/{venueId}/public-link") {
-        val id = call.pathParameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
-        val settings = links.settings(id, call.requireUserId())
-        val available = !maintenanceActive && isPublicLinkGuestAvailable(id, venues, subscriptions)
-        val url = settings.slug?.let { config?.publicUrl(settings.venueId, it) }
+
+    suspend fun respondSettings(
+        call: ApplicationCall,
+        settings: VenueLinkSettings,
+    ) {
+        val reason =
+            if (maintenanceActive) {
+                "MAINTENANCE"
+            } else {
+                try {
+                    ensureVenuePublishedForGuest(settings.venueId, venues)
+                    if (subscriptions.findSubscriptionState(settings.venueId)?.status?.isBlockedForGuest() == true) {
+                        "SUBSCRIPTION"
+                    } else {
+                        null
+                    }
+                } catch (_: NotFoundException) {
+                    "PUBLICATION"
+                } catch (_: DatabaseUnavailableException) {
+                    "UNVERIFIED"
+                }
+            }
+        val telegramIssue =
+            when {
+                config == null -> "ENVIRONMENT"
+                !config.mainMiniAppConfigured -> "MAIN_MINI_APP_UNCONFIRMED"
+                else -> null
+            }
         call.respond(
             settings.copy(
-                guestAvailable = available,
-                url = url,
+                guestAvailable = reason == null,
+                guestUnavailableReason = reason,
+                url = settings.slug?.let { config?.publicUrl(settings.venueId, it) },
                 telegramUrl = config?.directMiniAppUrl(settings.venueId),
+                telegramUnavailableReason = telegramIssue,
             ),
         )
+    }
+
+    get("/venue/{venueId}/public-link") {
+        val id = call.pathParameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
+        respondSettings(call, links.settings(id, call.requireUserId()))
     }
     put("/venue/{venueId}/public-link") {
         val id = call.pathParameters["venueId"]?.toLongOrNull() ?: throw NotFoundException()
-        val settings = links.update(id, call.requireUserId(), call.receive())
-        val available = !maintenanceActive && isPublicLinkGuestAvailable(id, venues, subscriptions)
-        val url = settings.slug?.let { config?.publicUrl(settings.venueId, it) }
-        call.respond(
-            settings.copy(
-                guestAvailable = available,
-                url = url,
-                telegramUrl = config?.directMiniAppUrl(settings.venueId),
-            ),
-        )
+        respondSettings(call, links.update(id, call.requireUserId(), call.receive()))
     }
 }
-
-private suspend fun isPublicLinkGuestAvailable(
-    id: Long,
-    venues: GuestVenueRepository,
-    subscriptions: SubscriptionRepository,
-): Boolean =
-    try {
-        ensureGuestBrowseAvailableReadOnly(id, venues, subscriptions)
-        true
-    } catch (_: NotFoundException) {
-        false
-    } catch (_: DatabaseUnavailableException) {
-        false
-    }
 
 private fun html(value: String): String =
     value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

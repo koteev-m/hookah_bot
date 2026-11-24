@@ -746,6 +746,7 @@ export type VenuePublicCardSettingsResponse = {
 }
 
 export type VenuePublicCardSettingsUpdateRequest = {
+  name?: string
   city?: string | null
   address?: string | null
   countryCode?: string | null

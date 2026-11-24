@@ -486,7 +486,7 @@ export function mountVenueApp(options: VenueAppOptions) {
   draftNotice.setAttribute('aria-label', 'Несохранённые черновики')
   draftNotice.hidden = true
   refs.content.before(draftNotice)
-  const needsRetention = (draft: SettingsDraft) => draft.state.hasUnsavedChanges() || draft.state.isSaving()
+  const needsRetention = (draft: SettingsDraft) => draft.state.hasFormDraft() || draft.state.hasPendingMedia() || draft.state.isSaving()
   options.registerModeExitGuard?.(() => {
     const guards = new Set<() => boolean>([
       ...[...drafts.values(), ...(currentSettings ? [currentSettings] : [])].map(draft => draft.guard),
@@ -510,8 +510,8 @@ export function mountVenueApp(options: VenueAppOptions) {
     for (const [key, draft] of drafts) {
       if (!needsRetention(draft)) { drafts.delete(key); draft.dispose() }
     }
-    const relevant = [...drafts.values(), ...(currentSettings ? [currentSettings] : [])]
-      .filter((draft) => draft.venueId === selectedVenueId && draft.role === currentRole && draft.userId === currentUserId && needsRetention(draft))
+    const relevant = [...drafts.values(), ...(currentSettings?.state.hasFormDraft() ? [currentSettings] : [])]
+      .filter((draft) => draft.venueId === selectedVenueId && draft.role === currentRole && draft.userId === currentUserId)
     const retainedSchedules = [...scheduleSessions.values()].filter((draft) => draft.venueId === selectedVenueId && draft.controller.hasUnsavedChanges())
     const retainedPhotos = [...photoSessions.values()].filter((session) => session.venueId === selectedVenueId && session.controller.hasPending())
     draftNotice.hidden = relevant.length === 0 && retainedSchedules.length === 0 && retainedPhotos.length === 0
@@ -1159,6 +1159,15 @@ export function mountVenueApp(options: VenueAppOptions) {
           setDraftState: (value) => { state = value },
           onDraftChange: updateDraftNotice,
           onBack: () => navigate('#/dashboard'),
+          onCardSaved: (card) => {
+            const item = accessList.find(venue => venue.venueId === card.venueId)
+            if (disposed || !item) return
+            item.venueName = card.name
+            item.venueCity = card.city
+            const option = Array.from(refs.venueSelect.options).find(entry => entry.value === String(card.venueId))
+            if (option) option.text = venueSelectorLabel(item)
+            if (selectedVenueId === card.venueId) updateAccessState()
+          },
           onPublicationStatusChanged: (venueStatus) => {
             if (disposed || selectedVenueId !== venueId) return
             const index = accessList.findIndex(item => item.venueId === venueId)

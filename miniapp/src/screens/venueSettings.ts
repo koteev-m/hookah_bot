@@ -42,7 +42,8 @@ import { formatPrice } from '../shared/ui/price'
 import { showToast } from '../shared/ui/toast'
 
 export type VenueSettingsDraftState = {
-  hasUnsavedChanges: () => boolean
+  hasFormDraft: () => boolean
+  hasPendingMedia: () => boolean
   isSaving: () => boolean
 }
 
@@ -58,6 +59,7 @@ export type VenueSettingsOptions = {
   onDraftChange?: () => void
   onBack?: () => void
   onOpenPreview?: () => void
+  onCardSaved?: (card: VenuePublicCardSettingsResponse) => void
   onPublicationStatusChanged?: (status: string | null) => void
   onStaffModuleSettingsSaved?: (settings: VenueStaffModuleSettingsDto) => void
 }
@@ -79,7 +81,8 @@ type VenueSettingsRefs = {
   staffModuleConfirmButton: HTMLButtonElement
   staffModuleCancelButton: HTMLButtonElement
   publicCard: HTMLElement
-  publicName: HTMLParagraphElement
+  nameInput: HTMLInputElement
+  cardFeedback: HTMLParagraphElement
   countryInput: HTMLInputElement
   countryOptions: HTMLDivElement
   cityInput: HTMLInputElement
@@ -149,6 +152,7 @@ const UNSAVED_PREVIEW_MESSAGE =
   'Есть несохранённые изменения. Сначала сохраните их, затем откройте предпросмотр.'
 
 type PublicCardDraft = {
+  name: string
   city: string | null
   address: string | null
   countryCode: string | null
@@ -306,9 +310,15 @@ function buildDom(root: HTMLDivElement, compact = false): VenueSettingsRefs {
   const publicDescription = el('p', {
     text: 'Эти данные видят гости в каталоге и карточке заведения.'
   })
-  const publicNameLabel = el('p', { className: 'field-label', text: 'Название' })
-  const publicName = el('p', { className: 'venue-order-sub', text: '' })
+  const publicNameLabel = el('label', { className: 'field-label', text: 'Название заведения' })
   const publicCardForm = el('div', { className: 'venue-form-grid' }) as HTMLDivElement
+
+  const nameInput = el('input', { className: 'venue-input' })
+  publicNameLabel.appendChild(nameInput)
+  nameInput.maxLength = 200
+  nameInput.disabled = true
+  const cardFeedback = el('p', { className: 'venue-card-save-status' })
+  cardFeedback.setAttribute('role', 'status')
 
   const countryLabel = el('p', { className: 'field-label', text: 'Страна' })
   const countryField = el('div', { className: 'venue-combobox-field' }) as HTMLDivElement
@@ -387,6 +397,7 @@ function buildDom(root: HTMLDivElement, compact = false): VenueSettingsRefs {
   })
   append(
     publicCardForm,
+    publicNameLabel,
     countryLabel,
     countryField,
     cityLabel,
@@ -400,9 +411,10 @@ function buildDom(root: HTMLDivElement, compact = false): VenueSettingsRefs {
     cardDescriptionLabel,
     cardDescriptionInput,
     publicCardActions,
+    cardFeedback,
     publicCardPreviewHint
   )
-  append(publicCard, publicTitle, publicDescription, publicNameLabel, publicName, publicCardForm)
+  append(publicCard, publicTitle, publicDescription, publicCardForm)
   const infoMedia = el('div')
   infoMedia.dataset.testid = 'venue-card-info-media'
   append(
@@ -646,7 +658,8 @@ function buildDom(root: HTMLDivElement, compact = false): VenueSettingsRefs {
     staffModuleConfirmButton,
     staffModuleCancelButton,
     publicCard,
-    publicName,
+    nameInput,
+    cardFeedback,
     countryInput,
     countryOptions,
     cityInput,
@@ -754,6 +767,7 @@ function isEmptyLocation(settings: VenuePublicCardSettingsResponse): boolean {
 function settingsToDraft(settings: VenuePublicCardSettingsResponse): PublicCardDraft {
   const defaultCountryCode = isEmptyLocation(settings) ? DEFAULT_COUNTRY_CODE : null
   return {
+    name: settings.name.trim(),
     city: normalizeNullableText(settings.city),
     address: normalizeNullableText(settings.address),
     countryCode: normalizeNullableText(settings.countryCode)?.toUpperCase() ?? defaultCountryCode,
@@ -767,6 +781,7 @@ function settingsToDraft(settings: VenuePublicCardSettingsResponse): PublicCardD
 
 function sameDraft(a: PublicCardDraft, b: PublicCardDraft): boolean {
   return (
+    a.name === b.name &&
     a.city === b.city &&
     a.address === b.address &&
     a.countryCode === b.countryCode &&
@@ -1059,9 +1074,9 @@ function renderScheduleSettings(
   )
 }
 
-function renderPublicCardSettings(refs: VenueSettingsRefs, settings: VenuePublicCardSettingsResponse) {
-  const draft = settingsToDraft(settings)
-  refs.publicName.textContent = settings.name || 'Название не задано'
+function renderPublicCardSettings(refs: VenueSettingsRefs, draft: PublicCardDraft) {
+  refs.nameInput.value = draft.name
+  refs.nameInput.disabled = false
   refs.countryInput.value = countryName(draft.countryCode)
   refs.cityInput.value = draft.city ?? ''
   refs.addressInput.value = draft.address ?? ''
@@ -1144,14 +1159,6 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   const disposables: Array<() => void> = []
   let publication: ReturnType<typeof mountVenuePublication> | null = null
   let publicLink: ReturnType<typeof mountVenuePublicLink> | null = null
-  const mediaEditor = canManagePublicCard ? createVenueInfoMediaEditor(backendUrl, isDebug, venueId, () => publication?.draftChanged()) : null
-  if (mediaEditor) {
-    const container = refs.publicCard.querySelector('[data-testid="venue-card-info-media"]')
-    container?.insertBefore(mediaEditor.element, container.querySelector('details'))
-    disposables.push(mediaEditor.dispose)
-  }
-
-
   let disposed = false
   let discarded = false
   const notifyDraftChange = () => queueMicrotask(() => {
@@ -1159,6 +1166,14 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     publication?.draftChanged()
     options.onDraftChange?.()
   })
+  const mediaEditor = canManagePublicCard ? createVenueInfoMediaEditor(backendUrl, isDebug, venueId, notifyDraftChange) : null
+  if (mediaEditor) {
+    const container = refs.publicCard.querySelector('[data-testid="venue-card-info-media"]')
+    container?.querySelector('details')?.before(mediaEditor.element, mediaEditor.savedMaterials)
+    disposables.push(mediaEditor.dispose)
+  }
+
+
   let loadAbort: AbortController | null = null
   let publicCardSaveAbort: AbortController | null = null
   let reviewLinkSaveAbort: AbortController | null = null
@@ -1167,14 +1182,13 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   let extensionSaveAbort: AbortController | null = null
   let staffModuleLoadAbort: AbortController | null = null
   let staffModuleSaveAbort: AbortController | null = null
-  let currentPublicCardSettings: VenuePublicCardSettingsResponse | null = null
   let publicCardSnapshot: PublicCardDraft | null = null
   let selectedCountryCode: string | null = 'RU'
   let selectedFormattedAddress: string | null = null
   let selectedLatitude: number | null = null
   let selectedLongitude: number | null = null
   let publicCardSaving = false
-  let publicCardSavedTimer: number | null = null
+  let publicCardSaved = false
   let currentReviewLinkSettings: VenuePublicReviewUrlResponse | null = null
   let reviewLinkSaving = false
   let currentScheduleSettings: VenueScheduleSettingsResponse | null = null
@@ -1472,6 +1486,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const currentPublicCardDraft = (): PublicCardDraft => ({
+    name: refs.nameInput.value.trim(),
     city: normalizeNullableText(refs.cityInput.value),
     address: normalizeNullableText(refs.addressInput.value),
     countryCode: normalizeNullableText(selectedCountryCode)?.toUpperCase() ?? null,
@@ -1514,32 +1529,15 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     return currentReviewLinkValue() !== normalizeNullableText(currentReviewLinkSettings.publicReviewUrl)
   }
 
-  const setPublicCardSavedState = () => {
-    if (publicCardSavedTimer) {
-      window.clearTimeout(publicCardSavedTimer)
-      publicCardSavedTimer = null
-    }
-    refs.publicCardSaveButton.textContent = '✓ Сохранено'
-    refs.publicCardSaveButton.disabled = true
-    publicCardSavedTimer = window.setTimeout(() => {
-      publicCardSavedTimer = null
-      updatePublicCardSaveButton()
-    }, 1800)
-  }
-
   const updatePublicCardSaveButton = () => {
     if (publicCardSaving) {
       refs.publicCardSaveButton.disabled = true
       refs.publicCardSaveButton.textContent = 'Сохраняем…'
       return
     }
-    if (publicCardSavedTimer) {
-      refs.publicCardSaveButton.disabled = true
-      return
-    }
     const dirty = publicCardIsDirty()
     refs.publicCardSaveButton.disabled = !dirty
-    refs.publicCardSaveButton.textContent = 'Сохранить'
+    refs.publicCardSaveButton.textContent = publicCardSaved && !dirty ? '✓ Сохранено' : 'Сохранить'
   }
 
   const updateReviewLinkButtons = () => {
@@ -1608,6 +1606,17 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     refs.extensionSaveButton.textContent = busy ? 'Сохраняем…' : 'Сохранить'
   }
 
+  const applyPublicCardSettings = (settings: VenuePublicCardSettingsResponse) => {
+    const draft = settingsToDraft(settings)
+    selectedCountryCode = draft.countryCode
+    selectedFormattedAddress = draft.formattedAddress
+    selectedLatitude = draft.latitude
+    selectedLongitude = draft.longitude
+    renderPublicCardSettings(refs, draft)
+    // Text controls normalize line breaks, including in older records created by the bot.
+    publicCardSnapshot = currentPublicCardDraft()
+  }
+
   const load = async () => {
     if (
       !canManagePublicCard &&
@@ -1632,13 +1641,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
         renderApiError(refs.status, result.error, isDebug)
         return
       }
-      currentPublicCardSettings = result.data
-      publicCardSnapshot = settingsToDraft(currentPublicCardSettings)
-      selectedCountryCode = publicCardSnapshot.countryCode
-      selectedFormattedAddress = publicCardSnapshot.formattedAddress
-      selectedLatitude = publicCardSnapshot.latitude
-      selectedLongitude = publicCardSnapshot.longitude
-      renderPublicCardSettings(refs, currentPublicCardSettings)
+      applyPublicCardSettings(result.data)
       updatePublicCardSaveButton()
     }
     if (canManageReviewLink) {
@@ -1702,36 +1705,42 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   }
 
   const savePublicCardSettings = async () => {
-    if (!canManagePublicCard || !currentPublicCardSettings || !publicCardSnapshot || publicCardSaving || publication?.isPublishing()) return
+    if (!canManagePublicCard || !publicCardSnapshot || publicCardSaving || publication?.isPublishing()) return
     if (!publicCardIsDirty()) return
     const draft = currentPublicCardDraft()
+    if (!draft.name && draft.name !== publicCardSnapshot.name) {
+      refs.cardFeedback.textContent = 'Введите название заведения.'
+      refs.nameInput.focus()
+      return
+    }
     const city = draft.city ?? ''
     const address = draft.address ?? ''
     const guestContact = draft.guestContact ?? ''
     const cardDescription = draft.cardDescription ?? ''
     if (city.length > PUBLIC_CARD_CITY_MAX_LENGTH) {
-      refs.status.textContent = `Город должен быть не длиннее ${PUBLIC_CARD_CITY_MAX_LENGTH} символов.`
+      refs.cardFeedback.textContent = `Город должен быть не длиннее ${PUBLIC_CARD_CITY_MAX_LENGTH} символов.`
       return
     }
     if (address.length > PUBLIC_CARD_ADDRESS_MAX_LENGTH) {
-      refs.status.textContent = `Адрес должен быть не длиннее ${PUBLIC_CARD_ADDRESS_MAX_LENGTH} символов.`
+      refs.cardFeedback.textContent = `Адрес должен быть не длиннее ${PUBLIC_CARD_ADDRESS_MAX_LENGTH} символов.`
       return
     }
     if (guestContact.length > PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH) {
-      refs.status.textContent =
+      refs.cardFeedback.textContent =
         `Контакт для гостей должен быть не длиннее ${PUBLIC_CARD_GUEST_CONTACT_MAX_LENGTH} символов.`
       return
     }
     if (cardDescription.length > PUBLIC_CARD_DESCRIPTION_MAX_LENGTH) {
-      refs.status.textContent =
+      refs.cardFeedback.textContent =
         `Описание должно быть не длиннее ${PUBLIC_CARD_DESCRIPTION_MAX_LENGTH} символов.`
       return
     }
     if ((draft.latitude == null) !== (draft.longitude == null)) {
-      refs.status.textContent = 'Координаты адреса неполные. Выберите адрес заново или сохраните вручную.'
+      refs.cardFeedback.textContent = 'Координаты адреса неполные. Выберите адрес заново или сохраните вручную.'
       return
     }
 
+    refs.cardFeedback.textContent = 'Сохраняем карточку…'
     setPublicCardBusy(true)
     notifyDraftChange()
     publicCardSaveAbort?.abort()
@@ -1742,6 +1751,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
       {
         venueId,
         body: {
+          ...(draft.name !== publicCardSnapshot.name ? { name: draft.name } : {}),
           city: draft.city,
           address: draft.address,
           countryCode: draft.countryCode,
@@ -1761,20 +1771,17 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     notifyDraftChange()
     if (!result.ok) {
       if (result.error.code === REQUEST_ABORTED_CODE) return
-      renderApiError(refs.status, result.error, isDebug)
+      renderApiError(refs.cardFeedback, result.error, isDebug)
       return
     }
-    currentPublicCardSettings = result.data
-    publicCardSnapshot = settingsToDraft(currentPublicCardSettings)
-    selectedCountryCode = publicCardSnapshot.countryCode
-    selectedFormattedAddress = publicCardSnapshot.formattedAddress
-    selectedLatitude = publicCardSnapshot.latitude
-    selectedLongitude = publicCardSnapshot.longitude
-    renderPublicCardSettings(refs, currentPublicCardSettings)
+    applyPublicCardSettings(result.data)
+    options.onCardSaved?.(result.data)
+    publication?.updateName(result.data.name)
     window.dispatchEvent(new CustomEvent('venue-public-card-saved', { detail: result.data }))
-    refs.status.textContent = 'Публичная карточка сохранена.'
+    refs.cardFeedback.textContent = 'Публичная карточка сохранена.'
     showToast('Публичная карточка сохранена.')
-    setPublicCardSavedState()
+    publicCardSaved = true
+    updatePublicCardSaveButton()
   }
 
   const saveReviewLinkSettings = async () => {
@@ -2106,15 +2113,9 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     showToast('Настройки сохранены')
   }
 
-  const clearPublicCardSavedTimer = () => {
-    if (publicCardSavedTimer) {
-      window.clearTimeout(publicCardSavedTimer)
-      publicCardSavedTimer = null
-    }
-  }
-
   const markPublicCardChanged = () => {
-    clearPublicCardSavedTimer()
+    publicCardSaved = false
+    refs.cardFeedback.textContent = ''
     updatePublicCardSaveButton()
   }
 
@@ -2299,7 +2300,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     closeSuggestions(refs.addressSuggestions)
     markPublicCardChanged()
   }))
-  ;[refs.guestContactInput, refs.cardDescriptionInput].forEach((input) => {
+  ;[refs.nameInput, refs.guestContactInput, refs.cardDescriptionInput].forEach((input) => {
     disposables.push(on(input, 'input', markPublicCardChanged))
   })
   const handleDocumentClick = (event: MouseEvent) => {
@@ -2337,6 +2338,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
   // Retention includes unfinished/raw text, even when the save contract normalizes whitespace
   // or a country search has not yet selected a structured value.
   const hasRawCardDraft = () => publicCardSnapshot !== null && (
+    refs.nameInput.value !== publicCardSnapshot.name ||
     refs.countryInput.value !== countryName(publicCardSnapshot.countryCode) ||
     refs.cityInput.value !== (publicCardSnapshot.city ?? '') ||
     refs.addressInput.value !== (publicCardSnapshot.address ?? '') ||
@@ -2396,7 +2398,7 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     disposables.push(publication.dispose, publicLink.dispose)
   }
   options.setLeaveGuard?.(canLeave)
-  options.setDraftState?.({ hasUnsavedChanges: () => hasUnsavedChanges() || Boolean(mediaEditor?.pending()), isSaving })
+  options.setDraftState?.({ hasFormDraft: hasUnsavedChanges, hasPendingMedia: () => Boolean(mediaEditor?.pending()), isSaving })
   disposables.push(on(root, 'input', notifyDraftChange))
   disposables.push(on(root, 'change', notifyDraftChange))
   disposables.push(on(root, 'click', notifyDraftChange))
@@ -2410,7 +2412,6 @@ export function renderVenueSettingsScreen(options: VenueSettingsOptions) {
     publicCardSaveAbort?.abort()
     reviewLinkSaveAbort?.abort()
     scheduleSaveAbort?.abort()
-    if (publicCardSavedTimer) window.clearTimeout(publicCardSavedTimer)
     bookingSaveAbort?.abort()
     extensionSaveAbort?.abort()
     staffModuleLoadAbort?.abort()

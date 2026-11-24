@@ -51,89 +51,106 @@ class VenuePublicLinksTest {
 
     @Test
     fun `explicit HTTPS public origin changes issued URLs only`() {
-        val miniApp = "https://miniapp.example.org/miniapp/?mode=home"
         val branded = "https://hookahtootah.club"
-        for (env in listOf("staging", "production")) {
-            val default = assertNotNull(VenuePublicLinkConfig.from(miniApp, "ExampleBot", appEnv = env))
-            assertEquals("https://miniapp.example.org/v/dym", default.publicUrl(1, "dym"))
-        }
-        assertEquals(
-            "https://staging.hookahtootah.club/v/dym",
-            VenuePublicLinkConfig.from(
-                "https://staging.hookahtootah.club/miniapp/",
-                "ExampleBot",
-                appEnv = "staging",
-            )?.publicUrl(1, "dym"),
-        )
-        val config =
-            assertNotNull(
-                VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, "$branded/", "production"),
-            )
+        val miniApp = "https://staging.hookahtootah.club/miniapp/"
+        val stageBot = "h_t_stage_bot"
+        val default = assertNotNull(VenuePublicLinkConfig.from(miniApp, stageBot, appEnv = "staging"))
+        assertEquals("https://staging.hookahtootah.club/v/dym", default.publicUrl(1, "dym"))
+        val config = assertNotNull(VenuePublicLinkConfig.from(miniApp, stageBot, true, branded, "staging"))
         assertEquals("$branded/v/dym", config.publicUrl(1, "dym"))
-        assertEquals("https://t.me/ExampleBot?startapp=venue_1", config.telegramUrl(1))
-        assertEquals("https://t.me/ExampleBot?startapp=venue_1", config.directMiniAppUrl(1))
-        assertEquals("https://t.me/ExampleBot?startapp=venue_10", config.directMiniAppUrl(36))
-        assertEquals("https://t.me/ExampleBot?start=venue_1", config.telegramUrl(1, false))
-        assertNull(VenuePublicLinkConfig.from(null, "ExampleBot", true, branded, "production"))
+        assertEquals("https://t.me/$stageBot?startapp=venue_1", config.directMiniAppUrl(1))
+        assertEquals("https://t.me/$stageBot?startapp=venue_10", config.directMiniAppUrl(36))
+        assertEquals("https://t.me/$stageBot?start=venue_1", config.telegramUrl(1, false))
+        val productionApp = "$branded/miniapp/"
+        val productionBot = "hookah_tootah_bot"
+        val production =
+            assertNotNull(VenuePublicLinkConfig.from(productionApp, productionBot, true, "$branded/", "production"))
+        assertEquals("$branded/v/dym", production.publicUrl(1, "dym"))
+        assertNull(VenuePublicLinkConfig.from(null, productionBot, true, branded, "production"))
         for (invalid in listOf(
             "http://example.org", "//example.org", " ", "https://user@example.org", "https://example.org:",
             "https://example.org:0", "https://example.org:65536", "$branded/v", "$branded?", "$branded#fragment",
         )) {
             assertFailsWith<IllegalArgumentException>(invalid) {
-                VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, invalid, "production")
+                VenuePublicLinkConfig.from(productionApp, productionBot, true, invalid, "production")
             }
         }
     }
 
     @Test
+    fun `staging and production issue links for their own bot and reject a crossed configuration`() {
+        val stage = "https://staging.hookahtootah.club/miniapp/"
+        val production = "https://hookahtootah.club/miniapp/"
+        val stageBot = "h_t_stage_bot"
+        val prodBot = "hookah_tootah_bot"
+        for (main in listOf(false, true)) {
+            val command = if (main) "startapp" else "start"
+            val stageConfig = assertNotNull(VenuePublicLinkConfig.from(stage, stageBot, main, appEnv = "staging"))
+            val prodConfig = assertNotNull(VenuePublicLinkConfig.from(production, prodBot, main, appEnv = "prod"))
+            assertEquals("https://t.me/$stageBot?$command=venue_3", stageConfig.telegramUrl(3))
+            assertEquals("https://t.me/$prodBot?$command=venue_3", prodConfig.telegramUrl(3))
+            assertEquals(if (main) "https://t.me/$stageBot?startapp=venue_3" else null, stageConfig.directMiniAppUrl(3))
+            assertEquals(if (main) "https://t.me/$prodBot?startapp=venue_3" else null, prodConfig.directMiniAppUrl(3))
+            assertNull(VenuePublicLinkConfig.from(stage, "UnknownBot", main, appEnv = "staging"))
+            assertNull(VenuePublicLinkConfig.from("${production}other", prodBot, main, appEnv = "production"))
+            assertNull(VenuePublicLinkConfig.from(stage, prodBot, main, appEnv = "staging"))
+            assertNull(VenuePublicLinkConfig.from(production, stageBot, main, appEnv = "staging"))
+            assertNull(VenuePublicLinkConfig.from(stage, prodBot, main, appEnv = "prod"))
+            assertNull(VenuePublicLinkConfig.from(production, stageBot, main, appEnv = "production"))
+        }
+    }
+
+    @Test
     fun `staging accepts only the approved branded origin`() {
+        val bot = "h_t_stage_bot"
         val miniApp = "https://staging.hookahtootah.club/miniapp/"
         val branded = "https://hookahtootah.club"
         val config =
-            assertNotNull(VenuePublicLinkConfig.from(miniApp, "ExampleBot", publicOrigin = branded, appEnv = "staging"))
+            assertNotNull(VenuePublicLinkConfig.from(miniApp, bot, publicOrigin = branded, appEnv = "staging"))
         assertEquals("$branded/v/dym", config.publicUrl(1, "dym"))
-        assertEquals("https://t.me/ExampleBot?start=venue_1", config.telegramUrl(1))
+        assertEquals("https://t.me/h_t_stage_bot?start=venue_1", config.telegramUrl(1))
         for (invalid in listOf(
             "https://example.org", "http://hookahtootah.club", "https://www.hookahtootah.club", "$branded.evil.example",
             "$branded/", "$branded:443", "$branded/v", "$branded?", "$branded#fragment",
             "https://user@hookahtootah.club",
         )) {
             assertFailsWith<IllegalArgumentException>(invalid) {
-                VenuePublicLinkConfig.from(miniApp, "ExampleBot", publicOrigin = invalid, appEnv = "staging")
+                VenuePublicLinkConfig.from(miniApp, bot, publicOrigin = invalid, appEnv = "staging")
             }
         }
         for (env in listOf("dev", "test")) {
             assertFailsWith<IllegalArgumentException>(env) {
-                VenuePublicLinkConfig.from(miniApp, "ExampleBot", publicOrigin = branded, appEnv = env)
+                VenuePublicLinkConfig.from(miniApp, bot, publicOrigin = branded, appEnv = env)
             }
         }
     }
 
     @Test
     fun `subdomain issuance is explicit and gives legacy slugs a distinct DNS namespace`() {
+        val bot = "h_t_stage_bot"
         val miniApp = "https://staging.hookahtootah.club/miniapp/"
         val root = "https://hookahtootah.club"
         val long = "a".repeat(64)
         val active =
-            assertNotNull(VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, root, "staging", "subdomain"))
+            assertNotNull(VenuePublicLinkConfig.from(miniApp, bot, true, root, "staging", "subdomain"))
         assertEquals("https://dym.hookahtootah.club", active.publicUrl(1, "dym"))
         assertEquals("https://venue--z.hookahtootah.club", active.publicUrl(35, long))
         assertEquals("https://venue--10.hookahtootah.club", active.publicUrl(36, "www"))
-        assertEquals("https://t.me/ExampleBot?startapp=venue_1", active.telegramUrl(1))
+        assertEquals("https://t.me/h_t_stage_bot?startapp=venue_1", active.telegramUrl(1))
         for (format in listOf(null, "path")) {
-            val config = assertNotNull(VenuePublicLinkConfig.from(miniApp, "ExampleBot", true, root, "staging", format))
+            val config = assertNotNull(VenuePublicLinkConfig.from(miniApp, bot, true, root, "staging", format))
             assertEquals("$root/v/dym", config.publicUrl(1, "dym"))
             assertEquals("$root/v/$long", config.publicUrl(35, long))
             assertEquals("dym", config.labelFromHost("DYM.hookahtootah.club"))
         }
         for (format in listOf("", "SUBDOMAIN", "https://another.example")) {
             assertFailsWith<IllegalArgumentException> {
-                VenuePublicLinkConfig.from(miniApp, "ExampleBot", appEnv = "staging", publicLinkFormat = format)
+                VenuePublicLinkConfig.from(miniApp, bot, appEnv = "staging", publicLinkFormat = format)
             }
         }
         for ((url, env) in listOf(miniApp to "production", miniApp to "dev", "https://example.org" to "staging")) {
             assertFailsWith<IllegalArgumentException> {
-                VenuePublicLinkConfig.from(url, "ExampleBot", appEnv = env, publicLinkFormat = "subdomain")
+                VenuePublicLinkConfig.from(url, bot, appEnv = env, publicLinkFormat = "subdomain")
             }
         }
     }
@@ -251,7 +268,9 @@ internal suspend fun verifyLinks(ds: DataSource) {
     assertFailsWith<InvalidInputException> {
         links.update(second, 202, VenueLinkUpdate(other.slug, true, "dym"))
     }
-    platform.updateVenueName(first, "Новое название")
+    assertNull(platform.updateVenueName(first, "Чужое имя", 202))
+    assertNotNull(platform.updateVenueName(first, "Менеджер", 303))
+    assertNotNull(platform.updateVenueName(first, "Новое название", 101))
     assertEquals("new-dym", links.settings(first, 101).slug)
     ds.connection.use { c ->
         c.createStatement().use { s ->

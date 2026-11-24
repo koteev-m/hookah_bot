@@ -1,6 +1,6 @@
 # Personal venue links on the root domain
 
-The prelaunch setup uses one HT70 `hookah-bot` Compose project on the existing VPS,
+The historical prelaunch setup used one HT70 `hookah-bot` Compose project on the existing VPS,
 one PostgreSQL database, and the current Telegram bot and Mini App. Keep
 `APP_ENV=staging` and `TELEGRAM_WEBAPP_PUBLIC_URL=https://staging.hookahtootah.club/miniapp/`.
 The staging hostname remains the Mini App origin and a compatible address for links already shared.
@@ -8,55 +8,48 @@ The staging hostname remains the Mini App origin and a compatible address for li
 By default, links use the HTTPS origin of `TELEGRAM_WEBAPP_PUBLIC_URL`. The optional
 `runtime.VENUE_PUBLIC_LINK_ORIGIN` in HT70's private `config.json` accepts exactly
 `https://hookahtootah.club`. Leave the key absent until activation. The override
-changes the origin in generated links only. The same backend serves both hosts and
-uses the same venue registry, aliases, availability checks and Telegram targets.
+changes the origin in generated links only. Under that prelaunch routing both hosts used the staging registry. Current Telegram
+links use the bot, Mini App origin and database of their own environment.
 Request Host and forwarded headers cannot choose the generated origin.
 
 ## Direct Main Mini App links for Telegram
 
-`GET/PUT /api/venue/{venueId}/public-link` retains `url` for the personal HTTPS
-address and adds nullable `telegramUrl`. The server generates the latter from the
-authorized venue's ID as `https://t.me/<bot>?startapp=venue_<base36-id>`, only when
-`TELEGRAM_MAIN_MINI_APP_CONFIGURED=true`. Absence/false returns no direct link;
-Venue Mode has one **Скопировать ссылку** button, which copies only `telegramUrl`
-for the selected venue. While the flag is absent/false, it stays disabled with an
-activation explanation; there is no HTTPS fallback copy action. Closed guest access
-also disables copying. The HTTPS field/button are not shown in the owner link block;
-existing HTTPS routes, aliases and QR remain available. Link availability never publishes a venue.
+Venue Mode has one **Скопировать ссылку** action. For a guest-accessible venue it
+copies `https://t.me/<environment-bot>?startapp=venue_<base36-id>` from the authenticated
+public-link response. When Main Mini App is unconfirmed the API returns no
+`telegramUrl` and the button explains the runtime setting. For a draft the button
+explains publication. Existing HTTPS aliases and the separate bot-chat
+`/start venue_<base36-id>` flow remain available under their existing access rules.
 
-The guest resolves the payload through the authenticated venue-entry API after
-normal Telegram authorization. Query/SDK launch values are navigation hints, not
-authorization; server lifecycle/subscription checks still apply. Public-link routes
-read ID, slug and payload from path parameters only, so an identically named query
-parameter cannot select another venue. No table visit,
-QR context, membership or ordering right comes from the payload. HTTPS landing,
-aliases and the explicit `?start=venue_…` bot-chat fallback remain supported.
+### Активация на staging после деплоя
 
-Owner confirmation, **2026-11-04** (`HT-VENUE-SINGLE-TELEGRAM-LINK-01`): Main Mini App
-for `@hookah_tootah_bot` is configured with
-`https://staging.hookahtootah.club/miniapp/`. The owner tested
-`https://t.me/hookah_tootah_bot?startapp=venue_1` on iPhone: it opens Микс directly
-inside Telegram, without Safari, a `/start` message or an intermediate bot button.
-This is owner-provided device evidence, not a browser mock. No repeat BotFather
-setup is required. It does not activate the server runtime flag or publish this UI.
+1. На отдельно допущенной версии проверьте привязки HT70. Для staging это проект
+   `hookah-bot`, `APP_ENV=staging`, БД `hookah` и том `hookah-bot_pgdata`.
+   У production отдельные `hookah_production`, `hookah_prod` и `hookah_production_pgdata`.
+   ID заведения сверяйте по staging. Один и тот же числовой ID может встречаться в обеих БД.
+2. Сверьте username из `getMe` для staging с `@h_t_stage_bot`. В BotFather у этого бота
+   проверьте именно **Main Mini App** и её URL `https://staging.hookahtootah.club/miniapp/`.
+   В production используются `@hookah_tootah_bot` и `https://hookahtootah.club/miniapp/`.
+   Меню бота настраивается отдельно. Если URL Main Mini App не подтверждён, оставьте флаг выключенным.
+3. На iPhone откройте прямую ссылку `https://t.me/h_t_stage_bot?startapp=venue_<base36-id>`
+   для заведомо опубликованного staging-заведения с открытым гостевым доступом.
+   Сверьте название и адрес карточки. Телеграм должен сразу показать Mini App.
+4. После успешной проверки и разрешения на изменение staging задайте **только**
+   `"TELEGRAM_MAIN_MINI_APP_CONFIGURED": "true"` в объекте `runtime` приватного
+   `/opt/hookah-bot/config.json`. Используйте совместимый HT70 и `candidate.json`
+   уже развёрнутого образа. Примените изменение по [процедуре HT70](STAGING_ORDINARY_RELEASE.md).
 
-Remaining activation after a separately authorized code/controller release:
+   ```bash
+   python3 -B /opt/hookah-bot/simple_staging.py deploy --directory /opt/hookah-bot \
+     --candidate /opt/hookah-bot/candidate.json --apply-config
+   ```
 
-1. Add only `"TELEGRAM_MAIN_MINI_APP_CONFIGURED": "true"` to private HT70 runtime
-   and apply through the existing `deploy --apply-config` with an admitted candidate.
-   Preserve `VENUE_PUBLIC_LINK_FORMAT`, origin, APP_ENV, Mini App URL and all other
-   settings; retain all ordinary CI, runtime/schema, shared-lock and backup gates.
-2. In Venue Mode, verify that the single **Скопировать ссылку** action copies the
-   selected venue's server-issued Telegram URL. Test a second venue, closed access,
-   current visit preservation and the previously shared HTTPS/alias/QR links.
-   This final owner-copy UI requires post-release iPhone smoke; the earlier direct
-   launch test does not prove the unpublished UI. No DNS/Caddy/BotFather changes
-   are needed for this activation.
-
-To stop issuing direct links, remove the optional flag (or set it to `false`)
-through the same separately authorized config activation. The copy action becomes unavailable; existing HTTPS and chat fallback
-routes remain available; already shared startapp links depend on Telegram's Main Mini App
-configuration.
+5. После `SUCCESS` скопируйте ссылку из карточки опубликованного заведения.
+   Сверьте `@h_t_stage_bot`, payload выбранного заведения и карточку, открытую в Telegram.
+   Повторите со вторым заведением. Для черновика `Test` (staging ID 3 на момент проверки)
+   ожидаются объяснение публикации и закрытый гостевой вход. Отдельно проверьте
+   существующий вход через чат. Для отключения выдачи верните прежнее значение флага
+   и примените тот же `deploy --apply-config` для того же образа.
 
 Official references: [Main Mini App direct links and start_param](https://core.telegram.org/bots/webapps#launching-the-main-mini-app),
 [BotFather configuration](https://core.telegram.org/bots/webapps#november-17-2024),
