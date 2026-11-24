@@ -1840,6 +1840,7 @@ jobs:
         run: |
           age --version
           age-keygen --version
+          systemd-analyze verify deploy/production/hookah-production-backup.{service,timer}
           python3 -B - <<'PY'
           import unittest
           class Result(unittest.TextTestResult):
@@ -1850,6 +1851,8 @@ jobs:
           suite = unittest.defaultTestLoader.discover("scripts", "test_production_*.py")
           result = unittest.TextTestRunner(verbosity=2, resultclass=Result).run(suite)
           required = {
+              "test_production_backup_points.ScheduledPointsTest.test_same_slot_retries_do_not_take_a_second_snapshot",
+              "test_production_backup_points.ScheduledPointsTest.test_transfer_checks_ciphertext_and_recovers_interrupted_receipt",
               "test_production_media_backup.ProductionMediaBackupTest.test_authenticated_recovery_and_incomplete_ciphertext",
               "test_production_operations.PilotOperationsTest.test_disaster_acceptance_is_bound_to_reviewed_database_and_first_open",
               "test_production_operations.PilotOperationsTest.test_open_requires_same_final_process_ready_and_polling_before_public_marker",

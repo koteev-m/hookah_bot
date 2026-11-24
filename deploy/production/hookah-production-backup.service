@@ -1,0 +1,18 @@
+[Unit]
+Description=Encrypted online backup of Hookah production
+After=docker.service network-online.target
+StartLimitIntervalSec=2h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+Environment=DOCKER_HOST=unix:///var/run/docker.sock
+EnvironmentFile=/etc/hookah-production/backup.env
+ExecStart=/usr/bin/python3 -B ${BACKUP_TOOL} create ${ADMITTED_PLAN} ${AGE_RECIPIENT_FILE} ${BACKUP_SPOOL} ${QUALIFIED_POINTS}
+TimeoutStartSec=2h
+Restart=on-failure
+RestartSec=10min

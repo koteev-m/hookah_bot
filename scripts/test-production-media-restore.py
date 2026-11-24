@@ -1,6 +1,6 @@
 """Rehearse production recovery from two PostgreSQL 17 points and from a stale point alone."""
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import hashlib
 import io
 import json
@@ -97,6 +97,82 @@ class SyntheticStorage:
         return {"Body": io.BytesIO(Key.encode())}
 
 
+def rehearse_online(root, cid, recipient, identity, image, key):
+    """Exercise publication and restore with real writers, pg_dump and age, using a synthetic object store."""
+    sql(cid, "CREATE TABLE online_backup_probe(n int); GRANT SELECT ON online_backup_probe TO hookah_app")
+    plan = root / "online-plan"
+    plan.write_text(json.dumps({"x-hookah-schema": 143, "services": {"backend": {"environment": {}}}}))
+    export = media_backup.snapshot
+
+    @contextmanager
+    def concurrent(target, **kwargs):
+        with export(target, **kwargs) as frozen:
+            sql(cid, "INSERT INTO online_backup_probe VALUES (1)")
+            yield frozen
+
+    class Storage:
+        fault = ""
+
+        def get_object(self, *, Bucket, Key):
+            data = Key.encode()
+            if Key == key and self.fault == "corrupt":
+                data = b"!" * len(data)
+            return {"Body": io.BytesIO(data), "ETag": '"original"'}
+
+        def head_object(self, *, Bucket, Key, IfMatch):
+            require(IfMatch == '"original"' and Bucket == media_backup.PRODUCTION_BUCKET, "conditional R2 check missing")
+            if Key == key:
+                if self.fault == "removed":
+                    raise FileNotFoundError("deleted after GET")
+                if self.fault == "replaced":
+                    raise OSError("precondition failed after replacement")
+                if self.fault == "hidden":
+                    sql(cid, f"UPDATE venue_info_section_media SET is_visible=false WHERE object_key='{key}'")
+            return {"ETag": IfMatch, "ContentLength": len(Key)}
+
+    client = Storage()
+    cli_output = subprocess.check_output
+
+    def output(cmd, **kwargs):
+        if cmd[:3] == ["docker", "inspect", "--format"]:
+            return (image + "\n").encode()
+        return cli_output(cmd, **kwargs)
+
+    with patch.object(media_backup.host, "operator_lock", return_value=nullcontext()), \
+            patch.object(media_backup.host, "lock_args", return_value={}), \
+            patch.object(media_backup.host, "database_space", return_value=(root, 16*1024**2, 0)), \
+            patch.object(media_backup, "backup_target", return_value=(cid, "running", "true")), \
+            patch.object(media_backup, "snapshot", concurrent), patch.object(media_backup, "storage_client", return_value=client), \
+            patch.object(subprocess, "check_output", side_effect=output):
+        point = root / "online-ok"
+        media_backup.backup(plan, point, recipient, False, online=True)
+        recovery.verify_archive(point, image)
+        recovery.coordinate(point)
+        sql(cid, "CREATE DATABASE online_restored OWNER hookah_app")
+        restore_sql = ["exec", "-i", cid, "psql", "-XqAtw", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "online_restored"]
+        recovery.load_database(point, identity, cid, "online_restored", restore_sql)
+        require(recovery.docker(*restore_sql, payload=b"SELECT count(*) FROM online_backup_probe") == "0"
+                and sql(cid, "SELECT count(*) FROM online_backup_probe") == "1", "dump includes a post-snapshot write")
+        rows = media_backup.inventory(recovery.docker(*restore_sql, payload=media_backup.INVENTORY.read_bytes()))
+        require(key in rows, "missing fixture media")
+        counts = media_backup.restore(point, identity, rows, rows)
+        require(counts["selected"] + counts["excluded"] == len(rows), "incomplete online archive")
+        sql(cid, "DROP DATABASE online_restored")
+        for fault, cause in [("corrupt", "checksum mismatch"), ("removed", "deleted after GET"),
+                             ("replaced", "precondition failed"), ("hidden", "required media changed")]:
+            client.fault = fault
+            failed = root / ("online-" + fault)
+            try:
+                media_backup.backup(plan, failed, recipient, False, online=True)
+            except (OSError, Refused) as exc:
+                require(cause in str(exc), "unexpected online failure boundary")
+            else:
+                raise AssertionError("unsafe online point accepted")
+            require(not (failed / "SHA256SUMS").exists(), "failed online point was published")
+    sql(cid, f"UPDATE venue_info_section_media SET is_visible=true WHERE object_key='{key}'; DROP TABLE online_backup_probe")
+    print("PASS online snapshot + independent writer, encrypted PG and media restore, four refusal cases")
+
+
 def rehearse_repair(root, cid, recipient, live_key, denied_keys):
     objects = {}
     class PrivateStorage:
@@ -167,6 +243,7 @@ def rehearse(root, image):
 
         for key in keys[:4]:
             upload(key)
+        rehearse_online(root, cid, recipient, identity, image, keys[0])
         sql(cid, f"INSERT INTO users(telegram_user_id) VALUES(42); INSERT INTO venue_members(venue_id,user_id,role) "
                  f"VALUES ({venue},42,'OWNER')")
         table = sql(cid, f"INSERT INTO venue_tables(venue_id,table_number) VALUES({venue},1) RETURNING id")
@@ -182,8 +259,8 @@ def rehearse(root, image):
             raise AssertionError("ordinary bind accepted an unmarked populated database")
         export_snapshot = media_backup.snapshot
         @contextmanager
-        def concurrent_change(target, *, pass_fds):
-            with export_snapshot(target, pass_fds=pass_fds) as frozen:
+        def concurrent_change(target, *, online, pass_fds):
+            with export_snapshot(target, online=online, pass_fds=pass_fds) as frozen:
                 sql(target, f"UPDATE venue_info_section_media SET is_visible=false WHERE object_key='{keys[0]}'")
                 require(sql(target, f"SELECT is_visible FROM venue_info_section_media WHERE object_key='{keys[0]}'") == "f",
                         "concurrent transaction did not commit the visibility change")
