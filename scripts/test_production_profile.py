@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 import textwrap
 import unittest
+import zipfile
 from unittest.mock import patch
 
 import production_profile as p
@@ -230,7 +231,7 @@ class ProductionProfileTest(unittest.TestCase):
         run = {"id": 10, "repository": {"full_name": p.REPO}, "head_repository": {"full_name": p.REPO},
                "event": "push", "head_branch": "other", "head_sha": self.release["revision"],
                "status": "completed", "conclusion": "success", "path": ".github/workflows/ci.yml"}
-        with patch("subprocess.check_output", return_value=json.dumps(run)), patch("subprocess.run") as download:
+        with patch.object(p, "github_get", return_value=run), patch("subprocess.run") as download:
             with self.assertRaises(p.Refused):
                 p.verify_published(self.release)
             download.assert_not_called()
@@ -239,20 +240,32 @@ class ProductionProfileTest(unittest.TestCase):
         run = dict(id=10, repository={"full_name": p.REPO}, head_repository={"full_name": p.REPO},
                    event="push", head_branch="main", head_sha=self.release["revision"], run_attempt=2,
                    status="completed", conclusion="success", path=".github/workflows/ci.yml")
-        def download(args, check):
-            self.assertIn("ghcr-candidate-" + self.release["revision"] + "-2", args)
-            (Path(args[-1]) / "candidate.json").write_text(json.dumps(self.release))
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("candidate.json", json.dumps(self.release))
+        raw = buf.getvalue()
         job = (p.ROOT / ".github/workflows/ci.yml").read_text().split("  publish-ghcr:", 1)[1]
         self.assertLess(job.index("Verify registry image and create candidate"), job.index("Upload immutable candidate"))
         self.assertLess(job.index("Upload immutable candidate"), job.index("Record verified image ${{ steps.build.outputs.digest }}"))
-        publisher = {"name": "publish-ghcr", "head_sha": self.release["revision"], "conclusion": "success",
+        publisher = {"id": 100, "name": "publish-ghcr", "head_sha": self.release["revision"], "conclusion": "success",
                      "run_id": 10, "run_attempt": 2, "steps": [{"name": "Record verified image sha256:" + "b"*64, "conclusion": "success"}]}
-        def api(args):
-            return json.dumps([{"jobs": [publisher]}] if "--paginate" in args else run)
-        with patch("subprocess.check_output", side_effect=api), patch("subprocess.run", side_effect=download) as fetch:
-            receipt = p.verify_published(self.release)
-            fetch.assert_called_once()
-            fetch.side_effect = AssertionError("expired artifact must not be downloaded")
+        jobs = [dict(publisher, name=n, id=i+1000, status="completed") for i, n in enumerate(p.REQUIRED_JOBS - {"publish-ghcr"})]
+        publisher["status"] = "completed"
+        jobs.append(publisher)
+        def api(path):
+            if "/artifacts?" in path:
+                return dict(total_count=1, artifacts=[dict(id=23, name="ghcr-candidate-" + self.release["revision"] + "-2",
+                        expired=False, size_in_bytes=len(raw), digest="sha256:" + hashlib.sha256(raw).hexdigest(),
+                        workflow_run=dict(id=10, head_sha=self.release["revision"]))])
+            if "/jobs?" in path:
+                return dict(jobs=jobs, total_count=len(jobs))
+            return run
+        with patch.object(p, "github_get", side_effect=api), patch("subprocess.run", side_effect=AssertionError("no gh on VPS")):
+            receipt = p.verify_published(self.release, archive=raw, expected_attempt=2)
+            with self.assertRaises(p.Refused):
+                p.verify_published(self.release, archive=raw[:-1], expected_attempt=2)
+            with self.assertRaises(p.Refused):
+                p.verify_published(self.release, archive=raw, expected_attempt=1)
             self.path.write_text(json.dumps(receipt))
             pin = hashlib.sha256(self.path.read_bytes()).hexdigest()
             self.assertEqual(p.verify_published(self.release, self.path, pin), receipt)
@@ -274,7 +287,7 @@ class ProductionProfileTest(unittest.TestCase):
     def test_update_rejects_downgrade_and_divergence(self):
         for status, base in (("behind", "a"), ("identical", "a"), ("ahead", "b")):
             record = {"status": status, "merge_base_commit": {"sha": base * 40}}
-            with self.subTest(status=status), patch("subprocess.check_output", return_value=json.dumps(record)):
+            with self.subTest(status=status), patch.object(p, "github_get", return_value=record):
                 with self.assertRaises(p.Refused):
                     p.verify_forward("a" * 40, "c" * 40)
 

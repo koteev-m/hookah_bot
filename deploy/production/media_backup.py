@@ -22,6 +22,23 @@ UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 KEY = re.compile(rf"(?:staff-photos/{UUID}\.jpg|venue-info/{UUID}\.(?:jpg|png|pdf))")
 
 
+def recovery_tools(root):
+    """Bind a rehearsal to the backup/restore implementation that produced and consumed the point."""
+    files = ["deploy/production/" + n for n in (
+        "backup.sh", "backup_points.py", "media_backup.py", "restore-test.sh", "restore_test.py", "restore-scheduled.py",
+        "history.sql", "media-inventory.sql")]
+    files += ["scripts/" + n for n in ("production_profile.py", "production_host.py", "production_traffic.py",
+                                      "simple_staging.py")]
+    migr = root / "backend/app/src/main/resources/db/migration/postgresql"
+    migrations = sorted(migr.glob("V*__*.sql"))
+    require(bool(migrations), "missing approved migration sources")
+    files.extend(str(f.relative_to(root)) for f in migrations)
+    h = hashlib.sha256()
+    for name in files:
+        h.update(name.encode() + b"\0" + hashlib.sha256((root / name).read_bytes()).digest())
+    return h.hexdigest()
+
+
 def inventory(raw):
     rows = {}
     decoded = json.loads(raw)

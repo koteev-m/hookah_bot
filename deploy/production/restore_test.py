@@ -217,7 +217,11 @@ def main():
     parser.add_argument("--point-sha256")
     parser.add_argument("--metadata-sha256")
     parser.add_argument("--keep-quarantine", action="store_true")
+    parser.add_argument("--release-json", action="store_true", help="emit a full single-point rehearsal result after cleanup")
     args = parser.parse_args()
+    if args.release_json:
+        require(args.point_sha256 and not (args.assertions or args.metadata_point or args.keep_quarantine)
+                and (args.point / "media.tar.age").is_file(), "complete isolated single-point rehearsal required")
     point, identity, image = args.point, args.identity, args.image
     state = Path(os.getenv("XDG_STATE_HOME", Path.home() / ".local/state")) / "hookah-production-restore"
     prepare_state_directory(state)
@@ -263,7 +267,12 @@ def main():
         finally:
             if journal.exists():
                 cleanup(journal, daemon)
-    print("Isolated restore, integrity and cleanup passed")
+    if args.release_json:
+        print(json.dumps({"point": point.name, "pin": args.point_sha256, "source": coordinate(point)[0],
+                          "postgres": image, "schema": (point / "schema-version").read_text().strip(),
+                          "tools": media_backup.recovery_tools(HERE.parents[1]), "result": "PASS"}))
+    else:
+        print("Isolated restore, integrity and cleanup passed")
 
 
 if __name__ == "__main__":
