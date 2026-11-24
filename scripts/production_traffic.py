@@ -881,6 +881,20 @@ def operate(args):
         raise
 
 
+def dispatch_locked(args):
+    """Operate on an existing production installation under its native locks."""
+    if args.action in ("stage", "resume", "rollback", "start-closed"):
+        host.verify_slice()
+        base = getattr(args, "previous", args.plan)
+        path, db, wal = host.database_space(verified_database(base, transition_from=args.plan))
+        target = base if args.action == "rollback" else args.plan
+        services = json.loads(target.read_bytes())["services"]
+        release = args.action in ("stage", "rollback")
+        host.image_space(host.plan_images(services), allocations=[(path, db + wal if release else 0)],
+                         reserve_release=release)
+    operate(args)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -925,16 +939,7 @@ def main():
         elif pending_close or args.action in ("install", "install-db", "install-successor", "recovery-start"):
             install_closed(args.action, args.plan)
         else:
-            if args.action in ("stage", "resume", "rollback", "start-closed"):
-                host.verify_slice()
-                base = getattr(args, "previous", args.plan)
-                path, db, wal = host.database_space(verified_database(base, transition_from=args.plan))
-                target = base if args.action == "rollback" else args.plan
-                services = json.loads(target.read_bytes())["services"]
-                release = args.action in ("stage", "rollback")
-                host.image_space(host.plan_images(services), allocations=[(path, db + wal if release else 0)],
-                                 reserve_release=release)
-            operate(args)
+            dispatch_locked(args)
     print("OK", args.action)
 
 

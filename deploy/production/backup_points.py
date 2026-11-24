@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -16,6 +17,7 @@ import tempfile
 import media_backup
 from production_profile import Refused, require, sync_directory
 from restore_test import coordinate, verify_archive
+from simple_staging import atomic, private_json
 
 STAMP = "full-%Y%m%dT%H%M%SZ"
 NAME = re.compile(r"full-[0-9]{8}T[0-9]{6}Z")
@@ -101,6 +103,13 @@ def expire(directory, qualified, now):
 def create(plan, recipient_file, spool, qualified):
     now = datetime.now(timezone.utc)
     with exclusive(spool):
+        journal = qualified.parent / "ordinary-update.json"
+        if journal.exists():
+            update = private_json(journal)
+            if update["phase"] not in ("done", "rolled-back") and update.get("backup_plan") != str(plan):
+                # A persistent timer can fire on reboot or immediately when the operator restarts it.
+                print("Backup deferred while reconciling production update", flush=True)
+                return
         slot = now.replace(hour=now.hour // 6 * 6, minute=0, second=0, microsecond=0).strftime(STAMP)
         completed = sorted(p for p in spool.iterdir() if NAME.fullmatch(p.name) and p.name >= slot)
         if completed:
@@ -113,6 +122,11 @@ def create(plan, recipient_file, spool, qualified):
                 media_backup.backup(plan, point, recipient_file.read_text().strip(), False, online=True)
                 verified(point)
                 publish(point, dest, shared=True)
+            # A reused slot cannot establish that a new producer actually wrote a point.
+            marker = qualified.parent / "scheduled-producer.json"
+            version = producer(recipient_file)
+            if not marker.exists() or private_json(marker).get("version") != version:
+                atomic(marker, {"version": version, "first": dest.name})
             print("Published online backup", dest.name, flush=True)
         expire(spool, qualified, now)
 
@@ -185,13 +199,20 @@ def pull_points(source, destination, state):
         expire(destination, state / "qualified.sha256", datetime.now(timezone.utc))
 
 
-def pull(uuid, state):
-    private_directory(state)
-    state = state.resolve()
+def external_disk(uuid):
     disk = plistlib.loads(subprocess.check_output(["/usr/sbin/diskutil", "info", "-plist", str(VOLUME)]))
     require(disk.get("VolumeUUID") == uuid and disk.get("MountPoint") == str(VOLUME)
             and disk.get("Internal") is False and disk.get("BusProtocol") == "USB" and disk.get("WritableVolume"),
             "expected writable external backup disk unavailable")
+    require(os.path.ismount(VOLUME) and VOLUME.stat().st_dev == os.stat(disk["DeviceNode"]).st_rdev,
+            "external mount changed")
+    return disk
+
+
+def pull(uuid, state):
+    private_directory(state)
+    state = state.resolve()
+    disk = external_disk(uuid)
     # Pin the cwd to that actual filesystem before creating anything on it.
     os.chdir(VOLUME)
     require(os.stat(".").st_dev == os.stat(disk["DeviceNode"]).st_rdev and os.path.ismount(VOLUME),
@@ -199,6 +220,95 @@ def pull(uuid, state):
     directory = Path("Hookah-Production-Scheduled")
     directory.mkdir(mode=0o700, exist_ok=True)
     pull_points(SOURCE, directory, state)
+
+
+def external_point(directory, receipts, name):
+    require(NAME.fullmatch(name), "invalid point name")
+    receipt = receipts / (name + ".sha256")
+    private_file(receipt)
+    match = re.fullmatch(r"([a-f0-9]{64})  " + re.escape(name) + r"\n", receipt.read_text())
+    require(match, "missing independent point checksum")
+    point = directory / name
+    pin = verified(point, match[1])
+    return dict(point=name, pin=pin, source=coordinate(point)[0],
+                postgres=(point / "postgres-image").read_text().strip(), schema=(point / "schema-version").read_text().strip())
+
+
+def producer(recipient_file, root=None):
+    return {"tools": media_backup.recovery_tools(root or Path(__file__).resolve().parents[2]),
+            "recipient": hashlib.sha256(recipient_file.read_bytes()).hexdigest()}
+
+
+def private_file(path):
+    st = path.lstat()
+    require(path.resolve() == path.absolute() and stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid()
+            and not st.st_mode & 0o077, "private operator file required")
+
+
+def newest(directory):
+    names = [p.name for p in directory.iterdir() if NAME.fullmatch(p.name)]
+    require(names, "no complete scheduled point available")
+    return max(names)
+
+
+def timestamp(name):
+    return datetime.strptime(name, STAMP).replace(tzinfo=timezone.utc).timestamp()
+
+
+def release_backup(directory, receipts, now, tools):
+    private_directory(receipts)
+    require(not any(os.path.lexists(receipts / n) for n in ("restore-pending", "release-hold")),
+            "unresolved backup or restore issue")
+    fresh = external_point(directory, receipts, newest(directory))
+    require(0 <= now - timestamp(fresh["point"]) <= 8 * 3600, "external point outside eight-hour window")
+    proof = receipts / "release-restore.json"
+    private_file(proof)
+    tested = json.loads(proof.read_bytes())
+    require(tested["result"] == "PASS" and tested["tools"] == tools
+            and timestamp(tested["point"]) <= tested["completed"] <= now
+            and now - tested["completed"] <= 7 * 86400, "new compatible isolated rehearsal required")
+    prior = external_point(directory, receipts, tested["point"])
+    require(all(tested[k] == v for k, v in prior.items()) and
+            all(prior[k] == fresh[k] for k in ("source", "postgres", "schema"))
+            and coordinate(directory / prior["point"])[1] <= coordinate(directory / fresh["point"])[1],
+            "rehearsal and external point are incompatible")
+    return {"fresh": fresh, "tested": tested["point"]}
+
+
+def rehearse_if_due(directory, receipts, runner, *, force=False):
+    """The custodian's adapter supplies the isolated host and volatile key, never the scheduler."""
+    private_directory(receipts)
+    private_file(runner)
+    require(force or not os.path.lexists(receipts / "release-hold"), "custodian hold requires investigation")
+    tools = media_backup.recovery_tools(Path(__file__).resolve().parents[2])
+    now = datetime.now(timezone.utc).timestamp()
+    proof = receipts / "release-restore.json"
+    pending = receipts / "restore-pending"
+    if not force and proof.exists() and not pending.exists():
+        try:
+            release_backup(directory, receipts, now, tools)
+        except Refused:
+            pass
+        else:
+            if now - json.loads(proof.read_bytes())["completed"] < 6 * 86400:
+                return
+    point = external_point(directory, receipts, newest(directory))
+    require(0 <= now - timestamp(point["point"]) <= 8 * 3600, "fresh point required for periodic rehearsal")
+    pending.touch(mode=0o600)
+    sync_directory(receipts)
+    result = subprocess.run([str(runner), str(directory / point["point"]), point["pin"], point["postgres"]],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=7200, check=True)
+    expect = dict(point, tools=tools, result="PASS")
+    require(json.loads(result.stdout) == expect, "isolated restore result mismatch")
+    expect["completed"] = datetime.now(timezone.utc).timestamp()
+    with tempfile.NamedTemporaryFile(dir=receipts, delete=False) as f:
+        f.write(json.dumps(expect).encode())
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(f.name, proof)
+    sync_directory(receipts)
+    pending.unlink()
+    sync_directory(receipts)
 
 
 def status(spool, now):
@@ -226,13 +336,23 @@ def main():
     fetch = sub.add_parser("pull")
     fetch.add_argument("volume_uuid")
     fetch.add_argument("receipt_directory", type=Path)
+    fetch.add_argument("--restore-runner", type=Path, help="private absolute custodian adapter, invoked after successful pull")
+    fetch.add_argument("--rehearse-now", action="store_true", help="require a new rehearsal even inside the weekly window")
     sub.add_parser("status").add_argument("spool", type=Path)
     args = parser.parse_args()
     os.umask(0o077)
     if args.command == "create":
         create(args.plan, args.recipient, args.spool, args.qualified)
     elif args.command == "pull":
-        pull(args.volume_uuid, args.receipt_directory)
+        require(not args.rehearse_now or args.restore_runner, "a custodian adapter is required")
+        if args.restore_runner:
+            require(args.restore_runner.is_absolute() and args.receipt_directory.is_absolute(), "absolute custody paths required")
+        with exclusive(args.receipt_directory):
+            pull(args.volume_uuid, args.receipt_directory)
+            if args.restore_runner:
+                directory = VOLUME / "Hookah-Production-Scheduled"
+                with exclusive(directory):
+                    rehearse_if_due(directory, args.receipt_directory, args.restore_runner, force=args.rehearse_now)
     else:
         status(args.spool, datetime.now(timezone.utc))
 

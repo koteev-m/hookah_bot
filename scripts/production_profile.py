@@ -10,12 +10,13 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 
 import production_host as host
 from simple_staging import (IMAGE_RE, PDF_FLAG, PDF_IPC, R2_CONNECTION_KEYS, REPO, SOURCE,
-                            PdfWorkerAdmission, Refused, add_pdf_worker, digest, history_for, manifest, require)
+                            NoCiRedirect, REQUIRED_JOBS, PdfWorkerAdmission, Refused, public_ci_json, add_pdf_worker, digest, history_for, manifest, require)
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / "deploy/production"
@@ -90,11 +91,13 @@ def candidate(path):
     return value
 
 
-def render(values, release):
+def render(values, release, *, bind_directory=None):
     # Compose interpolates the invoking shell before an env file. Pass only reviewed inputs.
     env = {k: os.environ[k] for k in ("PATH", "HOME", "DOCKER_CONFIG", "DOCKER_HOST") if k in os.environ}
     env.update(values, RELEASE_SHA=release["revision"], BACKEND_IMAGE=release["image"])
     args = ["docker", "compose", "--env-file", "/dev/null", "-p", PRODUCTION_PROJECT, "-f", str(PROFILE / "compose.yaml")]
+    if bind_directory is not None:
+        args.extend(["--project-directory", str(bind_directory)])
     overlay = None
     if values.get(MEDIA_FLAG) == "true":
         media = {k: values[k] for k in R2_CONNECTION_KEYS}
@@ -126,9 +129,55 @@ def source_manifest():
     return rows
 
 
-def verify_published(release, evidence=None, pinned=None):
+def github_get(path):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoCiRedirect())
+    return public_ci_json(opener, f"https://api.github.com/repos/{REPO}/{path}", time.monotonic() + 15)
+
+
+def github_pages(path, field):
+    rows = []
+    total = None
+    for page in range(1, 11):
+        result = github_get(f"{path}?per_page=100&page={page}")
+        if total is None:
+            total = result["total_count"]
+        batch = result[field]
+        require(type(total) is int and 0 <= total <= 1000 and result["total_count"] == total
+                and isinstance(batch, list) and len(batch) == min(100, total - len(rows)), "incomplete GitHub listing")
+        rows.extend(batch)
+        if len(rows) == total:
+            require(len({r["id"] for r in rows}) == total, "duplicate GitHub result")
+            return rows
+    raise Refused("GitHub listing exceeds limit")
+
+
+def candidate_artifact(release, attempt):
+    run = release["ci_run"]
+    name = f"ghcr-candidate-{release['revision']}-{attempt}"
+    found = [a for a in github_pages(f"actions/runs/{run}/artifacts", "artifacts") if a["name"] == name]
+    require(len(found) == 1, "unique candidate artifact required")
+    artifact = found[0]
+    require(artifact.get("expired") is False and artifact["workflow_run"]["id"] == run
+            and artifact["workflow_run"]["head_sha"] == release["revision"]
+            and type(artifact["id"]) is int and artifact["id"] > 0
+            and 0 < artifact["size_in_bytes"] <= 4 * 1024**2
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", artifact.get("digest") or ""), "unusable candidate artifact")
+    return artifact
+
+
+def check_archive(raw, artifact, release):
+    require(len(raw) == artifact["size_in_bytes"] and
+            "sha256:" + hashlib.sha256(raw).hexdigest() == artifact["digest"], "GitHub ZIP digest mismatch")
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        entries = [m for m in archive.infolist() if m.filename == "candidate.json"]
+        require(len(entries) == 1 and 0 < entries[0].file_size <= 4096
+                and json.loads(archive.read(entries[0])) == release, "published candidate differs")
+
+
+def verify_published(release, evidence=None, pinned=None, *, archive=None, expected_attempt=None):
     run_id = str(release["ci_run"])
-    data = json.loads(subprocess.check_output(["gh", "api", f"repos/{REPO}/actions/runs/{run_id}"]))
+    endpoint = f"actions/runs/{run_id}"
+    data = github_get(endpoint)
     require(data["id"] == release["ci_run"] and data["repository"]["full_name"] == REPO
             and data["head_repository"]["full_name"] == REPO and data["event"] == "push"
             and data["head_branch"] == "main" and data["head_sha"] == release["revision"]
@@ -138,15 +187,27 @@ def verify_published(release, evidence=None, pinned=None):
     require(type(attempt) is int and attempt > 0, "invalid CI attempt")
     receipt = {"repository": REPO, "workflow": data["path"], "attempt": attempt, "candidate": release}
     # Match the verified publisher's retained step, independent of both the candidate and custodian file.
-    pages = json.loads(subprocess.check_output(["gh", "api", "--paginate", "--slurp",
-                       f"repos/{REPO}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"]))
-    publishers = [job for page in pages for job in page["jobs"] if job["name"] == "publish-ghcr"]
+    require(expected_attempt is None or expected_attempt == attempt, "CI attempt changed")
+    jobs = github_pages(f"{endpoint}/attempts/{attempt}/jobs", "jobs")
+    if archive is not None:
+        require(REQUIRED_JOBS <= {job["name"].split(" (")[0] for job in jobs}
+                and all(job.get("head_sha") == release["revision"] and job.get("run_id") == release["ci_run"]
+                        and job.get("run_attempt", attempt) == attempt and job.get("conclusion") == "success"
+                        and job.get("status") == "completed" for job in jobs), "incomplete green CI attempt")
+    publishers = [job for job in jobs if job["name"] == "publish-ghcr"]
     step = "Record verified image " + release["image"].split("@")[1]
     require(len(publishers) == 1 and publishers[0].get("conclusion") == "success" and
             publishers[0].get("head_sha") == release["revision"] and publishers[0].get("run_id") == release["ci_run"] and
             publishers[0].get("run_attempt", attempt) == attempt and
             sum(s.get("name") == step and s.get("conclusion") == "success" for s in publishers[0]["steps"]) == 1,
             "no independently verified image digest in this publisher attempt")
+    if archive is not None:
+        require(evidence is None and pinned is None and expected_attempt == attempt, "ambiguous archive admission")
+        check_archive(archive, candidate_artifact(release, attempt), release)
+        final = github_get(endpoint)
+        require(all(final.get(k) == data.get(k) for k in ("id", "head_sha", "run_attempt", "status", "conclusion",
+                                                          "head_branch", "event", "path")), "GitHub run changed during admission")
+        return receipt
     if evidence is not None or pinned is not None:
         require(evidence is not None and isinstance(pinned, str) and re.fullmatch("[a-f0-9]{64}", pinned),
                 "release evidence requires its independently held SHA-256")
@@ -154,11 +215,7 @@ def verify_published(release, evidence=None, pinned=None):
         require(hashlib.sha256(raw).hexdigest() == pinned and json.loads(raw) == receipt,
                 "release evidence differs from custodian pin or successful CI attempt")
         return receipt
-    name = f"ghcr-candidate-{release['revision']}-{data['run_attempt']}"
-    with tempfile.TemporaryDirectory() as folder:
-        subprocess.run(["gh", "run", "download", run_id, "--repo", REPO, "-n", name, "-D", folder], check=True)
-        require(candidate(Path(folder) / "candidate.json") == release, "published candidate differs")
-    return receipt
+    raise Refused("supply the original GitHub candidate ZIP from the operator Mac and its attempt, or held custody evidence")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -323,7 +380,7 @@ def check_target_image(plan):
 
 
 def verify_forward(previous, desired):
-    compare = json.loads(subprocess.check_output(["gh", "api", f"repos/{REPO}/compare/{previous}...{desired}"]))
+    compare = github_get(f"compare/{previous}...{desired}?per_page=1")
     require(compare["status"] == "ahead" and compare["merge_base_commit"]["sha"] == previous,
             "ordinary update requires a descendant of the current revision")
 
@@ -538,6 +595,8 @@ def main():
             cmd.add_argument("--image-sizes", type=Path, help="qualified packed and unpacked bounds per missing linux/amd64 digest and storage driver")
             cmd.add_argument("--evidence", type=Path, help="previously qualified release receipt from custody")
             cmd.add_argument("--evidence-sha256", help="independent pin recorded at live admission")
+            cmd.add_argument("--candidate-zip", type=Path, help="original GitHub Actions ZIP obtained on the operator Mac")
+            cmd.add_argument("--attempt", type=int, help="owner-approved CI run attempt")
             cmd.add_argument("--previous", type=Path, help="current admitted Compose file for an update")
     args = parser.parse_args()
     if args.action in ("admit", "bind-db"):
@@ -559,7 +618,7 @@ def execute(args):
     else:
         values = runtime(args.runtime)
         release = candidate(args.candidate)
-        document = render(values, release)
+        document = render(values, release, bind_directory=getattr(args, "bind_directory", None))
         if args.action == "admit":
             plan = json.loads(document)
             plan["x-hookah-schema"] = 143
@@ -572,7 +631,12 @@ def execute(args):
                                               "to": release_identity(plan)}
                 document = json.dumps(plan).encode()
                 confirm_transition(args.previous, document)
-            receipt = verify_published(release, args.evidence, args.evidence_sha256)
+            archive = getattr(args, "archive", None)
+            if getattr(args, "candidate_zip", None):
+                require(args.candidate_zip.stat().st_size <= 4 * 1024**2, "candidate ZIP exceeds limit")
+                archive = args.candidate_zip.read_bytes()
+            receipt = verify_published(release, args.evidence, args.evidence_sha256, archive=archive,
+                                       expected_attempt=getattr(args, "attempt", None))
             allocations = []
             if args.previous:
                 host.image_space(host.plan_images(json.loads(args.previous.read_bytes())["services"]))

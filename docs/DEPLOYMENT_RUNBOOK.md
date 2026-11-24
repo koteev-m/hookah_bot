@@ -2132,6 +2132,13 @@ External media bytes and a numerical RTO are not guaranteed. This supersedes the
 previous undecided G01 policy choice, not its missing operational evidence.
 **AP-01 local implementation is not DR PASS, DR-A…DR-G execution, or release authority.**
 
+For a schema- and runtime-preserving production application update with reviewed bidirectional data
+compatibility, the owner approved a release-only gate: a complete integrity-checked external point
+within 8 hours and a successful compatible isolated restore within 7 days. A changed backup
+implementation, format or schema requires another restore. The latest point can differ from the
+rehearsed point. D1–D4, disaster authority and the evidence required for DR PASS still apply to DR.
+See the [production pilot procedure](PRODUCTION_PILOT.md#обычный-релиз-приложения).
+
 Accepted D1–D4:
 
 - D1: provider-neutral S3-compatible target; the selected future provider is
