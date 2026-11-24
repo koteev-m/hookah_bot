@@ -174,7 +174,8 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
       }, false)
       savedMaterials.appendChild(open)
     }
-    if (!element.open) return
+    // Defer creating the controls until first open, then keep them in sync with server responses.
+    if (!element.open && !controls.hasChildNodes()) return
     controls.replaceChildren()
     append(controls, button('Обновить список', () => void refresh(), busy), ...(pending.length ? [button(outcome === 'FAILED' ? 'Начать новую загрузку' : 'Повторить загрузку', () => {
       if (outcome === 'FAILED' && state) {
@@ -263,7 +264,7 @@ export function createVenueInfoMediaEditor(backendUrl: string, isDebug: boolean,
     if (busy) return
     const key = focusTarget
     focusTarget = null
-    if (!key || disposed || document.activeElement !== document.body) return
+    if (!key || !element.open || disposed || document.activeElement !== document.body) return
     const target = Array.from(element.querySelectorAll<HTMLElement>('[data-media-focus]')).find((node) => node.dataset.mediaFocus === key)
     if (target && !target.matches(':disabled') && target.getClientRects().length && getComputedStyle(target).visibility !== 'hidden') {
       target.focus({ preventScroll: true })

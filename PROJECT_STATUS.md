@@ -9,7 +9,10 @@
 Main Mini App. Прошли 13 адресных тестов API и 26 браузерных сценариев Chromium/WebKit.
 CI для PR проверяет отчёты PostgreSQL по ссылкам, публикации и медиа.
 Три известных сбоя WebKit воспроизводились на исходном main.
-Разрешена публикация одного PR. Следующий этап — CI на опубликованном SHA.
+В PR №278 задача `HT-VENUE-CARD-CI-FIX-01` устраняет сбой закрытого редактора
+на `3594a3f`. Проблема воспроизведена в Chromium. После исправления прошли
+38 проверок медиаредактора в Chromium и WebKit на локальной сборке.
+Следующий этап — [CI обновлённой ветки PR](https://github.com/koteev-m/hookah_bot/pull/278/checks).
 Для последующей [активации staging](docs/VENUE_PUBLIC_LINK_ORIGIN_CHECKLIST.md#direct-main-mini-app-links-for-telegram)
 нужны подтверждение URL у staging-бота, проверка на iPhone и отдельно разрешённое изменение HT70.
 

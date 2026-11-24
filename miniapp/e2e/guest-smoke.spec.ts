@@ -27902,8 +27902,15 @@ test('PDF inline P2 focus refresh replacement deletion and closed editor', async
   await expect.poll(() => started).toBe(true)
   await editor.evaluate((node) => { (node as HTMLDetailsElement).open = false })
   release()
-  await expect(editor.getByRole('button', { name: 'Показать раздел', exact: true, includeHidden: true })).toBeEnabled()
+  const showSection = editor.getByRole('button', { name: 'Показать раздел', exact: true, includeHidden: true })
+  await expect(showSection).toBeEnabled()
+  await expect(editor).not.toHaveAttribute('open', '')
   expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('BUTTON')
+  const summary = editor.locator('summary')
+  await summary.focus(); await page.keyboard.press('Enter')
+  await expect(showSection).toBeVisible()
+  await expect(showSection).toBeEnabled()
+  await expect(summary).toBeFocused()
 })
 
 test('PDF inline P2 focus refuses disabled and removed actions', async ({ page }) => {
