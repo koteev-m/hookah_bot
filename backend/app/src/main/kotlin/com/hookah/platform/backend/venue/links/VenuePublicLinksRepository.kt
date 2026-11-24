@@ -22,6 +22,8 @@ data class VenueLinkSettings(
     val guestAvailable: Boolean = false,
     val url: String? = null,
     val telegramUrl: String? = null,
+    val guestUnavailableReason: String? = null,
+    val telegramUnavailableReason: String? = null,
 )
 
 class VenuePublicLinksRepository(private val dataSource: DataSource?, private val platformOwnerId: Long?) {

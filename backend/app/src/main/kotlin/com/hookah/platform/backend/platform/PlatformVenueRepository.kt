@@ -2,6 +2,7 @@ package com.hookah.platform.backend.platform
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.telegram.db.updateVenueName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -146,6 +147,7 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
     suspend fun updateVenueName(
         venueId: Long,
         name: String,
+        actorId: Long,
     ): PlatformVenueDetail? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -153,19 +155,7 @@ class PlatformVenueRepository(private val dataSource: DataSource?) {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
-                        val updatedRows =
-                            connection.prepareStatement(
-                                """
-                                UPDATE venues
-                                SET name = ?
-                                WHERE id = ?
-                                """.trimIndent(),
-                            ).use { statement ->
-                                statement.setString(1, name)
-                                statement.setLong(2, venueId)
-                                statement.executeUpdate()
-                            }
-                        if (updatedRows <= 0) {
+                        if (!connection.updateVenueName(venueId, name, actorId)) {
                             connection.rollback()
                             return@withContext null
                         }

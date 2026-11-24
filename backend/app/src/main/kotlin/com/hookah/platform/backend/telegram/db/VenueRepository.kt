@@ -1,6 +1,7 @@
 package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.telegram.TelegramRecipientLockRegistry
@@ -13,6 +14,27 @@ import java.sql.SQLException
 import java.sql.Types
 import java.time.Instant
 import javax.sql.DataSource
+
+internal fun Connection.updateVenueName(
+    venueId: Long,
+    name: String,
+    actorId: Long,
+): Boolean =
+    prepareStatement(
+        """
+        UPDATE venues SET name = ?
+        WHERE id = ? AND COALESCE(status, 'DRAFT') <> 'DELETED'
+          AND EXISTS (
+              SELECT 1 FROM venue_members
+              WHERE venue_id = venues.id AND user_id = ? AND role IN ('OWNER', 'MANAGER', 'ADMIN')
+          )
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, name)
+        statement.setLong(2, venueId)
+        statement.setLong(3, actorId)
+        statement.executeUpdate() == 1
+    }
 
 open class VenueRepository(
     private val dataSource: DataSource?,
@@ -202,6 +224,8 @@ open class VenueRepository(
         longitude: Double?,
         guestContact: String?,
         cardDescription: String?,
+        actorId: Long,
+        name: String? = null,
     ): VenuePublicCardSettings? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -248,10 +272,13 @@ open class VenueRepository(
                             connection.rollback()
                             return@withContext null
                         }
+                        if (name != null && !connection.updateVenueName(venueId, name, actorId)) {
+                            throw ForbiddenException()
+                        }
                         val updated = loadPublicCardSettings(connection, venueId)
                         connection.commit()
                         updated
-                    } catch (e: SQLException) {
+                    } catch (e: Exception) {
                         runCatching { connection.rollback() }
                         throw e
                     } finally {

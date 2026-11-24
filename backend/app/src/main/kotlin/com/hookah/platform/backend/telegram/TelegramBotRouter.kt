@@ -15877,7 +15877,7 @@ class TelegramBotRouter internal constructor(
         state: DialogState,
     ) {
         val venueId = state.payload["venue_id"]?.toLongOrNull()
-        val ownerUserId = (from?.id ?: state.payload["owner_user_id"]?.toLongOrNull())
+        val ownerUserId = from?.id
         if (venueId == null || ownerUserId == null) {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Не удалось продолжить изменение названия. Откройте «🏢 Мои заведения» снова.")
@@ -15887,7 +15887,7 @@ class TelegramBotRouter internal constructor(
         if (input == "-" || input == "—") {
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "Изменение названия отменено.")
-            showVenueOwnerVenueCardByUserId(chatId, ownerUserId)
+            showVenueOwnerVenueCardByVenueId(chatId, ownerUserId, venueId)
             return
         }
         val normalized = normalizeVenueConnectionRequiredField(input, maxLength = 200)
@@ -15909,6 +15909,7 @@ class TelegramBotRouter internal constructor(
                 platformVenueRepository.updateVenueName(
                     venueId = venueId,
                     name = normalized,
+                    actorId = ownerUserId,
                 )
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
@@ -15916,12 +15917,12 @@ class TelegramBotRouter internal constructor(
             }
         if (updated == null) {
             dialogStateRepository.clear(chatId)
-            enqueueMessage(chatId, "Заведение не найдено.")
+            enqueueMessage(chatId, "Заведение недоступно. Проверьте свои права на изменение карточки.")
             return
         }
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Название обновлено.")
-        showVenueOwnerVenueCardByUserId(chatId, ownerUserId)
+        showVenueOwnerVenueCardByVenueId(chatId, ownerUserId, venueId)
     }
 
     private suspend fun proceedOwnerVenueCity(

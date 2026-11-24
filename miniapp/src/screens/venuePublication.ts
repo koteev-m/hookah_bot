@@ -177,6 +177,7 @@ export function mountVenuePublication(options: {
 
   return {
     draftChanged,
+    updateName: (name: string) => { if (data) data.name = name },
     isPublishing: () => publishing,
     dispose: () => { controller.abort(); section.remove() }
   }

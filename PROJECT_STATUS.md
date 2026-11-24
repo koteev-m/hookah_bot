@@ -1,5 +1,18 @@
 # Project Status
 
+## HT-VENUE-CARD-UX-PUBLISH-01 — карточка заведения и прямая ссылка
+
+Основной checkout, ветка `codex/ht-venue-card-ux-fix-01`, база
+`f5ef51cb911a9b85f0b28e8b618e9ccd5aa01a77`. Кандидат на PR в main сохраняет
+переименование для OWNER/MANAGER, подтверждение сохранения и приватный просмотр
+материалов. Кнопка копирует `startapp` при открытом гостевом доступе и подтверждённом
+Main Mini App. Прошли 13 адресных тестов API и 26 браузерных сценариев Chromium/WebKit.
+CI для PR проверяет отчёты PostgreSQL по ссылкам, публикации и медиа.
+Три известных сбоя WebKit воспроизводились на исходном main.
+Разрешена публикация одного PR. Следующий этап — CI на опубликованном SHA.
+Для последующей [активации staging](docs/VENUE_PUBLIC_LINK_ORIGIN_CHECKLIST.md#direct-main-mini-app-links-for-telegram)
+нужны подтверждение URL у staging-бота, проверка на iPhone и отдельно разрешённое изменение HT70.
+
 ## HT-PRODUCTION-BACKUP-AUTOMATION-01 — плановые онлайн-копии
 
 Основной checkout, ветка `codex/ht-production-media-ready-01-primary`, база

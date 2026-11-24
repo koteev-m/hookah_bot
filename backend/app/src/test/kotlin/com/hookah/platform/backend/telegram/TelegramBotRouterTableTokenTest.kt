@@ -288,6 +288,8 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import org.slf4j.LoggerFactory
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
@@ -15118,8 +15120,9 @@ class TelegramBotRouterTableTokenTest {
             }
         }
 
-    @Test
-    fun `owner venue name input updates venue and returns updated card`() =
+    @ParameterizedTest
+    @ValueSource(strings = ["OWNER", "MANAGER"])
+    fun `venue name input updates the selected venue and returns its card`(role: String) =
         runBlocking {
             coEvery { dialogStateRepository.get(100) } returns
                 DialogState(
@@ -15132,7 +15135,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
             coEvery {
-                platformVenueRepository.updateVenueName(venueId = 10L, name = "Новая кальянная")
+                platformVenueRepository.updateVenueName(venueId = 10L, name = "Новая кальянная", actorId = 200L)
             } returns
                 PlatformVenueDetail(
                     id = 10L,
@@ -15147,7 +15150,7 @@ class TelegramBotRouterTableTokenTest {
                 listOf(
                     VenueAccessRepository.VenueMembership(
                         venueId = 10L,
-                        role = "OWNER",
+                        role = role,
                     ),
                 )
             coEvery { platformVenueRepository.getVenueDetail(10L) } returns
@@ -15175,7 +15178,7 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerifyOrder {
-                platformVenueRepository.updateVenueName(venueId = 10L, name = "Новая кальянная")
+                platformVenueRepository.updateVenueName(venueId = 10L, name = "Новая кальянная", actorId = 200L)
                 outboxEnqueuer.enqueueSendMessage(100, "✅ Название обновлено.", null)
                 outboxEnqueuer.enqueueSendMessage(
                     100,
@@ -15183,6 +15186,46 @@ class TelegramBotRouterTableTokenTest {
                     match { it is InlineKeyboardMarkup },
                 )
             }
+        }
+
+    @Test
+    fun `staff cannot open or finish a venue name change after manager access is revoked`() =
+        runBlocking {
+            val buttons = TelegramKeyboards.inlineVenueManagerProfileActions(10).inlineKeyboard.flatten()
+            assertTrue(buttons.any { it.callbackData == "owner_venue_field:10:name" })
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns false
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_005,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "name",
+                            from = User(id = 200L),
+                            message = Message(messageId = 30_005, chat = Chat(id = 100, type = "private")),
+                            data = "owner_venue_field:10:name",
+                        ),
+                ),
+            )
+            coVerify(exactly = 0) { dialogStateRepository.set(any(), any()) }
+            coEvery { dialogStateRepository.get(100) } returns
+                DialogState(
+                    DialogStateType.OWNER_VENUE_PROFILE_WAIT_NAME,
+                    mapOf("venue_id" to "10", "owner_user_id" to "999"),
+                )
+            router.process(
+                TelegramUpdate(
+                    updateId = 10_006,
+                    message =
+                        Message(
+                            messageId = 20_006,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200L),
+                            text = "Новое имя",
+                        ),
+                ),
+            )
+            coVerify(exactly = 2) { outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к заведению.", null) }
+            coVerify(exactly = 0) { platformVenueRepository.updateVenueName(any(), any(), any()) }
         }
 
     @Test

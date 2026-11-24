@@ -376,7 +376,7 @@ SHOULD:
   at most 63 characters and skip reserved service names. See the [activation checklist](VENUE_PUBLIC_LINK_ORIGIN_CHECKLIST.md).
 - The compact public transition exposes name/address only. It opens `startapp=venue_<base36-id>`
   after platform Main Mini App configuration is confirmed, otherwise `/start venue_<base36-id>`
-  opens a WebApp button. These pointers never establish table/session/tab or grant working roles.
+  opens a WebApp button. Venue settings have one copy action for a confirmed direct `startapp` link to the selected venue. Copying requires open guest access. These pointers never establish table/session/tab or grant working roles.
 - Browsing context is user-scoped and distinct from the active visit. Viewing B preserves A's cart,
   tab and order; B's menu remains browse-only without B's valid table context. `Вернуться к посещению`
   explicitly returns to A. Card/menu/Back and reopening the App preserve the browsing selection;
@@ -491,7 +491,8 @@ SHOULD:
 ## Block 7 — Venue onboarding & settings
 MUST:
 - Venue owner/admin can set: description, hours, contact and public location/address; Mini App public-location editing must work provider-free through local country/city lists and manual address entry, with optional backend geodata providers kept disabled/commercial-only unless approved.
-- M8a/M8b-Free public card/location basics are CLOSED after staging smoke: Venue Mini App lets OWNER/MANAGER edit public city/address/contact/description plus structured country/city/address fields, while venue name stays read-only and STAFF stays denied/hidden.
+- M8a/M8b-Free public card/location basics are CLOSED after staging smoke: Venue Mini App lets OWNER/MANAGER edit public city/address/contact/description plus structured country/city/address fields, with STAFF denied.
+- OWNER and MANAGER can rename their own venue in the public card form and in the Telegram bot (1–200 trimmed characters). STAFF and users of other venues are denied. A rename updates the existing venue row and preserves issued links, QR, history, memberships, commercial terms and publication status.
 - M9b/M9b.1/M9b.2/M9b.3 schedule parity is CLOSED / staging smoke passed: Venue Mini App lets OWNER/MANAGER manage weekly working hours, date exceptions, inclusive exception ranges, post-save exception UX and changed date ranges after creation; STAFF stays denied/hidden.
 - Bundled country/city data is a convenience seed, not address verification; full local street/house autocomplete requires a separate ФИАС/ГАР import/indexing slice and must not depend on runtime third-party geodata APIs.
 - Create tables; assign staff roles; configure visible modules.

@@ -6217,16 +6217,17 @@ query parameters, unchanged HTTPS/aliases/fallback and clipboard denial. Registr
 navigation are unchanged; browser auth mocks do not prove signed Telegram launch
 or BotFather configuration.
 
-`HT-VENUE-SINGLE-TELEGRAM-LINK-01`: the owner confirmed Main Mini App configuration
-and direct Микс launch on iPhone on 2026-11-04; do not repeat BotFather setup. The
-final owner block has exactly one **Скопировать ссылку** action and a Telegram URL.
+`HT-VENUE-SINGLE-TELEGRAM-LINK-01`: the owner confirmed direct Микс launch on iPhone
+on 2026-11-04 using the former staging bot. For the current bot and launch URL,
+use the [environment checklist](VENUE_PUBLIC_LINK_ORIGIN_CHECKLIST.md). The owner
+block has exactly one **Скопировать ссылку** action and a Telegram URL.
 Assert exact server-returned links for two selected venues, no HTTPS field or copy
-fallback, disabled copy for absent/null `telegramUrl` and closed guest access,
+fallback, disabled copy for absent/null `telegramUrl`, a chat link, a different venue or closed guest access,
 publication refresh and clipboard fallback. Reuse backend/HT70 evidence only after
 matching source/test hashes; rerun Mini App build and focused personal-link/publication
 smoke for UI changes. Post-release iPhone acceptance still covers the new copy UI,
-another venue and preserved existing visit/QR/HTTPS links. Runtime activation remains
-separate from the already completed external Telegram setup.
+another venue and preserved existing visit/QR/HTTPS links. Verify the independent
+bot-chat flow with the flag disabled and direct launch on the exact bot before activation.
 
 Local acceptance: run `VenuePublicationRoutesTest` (H2 with authenticated HTTP), `VenuePublicationPostgresTest`
 (real PostgreSQL and venue-row contention), the `VenuePublicLinks*`, Guest Preview, Venue RBAC,

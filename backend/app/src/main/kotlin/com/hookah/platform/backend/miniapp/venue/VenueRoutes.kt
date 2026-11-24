@@ -173,6 +173,7 @@ data class VenuePublicCardSettingsResponse(
 
 @Serializable
 data class VenuePublicCardSettingsUpdateRequest(
+    val name: String? = null,
     val city: String? = null,
     val address: String? = null,
     val countryCode: String? = null,
@@ -451,6 +452,11 @@ fun Route.venueRoutes(
             val venueId = call.requireVenueId()
             requirePublicCardSettingsPermission(venueAccessRepository, userId, venueId)
             val request = call.receive<VenuePublicCardSettingsUpdateRequest>()
+            val name =
+                request.name?.let {
+                    it.trim().takeIf { value -> value.length in 1..200 }
+                        ?: throw InvalidInputException("Введите название заведения длиной от 1 до 200 символов.")
+                }
             val city = normalizePublicCardText(request.city, PUBLIC_CARD_CITY_MAX_LENGTH, "city")
             val address = normalizePublicCardText(request.address, PUBLIC_CARD_ADDRESS_MAX_LENGTH, "address")
             val countryCode = normalizeCountryCode(request.countryCode)
@@ -471,6 +477,8 @@ fun Route.venueRoutes(
                 )
             val settings =
                 venueRepository.updatePublicCardSettings(
+                    name = name,
+                    actorId = userId,
                     venueId = venueId,
                     city = city,
                     address = address,

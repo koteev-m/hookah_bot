@@ -46,6 +46,7 @@ class VenuePublicLinksRoutesTest {
         testApplication {
             h2().use { ds ->
                 val appEnv = "staging"
+                val bot = "h_t_stage_bot"
                 val stagingHost = "staging.hookahtootah.club"
                 val rootHost = "hookahtootah.club"
                 val config =
@@ -58,7 +59,7 @@ class VenuePublicLinksRoutesTest {
                         "telegram.enabled" to "false",
                         "telegram.trafficPolicy" to "PRODUCT",
                         "telegram.webAppPublicUrl" to "https://$stagingHost/miniapp/",
-                        "telegram.botUsername" to "ExampleBot",
+                        "telegram.botUsername" to bot,
                         "venue.staffInviteSecretPepper" to "synthetic-brand-route-fixture",
                     ).apply {
                         if (branded) {
@@ -93,6 +94,9 @@ class VenuePublicLinksRoutesTest {
                 val token = SessionTokenService(SessionTokenConfig.from(config, appEnv)).issueToken(101).token
                 val manager = SessionTokenService(SessionTokenConfig.from(config, appEnv)).issueToken(303).token
 
+                fun expectedDirectLink(venueId: Long) =
+                    if (mainMiniApp) "https://t.me/$bot?startapp=${venuePayload(venueId)}" else null
+
                 val expectedHost = if (branded) rootHost else stagingHost
                 val management =
                     client.get("/api/venue/$id/public-link?venueId=$other&payload=${venuePayload(other)}") {
@@ -101,14 +105,18 @@ class VenuePublicLinksRoutesTest {
                         header("X-Forwarded-Host", "evil.example")
                     }
                 assertEquals(HttpStatusCode.OK, management.status)
+                val linkSettings = Json.parseToJsonElement(management.bodyAsText()).jsonObject
                 assertEquals(
-                    if (mainMiniApp) "https://t.me/ExampleBot?startapp=${venuePayload(id)}" else null,
-                    Json.parseToJsonElement(management.bodyAsText())
-                        .jsonObject["telegramUrl"]?.jsonPrimitive?.contentOrNull,
+                    expectedDirectLink(id),
+                    linkSettings["telegramUrl"]?.jsonPrimitive?.contentOrNull,
                 )
                 assertEquals(
                     if (subdomains) "https://new-dym.$rootHost" else "https://$expectedHost/v/new-dym",
-                    Json.parseToJsonElement(management.bodyAsText()).jsonObject["url"]?.jsonPrimitive?.content,
+                    linkSettings["url"]?.jsonPrimitive?.content,
+                )
+                assertEquals(
+                    if (mainMiniApp) null else "MAIN_MINI_APP_UNCONFIRMED",
+                    linkSettings["telegramUnavailableReason"]?.jsonPrimitive?.contentOrNull,
                 )
                 val otherSettings = links.settings(other, 101)
                 val otherHost = "${otherSettings.slug}.$rootHost"
@@ -118,7 +126,7 @@ class VenuePublicLinksRoutesTest {
                     }
                 assertEquals(HttpStatusCode.OK, otherManagement.status)
                 assertEquals(
-                    if (mainMiniApp) "https://t.me/ExampleBot?startapp=${venuePayload(other)}" else null,
+                    expectedDirectLink(other),
                     Json.parseToJsonElement(otherManagement.bodyAsText())
                         .jsonObject["telegramUrl"]?.jsonPrimitive?.contentOrNull,
                 )
@@ -185,13 +193,13 @@ class VenuePublicLinksRoutesTest {
                     val page = subdomain("$slug.$rootHost")
                     assertEquals(HttpStatusCode.OK, page.status)
                     assertEquals("no-store", page.headers[HttpHeaders.CacheControl])
-                    assertTrue(page.bodyAsText().contains("https://t.me/ExampleBot?start=${venuePayload(id)}"))
+                    assertTrue(page.bodyAsText().contains("https://t.me/$bot?start=${venuePayload(id)}"))
                 }
                 val otherPage = subdomain(otherHost)
                 assertEquals(HttpStatusCode.OK, otherPage.status)
                 val otherBody = otherPage.bodyAsText()
                 assertTrue(otherBody.contains("Баумана, 2"))
-                assertTrue(otherBody.contains("https://t.me/ExampleBot?start=${venuePayload(other)}"))
+                assertTrue(otherBody.contains("https://t.me/$bot?start=${venuePayload(other)}"))
                 assertFalse(otherBody.contains("Арбат, 1"))
                 for (host in listOf(
                     "unknown.$rootHost", "staging.$rootHost", "www.$rootHost", "dev.$rootHost",
@@ -212,8 +220,8 @@ class VenuePublicLinksRoutesTest {
                         val body = page.bodyAsText()
                         assertTrue(body.contains("&lt;Дым &amp; Mix&gt;"))
                         assertTrue(body.contains("Арбат, 1"))
-                        assertTrue(body.contains("https://t.me/ExampleBot?start=${venuePayload(id)}"))
-                        assertEquals(mainMiniApp, body.contains("https://t.me/ExampleBot?startapp=${venuePayload(id)}"))
+                        assertTrue(body.contains("https://t.me/$bot?start=${venuePayload(id)}"))
+                        assertEquals(mainMiniApp, body.contains("https://t.me/$bot?startapp=${venuePayload(id)}"))
                         assertFalse(body.contains("evil.example"))
                         assertFalse(body.contains("<Дым"))
                         assertEquals("no-store", page.headers[HttpHeaders.CacheControl])
@@ -270,7 +278,7 @@ class VenuePublicLinksRoutesTest {
                         }
                     assertEquals(HttpStatusCode.OK, renamed.status)
                     assertEquals(
-                        if (mainMiniApp) "https://t.me/ExampleBot?startapp=${venuePayload(legacy)}" else null,
+                        expectedDirectLink(legacy),
                         Json.parseToJsonElement(renamed.bodyAsText())
                             .jsonObject["telegramUrl"]?.jsonPrimitive?.contentOrNull,
                     )
@@ -282,7 +290,7 @@ class VenuePublicLinksRoutesTest {
                         listOf(subdomain(legacyHost), subdomain("permskij-dym.$rootHost"), client.get("/v/www"))
                     for (page in legacyPages) {
                         assertEquals(HttpStatusCode.OK, page.status)
-                        assertTrue(page.bodyAsText().contains("https://t.me/ExampleBot?start=${venuePayload(legacy)}"))
+                        assertTrue(page.bodyAsText().contains("https://t.me/$bot?start=${venuePayload(legacy)}"))
                     }
                     assertDeniedHost("www.$rootHost")
                     assertDeniedHost("venue--${id.toString(36)}.$rootHost")
@@ -307,6 +315,18 @@ class VenuePublicLinksRoutesTest {
                                 "UPDATE venues SET status = '$status' WHERE id = $id",
                             )
                         }
+                    }
+                    if (status == "DRAFT") {
+                        val draft =
+                            client.get("/api/venue/$id/public-link") {
+                                header(HttpHeaders.Authorization, "Bearer $token")
+                            }
+                        val dto = Json.parseToJsonElement(draft.bodyAsText()).jsonObject
+                        assertEquals("PUBLICATION", dto["guestUnavailableReason"]?.jsonPrimitive?.content)
+                        assertEquals(
+                            expectedDirectLink(id),
+                            dto["telegramUrl"]?.jsonPrimitive?.contentOrNull,
+                        )
                     }
                     assertDeniedHost("new-dym.$rootHost")
                     for (path in listOf(
