@@ -69,6 +69,10 @@ class ProductionProfileTest(unittest.TestCase):
         code = textwrap.dedent(step.split("python3 -B - <<'PY'\n", 1)[1].split('          PY\n', 1)[0])
         first = 'test_production_operations.PilotOperationsTest.test_disaster_acceptance_is_bound_to_reviewed_database_and_first_open'
         encrypted = 'test_production_media_backup.ProductionMediaBackupTest.test_authenticated_recovery_and_incomplete_ciphertext'
+        scheduled = (
+            'test_production_backup_points.ScheduledPointsTest.test_same_slot_retries_do_not_take_a_second_snapshot',
+            'test_production_backup_points.ScheduledPointsTest.test_transfer_checks_ciphertext_and_recovers_interrupted_receipt',
+        )
         def synthetic(name, skip=False):
             def run():
                 if skip:
@@ -76,7 +80,7 @@ class ProductionProfileTest(unittest.TestCase):
             case = unittest.FunctionTestCase(run)
             case.id = lambda: name
             return case
-        required = (first, encrypted, *('test_production_operations.PilotOperationsTest.' + name for name in (
+        required = (first, encrypted, *scheduled, *('test_production_operations.PilotOperationsTest.' + name for name in (
             'test_open_requires_same_final_process_ready_and_polling_before_public_marker',
             'test_killed_normal_open_leaves_only_a_probe_permission',
             'test_recorded_telegram_backlog_requires_owner_review_even_after_expiry',
