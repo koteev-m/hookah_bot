@@ -117,6 +117,22 @@ def unit_properties(unit, *keys):
     return dict(line.split("=", 1) for line in lines)
 
 
+def require_empty_unit_arrays(unit, shown, names):
+    for name in names:
+        if name in shown:
+            require(not shown[name], f"unexpected loaded {name} on {unit}")
+    missing = [k for k in names if k not in shown]
+    if not missing:
+        return
+    # systemctl show --all can omit empty arrays. Read those properties from the loaded unit.
+    interface, empty = {SERVICE: ("Service", "a(sasbttttuii) 0"), TIMER: ("Timer", "a(stt) 0")}[unit]
+    path = "/org/freedesktop/systemd1/unit/" + unit.replace("-", "_2d").replace(".", "_2e")
+    reply = output("busctl", "--system", "get-property", "org.freedesktop.systemd1", path,
+                   "org.freedesktop.systemd1." + interface, *missing)
+    require(reply.splitlines() == [empty] * len(missing),
+            f"cannot confirm empty loaded properties on {unit}: {', '.join(missing)}")
+
+
 def schedule(expect_active, *, allow_catchup=False):
     for unit in (TIMER, SERVICE):
         props = unit_properties(unit, "FragmentPath", "DropInPaths", "NeedDaemonReload")
@@ -130,13 +146,14 @@ def schedule(expect_active, *, allow_catchup=False):
     hooks = ("ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost")
     service = unit_properties(SERVICE, "EnvironmentFiles", "Environment", "ExecStart", "Type", *hooks,
                               "ActiveState", "Result", "User")
+    require_empty_unit_arrays(SERVICE, service, hooks)
+    require_empty_unit_arrays(TIMER, timer, ("TimersMonotonic",))
     command = "/usr/bin/python3 -B ${BACKUP_TOOL} create ${ADMITTED_PLAN} ${AGE_RECIPIENT_FILE} ${BACKUP_SPOOL} ${QUALIFIED_POINTS}"
     require(service["User"] in ("", "root") and service["EnvironmentFiles"] == str(BACKUP_ENV) + " (ignore_errors=no)"
             and service["ExecStart"].count("argv[]=") == 1 and "argv[]=" + command + " ;" in service["ExecStart"]
             and "path=/usr/bin/python3 ;" in service["ExecStart"] and service["Type"] == "oneshot"
-            and not any(service[k] for k in hooks)
             and service["Environment"] == "DOCKER_HOST=unix:///var/run/docker.sock"
-            and timer["Unit"] == SERVICE and not timer["TimersMonotonic"]
+            and timer["Unit"] == SERVICE
             and timer["UnitFileState"] == "enabled" and timer["Persistent"] == "yes"
             and timer["TimersCalendar"].count("OnCalendar=") == 1
             and "OnCalendar=*-*-* 00,06,12,18:00:00 UTC ;" in timer["TimersCalendar"],
