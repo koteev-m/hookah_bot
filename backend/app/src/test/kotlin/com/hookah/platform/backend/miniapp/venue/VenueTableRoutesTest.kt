@@ -6,10 +6,12 @@ import com.google.zxing.client.j2se.BufferedImageLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import com.hookah.platform.backend.ModuleOverrides
 import com.hookah.platform.backend.api.ApiErrorCodes
+import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
 import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
 import com.hookah.platform.backend.miniapp.session.SessionTokenService
 import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRepository
+import com.hookah.platform.backend.miniapp.venue.tables.VenueTableRotateTokensResponse
 import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
 import com.hookah.platform.backend.test.assertApiErrorEnvelope
@@ -34,7 +36,10 @@ import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import org.h2.jdbcx.JdbcDataSource
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.DriverManager
@@ -141,15 +146,128 @@ class VenueTableRoutesTest {
             assertEquals(HttpStatusCode.NotFound, resolveResponse.status)
             assertApiErrorEnvelope(resolveResponse, ApiErrorCodes.NOT_FOUND)
 
-            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-                connection.prepareStatement(
-                    "SELECT is_active FROM table_tokens WHERE token = ?",
-                ).use { statement ->
-                    statement.setString(1, oldToken)
-                    statement.executeQuery().use { rs ->
-                        assertTrue(rs.next())
-                        assertEquals(false, rs.getBoolean(1))
+            assertEquals(
+                listOf(tokenAudit("TABLE_TOKEN_ROTATE", venueId, """{"tableId":$tableId}""")),
+                tokenAudits(jdbcUrl),
+            )
+            val newToken = VenueTableRepository(testDataSource(jdbcUrl)).listTablesWithTokens(venueId).single().token
+            assertEquals(
+                HttpStatusCode.OK,
+                client.get("/api/guest/table/resolve?tableToken=$newToken") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }.status,
+            )
+        }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `batch and all rotate only active own tables and audit the returned ids in order`(all: Boolean) =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("rotate-scope")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venue = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            val foreignVenue = seedVenueWithRole(jdbcUrl, 8001L, "OWNER")
+            val first = seedTable(jdbcUrl, venue, 2)
+            val second = seedTable(jdbcUrl, venue, 1)
+            val third = seedTable(jdbcUrl, venue, 3)
+            val foreign = seedTable(jdbcUrl, foreignVenue, 1)
+            val inactive = seedTable(jdbcUrl, venue, 4)
+            for (id in listOf(first, second, third, foreign, inactive)) seedTableToken(jdbcUrl, id, "original-$id")
+            val ds = testDataSource(jdbcUrl)
+            ds.connection.use { connection ->
+                connection.createStatement().use {
+                    it.executeUpdate("UPDATE venue_tables SET is_active = false WHERE id = $inactive")
+                }
+            }
+            val repo = VenueTableRepository(ds)
+
+            suspend fun activeTokens() = repo.listTablesWithTokens(venue).associate { it.tableId to it.token }
+
+            suspend fun rotate(
+                scope: Long,
+                body: String,
+            ) = client.post("/api/venue/tables/rotate-tokens?venueId=$scope") {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer ${issueToken(config)}")
+                    append(HttpHeaders.ContentType, "application/json")
+                }
+                setBody(body)
+            }
+            val original = activeTokens()
+            assertEquals(HttpStatusCode.Forbidden, rotate(foreignVenue, "{}").status)
+            val wrongTable =
+                client.post("/api/venue/tables/$foreign/rotate-token?venueId=$venue") {
+                    headers { append(HttpHeaders.Authorization, "Bearer ${issueToken(config)}") }
+                }
+            assertEquals(HttpStatusCode.NotFound, wrongTable.status)
+            assertTrue(tokenAudits(jdbcUrl).isEmpty())
+
+            val expectedIds = if (all) listOf(second, first, third) else listOf(second, first)
+            val body = if (all) "{}" else """{"tableIds":[$second,$foreign,$inactive,$first]}"""
+            val response = rotate(venue, body)
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(
+                VenueTableRotateTokensResponse(expectedIds.size, expectedIds),
+                json.decodeFromString(VenueTableRotateTokensResponse.serializer(), response.bodyAsText()),
+            )
+            val after = activeTokens()
+            for ((id, token) in original) assertEquals(id in expectedIds, token != after.getValue(id))
+            assertTrue(repo.listTablesWithTokens(foreignVenue).single().token == "original-$foreign")
+            assertTrue(repo.listOwnerTables(venue).single { it.tableId == inactive }.token == "original-$inactive")
+            val action = if (all) "TABLE_TOKEN_ROTATE_ALL" else "TABLE_TOKEN_ROTATE_BATCH"
+            val payload = """{"count":${expectedIds.size},"tableIds":[${expectedIds.joinToString(",")}]}"""
+            assertEquals(listOf(tokenAudit(action, venue, payload)), tokenAudits(jdbcUrl))
+        }
+
+    @Test
+    fun `rejected audit insert rolls back single selected and all rotations and old QR still resolves`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("rotate-rollback")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            val venue = seedVenueWithRole(jdbcUrl, TELEGRAM_USER_ID, "OWNER")
+            seedSubscription(jdbcUrl, venue, "ACTIVE")
+            val ids = (1..2).map { seedTable(jdbcUrl, venue, it) }
+            for (id in ids) seedTableToken(jdbcUrl, id, "original-$id")
+            val ds = testDataSource(jdbcUrl)
+            ds.connection.use { c ->
+                c.createStatement().use {
+                    it.execute("ALTER TABLE audit_log ADD CHECK (action NOT LIKE 'TABLE_TOKEN_ROTATE%')")
+                }
+            }
+            val bearer = "Bearer ${issueToken(config)}"
+            for ((path, body) in listOf(
+                "${ids.first()}/rotate-token" to null,
+                "rotate-tokens" to """{"tableIds":[${ids.joinToString(",")}]}""",
+                "rotate-tokens" to "{}",
+            )) {
+                val response =
+                    client.post("/api/venue/tables/$path?venueId=$venue") {
+                        headers {
+                            append(HttpHeaders.Authorization, bearer)
+                            append(HttpHeaders.ContentType, "application/json")
+                        }
+                        if (body != null) setBody(body)
                     }
+                assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+                assertApiErrorEnvelope(response, ApiErrorCodes.DATABASE_UNAVAILABLE)
+                assertEquals(ids.size, tableCounts(jdbcUrl)[1])
+                assertTrue(tokenAudits(jdbcUrl).isEmpty())
+                for (id in ids) {
+                    val resolve =
+                        client.get("/api/guest/table/resolve?tableToken=original-$id") {
+                            headers { append(HttpHeaders.Authorization, bearer) }
+                        }
+                    assertEquals(HttpStatusCode.OK, resolve.status)
+                    assertEquals(
+                        id,
+                        json.decodeFromString(TableResolveResponse.serializer(), resolve.bodyAsText()).tableId,
+                    )
                 }
             }
         }
@@ -245,6 +363,19 @@ class VenueTableRoutesTest {
             seedTableToken(jdbcUrl, tableId, "staff-readonly-token")
             val staffToken = issueToken(config, staffId)
 
+            for ((path, body) in listOf(
+                "$tableId/rotate-token" to null,
+                "rotate-tokens" to """{"tableIds":[$tableId]}""",
+                "rotate-tokens" to "{}",
+            )) {
+                val anonymous =
+                    client.post("/api/venue/tables/$path?venueId=$venueId") {
+                        headers { append(HttpHeaders.ContentType, "application/json") }
+                        if (body != null) setBody(body)
+                    }
+                assertEquals(HttpStatusCode.Unauthorized, anonymous.status)
+            }
+
             val listResponse =
                 client.get("/api/venue/tables?venueId=$venueId") {
                     headers { append(HttpHeaders.Authorization, "Bearer $staffToken") }
@@ -297,6 +428,11 @@ class VenueTableRoutesTest {
 
             assertEquals(HttpStatusCode.Forbidden, rotateAllResponse.status)
             assertApiErrorEnvelope(rotateAllResponse, ApiErrorCodes.FORBIDDEN)
+
+            assertTrue(tokenAudits(jdbcUrl).isEmpty())
+            assertEquals(1, tableCounts(jdbcUrl)[1])
+            val active = VenueTableRepository(testDataSource(jdbcUrl)).listTablesWithTokens(venueId).single()
+            assertTrue(active.token == "staff-readonly-token")
 
             val exportResponse =
                 client.get("/api/venue/tables/qr-package?venueId=$venueId&format=zip") {
@@ -682,6 +818,51 @@ class VenueTableRoutesTest {
                 }
             assertEquals(HttpStatusCode.OK, single.status)
             assertEquals(before, tableCounts(jdbcUrl))
+        }
+
+    private fun testDataSource(jdbcUrl: String) =
+        JdbcDataSource().apply {
+            setURL(jdbcUrl)
+            user = "sa"
+            password = ""
+        }
+
+    private data class TokenAudit(
+        val actor: Long,
+        val action: String,
+        val entity: String,
+        val venue: Long,
+        val payload: JsonElement,
+    )
+
+    private fun tokenAudit(
+        action: String,
+        venue: Long,
+        payload: String,
+    ) = TokenAudit(TELEGRAM_USER_ID, action, "venue", venue, json.parseToJsonElement(payload))
+
+    private fun tokenAudits(jdbcUrl: String): List<TokenAudit> =
+        testDataSource(jdbcUrl).connection.use { c ->
+            c.createStatement().use { statement ->
+                statement.executeQuery(
+                    "SELECT actor_user_id, action, entity_type, entity_id, payload_json FROM audit_log " +
+                        "WHERE action LIKE 'TABLE_TOKEN_%' ORDER BY id",
+                ).use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                TokenAudit(
+                                    rs.getLong(1),
+                                    rs.getString(2),
+                                    rs.getString(3),
+                                    rs.getLong(4),
+                                    json.parseToJsonElement(rs.getString(5)),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
         }
 
     private fun tableCounts(jdbcUrl: String): List<Int> =

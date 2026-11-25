@@ -834,6 +834,35 @@ the retained-session link before and during upload, offscreen completion and sub
 Use controlled API barriers, separate browser contexts and explicit bounded repetitions with zero
 retries. A green repeat alone does not establish the cause of an earlier failure.
 
+**Table QR rotation (`HT-TABLE-QR-ATOMIC-ROTATION-01`).** `VenueTableRoutesTest` covers single,
+selected and all-table rotation, audit contents, role/venue boundaries and guest resolution after
+a rejected audit insert. `TelegramBotRouterTableTokenTest` covers the owner callback, missing-token
+provisioning, repeat viewing, rollback before delivery and loss of membership between the bot's
+preliminary check and the token transaction. `VenueTableBatchPostgresTest` checks audit rejection
+and competing single, selected and all-table rotations on PostgreSQL. The legacy H2 V6 unique index
+permits only one inactive token per table.
+
+Manual staging smoke is pending. Use disposable tables in two test venues and a fresh guest flow
+for each scan. Save only table IDs and outcomes as evidence.
+
+1. **Mini App, one table.** As Owner, cancel «Переиздать токен». The original QR still opens the
+   table and there is no rotation event. Repeat and confirm. The old QR is rejected, the new QR
+   opens that table, and one `TABLE_TOKEN_ROTATE` identifies it.
+2. **Mini App, all tables.** Cancel «Переиздать токены (все)» and verify the original codes and
+   audit are unchanged. Repeat and confirm. All replaced codes are rejected, their replacements
+   open the correct tables, and one `TABLE_TOKEN_ROTATE_ALL` lists the affected IDs and count.
+3. **API, selected tables.** Submit `POST /api/venue/tables/rotate-tokens?venueId=…` with explicit
+   `tableIds`. Check the returned IDs and count against one `TABLE_TOKEN_ROTATE_BATCH` event.
+   Each old selected code must be rejected, each replacement must open its table, and the
+   original code of an unselected table must still work.
+4. **Telegram, one table.** Tap the Owner’s «Перевыпустить QR» once. The current bot performs the
+   reissue immediately. Verify the delivered QR opens the intended table, the previous code is
+   rejected and exactly one `TABLE_TOKEN_ROTATE` exists. The confirmation UX is tracked separately
+   as `SECURITY-TABLE-QR-TG-CONFIRM-001` in the [roadmap](UPDATED_PRODUCT_AI_ROADMAP.md).
+
+Check the actor and venue on each event, verify a control QR in the second venue still works,
+and confirm Staff cannot rotate.
+
 UX03 local regression scope (`HT-VENUE-MENU-TABLES-QR-UX03`): native collapsed hookah flavors,
 90-flavor fixture, keyboard/mobile layout, mutation/retry draft retention and venue isolation;
 sequential/individual table numbers, strict validation, late conflict and audit rollback, table/token

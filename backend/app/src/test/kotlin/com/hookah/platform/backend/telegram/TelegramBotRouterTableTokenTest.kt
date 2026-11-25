@@ -379,6 +379,7 @@ class TelegramBotRouterTableTokenTest {
         outboxOverride: TelegramOutboxEnqueuer = outboxEnqueuer,
         dialogStateOverride: DialogStateRepository = dialogStateRepository,
         ordersOverride: OrdersRepository = ordersRepository,
+        venueTableRepositoryOverride: VenueTableRepository = venueTableRepository,
     ): TelegramBotRouter =
         TelegramBotRouter(
             venueInfoMediaService = infoMediaServiceOverride,
@@ -414,7 +415,7 @@ class TelegramBotRouterTableTokenTest {
             venueBookingHoursRepository = venueBookingHoursRepository,
             venueMenuSectionImagesRepository = venueMenuSectionImagesRepository,
             venueMenuRepository = venueMenuRepositoryOverride,
-            venueTableRepository = venueTableRepository,
+            venueTableRepository = venueTableRepositoryOverride,
             venueAccessRepository = venueAccessRepository,
             venueContextRepository = venueContextRepository,
             subscriptionRepository = subscriptionRepository,
@@ -2670,6 +2671,147 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
+    fun `owner bot QR callback commits only audited tokens and view preserves the active code`() =
+        runBlocking {
+            val actor = 200L
+            val ds = migratedTelegramMenuDataSource()
+            val venue = seedTelegramMenuAuditVenue(ds, actor)
+            ds.connection.use { c ->
+                c.createStatement().use {
+                    it.executeUpdate(
+                        "INSERT INTO venue_members (venue_id, user_id, role) VALUES ($venue, $actor, 'OWNER')",
+                    )
+                    it.executeUpdate(
+                        "INSERT INTO venue_tables (venue_id, table_number, is_active) VALUES ($venue, 5, true)",
+                    )
+                }
+            }
+            val tables = VenueTableRepository(ds)
+            val table = tables.listTables(venue).single().tableId
+            val bot =
+                routerWithWebAppPublicUrl(null, botUsername = "test_qr_bot", venueTableRepositoryOverride = tables)
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(actor, venue) } returns true
+            coEvery { venueAccessRepository.hasVenueOwner(actor, venue) } returns true
+            coEvery { apiClient.sendPhotoBytes(any(), any(), any(), any(), any()) } returns true
+            val view = "owner_venue_tables_qr_table:$venue:$table"
+            val rotate = "owner_venue_tables_qr_rotate:$venue:$table"
+            processBotCallback(92_001L, "show-missing", view, bot)
+            val original = tables.listTablesWithTokens(venue).single().token
+            processBotCallback(92_002L, "show-existing", view, bot)
+            assertTrue(tables.ensureActiveToken(venue, table, actor))
+            assertTrue(tables.listTablesWithTokens(venue).single().token == original)
+            assertEquals(1, countRows(ds, "table_tokens"))
+            assertEquals(1, countRows(ds, "audit_log", "TABLE_TOKEN_PROVISION"))
+            ds.connection.use { c ->
+                c.createStatement().use {
+                    it.execute(
+                        "ALTER TABLE audit_log ADD CONSTRAINT reject_rotation CHECK (action <> 'TABLE_TOKEN_ROTATE')",
+                    )
+                }
+            }
+            processBotCallback(92_003L, "failed-rotation", rotate, bot)
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "База недоступна, попробуйте позже.", null) }
+            coVerify(exactly = 2) { apiClient.sendPhotoBytes(any(), any(), any(), any(), any()) }
+            assertTrue(tables.listTablesWithTokens(venue).single().token == original)
+            assertEquals(1, countRows(ds, "table_tokens"))
+            assertEquals(0, countRows(ds, "audit_log", "TABLE_TOKEN_ROTATE"))
+            ds.connection.use { connection ->
+                connection.createStatement().use { it.execute("ALTER TABLE audit_log DROP CONSTRAINT reject_rotation") }
+            }
+            processBotCallback(92_004L, "committed-rotation", rotate, bot)
+            val resolver = TableTokenRepository(ds)
+            assertNull(resolver.resolve(original))
+            assertEquals(table, resolver.resolve(tables.listTablesWithTokens(venue).single().token)?.tableId)
+            coVerify(exactly = 1) { outboxEnqueuer.enqueueSendMessage(100, "✅ QR перевыпущен.", any()) }
+            ds.connection.use { c ->
+                c.createStatement().use {
+                    it.executeQuery(
+                        "SELECT actor_user_id, entity_type, entity_id, payload_json FROM audit_log " +
+                            "WHERE action = 'TABLE_TOKEN_ROTATE'",
+                    ).use { rs ->
+                        assertTrue(rs.next())
+                        assertEquals(actor, rs.getLong(1))
+                        assertEquals("venue", rs.getString(2))
+                        assertEquals(venue, rs.getLong(3))
+                        assertEquals(
+                            infoJson.parseToJsonElement("""{"tableId":$table}"""),
+                            infoJson.parseToJsonElement(rs.getString(4)),
+                        )
+                        assertFalse(rs.next())
+                    }
+                }
+            }
+        }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun `QR callback reports access denied when membership changes before the token transaction`(rotate: Boolean) =
+        runBlocking {
+            val actor = 200L
+            val ds = migratedTelegramMenuDataSource()
+            val venue = seedTelegramMenuAuditVenue(ds, actor)
+            val role = if (rotate) "OWNER" else "MANAGER"
+            val tables = VenueTableRepository(ds)
+            val table =
+                ds.connection.use { connection ->
+                    connection.createStatement().use { statement ->
+                        statement.executeUpdate(
+                            "INSERT INTO venue_members (venue_id, user_id, role) VALUES ($venue, $actor, '$role')",
+                        )
+                        statement.executeUpdate(
+                            "INSERT INTO venue_tables (venue_id, table_number, is_active) VALUES ($venue, 5, true)",
+                            Statement.RETURN_GENERATED_KEYS,
+                        )
+                        statement.generatedKeys.use { rows ->
+                            check(rows.next())
+                            rows.getLong(1)
+                        }
+                    }
+                }
+            if (rotate) tables.ensureActiveToken(venue, table, actor)
+            val before = tables.listTablesWithTokens(venue)
+            val audits = countRows(ds, "audit_log")
+            val access = VenueAccessRepository(ds)
+
+            fun revokeAfterCheck(allowed: Boolean): Boolean {
+                assertTrue(allowed)
+                ds.connection.use { connection ->
+                    connection.createStatement().use { statement ->
+                        val removed =
+                            statement.executeUpdate(
+                                "DELETE FROM venue_members WHERE user_id = $actor AND venue_id = $venue",
+                            )
+                        assertEquals(1, removed)
+                    }
+                }
+                return allowed
+            }
+            coEvery { venueAccessRepository.findVenueMembership(actor, venue) } coAnswers {
+                access.findVenueMembership(actor, venue)
+            }
+            coEvery { venueAccessRepository.hasVenueAdminOrOwner(actor, venue) } coAnswers {
+                val allowed = access.hasVenueAdminOrOwner(actor, venue)
+                if (rotate) allowed else revokeAfterCheck(allowed)
+            }
+            coEvery { venueAccessRepository.hasVenueOwner(actor, venue) } coAnswers {
+                revokeAfterCheck(access.hasVenueOwner(actor, venue))
+            }
+            val bot =
+                routerWithWebAppPublicUrl(null, botUsername = "test_qr_bot", venueTableRepositoryOverride = tables)
+            val action = if (rotate) "owner_venue_tables_qr_rotate" else "owner_venue_tables_qr_table"
+            processBotCallback(92_005L, "stale-qr-permission", "$action:$venue:$table", bot)
+            coVerify(exactly = 1) {
+                outboxEnqueuer.enqueueSendMessage(100, "Нет доступа к управлению QR этого стола.", null)
+            }
+            coVerify(exactly = 1) { outboxEnqueuer.enqueueSendMessage(100, any(), any()) }
+            coVerify(exactly = 0) { apiClient.sendPhotoBytes(any(), any(), any(), any(), any()) }
+            assertNull(access.findVenueMembership(actor, venue))
+            assertTrue(before == tables.listTablesWithTokens(venue))
+            assertEquals(before.size, countRows(ds, "table_tokens"))
+            assertEquals(audits, countRows(ds, "audit_log"))
+        }
+
+    @Test
     fun `manager direct rotate table qr callback is denied`() =
         runBlocking {
             coEvery { venueAccessRepository.hasVenueAdminOrOwner(200L, 10L) } returns true
@@ -2691,7 +2833,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(100, "Нет доступа", any())
             }
-            coVerify(exactly = 0) { venueTableRepository.rotateToken(any(), any()) }
+            coVerify(exactly = 0) { venueTableRepository.rotateToken(any(), any(), any()) }
         }
 
     @Test
@@ -14407,7 +14549,7 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 0) { venueTableRepository.setTableActive(10L, 21L, any(), any()) }
-            coVerify(exactly = 0) { venueTableRepository.rotateToken(10L, 21L) }
+            coVerify(exactly = 0) { venueTableRepository.rotateToken(10L, 21L, any()) }
             coVerify(exactly = 2) {
                 outboxEnqueuer.enqueueSendMessage(100, "Управление столами доступно менеджеру или владельцу.", null)
             }
@@ -38619,8 +38761,9 @@ class TelegramBotRouterTableTokenTest {
         updateId: Long,
         callbackId: String,
         data: String,
+        bot: TelegramBotRouter = router,
     ) {
-        router.process(
+        bot.process(
             TelegramUpdate(
                 updateId = updateId,
                 callbackQuery =

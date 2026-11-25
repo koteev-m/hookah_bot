@@ -193,17 +193,7 @@ internal fun Route.venueTableRoutes(
             val tableId =
                 call.parameters["tableId"]?.toLongOrNull()
                     ?: throw InvalidInputException("tableId must be a number")
-            val rotated = venueTableRepository.rotateToken(venueId, tableId) ?: throw NotFoundException()
-            auditLogRepository.appendJson(
-                actorUserId = userId,
-                action = "TABLE_TOKEN_ROTATE",
-                entityType = "venue",
-                entityId = venueId,
-                payload =
-                    buildJsonObject {
-                        put("tableId", tableId)
-                    },
-            )
+            val rotated = venueTableRepository.rotateToken(venueId, tableId, userId) ?: throw NotFoundException()
             call.respond(
                 VenueTableTokenRotateResponse(
                     tableId = rotated.tableId,
@@ -221,36 +211,8 @@ internal fun Route.venueTableRoutes(
             val permissions = VenuePermissions.forRole(role)
             val request = call.receive<VenueTableRotateTokensRequest>()
             val requestedTableIds = request.tableIds
-            if (requestedTableIds == null) {
-                if (!permissions.contains(VenuePermission.TABLE_TOKEN_ROTATE_ALL)) {
-                    throw ForbiddenException()
-                }
-                val allTables = venueTableRepository.listTableIds(venueId)
-                val rotated = venueTableRepository.rotateTokens(venueId, allTables)
-                auditLogRepository.appendJson(
-                    actorUserId = userId,
-                    action = "TABLE_TOKEN_ROTATE_ALL",
-                    entityType = "venue",
-                    entityId = venueId,
-                    payload =
-                        buildJsonObject {
-                            put("count", rotated.size)
-                            put(
-                                "tableIds",
-                                buildJsonArray { rotated.forEach { add(JsonPrimitive(it.tableId)) } },
-                            )
-                        },
-                )
-                call.respond(
-                    VenueTableRotateTokensResponse(
-                        rotatedCount = rotated.size,
-                        tableIds = rotated.map { it.tableId },
-                    ),
-                )
-            } else {
-                if (!permissions.contains(VenuePermission.TABLE_TOKEN_ROTATE)) {
-                    throw ForbiddenException()
-                }
+            if (rotationPermission(requestedTableIds) !in permissions) throw ForbiddenException()
+            if (requestedTableIds != null) {
                 if (requestedTableIds.isEmpty()) {
                     throw InvalidInputException("tableIds must not be empty")
                 }
@@ -264,28 +226,14 @@ internal fun Route.venueTableRoutes(
                 if (tableIds.size != requestedTableIds.size) {
                     throw InvalidInputException("tableIds must not contain duplicates")
                 }
-                val rotated = venueTableRepository.rotateTokens(venueId, tableIds)
-                auditLogRepository.appendJson(
-                    actorUserId = userId,
-                    action = "TABLE_TOKEN_ROTATE_BATCH",
-                    entityType = "venue",
-                    entityId = venueId,
-                    payload =
-                        buildJsonObject {
-                            put("count", rotated.size)
-                            put(
-                                "tableIds",
-                                buildJsonArray { rotated.forEach { add(JsonPrimitive(it.tableId)) } },
-                            )
-                        },
-                )
-                call.respond(
-                    VenueTableRotateTokensResponse(
-                        rotatedCount = rotated.size,
-                        tableIds = rotated.map { it.tableId },
-                    ),
-                )
             }
+            val rotated = venueTableRepository.rotateTokens(venueId, requestedTableIds, userId)
+            call.respond(
+                VenueTableRotateTokensResponse(
+                    rotatedCount = rotated.size,
+                    tableIds = rotated.map { it.tableId },
+                ),
+            )
         }
 
         get("/qr-package") {
