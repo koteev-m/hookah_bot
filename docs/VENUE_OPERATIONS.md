@@ -336,7 +336,7 @@ Canonical dependencies:
 | Bookings | Venue booking queue and lifecycle. | Booking queue/lifecycle, hold settings, confirmed-only arrival actions, state-aware staff-chat booking buttons, reminders and attendance indicators are partially/smoke-closed. | Broader lifecycle automation/preorder/reminder rollout remains partial/future. |
 | Menu | Structured order menu management. | Structured selected-option parity and OWNER/MANAGER atomic pre-shift availability review are staging-smoke-passed. Menu constructor broader status is partial. | Descriptions/manual recommendations are local/review pending; see `docs/MENU_OPTIONS_STOPLIST.md`. Broader media remains open. |
 | Stop-list | Fast operational availability toggles. | Item/option availability parity is documented for current Staff/Manager/Owner paths; shift-check mass changes use an OWNER/MANAGER-only local draft and one batch confirmation. | Per-venue `staff_stoplist_enabled` and audit completeness outside shift check remain future/partial. |
-| Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics/QR rotate audit need verification. |
+| Tables / QR | Physical table inventory and QR context. | Tables/QR basics exist; table-session runtime behavior is documented separately. | Single table CRUD/diagnostics need verification. Rotation audit is implemented locally and awaits staging smoke. |
 | Staff / invites | Membership, roles, pending invite lifecycle and team cards. | `STAFF OPERATIONS SLICE A / MANAGER PARITY + SHIFT TIME DEFAULTS / DONE / MVP / STAGING-SMOKE-PASSED`; Platform Owner OWNER invite/revoke remains smoke-closed. | Keep Manager Staff-only authority, protected cards, invite revocation and identity privacy in regression. |
 | Staff profiles / today shift | Guest-visible opt-in staff profiles and the configured Today source. | `STAFF PROFILES + TODAY SHIFT PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`. Slice B keeps MANUAL publication or derives current SCHEDULE presence through the shared resolver; both Preview modes use the same filters. | Tips remain future; direct photo management is local-only pending separate staging/iPhone acceptance. |
 | Staff schedule | Optional venue-local planning of one shift per profile/start-date. | `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`; `CANCELED SHIFT RESTORE + BULK ASSIGNMENT / DONE / MVP / STAGING-SMOKE-PASSED`; `STAFF OPERATIONS SLICE B / OPTIONAL TEAM AND SCHEDULE MODULE / GUEST MANUAL OR SCHEDULE SOURCE / DONE / MVP / STAGING-SMOKE-PASSED`. | Keep schedule, restore/bulk, CAS, timezone, module guards, Guest source parity and RBAC/privacy in regression. |
@@ -760,7 +760,7 @@ Dangerous actions:
 - table deactivate with active session should warn and require explicit confirmation.
 
 Current vs target:
-- Table/QR basics exist, while single CRUD/diagnostics/QR rotate audit need verification in the current implementation docs.
+- Single CRUD/diagnostics need verification. Manual staging acceptance of QR rotation remains open.
 
 ### Venue tables and QR — UX03 local implementation
 
@@ -777,6 +777,14 @@ API (authenticated, `venueId` remains required):
   (1..2147483647), `count` 1..500, and cannot be combined with `startNumber`. Existing `prefix`
   compatibility is retained; the new UI supplies only numeric numbers. `TABLE_MANAGE` and current
   venue membership remain required. Database uniqueness protects concurrent creates.
+- `POST /api/venue/tables/{tableId}/rotate-token` and `POST /api/venue/tables/rotate-tokens`
+  require the venue Owner. A supplied `tableIds` list targets active own tables in request
+  order. An omitted list targets all active tables in the venue. Revocation, replacement and
+  one audit row commit together. An audit write error leaves every original code usable.
+  Mini App single/all confirmation warns the Owner to replace printed codes.
+- The Telegram Owner’s «Перевыпустить QR» uses the same single-table operation. When a manager
+  or Owner opens a table without a usable code, the bot provisions it once under lock.
+  Opening an existing code preserves it.
 - `GET /api/venue/tables/qr-package`: UI requests `format=pdf` as the primary format.
   Existing omitted-format ZIP and explicit `format=zip` contracts are preserved.
   `format=png&tableId=...` exports exactly one active own-venue table. PDF has one numbered page
@@ -1409,7 +1417,7 @@ UI is LOCAL IMPLEMENTED / INDEPENDENT REVIEW PASS and has no hosted/staging/devi
 | Bookings | Bot and venue booking flows exist. | Queue/lifecycle/hold settings smoke-closed. | Operational notifications where policy allows. | Broader automation/preorder/reminder rollout future. | Regression/P2 |
 | Menu manage | Bot owner/manager flows exist; no Phase 1 shift-check UI. | Options/flavors parity and OWNER/MANAGER shift check are staging-smoke-passed; broader constructor partial. | No source-of-truth edits. | Follow `docs/MENU_OPTIONS_STOPLIST.md`; keep the UX, atomic batch/stale/audit contract in regression. | Regression/P2 |
 | Stop-list | Existing immediate Bot paths remain unchanged. | Item/option parity documented/smoked; shift-check draft/mass confirmation is OWNER/MANAGER-only. | Callback shortcuts only if role-checked. | Per-venue Staff stop-list flag future. | Regression/P2 |
-| Tables/QR | Bot table flows exist. | Basics exist. | No. | QR rotate audit/diagnostics need verification. | P2 |
+| Tables/QR | Bot table flows exist. | Basics exist. | No. | QR rotation awaits staging smoke. Diagnostics need verification. | P2 |
 | Staff invites | Bot invite acceptance exists. | Copy/share invite result smoke-closed. | No. | Keep role denial/last-owner protection in regression. | Regression |
 | Staff schedule | No Phase 1 flow. | `STAFF SCHEDULE PHASE 1 / DONE / MVP / STAGING-SMOKE-PASSED`: Owner/Manager use bulk `График смен` plus explicit canceled restore; Staff uses read-only `Мои смены`. | No Phase 1 event/button. | Venue Mini App only; keep atomicity, conflict/CAS, effective-hours, bounded own-venue management/read and Today/Guest compatibility in regression. | Regression |
 | Staff-chat link/test | Bot link command exists. | M6 link/test/unlink smoke-closed. | Target group. | Personal notifications future. | Regression |

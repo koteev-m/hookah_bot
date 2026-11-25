@@ -18264,7 +18264,10 @@ class TelegramBotRouter internal constructor(
         if (rotateToken) {
             val rotated =
                 try {
-                    venueTableRepository.rotateToken(venueId, tableId)
+                    venueTableRepository.rotateToken(venueId, tableId, userId)
+                } catch (e: ForbiddenException) {
+                    enqueueMessage(chatId, "Нет доступа к управлению QR этого стола.")
+                    return
                 } catch (e: DatabaseUnavailableException) {
                     enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                     return
@@ -18278,7 +18281,7 @@ class TelegramBotRouter internal constructor(
                 return
             }
         }
-        val tableWithToken = resolveOwnerTableForQr(chatId, venueId, tableId) ?: return
+        val tableWithToken = resolveOwnerTableForQr(chatId, userId, venueId, tableId) ?: return
         val token = tableWithToken.token
         if (token.isNullOrBlank()) {
             enqueueMessage(chatId, "Не удалось сформировать QR: у стола отсутствует активный токен.")
@@ -18331,6 +18334,7 @@ class TelegramBotRouter internal constructor(
 
     private suspend fun resolveOwnerTableForQr(
         chatId: Long,
+        userId: Long,
         venueId: Long,
         tableId: Long,
     ): VenueTableOwnerSummary? {
@@ -18340,15 +18344,18 @@ class TelegramBotRouter internal constructor(
         }
         val tokenProvisioned =
             try {
-                venueTableRepository.rotateToken(venueId, tableId)
+                venueTableRepository.ensureActiveToken(venueId, tableId, userId)
+            } catch (e: ForbiddenException) {
+                enqueueMessage(chatId, "Нет доступа к управлению QR этого стола.")
+                return null
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return null
             } catch (e: Exception) {
                 logBestEffort("provision missing active table token from owner bot flow", e)
-                null
+                false
             }
-        if (tokenProvisioned == null) {
+        if (!tokenProvisioned) {
             return table
         }
         return loadOwnerVenueTable(chatId, venueId, tableId, "reload table qr after token provision") ?: table
