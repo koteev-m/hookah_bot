@@ -373,6 +373,38 @@ class ReleaseBackupTest(Fixture):
 
 
 class BoundariesTest(Fixture):
+    def test_omitted_systemctl_arrays_require_typed_empty_dbus_replies(self):
+        hooks = ("ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost")
+        for unit, interface, names, empty in ((u.SERVICE, "Service", hooks, "a(sasbttttuii) 0"),
+                                               (u.TIMER, "Timer", ("TimersMonotonic",), "a(stt) 0")):
+            with self.subTest(unit=unit):
+                path = "/org/freedesktop/systemd1/unit/hookah_2dproduction_2dbackup_2e" + interface.lower()
+                expected = ("busctl", "--system", "get-property", "org.freedesktop.systemd1", path,
+                            "org.freedesktop.systemd1." + interface, *names)
+                with patch.object(u, "output", side_effect=["", "\n".join([empty] * len(names))]) as read:
+                    shown = u.unit_properties(unit, *names)
+                    u.require_empty_unit_arrays(unit, shown, names)
+                    self.assertEqual(read.call_args.args, expected)
+                prefix = [empty] * (len(names) - 1)
+                for tail in ([], [empty, empty], ["as 0"], [empty[:-1] + "1 unexpected"]):
+                    bad = "\n".join(prefix + tail)
+                    with self.subTest(reply=bad), patch.object(u, "output", return_value=bad), self.assertRaises(u.Refused):
+                        u.require_empty_unit_arrays(unit, {}, names)
+                with patch.object(u, "output", side_effect=subprocess.CalledProcessError(1, "busctl")), \
+                     self.assertRaises(subprocess.CalledProcessError):
+                    u.require_empty_unit_arrays(unit, {}, names)
+
+    def test_partially_shown_hooks_preserve_systemctl_evidence(self):
+        names = ("ExecStartPre", "ExecStopPost")
+        with patch.object(u, "output", return_value="a(sasbttttuii) 0") as bus:
+            u.require_empty_unit_arrays(u.SERVICE, {"ExecStartPre": ""}, names)
+            self.assertEqual(bus.call_args.args[6:], ("ExecStopPost",))
+            bus.reset_mock()
+            with self.assertRaises(u.Refused):
+                u.require_empty_unit_arrays(u.SERVICE, {"ExecStartPre": "/unexpected"}, names)
+            u.require_empty_unit_arrays(u.SERVICE, dict.fromkeys(names, ""), names)
+            bus.assert_not_called()
+
     def test_need_daemon_reload_compares_effective_schedule_before_continuing(self):
         cmd = "/usr/bin/python3 -B ${BACKUP_TOOL} create ${ADMITTED_PLAN} ${AGE_RECIPIENT_FILE} ${BACKUP_SPOOL} ${QUALIFIED_POINTS}"
         service = dict(Environment="DOCKER_HOST=unix:///var/run/docker.sock", EnvironmentFiles=str(u.BACKUP_ENV)+" (ignore_errors=no)",
@@ -384,7 +416,7 @@ class BoundariesTest(Fixture):
         def properties(unit, *keys):
             values = dict(FragmentPath="/etc/systemd/system/"+unit, DropInPaths="", NeedDaemonReload="yes")
             values.update(timer if unit == u.TIMER else service)
-            return {k:values[k] for k in keys}
+            return {k:values[k] for k in keys if k in values}
         self.replace(u, "unit_properties", side_effect=properties)
         self.replace(Path, "read_bytes", return_value=b"same unit")
         u.schedule(True)
@@ -396,6 +428,11 @@ class BoundariesTest(Fixture):
             with self.assertRaises(u.Refused):
                 u.schedule(True)
             values[key] = original
+        for k in ("ExecCondition", "ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost"):
+            del service[k]
+        del timer["TimersMonotonic"]
+        with patch.object(u, "output", side_effect=["\n".join(["a(sasbttttuii) 0"] * 5), "a(stt) 0"]):
+            u.schedule(True)
 
     def test_local_child_refuses_foreign_cwd_and_unreviewed_paths(self):
         with patch.object(Path, "cwd", return_value=self.root), self.assertRaisesRegex(u.Refused, "STOP_PROJECT_CONTEXT"):
