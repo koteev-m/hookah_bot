@@ -438,12 +438,14 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       tableSnapshot.status !== 'resolved' ||
       !tableSnapshot.tableToken ||
       !tableSnapshot.tableSessionId ||
+      tableSnapshot.visitGeneration === undefined ||
       !tableSnapshot.orderAllowed
     ) {
       return null
     }
     return {
       tableToken: tableSnapshot.tableToken,
+      expectedVisitGeneration: tableSnapshot.visitGeneration,
       tableSessionId: tableSnapshot.tableSessionId
     }
   }
@@ -534,6 +536,8 @@ export function renderOrderScreen(options: OrderScreenOptions) {
         tableToken: tableScope.tableToken,
         tableSessionId: tableScope.tableSessionId,
         tabId: order.tabId,
+        expectedVisitGeneration: tableScope.expectedVisitGeneration,
+        expectedOrderId: order.orderId,
         paymentMethod
       },
       buildApiDeps(isDebug),
@@ -600,6 +604,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     const currentScope = getTableScope()
     if (
       !currentScope ||
+      currentScope.expectedVisitGeneration !== tableScope.expectedVisitGeneration ||
       currentScope.tableToken !== tableScope.tableToken ||
       currentScope.tableSessionId !== tableScope.tableSessionId
     ) {
@@ -667,6 +672,7 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     const afterLoadScope = getTableScope()
     if (
       !afterLoadScope ||
+      afterLoadScope.expectedVisitGeneration !== tableScope.expectedVisitGeneration ||
       afterLoadScope.tableToken !== tableScope.tableToken ||
       afterLoadScope.tableSessionId !== tableScope.tableSessionId
     ) {
@@ -764,9 +770,15 @@ export function renderOrderScreen(options: OrderScreenOptions) {
     if (
       nextScope &&
       (!prevScope ||
-        nextScope.tableToken !== prevScope.tableToken ||
+        nextScope.expectedVisitGeneration !== prevScope.expectedVisitGeneration ||
+      nextScope.tableToken !== prevScope.tableToken ||
         nextScope.tableSessionId !== prevScope.tableSessionId)
     ) {
+      if (prevScope?.expectedVisitGeneration !== nextScope.expectedVisitGeneration || prevScope?.tableSessionId !== nextScope.tableSessionId) {
+        currentOrder = null
+        billChoiceVisible = false
+        renderState()
+      }
       void loadOrder()
     }
     if (!nextScope) {

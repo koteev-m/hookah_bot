@@ -80,6 +80,16 @@ export function presentApiError(
           : 'У вас нет доступа к этой операции.'
       severity = 'warn'
       break
+    case ApiErrorCodes.VISIT_VERSION_REQUIRED:
+      title = 'Обновите Mini App'
+      message = 'Закройте Mini App и заново откройте стол перед продолжением.'
+      severity = 'warn'
+      break
+    case ApiErrorCodes.VISIT_GENERATION_CHANGED:
+      title = 'Посещение изменилось'
+      message = 'Заново откройте стол и проверьте текущую корзину.'
+      severity = 'warn'
+      break
     case ApiErrorCodes.SUBSCRIPTION_BLOCKED:
       title = 'Заказы временно недоступны'
       message = 'Попробуйте позже.'

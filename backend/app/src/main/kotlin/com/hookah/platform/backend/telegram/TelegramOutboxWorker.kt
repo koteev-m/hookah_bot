@@ -30,7 +30,9 @@ class TelegramOutboxWorker(
     private val nowProvider: () -> Instant = Instant::now,
     private val metrics: AppMetrics? = null,
     private val recipientLocks: TelegramRecipientLockRegistry = TelegramRecipientLockRegistry(),
+    private val hasGuestBinding: suspend (Long) -> Boolean = { true },
     private val canDispatch: () -> Boolean = { true },
+    private val checkoutNotifications: GuestCheckoutNotifications? = null,
     private val venueInfoDispatch: (
         suspend (TelegramOutboxMessage, JsonElement, TelegramApiClient) -> TelegramCallResult
     )? = null,
@@ -53,6 +55,13 @@ class TelegramOutboxWorker(
 
     suspend fun processOnce() {
         if (!canDispatch()) return
+        try {
+            checkoutNotifications?.recoverPrepared()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logWorkerException("recover guest checkouts", e)
+        }
         val now = nowProvider()
         val batch =
             try {
@@ -89,12 +98,22 @@ class TelegramOutboxWorker(
                     rejectLocalValidation(message, LocalValidationFailure.MALFORMED_JSON)
                     return
                 }
+        if (message.method == GUEST_CHECKOUT_STAFF_METHOD) {
+            val notices = checkoutNotifications ?: return
+            val notice = json.decodeFromJsonElement(GuestCheckoutStaffNotice.serializer(), payload)
+            if (notices.publishStaff(message.chatId, notice)) {
+                repository.markSent(message.id, nowProvider())
+            } else {
+                scheduleRetry(message, "Staff checkout outbox enqueue failed", null)
+            }
+            return
+        }
         val apiClient = apiClientProvider()
         if (apiClient == null) {
             scheduleRetry(message, "Telegram API client unavailable", null)
             return
         }
-        if (message.method == "sendMessage" || message.method == "venueInfo") {
+        if (message.method in setOf("sendMessage", "venueInfo", GUEST_TEARDOWN_MENU_METHOD)) {
             rateLimiter.awaitPermit(message.chatId)
         }
         if ((message.staffOrderRadar && message.staffLiveOrderId == null) ||
@@ -105,12 +124,24 @@ class TelegramOutboxWorker(
         }
 
         if (!canDispatch()) return
+        if (message.method == GUEST_TEARDOWN_MENU_METHOD && hasGuestBinding(message.chatId)) {
+            markSent(message, TelegramCallResult.Success(responseJson = null))
+            return
+        }
         val result =
             try {
                 if (message.method == "venueInfo") {
                     venueInfoDispatch?.invoke(message, payload, apiClient) ?: TelegramCallResult.TrafficDenied
+                } else if (message.chatId < 0 && message.method in setOf("sendMessage", "editMessageText")) {
+                    repository.dispatchClaimedStaffMessage(message) {
+                        apiClient.dispatchOutbox(message.chatId, message.method, payload)
+                    } ?: return
                 } else {
-                    apiClient.dispatchOutbox(message.chatId, message.method, payload)
+                    apiClient.dispatchOutbox(
+                        message.chatId,
+                        if (message.method == GUEST_TEARDOWN_MENU_METHOD) "sendMessage" else message.method,
+                        payload,
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -240,6 +271,7 @@ class TelegramOutboxWorker(
             )
         try {
             repository.enqueueStaffChatOrderFallback(
+                sourceEnvelopeId = message.id,
                 orderId = orderId,
                 chatId = payload.chatId,
                 payloadJson = json.encodeToString(SendMessagePayload.serializer(), fallbackPayload),
@@ -292,7 +324,7 @@ class TelegramOutboxWorker(
             metrics?.incrementOutbound429()
         }
         metrics?.incrementOutboundSendFailed()
-        if (message.attempts >= config.maxAttempts) {
+        if (message.method != GUEST_CHECKOUT_STAFF_METHOD && message.attempts >= config.maxAttempts) {
             markFailed(message, safeReason, incrementMetric = false)
             return
         }

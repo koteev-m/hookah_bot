@@ -720,11 +720,11 @@ class ContractTests(unittest.TestCase):
         self.assertEqual([r['version'] for r in rows], list(range(1, 127)))
         self.assertEqual(rows[-1]['script'], 'V126__support_thread_read_message_cursor.sql')
 
-    def test_current_manifest_is_exact_append_only_v143(self):
+    def test_current_manifest_is_exact_append_only_and_offline_versions_are_fenced(self):
         historical, current = real_manifest(True), real_manifest()
         self.assertEqual(current[:126], historical)
-        self.assertEqual([r['version'] for r in current], list(range(1, 144)))
-        self.assertEqual(current[126:], [
+        self.assertEqual([r['version'] for r in current], list(range(1, 148)))
+        self.assertEqual(current[126:144], [
             {'version': 127, 'script': 'V127__staff_profile_photos.sql',
              'sha256': '2034cdaf16b62e2f0eeacfc07bfd0d1941cad327cb5e6e7785af5e50ee514846', 'checksum': 881920632},
             {'version': 128, 'script': 'V128__venue_info_media_objects.sql',
@@ -759,20 +759,38 @@ class ContractTests(unittest.TestCase):
              'sha256': '5b595fbe139f39b0e94c92aa5c233062f093c46e13635fad029ea2b3a7cdbf99', 'checksum': -58333985},
             {'version': 143, 'script': 'V143__billing_courtesy_operation.sql',
              'sha256': '5c691365880e08b2cbff794d60d1bd046d58737c78ad82a555d0c9a3e839ffa6', 'checksum': 1900727557},
+            {'version': 144, 'script': 'V144__guest_visit_generations.sql',
+             'sha256': 'c913bfc1523b20236934b5b740810875dce3b84cb836ac7d1a8900c16c6d71e6', 'checksum': -616427711},
         ])
-        review = dict(from_manifest=s.digest(historical), to_manifest=s.digest(current),
-                      backward_compatible=True, reason='Synthetic test review of exact additive migration inventory through V143; not staging approval.')
-        with self.assertRaisesRegex(s.Refused, 'EXACT_COMPATIBILITY_REVIEW'): s.compatibility(historical, current)
-        s.compatibility(historical, current, review)
+        self.assertEqual([r['script'] for r in current[144:]], [
+            'V145__bot_prepared_checkouts.sql',
+            'V146__shift_extension_request_keys.sql',
+            'V147__shift_extension_terms_revision.sql',
+        ])
+
+        def reviewed(old, new):
+            return dict(from_manifest=s.digest(old), to_manifest=s.digest(new),
+                        backward_compatible=True, reason='Synthetic exact compatibility fixture only.')
+
+        compatible = current[:143]
+        review = reviewed(historical, compatible)
+        s.compatibility(historical, compatible, review)
+        with self.assertRaisesRegex(s.Refused, 'EXACT_COMPATIBILITY_REVIEW'):
+            s.compatibility(historical, compatible)
         for field in ('sha256', 'checksum', 'script'):
-            drift = copy.deepcopy(current); drift[0][field] = 'changed'
+            drift = copy.deepcopy(compatible); drift[0][field] = 'changed'
             with self.subTest(field=field), self.assertRaisesRegex(s.Refused, 'APPEND_ONLY'):
                 s.compatibility(historical, drift, review)
-        for version in (127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143):
+        for version in range(127, 144):
             for field in ('sha256', 'checksum', 'script'):
-                drift = copy.deepcopy(current); drift[version - 1][field] = 'changed'
+                drift = copy.deepcopy(compatible); drift[version - 1][field] = 'changed'
                 with self.subTest(version=version, field=field), self.assertRaisesRegex(s.Refused, 'EXACT_COMPATIBILITY_REVIEW'):
                     s.compatibility(historical, drift, review)
+        for start, end in ((143, 144), (143, 145), (144, 145), (145, 146), (146, 147), (126, 147)):
+            old, new = current[:start], current[:end]
+            for attestation in (None, reviewed(old, new)):
+                with self.subTest(start=start, end=end), self.assertRaisesRegex(s.Refused, 'PARTICIPATION_OFFLINE_CUTOVER'):
+                    s.compatibility(old, new, attestation)
         with tempfile.TemporaryDirectory() as tmp:
             runtime = MemoryStaging(Path(tmp).resolve())
             bootstrap, target = image(), image('b', 127)
@@ -781,12 +799,13 @@ class ContractTests(unittest.TestCase):
             with self.assertRaisesRegex(s.Refused, 'EXACT_V126'): runtime.apply('install', record(target))
             self.assertEqual(runtime.calls, [])
             self.assertEqual(runtime.apply('install', record(bootstrap))['schema'], 126)
-            with self.assertRaisesRegex(s.Refused, 'REVIEW'): runtime.apply('deploy', record(target))
+            with self.assertRaisesRegex(s.Refused, 'PARTICIPATION_OFFLINE_CUTOVER'):
+                runtime.apply('deploy', record(target))
             self.assertEqual(runtime.history(), s.history_for(historical))
-            self.assertEqual(runtime.apply('deploy', record(target), review)['schema'], 143)
-            self.assertEqual(runtime.history(), s.history_for(current))
-            self.assertEqual(len(runtime.backups), 1)
-            with self.assertRaisesRegex(s.Refused, 'SCHEMA_ROLLBACK'): runtime.apply('rollback')
+            with self.assertRaisesRegex(s.Refused, 'PARTICIPATION_OFFLINE_CUTOVER'):
+                runtime.apply('deploy', record(target), reviewed(historical, current))
+            self.assertEqual(runtime.history(), s.history_for(historical))
+            self.assertEqual(len(runtime.backups), 0)
 
     def test_bad_image_rejected_before_docker(self):
         with tempfile.TemporaryDirectory() as tmp:

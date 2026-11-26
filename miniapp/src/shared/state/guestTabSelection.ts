@@ -18,8 +18,13 @@ function resolveUserStoragePart(): string {
   return userId ? `user:${userId}` : 'user:unknown'
 }
 
+const participation = new Map<string, string>()
+export function bindGuestTabParticipation(sessionId: number, generation: string) {
+  participation.set(resolveUserStoragePart() + ':' + sessionId, generation)
+}
+
 function resolveSelectionKey(tableSessionId: number): string {
-  return `${resolveUserStoragePart()}:session:${tableSessionId}`
+  return `${resolveUserStoragePart()}:session:${tableSessionId}:visit:${participation.get(resolveUserStoragePart() + ':' + tableSessionId) ?? 'unconfirmed'}`
 }
 
 function readStorage(): Record<string, TabSelection> {
@@ -42,7 +47,7 @@ function readStorage(): Record<string, TabSelection> {
       if (!normalizedTabId && value !== 'choose') {
         return
       }
-      if (normalizeId(Number(key)) || /^user:(?:\d+|unknown):session:\d+$/.test(key)) {
+      if (normalizeId(Number(key)) || /^user:(?:\d+|unknown):session:\d+:visit:\d+$/.test(key)) {
         next[key] = normalizedTabId ?? 'choose'
       }
     })
@@ -93,12 +98,11 @@ export function setSelectedGuestTabId(
   writeStorage(selection)
 }
 
-export function restoreGuestTabSelection(sessionId: number, defaultId: number | null, hasDraft: boolean): void {
+export function restoreGuestTabSelection(sessionId: number, hasDraft: boolean): void {
   const selection = readStorage()
   const key = resolveSelectionKey(sessionId)
   if (selection[key] !== undefined) return
   if (hasDraft) writeStorage({ ...selection, [key]: 'choose' })
-  else if (defaultId !== null) writeStorage({ ...selection, [key]: defaultId })
 }
 
 export function chooseGuestTab(tabs: GuestTabDto[], tableSessionId: number | null): GuestTabDto | null {
@@ -106,5 +110,5 @@ export function chooseGuestTab(tabs: GuestTabDto[], tableSessionId: number | nul
   const selected = tableSessionId ? readStorage()[resolveSelectionKey(tableSessionId)] : undefined
   if (selected === 'choose') return null
   if (selected !== undefined) return active.find(tab => tab.id === selected) ?? null
-  return active.find(tab => tab.type === 'PERSONAL') ?? active[0] ?? null
+  return active.length === 1 ? active[0] : null
 }

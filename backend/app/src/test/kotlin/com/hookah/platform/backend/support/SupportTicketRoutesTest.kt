@@ -149,7 +149,9 @@ class SupportTicketRoutesTest {
                         {
                           "category":"ORDER_SERVICE",
                           "message":"Проверка приватного отказа",
-                          "tableToken":"${table.token}"
+                          "tableToken":"${table.token}",
+                          "tableSessionId":${table.tableSessionId},
+                          "expectedVisitGeneration":"0"
                         }
                         """.trimIndent(),
                     )
@@ -231,7 +233,9 @@ class SupportTicketRoutesTest {
                         {
                           "category":"ORDER_SERVICE",
                           "message":"Проверка отметки чтения",
-                          "tableToken":"${table.token}"
+                          "tableToken":"${table.token}",
+                          "tableSessionId":${table.tableSessionId},
+                          "expectedVisitGeneration":"0"
                         }
                         """.trimIndent(),
                     )
@@ -360,7 +364,9 @@ class SupportTicketRoutesTest {
                         {
                           "category":"ORDER_SERVICE",
                           "message":"confirmed-platform-support-initial",
-                          "tableToken":"${table.token}"
+                          "tableToken":"${table.token}",
+                          "tableSessionId":${table.tableSessionId},
+                          "expectedVisitGeneration":"0"
                         }
                         """.trimIndent(),
                     )
@@ -467,7 +473,9 @@ class SupportTicketRoutesTest {
                         {
                           "category":"ORDER_SERVICE",
                           "message":"Подтверждённое обращение",
-                          "tableToken":"${table.token}"
+                          "tableToken":"${table.token}",
+                          "tableSessionId":${table.tableSessionId},
+                          "expectedVisitGeneration":"0"
                         }
                         """.trimIndent(),
                     )
@@ -495,7 +503,8 @@ class SupportTicketRoutesTest {
                           "category":"ORDER_SERVICE",
                           "message":"Подтверждённое обращение с сессией",
                           "tableToken":"${table.token}",
-                          "tableSessionId":${table.tableSessionId}
+                          "tableSessionId":${table.tableSessionId},
+                          "expectedVisitGeneration":"0"
                         }
                         """.trimIndent(),
                     )
@@ -525,10 +534,17 @@ class SupportTicketRoutesTest {
                         append(HttpHeaders.Authorization, "Bearer $platformToken")
                         append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                     }
-                    setBody("""{"message":"Не должно сохраниться"}""")
+                    setBody(
+                        """{"message":"Не должно сохраниться","expectedTableSessionId":${table.tableSessionId},
+                            "expectedVisitGeneration":"0"}""",
+                    )
                 }
             val resolveResponse =
                 client.post("/api/guest/support/threads/$threadId/resolve") {
+                    url {
+                        parameters.append("expectedTableSessionId", table.tableSessionId.toString())
+                        parameters.append("expectedVisitGeneration", "0")
+                    }
                     headers { append(HttpHeaders.Authorization, "Bearer $platformToken") }
                 }
 
@@ -702,7 +718,8 @@ class SupportTicketRoutesTest {
                           "category":"ORDER_SERVICE",
                           "message":"Нужна помощь по заказу",
                           "tableToken":"${table.token}",
-                          "tableSessionId":${table.tableSessionId}
+                          "tableSessionId":${table.tableSessionId},
+                          "expectedVisitGeneration":"0"
                         }
                         """.trimIndent(),
                     )

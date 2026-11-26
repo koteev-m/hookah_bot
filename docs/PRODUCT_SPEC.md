@@ -413,8 +413,15 @@ SHOULD:
 - When a guest reloads “Для заведений”, the Mini App verifies the saved QR token and session together
   with authenticated `GET /api/guest/table/restore`. The exact lookup checks active table, token,
   unexpired session, tab membership, exit and venue availability. It performs no visit writes.
-  Discovery without a saved visit retains its existing order-based ranking. An unavailable saved
-  visit prompts a new scan. The guest’s tab choice belongs to the user and session and must still
+  A newly opened WebView can verify the last explicitly confirmed table and session using a
+  per-user device pointer. An unavailable saved visit prompts a new scan. Without a pointer, the
+  authenticated server can resume an eligible active visit even after the last order closes or
+  before the first bill in a confirmed Bot visit. Controlled Platform Guest still requires its
+  confirmed Bot binding. Discovery follows the actor’s latest eligible Bot confirmation, or a
+  single eligible visit through bill membership. When several visits remain ambiguous, the guest can scan the intended table’s QR. A temporary failure keeps the exact visit and cart available for another validation
+  using «Повторить загрузку стола». A confirmed exit clears that visit’s device pointers and
+  draft. Reopening from the chat menu or Main Mini App does not create or extend
+  a session or open a bill. The guest’s tab choice belongs to the user and session and must still
   appear in the active tabs response. A missing choice for an existing cart or a closed selected
   tab requires an explicit selection before pricing or checkout. Cart keys include the user, QR
   and session. Legacy drafts without a session identifier cannot be assigned to a later visit.
@@ -625,7 +632,7 @@ Product intent:
 - Guest sees it in the same table service/order flow as menu and bill, but the charge is created only after staff confirmation.
 - Staff/manager sees it in the active table/order/bill context, not as a separate operational island.
 - Confirmation adds a fixed, preconfigured charge to the current bill and extends the active table/session ordering window by the configured duration, default 60 minutes.
-- Extension can be repeated while the bill/session remains active.
+- Each approved paid extension adds its agreed duration to the current ordering deadline. All bills at a table share the physical session limit. A staff-recorded seating uses the staff floor extension with its next-booking check. No paid extension is offered on that seating.
 - Staff chat must stay one live order/bill message where possible; extension state should update that message instead of creating noisy side messages.
 
 Current implementation map:
@@ -638,7 +645,7 @@ Current implementation map:
 
 Guest Mini App target:
 1. In active table context, show service action `Продление работы заведения` in the ordering section list only when venue extension settings are enabled, price is configured, and the table session/order is active.
-2. Inside the service action, show button `Продлить на 1 час` and copy: `Продление на 1 час — 3 000 ₽. Персонал подтвердит возможность продления.`
+2. Show the quoted duration on the action and display the current price, currency, target order and bill before confirmation.
 3. Guest sends request with optional comment; UI state becomes `Ожидает подтверждения`.
 4. If approved, guest sees `Продление подтверждено до HH:mm. Сумма добавлена в счёт.`
 5. If rejected or timed out, guest sees `Продление отклонено. Обратитесь к персоналу.` or another clear non-mutating status, and the bill is unchanged.
@@ -646,8 +653,8 @@ Guest Mini App target:
 
 Guest Bot target:
 1. In every bot ordering menu section list entry point, including `🍽️ Меню` and `Мой заказ → Дозаказать`, show `Продление работы заведения` only when the venue exposes enabled, configured extension settings and the current table/order state makes extension actionable.
-2. Opening it shows `Продление на 1 час — 3 000 ₽` and `Персонал подтвердит возможность продления.`
-3. Primary action: `Продлить на 1 час`; after submit, replace action with `Ожидает подтверждения`.
+2. Show the quoted duration, price, currency, order and bill and explain that staff must confirm.
+3. Use the quoted duration on the action. Render the recorded request status after submission or replay.
 4. Duplicate pending requests should show the existing pending state instead of creating another request.
 5. Approval/rejection should be reflected on the next table/order refresh with human copy: `Продление подтверждено. Сумма добавлена в счёт.` or `Продление отклонено. Обратитесь к персоналу.`
 6. Guest bot implementation must use the same fixed-price backend semantics as Mini App and must not create menu/cart/order-batch records.

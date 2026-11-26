@@ -2,6 +2,7 @@ package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
+import com.hookah.platform.backend.telegram.GUEST_CHECKOUT_STAFF_METHOD
 import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -222,6 +223,36 @@ class TelegramOutboxRepository(
             }
         }
         return true
+    }
+
+    internal fun enqueueGuestCheckoutStaffOnConnection(
+        connection: Connection,
+        venueId: Long,
+        payloadJson: String,
+        dedupeKey: String,
+    ) {
+        val chatId = currentStaffChat(connection, venueId) ?: return
+        if (!allowsOutboundChat(chatId)) return
+        enqueueStrictBookingEnvelopeOnConnection(
+            connection,
+            chatId,
+            GUEST_CHECKOUT_STAFF_METHOD,
+            payloadJson,
+            dedupeKey,
+        )
+    }
+
+    private fun currentStaffChat(
+        connection: Connection,
+        venueId: Long,
+    ): Long? {
+        val lock = if (connection.metaData.databaseProductName == "PostgreSQL") "FOR NO KEY UPDATE" else "FOR UPDATE"
+        return connection.prepareStatement("SELECT staff_chat_id FROM venues WHERE id = ? $lock").use { statement ->
+            statement.setLong(1, venueId)
+            statement.executeQuery().use { rows ->
+                if (rows.next()) rows.getLong(1).takeUnless { rows.wasNull() } else null
+            }
+        }
     }
 
     private fun enqueueLegacyOnConnection(
@@ -559,6 +590,34 @@ class TelegramOutboxRepository(
         }
     }
 
+    // A relink cancels NEW and SENDING envelopes in its transaction. Hold the claimed
+    // row through the bounded Bot API call so a different worker/process also observes that fence.
+    internal suspend fun <T> dispatchClaimedStaffMessage(
+        message: TelegramOutboxMessage,
+        send: suspend () -> T,
+    ): T? =
+        withContext(Dispatchers.IO) {
+            val ds = dataSource ?: throw DatabaseUnavailableException()
+            ds.connection.use { connection ->
+                connection.autoCommit = false
+                try {
+                    val active =
+                        connection.prepareStatement(
+                            "SELECT id FROM telegram_outbox WHERE id=? AND chat_id=? AND status='SENDING' " +
+                                "AND attempts=? FOR UPDATE",
+                        ).use {
+                            it.setLong(1, message.id)
+                            it.setLong(2, message.chatId)
+                            it.setInt(3, message.attempts)
+                            it.executeQuery().use { rows -> rows.next() }
+                        }
+                    if (active) send() else null
+                } finally {
+                    connection.rollback()
+                }
+            }
+        }
+
     suspend fun markSent(
         id: Long,
         processedAt: Instant,
@@ -636,13 +695,13 @@ class TelegramOutboxRepository(
                     connection.prepareStatement(
                         """
                         UPDATE telegram_staff_chat_order_messages
-                        SET chat_id = ?, message_id = ?, updated_at = CURRENT_TIMESTAMP
-                        WHERE order_id = ?
+                        SET message_id = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE order_id = ? AND chat_id = ?
                         """.trimIndent(),
                     ).use { statement ->
-                        statement.setLong(1, chatId)
-                        statement.setLong(2, messageId)
-                        statement.setLong(3, orderId)
+                        statement.setLong(1, messageId)
+                        statement.setLong(2, orderId)
+                        statement.setLong(3, chatId)
                         statement.executeUpdate()
                     }
                 }
@@ -662,6 +721,7 @@ class TelegramOutboxRepository(
         orderId: Long,
         chatId: Long,
         payloadJson: String,
+        sourceEnvelopeId: Long? = null,
     ) {
         if (!allowsOutboundChat(chatId)) return
         val ds = dataSource ?: throw DatabaseUnavailableException()
@@ -673,6 +733,21 @@ class TelegramOutboxRepository(
                         if (!isProductOrderStaffChatAuthorized(connection, orderId, chatId)) {
                             connection.rollback()
                             return@use
+                        }
+                        if (sourceEnvelopeId != null) {
+                            val active =
+                                connection.prepareStatement(
+                                    "SELECT id FROM telegram_outbox WHERE id=? AND chat_id=? " +
+                                        "AND status='SENDING' FOR UPDATE",
+                                ).use {
+                                    it.setLong(1, sourceEnvelopeId)
+                                    it.setLong(2, chatId)
+                                    it.executeQuery().use { rows -> rows.next() }
+                                }
+                            if (!active) {
+                                connection.rollback()
+                                return@use
+                            }
                         }
                         val outboxId =
                             connection.prepareStatement(
@@ -839,7 +914,7 @@ class TelegramOutboxRepository(
                         """
                         UPDATE telegram_outbox
                         SET status = ?, processed_at = ?, last_error = ?, next_attempt_at = ?
-                        WHERE id = ?
+                        WHERE id = ? AND status = 'SENDING'
                         """.trimIndent()
                     connection.prepareStatement(sql).use { statement ->
                         statement.setString(1, status.name)

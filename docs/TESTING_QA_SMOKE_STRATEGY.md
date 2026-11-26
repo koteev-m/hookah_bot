@@ -834,6 +834,141 @@ the retained-session link before and during upload, offscreen completion and sub
 Use controlled API barriers, separate browser contexts and explicit bounded repetitions with zero
 retries. A green repeat alone does not establish the cause of an earlier failure.
 
+**Guest visit after a new WebView (`HT-GUEST-VISIT-RESTORE-FIX-01`).** The focused browser tests
+close the first browser context and open another through the chat menu or Main Mini App entry.
+The second launch starts without the previous URL, history or sessionStorage. Run Chromium and
+WebKit for an empty visit, an unsent local cart, a submitted order, an active visit after order
+closure and the controlled Platform Guest visit. Keep only same-origin cart and visit storage
+for the draft case. The backend regression verifies the actual read-only discovery with and
+without a bill, including after order closure and with a rejected Platform Guest binding.
+Run the `shared WebView visit selection` cases in Chromium and WebKit. They use separate windows
+with the same origin and native IndexedDB. The API fixture controls response order for repeat
+scans, A → C → A, retry after 503, cancellation, account changes and explicit exit. Deliver the
+exit reply both before and after the confirmed rejoin to the same physical session. Verify the
+old draft is gone and the new draft survives. After an unrelated rejected QR, a temporary
+restore failure must retain the old pointer and draft. A definitive rejection must clear that
+visit's draft. Check the other account's draft byte for byte throughout.
+
+Run the QR denial and personal-link cases in Vite dev. The personal-link assertions import the
+live table, tab and cart modules from the development server.
+Verify QR entry and cold restore with Web Locks disabled. Abort the first IndexedDB migration,
+then retry and check the legacy pointer, both drafts and the exact restore request. Interrupt
+publication or exit cleanup and reopen twice after storage recovers. The completed visit must
+stop appearing in exact restore requests. A newer confirmed visit must survive.
+
+The updated client coordinates each account in one IndexedDB object store. Overlapping
+read/write transactions on that store are serialized. Telegram iOS uses WKWebView. Verify the
+actual device retains its website data when Telegram closes using the manual smoke below.
+[IndexedDB transaction scheduling](https://www.w3.org/TR/IndexedDB-3/#transaction-scheduling),
+[Telegram iOS WebAppWebView](https://github.com/TelegramMessenger/Telegram-iOS/blob/master/submodules/WebUI/Sources/WebAppWebView.swift).
+
+Delay the first IndexedDB open while another window confirms a new choice. Release the open
+and verify the new choice survives. Deliver positive and negative restore responses after an
+exit and a table switch. Suspend service for a still-active participant and verify the draft
+returns when service resumes. Abort the IndexedDB transaction during initial LocalStorage import,
+reading and editing. Verify the retry action, original bytes before import commits, and the visible
+cart after recovery. Seed an unversioned
+historical draft and check it remains separate from the visible generation-zero basket.
+
+The Playwright failure cases cover HTTP 408, 429, 503, a stalled request, offline retry, reload, a new
+WebView and explicit exit. The local API fixtures for those cases inject the listed failures.
+
+#### Guest participation and order continuity
+
+With a disposable guest, prepare a preview, end and rejoin the same physical table in
+Telegram. Deliver the earlier batch and verify HTTP 409 and unchanged orders, TTL, bills
+and analytics. A fresh submit must succeed once, including after loss of its response.
+Repeat a versioned exit and confirm that the original rejoin challenge still works. Verify
+the expired Platform Guest binding can be cleared only with the matching version.
+Open two WebViews for the same guest. Add from each, edit separate lines, then edit the
+same comment differently. Verify the combined quantities and explicit conflict choice
+after reopening. Interrupt draft writes, return focus, then retry. Check another actor's draft.
+With the shipped client verify HTTP 428 and the server update message before unsafe commands.
+The already loaded preview screen displays its own generic error. Close and reopen the app,
+match the new build to its release assets, and verify one successful fresh checkout.
+Check that the updated client shows explicit guidance for HTTP 428. With an unmarked
+restore response from the old server verify retry and preservation of the exact pointer and cart.
+Retain physical iPhone acceptance as pending until exercised on the released candidate.
+
+For REVIEW-07, withhold the response **after** PostgreSQL commits add-batch. Open a second window on the same draft, retry explicitly, close both windows and reopen. Verify zero automatic sends, identical payload and key on retry, the original batch ID, and unchanged order and batch counts. Then add the same item deliberately and check that a different key creates one new batch. Edit a separate line while submission is pending and check that it survives acknowledgment.
+
+For REVIEW-09, submit an unavailable item, observe the committed refusal, restore availability
+and resend the original request. Verify that only a deliberate submission with a new key creates a
+batch. Reverse the order and verify a committed batch replays even when the item is now unavailable.
+Try a different payload with the same key and keep the reservation after an unverifiable response.
+
+For REVIEW-10, display the 60-minute 50 ₽ quote, update the venue settings to
+120 minutes and 100 ₽, and submit the old confirmation. Verify HTTP 409, unchanged
+visit timestamps and no request or charge. Submit a fresh confirmation and
+approve it after another tariff change. Verify one charge on the original order
+at the accepted amount. A request with a missing or blank key returns HTTP 428.
+Run the supported operational reset and prove the old order address stays closed.
+For Bot, repeat the exact old confirmation and verify the actual pending,
+approved or rejected status. Force both outbox writes to fail in turn. Restart
+the worker after committing a legacy prepared checkout and expiring its session.
+Check the original batch survives, its staff and guest rows are recovered, the
+session stays closed, and the guest receipt has no table keyboard. Force a
+failure between downstream staff enqueue and worker acknowledgement to check
+batch deduplication. Run the Mini App checkout with a rejected outbox write to
+check that the batch and all associated changes roll back.
+
+For REVIEW-11, approve two different bills on one physical session concurrently. With a limit
+of one, check one saved-price charge and one duration of extra time. With a limit of two,
+check both charges and the sum of both durations. Repeat both decisions and compare the
+stored service deadlines and charges. Change only the quote revision on replay. On a
+staff-recorded seating, check guest extension visibility, the registered-seating count,
+floor extension against the next booking, and normal release.
+
+On a disposable local database, race dev reset against checkout. Replay old basket, Bot
+preparation and extension commands after a fresh QR entry. Check the adjacent venue
+retains its data. Exercise quick text and direct reorders for Guest and Platform Guest,
+fail the staff handoff, then retry after commit with the original key. Compare batches and
+outbox rows. Rebind the chat before both rendering and external dispatch. Compare staff
+receipt prices, currency, discount and total with immutable order lines after a menu edit.
+
+Open two independent WebViews and submit an extension with distinct keys. Withhold both replies after
+commit. After the staff decision, close and reopen and explicitly retry each operation. Verify one
+request and one charge on approval, zero charges on rejection and a new ID for a deliberate subsequent
+extension. In Bot, rehearse prepared checkout recovery following menu changes and notification queue
+failure. Confirm a stale Platform Guest ticket reply and status action cannot write after rejoin.
+Verify that a current ordinary Mini App participation can open quick order in an unbound Bot chat.
+
+For REVIEW-08, revoke shared-bill membership before submission and after the server commits a batch while its response is withheld. Verify the final refusal or original batch ID, then restore membership and resend the rejected key. Check that the key creates no batch when membership returns. Keep a generic access error unresolved. Submit the retained draft with a new key on an accessible bill. Repeat with concurrent deliveries and compare order, batch, audit and idempotency records.
+
+For Bot checkout, withhold the commit acknowledgment, add a new item, reopen the cart and explicitly retry the original operation. Restart the Bot after an uncertain response and repeat from the current menu. Verify one original batch, preservation of subsequent local draft items during the live process and a separate intentional add-on. Check stale Web App Data, old draft buttons, and a delayed exit keyboard after rejoin. Reissue a short invite code for a different shared bill and verify that the old confirmation joins neither wrong bill.
+
+For extension, withhold the response after commit and let staff approve the request. Close and reopen the Mini App. Retry the original request explicitly and verify one request and one charge. Move to a new order on the same bill and verify the previous charge is absent from the extension screen. On the Platform Guest account, attempt a table-linked ticket from the previous generation and check that support threads and messages stay unchanged.
+
+
+Pause and republish a disposable venue for ordinary Guest and Platform Guest. Verify that ordering is disabled during the pause and the exact basket is available afterwards. From two windows, change the same item's option, quantity or removal state. Check the visible conflict and total quantity. Interrupt a comment write, verify that the accepted text remains visible, editing is blocked and retry saves it.
+
+Deliver a payment request addressed to the previous order and a bill command addressed to the previous participation. Verify the refusal, unchanged TTL, membership, order and staff-call rows. Open an old Bot button after rejoin. Only an explicit confirmation for the current table may perform its action. Deliver cleanup for the old participation after rejoin and check the new Bot cart and bill. Keep physical iPhone acceptance open until exercised.
+
+To exercise the full browser startup against real Ktor routes and PostgreSQL, build the Mini App,
+install the project’s Playwright Chromium and WebKit, and run the existing PostgreSQL fixture
+with Docker available. Force test execution when turning on the optional browser check.
+
+```sh
+npm --prefix miniapp run build
+HT_GUEST_VISIT_BROWSER_TEST=1 ./gradlew :backend:app:test --rerun --tests '*GuestTableResolveAvailabilityPostgresTest'
+```
+
+For Guest and controlled Platform Guest, both engines open a clean WebView against the loopback
+server. The fixture retains a bill at A, confirms B, and checks before the first bill and after
+a closed order at B. It waits for the actual status, tabs and applicable active-order responses.
+The Bot-link retry regression starts with A saved, opens the pinned B link and injects one
+HTTP 503. Both pointers must still select A until Ktor confirms the retry. Close that WebView
+and open a fresh one from the menu. Its exact restore must select B, with A’s draft and the
+other guest’s draft intact.
+For response-loss coverage, forward the real exit or rejoin to Ktor, wait for HTTP 200, then
+drop the response before it reaches the Mini App. Rejoin once through the Bot lifecycle and
+once through the Mini App. Open a fresh WebView, check the empty basket, and compare the
+other actor's stored draft byte for byte. Race a stale versioned exit against the transaction
+consuming the exit event. Expect HTTP 409 for the stale request and an unchanged database.
+PostgreSQL snapshots include IDs, activity and expiry timestamps, orders, batches, memberships,
+Bot bindings, exit markers and participation generations. Verify that the database tests executed without skips. The
+[manual iPhone smoke](DEFERRED_MANUAL_SMOKE_BACKLOG.md#guest-visit-cold-restart-manual-001) remains open.
+
 **Table QR rotation (`HT-TABLE-QR-ATOMIC-ROTATION-01`).** `VenueTableRoutesTest` covers single,
 selected and all-table rotation, audit contents, role/venue boundaries and guest resolution after
 a rejected audit insert. `TelegramBotRouterTableTokenTest` covers the owner callback, missing-token
@@ -4338,10 +4473,10 @@ Required regression coverage:
   `cartLineRef`, client order/prices/fingerprints, availability, names and display fields;
 - an exact in-screen network retry keeps its key; item/option/note/quantity/comment or
   account/venue/table-session/tab mutation rotates it. Server price/availability/pricing-fingerprint
-  change alone does not. Mismatch keeps the cart and creates a new key only on the next explicit
-  submit; legacy unverifiable recovery exposes active-order review and explicit new-submit actions,
-  with no automatic resend. A delayed success for submitted payload A cannot clear a business-
-  mutated cart B; B remains for a separate explicit submit with a new key;
+  change alone does not. A payload mismatch or unverifiable legacy replay preserves the reservation
+  and offers active-order review. A confirmed success or durably closed refusal releases the
+  reservation. A delayed success for payload A preserves subsequent cart edits for the next
+  explicit submission;
 - exact retry and equivalent line order return one committed batch before current menu/gift
   validation; quantity/item/option/note/comment/tab/actor mismatches in one table session conflict;
   the same key in another table session is independent;

@@ -87,6 +87,7 @@ open class StaffChatNotificationRepository(
         chatId: Long,
         method: String,
         payloadJson: String,
+        checkoutHandoff: Boolean = false,
     ): StaffChatNotificationClaim {
         if (!allowsOutboundChat(chatId)) {
             return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
@@ -96,7 +97,13 @@ open class StaffChatNotificationRepository(
             ds.connection.use { connection ->
                 connection.autoCommit = false
                 try {
-                    if (!isProductVenueStaffChatAuthorized(connection, venueId, chatId)) {
+                    val authorized =
+                        if (checkoutHandoff) {
+                            lockCheckoutHandoff(connection, venueId, chatId, notificationKey)
+                        } else {
+                            isProductVenueStaffChatAuthorized(connection, venueId, chatId)
+                        }
+                    if (!authorized) {
                         connection.rollback()
                         return@use StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
                     }
@@ -150,6 +157,7 @@ open class StaffChatNotificationRepository(
         method: String,
         payloadJson: String,
         radarPayloadJson: String? = null,
+        checkoutHandoff: Boolean = false,
     ): StaffChatNotificationClaim {
         if (!allowsOutboundChat(chatId)) {
             return StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
@@ -159,7 +167,13 @@ open class StaffChatNotificationRepository(
             ds.connection.use { connection ->
                 connection.autoCommit = false
                 try {
-                    if (!isProductVenueStaffChatAuthorized(connection, venueId, chatId)) {
+                    val authorized =
+                        if (checkoutHandoff) {
+                            lockCheckoutHandoff(connection, venueId, chatId, notificationKey)
+                        } else {
+                            isProductVenueStaffChatAuthorized(connection, venueId, chatId)
+                        }
+                    if (!authorized) {
                         connection.rollback()
                         return@use StaffChatNotificationClaim.SKIPPED_TRAFFIC_POLICY
                     }
@@ -536,6 +550,33 @@ open class StaffChatNotificationRepository(
             statement.setLong(1, outboxId)
             statement.setLong(2, orderId)
             statement.executeUpdate()
+        }
+    }
+
+    private fun lockCheckoutHandoff(
+        connection: java.sql.Connection,
+        venueId: Long,
+        chatId: Long,
+        batchId: Long,
+    ): Boolean {
+        // Rebinding locks the venue before cancelling every pending envelope for the old chat.
+        val bound =
+            connection.prepareStatement(
+                "SELECT id FROM venues WHERE id=? AND staff_chat_id=? FOR UPDATE",
+            ).use {
+                it.setLong(1, venueId)
+                it.setLong(2, chatId)
+                it.executeQuery().use { rows -> rows.next() }
+            }
+        if (!bound) return false
+        return connection.prepareStatement(
+            "SELECT id FROM telegram_outbox WHERE dedupe_key=? AND chat_id=? AND method=? " +
+                "AND status IN ('NEW','SENDING') FOR UPDATE",
+        ).use {
+            it.setString(1, "guest-checkout-staff:$batchId")
+            it.setLong(2, chatId)
+            it.setString(3, com.hookah.platform.backend.telegram.GUEST_CHECKOUT_STAFF_METHOD)
+            it.executeQuery().use { rows -> rows.next() }
         }
     }
 

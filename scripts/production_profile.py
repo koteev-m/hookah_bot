@@ -118,14 +118,19 @@ def render(values, release, *, bind_directory=None):
     return raw
 
 
-def source_manifest():
+def source_manifest(*, historical=False):
     files = ROOT / "backend/app/src/main/resources/db/migration/postgresql"
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as jar:
         for sql in files.glob("V*__*.sql"):
             jar.write(sql, "db/migration/postgresql/" + sql.name)
     rows = manifest(archive.getvalue())
-    require(len(rows) == 143, "pilot requires approved V1–V143 schema")
+    if historical:
+        # A V143 backup still uses the pilot schema when this checkout contains later SQL.
+        rows = rows[:143]
+    # SHA-256 of the complete, ordered pilot manifest (names, Flyway CRCs and SQL hashes).
+    require(len(rows) == 143 and digest(rows) == "d1474a3b83ce086761a058edf124cecb3ca6d5687462a2bc868c2118e1f87b39",
+            "pilot requires approved V1–V143 schema")
     return rows
 
 
@@ -278,7 +283,7 @@ def check_history(raw, allowed=(143,)):
     rows = json.loads(raw)
     require(isinstance(rows, list) and all(r.get("success") is True for r in rows), "unsuccessful Flyway history")
     actual = [{k: row[k] for k in ("version", "script", "checksum")} for row in rows]
-    expected = history_for(source_manifest())
+    expected = history_for(source_manifest(historical=True))
     require(len(actual) in allowed and actual == expected[:len(actual)], "Flyway versions, scripts or checksums differ")
 
 

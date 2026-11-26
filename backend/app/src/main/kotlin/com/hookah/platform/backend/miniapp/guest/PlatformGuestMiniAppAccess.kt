@@ -2,10 +2,13 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
+import com.hookah.platform.backend.api.VisitVersionRequiredException
 import com.hookah.platform.backend.miniapp.guest.db.ConfirmedPlatformGuestMutationContext
 import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
+import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationResult
 import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableResolveResult
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionContext
 import com.hookah.platform.backend.telegram.TableContext
 import java.sql.Connection
 import java.time.Duration
@@ -31,6 +34,7 @@ internal suspend fun requirePlatformGuestTokenAccessIfNeeded(
             expectedTableId = table.tableId,
             requestedTableSessionId = requestedTableSessionId,
             ttl = resolvedTtl,
+            verifyOnly = true,
         ) ?: PlatformGuestTableResolveResult.DatabaseUnavailable,
     )
 }
@@ -101,3 +105,61 @@ private fun requirePlatformGuestAccess(
         PlatformGuestTableResolveResult.Denied -> throw ForbiddenException(PLATFORM_GUEST_RECONFIRM_MESSAGE)
         PlatformGuestTableResolveResult.DatabaseUnavailable -> throw DatabaseUnavailableException()
     }
+
+internal fun requiredVisitGeneration(
+    sessionId: Long,
+    generation: String?,
+): Long {
+    if (sessionId <= 0) throw VisitVersionRequiredException()
+    return parseVisitGeneration(generation) ?: throw VisitVersionRequiredException()
+}
+
+internal fun requiredOrderId(orderId: Long?): Long = orderId?.takeIf { it > 0 } ?: throw VisitVersionRequiredException()
+
+internal suspend fun <T> GuestTabsRepository.mutateParticipation(
+    userId: Long,
+    session: TableSessionContext,
+    generation: Long,
+    ownerId: Long?,
+    lifecycle: GuestTableContextLifecycleRepository?,
+    ttl: Duration?,
+    tableToken: String? = null,
+    chatId: Long? = null,
+    requiredTab: Long? = null,
+    touchOnSuccess: Boolean = true,
+    mutation: (Connection) -> T,
+): T {
+    fun applyAuthorized(connection: Connection): T {
+        if (requiredTab != null) {
+            val member = isTabMember(connection, requiredTab, session.venueId, session.id, userId, forUpdate = true)
+            if (!member) throw ForbiddenException()
+        }
+        return mutation(connection)
+    }
+
+    if (userId != ownerId) {
+        return withActiveOrdinarySession(
+            session,
+            userId,
+            lifecycle.takeIf {
+                requiredTab == null || chatId != null
+            },
+            generation,
+            tableToken,
+            chatId,
+            operation = ::applyAuthorized,
+        )
+    }
+    return requireConfirmedPlatformGuestMutation(
+        userId, ownerId, lifecycle, chatId = chatId, tableToken = tableToken, expectedVenueId = session.venueId,
+        expectedTableId = session.tableId,
+        expectedTableSessionId = session.id,
+        ttl = ttl,
+        touchSessionBeforeMutation = false,
+    ) { connection, confirmed ->
+        checkGeneration(connection, userId, confirmed.tableSession.id, generation)
+        applyAuthorized(
+            connection,
+        ).also { if (touchOnSuccess) touchParticipation(connection, session, checkNotNull(ttl)) }
+    }
+}

@@ -113,7 +113,11 @@ class GuestTableContextActivationRepositoryTest {
             val previous =
                 checkNotNull(sessions.currentQrExit(database.actorUserId, database.venueId, database.tableId))
             database.dataSource.connection.use {
+                it.autoCommit = false
+                sessions.findSessionForTable(it, session, database.venueId, database.tableId, forUpdate = true)
+                assertTrue(sessions.consumeExitEvent(it, database.actorUserId, session, previous))
                 sessions.recordUserExit(it, database.actorUserId, session, now)
+                it.commit()
             }
             var current = checkNotNull(sessions.currentQrExit(database.actorUserId, database.venueId, database.tableId))
             assertTrue(current != previous)

@@ -10,11 +10,17 @@ import com.hookah.platform.backend.ai.AiDraftTextType
 import com.hookah.platform.backend.ai.AiVenueSummaryCommand
 import com.hookah.platform.backend.ai.AiVenueSummaryType
 import com.hookah.platform.backend.analytics.AnalyticsChannel
+import com.hookah.platform.backend.api.CartMenuSelectionIssue
+import com.hookah.platform.backend.api.CartMenuSelectionKind
+import com.hookah.platform.backend.api.CartMenuSelectionReason
+import com.hookah.platform.backend.api.CartMenuSelectionUnavailableException
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.FinalOrderBatchRejection
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.MENU_ITEM_DELETE_BLOCKED_BY_FIXED_REWARD_MESSAGE
 import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
+import com.hookah.platform.backend.api.OrderBatchRejection
 import com.hookah.platform.backend.miniapp.guest.db.BookingRecord
 import com.hookah.platform.backend.miniapp.guest.db.BookingReminderScheduleResult
 import com.hookah.platform.backend.miniapp.guest.db.BookingStatus
@@ -172,9 +178,13 @@ import com.hookah.platform.backend.support.SupportThreadStatus
 import com.hookah.platform.backend.support.SupportThreadType
 import com.hookah.platform.backend.support.SupportTicketCreateInput
 import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
+import com.hookah.platform.backend.telegram.db.BotCheckoutScope
+import com.hookah.platform.backend.telegram.db.BotPreparedCheckout
+import com.hookah.platform.backend.telegram.db.BotPreparedCheckoutRepository
 import com.hookah.platform.backend.telegram.db.CatalogVenueShort
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.CompletedStaffCallStatusUpdate
+import com.hookah.platform.backend.telegram.db.CreatedGuestBillRequest
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
 import com.hookah.platform.backend.telegram.db.CreatedOrderPromotionDiscount
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
@@ -197,6 +207,7 @@ import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.LoyaltyRewardCondition
 import com.hookah.platform.backend.telegram.db.OrderBatchDetails
 import com.hookah.platform.backend.telegram.db.OrderBatchItemDetails
+import com.hookah.platform.backend.telegram.db.OrderBatchItemInput
 import com.hookah.platform.backend.telegram.db.OrderItemSelectedOptionDetails
 import com.hookah.platform.backend.telegram.db.OrdersRepository
 import com.hookah.platform.backend.telegram.db.PromotionPlacement
@@ -284,6 +295,8 @@ import org.flywaydb.core.Flyway
 import org.h2.jdbcx.JdbcDataSource
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -362,6 +375,39 @@ class TelegramBotRouterTableTokenTest {
     private val platformGuestQrCallbackTagSequence = AtomicLong()
     private var platformGuestQrNow = Instant.parse("2026-08-04T10:00:00Z")
     private val infoJson = Json { ignoreUnknownKeys = true }
+    private val preparedCheckouts = mockk<BotPreparedCheckoutRepository>()
+
+    private var offeredGuestAction: String? = null
+
+    private suspend fun TelegramBotRouter.performGuestAction(update: TelegramUpdate) {
+        offeredGuestAction = null
+        val original = update.callbackQuery
+        if (original?.data == "guest_shift_extension_request") {
+            process(update.copy(callbackQuery = original.copy(data = "guest_shift_extension_open")))
+        } else {
+            process(update)
+        }
+        val wire = offeredGuestAction ?: return
+        val message = original?.message ?: requireNotNull(update.message)
+        val actor = original?.from ?: requireNotNull(message.fromUser)
+        val confirmed =
+            CallbackQuery(
+                id = original?.id ?: "confirm-${update.updateId}",
+                from = actor,
+                message = message,
+                data = wire,
+            )
+        process(TelegramUpdate(updateId = 1_000_000_000L + update.updateId, callbackQuery = confirmed))
+    }
+
+    private fun String?.matchesGuestAction(expected: String): Boolean {
+        if (this == null || !startsWith("gv|")) return this == expected
+        if (expected == "guest_shift_extension_request") {
+            return length <= 64 && substringAfterLast('|').startsWith("x:")
+        }
+        return length <= 64 && GuestVisitButton.encode(expected) == substringAfterLast('|')
+    }
+
     private val router = routerWithWebAppPublicUrl(null)
 
     private fun routerWithWebAppPublicUrl(
@@ -377,11 +423,14 @@ class TelegramBotRouterTableTokenTest {
         miniAppAbuseProtectionOverride: MiniAppAbuseProtection = MiniAppAbuseProtection(),
         infoMediaServiceOverride: com.hookah.platform.backend.miniapp.venue.media.VenueInfoMediaService? = null,
         outboxOverride: TelegramOutboxEnqueuer = outboxEnqueuer,
+        checkoutNotices: GuestCheckoutNotifications? = null,
         dialogStateOverride: DialogStateRepository = dialogStateRepository,
         ordersOverride: OrdersRepository = ordersRepository,
         venueTableRepositoryOverride: VenueTableRepository = venueTableRepository,
     ): TelegramBotRouter =
         TelegramBotRouter(
+            botPreparedCheckouts = preparedCheckouts,
+            checkoutNotifications = checkoutNotices,
             venueInfoMediaService = infoMediaServiceOverride,
             trafficPolicy = trafficPolicyOverride,
             miniAppAbuseProtection = miniAppAbuseProtectionOverride,
@@ -641,12 +690,46 @@ class TelegramBotRouterTableTokenTest {
 
     @BeforeEach
     fun setup() {
+        coEvery {
+            outboxEnqueuer.enqueueSendMessage(
+                any(),
+                match { text ->
+                    text.startsWith("Проверьте действие") || text.startsWith("Завершить текущий визит?") ||
+                        text.startsWith("Вступить в общий счёт") || text.startsWith("Отправка в счёт") ||
+                        text.startsWith("Применить комментарий для стола") ||
+                        text.startsWith("Вызвать персонал с комментарием для стола")
+                },
+                any(), any(), any(),
+            )
+        } answers {
+            offeredGuestAction =
+                (arg<ReplyMarkup>(2) as InlineKeyboardMarkup).inlineKeyboard.single().single().callbackData
+            TelegramOutboxEnqueueOutcome.ENQUEUED
+        }
+        coEvery {
+            outboxEnqueuer.enqueueEditMessageText(any(), any(), any(), any())
+        } answers {
+            val markup = arg<ReplyMarkup?>(3) as? InlineKeyboardMarkup
+            val confirmation =
+                markup?.inlineKeyboard?.flatten()?.firstOrNull {
+                    it.callbackData.matchesGuestAction("guest_shift_extension_request")
+                }?.callbackData
+            if (confirmation != null) offeredGuestAction = confirmation
+            TelegramOutboxEnqueueOutcome.ENQUEUED
+        }
+        every { shiftExtensionRepository.findExactReplay(any(), any()) } returns null
         every { aiAssistantService.isEnabled } returns true
         coEvery { idempotencyRepository.tryAcquire(any(), any(), any()) } returns true
         coEvery { tableTokenRepository.resolveInactiveTable(any()) } returns null
-        coEvery { dialogStateRepository.get(any()) } returns DialogState(DialogStateType.NONE)
-        coEvery { dialogStateRepository.set(any(), any()) } returns Unit
-        coEvery { dialogStateRepository.clear(any()) } returns Unit
+        val dialogs = mutableMapOf<Long, DialogState>()
+        coEvery {
+            dialogStateRepository.get(any())
+        } answers { dialogs[firstArg()] ?: DialogState(DialogStateType.NONE) }
+        coEvery { dialogStateRepository.set(any(), any()) } answers { dialogs[firstArg()] = secondArg() }
+        coEvery { dialogStateRepository.clear(any()) } answers {
+            dialogs.remove(firstArg())
+            Unit
+        }
         coEvery {
             dialogStateRepository.transitionQuickOrderRequest(
                 chatId = any(), requestId = any(), nextState = any(), allowCommitted = any(),
@@ -669,6 +752,7 @@ class TelegramBotRouterTableTokenTest {
                 any(),
                 any(),
                 any(),
+                expectedVisitGeneration = any(),
             )
         } returns
             GuestOrderCartPreview(
@@ -1085,6 +1169,7 @@ class TelegramBotRouterTableTokenTest {
             GuestTableActivationResult.Applied(
                 context = context,
                 tableSession = platformGuestTableSession(context),
+                visitGeneration = 0,
             )
         }
         coEvery {
@@ -1101,16 +1186,31 @@ class TelegramBotRouterTableTokenTest {
                 expectedSessionId = any(),
                 ttl = any(),
                 now = any(),
+                touchSessionBeforeMutation = any(),
                 mutation = any(),
             )
         } returns PlatformGuestTableMutationResult.Denied
         coEvery {
-            guestTableContextLifecycleRepository.teardownByChat(any(), any(), any(), any())
+            guestTableContextLifecycleRepository.teardownByChat(
+                any(), any(), any(), any(),
+                matchNullable {
+                    true
+                },
+                matchNullable { true }, matchNullable { true },
+            )
         } answers {
             val actorUserId = invocation.args[0] as Long
             val chatId = invocation.args[1] as Long
+            coEvery { chatContextRepository.get(chatId) } returns null
             GuestTableTeardownResult.Cleared(
-                identity = platformGuestIdentity(actorUserId = actorUserId, chatId = chatId),
+                identity =
+                    platformGuestIdentity(actorUserId = actorUserId, chatId = chatId).copy(
+                        tableToken =
+                            arg<String?>(
+                                4,
+                            ) ?: "TOKEN",
+                    ),
+                visitGeneration = arg(6),
                 tableSessionId = 55L,
                 exitRecorded = true,
             )
@@ -1135,7 +1235,14 @@ class TelegramBotRouterTableTokenTest {
                 status = TableSessionStatus.ACTIVE,
             )
         coEvery {
-            guestTableContextLifecycleRepository.ordinaryBotVisit(any(), any(), any(), any(), any())
+            guestTableContextLifecycleRepository.ordinaryBotVisit(
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                matchNullable { true },
+            )
         } coAnswers {
             val actor = firstArg<Long>()
             val chatId = secondArg<Long>()
@@ -1143,7 +1250,9 @@ class TelegramBotRouterTableTokenTest {
             val saved = chatContextRepository.get(chatId)
             val table = saved?.let { tableTokenRepository.resolve(it.tableToken) }
             val id = saved?.tableSessionId
-            if (saved?.userId != actor || table == null || id == null ||
+            if (saved?.userId != actor || table == null || id == null || arg<Long?>(5)?.let {
+                    it != saved.visitGeneration
+                } == true ||
                 (expected != null && (expected != table || id != arg<Long?>(3)))
             ) {
                 return@coAnswers PlatformGuestContextValidationResult.Inactive
@@ -1154,7 +1263,10 @@ class TelegramBotRouterTableTokenTest {
             ) {
                 PlatformGuestContextValidationResult.Inactive
             } else {
-                platformGuestContextActive(table, actor, chatId).copy(tableSession = session)
+                platformGuestContextActive(table, actor, chatId).copy(
+                    tableSession = session,
+                    visitGeneration = saved.visitGeneration,
+                )
             }
         }
         coEvery { tableSessionRepository.hasUserExit(any(), any()) } returns false
@@ -1167,6 +1279,102 @@ class TelegramBotRouterTableTokenTest {
             guestTableContextLifecycleRepository.ordinaryBotCanRejoin(any(), any(), any(), any(), any())
         } returns true
         coEvery { tableSessionRepository.currentQrExit(any(), any(), any(), any()) } returns null
+        val guestConnection = mockk<Connection>()
+        val pending = mutableMapOf<BotCheckoutScope, BotPreparedCheckout>()
+        coEvery { preparedCheckouts.find(any()) } answers { pending[firstArg()] }
+        coEvery { preparedCheckouts.pruneRetired() } returns 0
+        coEvery { outboxEnqueuer.enqueueGuestTeardownMenu(any(), any(), any()) } returns
+            TelegramOutboxEnqueueOutcome.ENQUEUED
+        every { preparedCheckouts.prepare(guestConnection, any(), any()) } answers {
+            pending.getOrPut(secondArg()) { thirdArg() }
+        }
+        coEvery { preparedCheckouts.remove(any(), any()) } answers {
+            if (pending.remove(firstArg(), secondArg())) 1 else 0
+        }
+        every { guestTabsRepository.findInviteForUpdate(guestConnection, any(), any(), any()) } answers {
+            if (arg<String>(3) == "1234") {
+                17L to GuestTabModel(77, 10, 55, "SHARED", 201, "ACTIVE")
+            } else {
+                null
+            }
+        }
+        every {
+            ordersRepository.createGuestOrderBatch(
+                connection = guestConnection, tableId = any(), venueId = any(), tableSessionId = any(),
+                userId = any(), idempotencyKey = any(), tabId = any(), comment = any(), items = any(),
+                expectedPreviewFingerprint = any(), giftDecisionCommand = any(), beforeAuthoritativeWrites = any(),
+                venueZoneIdProvider = any(), expectedTableToken = any(), analyticsChannel = AnalyticsChannel.TELEGRAM,
+                expectedVisitGeneration = any(), authorizeNewBatch = any(),
+            )
+        } answers {
+            runBlocking {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = arg(1), venueId = arg(2), tableSessionId = arg(3), userId = arg(4),
+                    idempotencyKey = arg(5), tabId = arg(6), comment = arg(7), items = arg(8),
+                    expectedPreviewFingerprint = arg(13), giftDecisionCommand = arg(14),
+                    expectedTableToken = arg(18), analyticsChannel = AnalyticsChannel.TELEGRAM,
+                    expectedVisitGeneration = arg(21),
+                )
+            }
+        }
+
+        coEvery {
+            guestTabsRepository.withActiveOrdinarySession<Any?>(any(), any(), any(), any(), any(), any(), any())
+        } coAnswers {
+            val chat = arg<Long>(5)
+            val saved = chatContextRepository.get(chat)
+            val session = firstArg<com.hookah.platform.backend.miniapp.guest.db.TableSessionContext>()
+            if (saved?.userId != secondArg<Long>() || saved.tableSessionId != session.id ||
+                saved.visitGeneration != arg<Long>(3) || saved.tableToken != arg<String>(4)
+            ) {
+                throw com.hookah.platform.backend.api.ForbiddenException()
+            }
+            arg<(Connection) -> Any?>(6)(guestConnection)
+        }
+        coEvery { guestTabsRepository.createSharedTab(guestConnection, any(), any(), any()) } coAnswers {
+            guestTabsRepository.createSharedTab(arg(1), arg(2), arg(3))
+        }
+        every { guestTabsRepository.deleteExpiredInvites(guestConnection) } returns Unit
+        coEvery {
+            guestTabsRepository.createInvite(guestConnection, any(), any(), any(), any(), any(), any())
+        } coAnswers {
+            guestTabsRepository.createInvite(arg(1), arg(2), arg(3), arg(4), arg(5), arg(6))
+        }
+        every { tableSessionRepository.checkVisitGeneration(any(), any(), 55L, 0L) } returns Unit
+        coEvery { shiftExtensionRepository.createPendingRequest(guestConnection, any(), any()) } coAnswers {
+            shiftExtensionRepository.createPendingRequest(arg(1))
+        }
+        coEvery { ordersRepository.findActiveOrderDetailsForTab(guestConnection, any(), any(), true) } coAnswers {
+            ordersRepository.findActiveOrderSummaryForTab(arg(1), arg(2))?.let {
+                ActiveOrderDetails(it.id, it.status, emptyList())
+            }
+        }
+        coEvery {
+            guestTabsRepository.joinByInvite(guestConnection, any(), any(), any(), any(), any(), any())
+        } coAnswers {
+            guestTabsRepository.joinByInvite(arg(1), arg(2), arg(3), arg(4))
+        }
+        coEvery {
+            staffCallRepository.createGuestStaffCall(guestConnection, any(), any(), any(), any(), any(), any(), any())
+        } coAnswers {
+            val id = staffCallRepository.createStaffCall(arg(1), arg(2), arg(4), arg(5), arg(6), arg(3), arg(7))
+            com.hookah.platform.backend.telegram.db.CreatedStaffCall(checkNotNull(id), Instant.now())
+        }
+        coEvery { tableSessionRepository.findSessionForTable(guestConnection, any(), any(), any(), true) } coAnswers {
+            tableSessionRepository.findSessionForTable(arg(1), arg(2), arg(3))
+        }
+        coEvery {
+            tableSessionRepository.touchActiveSession(guestConnection, any(), any(), any(), any(), any())
+        } coAnswers {
+            tableSessionRepository.touchActiveSession(arg(1), arg(2), arg(3), arg(4), arg(5))
+        }
+        coEvery { guestTabsRepository.ordinaryPersonalTab(guestConnection, any(), any()) } coAnswers {
+            val session = arg<com.hookah.platform.backend.miniapp.guest.db.TableSessionContext>(1)
+            guestTabsRepository.ensurePersonalTab(session.venueId, session.id, arg(2))
+        }
+        coEvery { guestTabsRepository.listTabsForUser(guestConnection, any(), any(), any()) } coAnswers {
+            guestTabsRepository.listTabsForUser(arg(1), arg(2), arg(3))
+        }
         coEvery {
             guestTabsRepository.ensurePersonalTab(
                 venueId = any(),
@@ -2086,7 +2294,12 @@ class TelegramBotRouterTableTokenTest {
     fun `guest qr reentry removes bot keyboard and preserves draft session tab and order`() =
         runBlocking {
             val entryKeys = mutableListOf<String?>()
-            coEvery { outboxEnqueuer.enqueueSendMessage(any(), any(), any(), any(), any()) } answers {
+            coEvery {
+                outboxEnqueuer.enqueueSendMessage(
+                    any(), any(), any(), any(),
+                    matchNullable { it != null },
+                )
+            } answers {
                 entryKeys += invocation.args[4] as String?
                 TelegramOutboxEnqueueOutcome.ENQUEUED
             }
@@ -2314,54 +2527,45 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `web app fallback quick order command applies table token and opens quick order`() =
+    fun `review08 legacy and stale web app commands never activate or mutate current participation`() =
         runBlocking {
-            val context =
-                TableContext(
-                    venueId = 10L,
-                    venueName = "Venue",
-                    tableId = 11L,
-                    tableNumber = 5,
-                    tableToken = "TOKEN",
-                    staffChatId = null,
+            val table = stubBotGiftCartContext(Instant.now())
+            coEvery { chatContextRepository.get(100) } returns
+                StoredChatContext(200, table.tableToken, tableSessionId = 55, visitGeneration = 3)
+            val commands =
+                listOf(
+                    "start_quick_order",
+                    "call_staff",
+                    """{"cmd":"start_quick_order","table_token":"${table.tableToken}","table_session_id":55,
+                    "visit_generation":"0","tab_id":1}""",
+                    """{"cmd":"call_staff","table_token":"${table.tableToken}","table_session_id":55,
+                    "visit_generation":"0","reason":"COME"}""",
                 )
-            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
-            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
-            coEvery {
-                chatContextRepository.get(100)
-            } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
-
-            coEvery { subscriptionRepository.findSubscriptionState(10L) } returns
-                VenueSubscriptionState(10L, SubscriptionStatus.ACTIVE, null, null, Instant.now())
-            router.process(
-                TelegramUpdate(
-                    updateId = 9_1,
-                    message =
-                        Message(
-                            messageId = 19_1,
-                            chat = Chat(id = 100, type = "private"),
-                            fromUser = User(id = 200),
-                            webAppData = WebAppData("""{"cmd":"start_quick_order","table_token":"TOKEN"}"""),
-                        ),
-                ),
-            )
-
-            coVerify {
-                guestTableContextLifecycleRepository.activate(
-                    200L, 100L, context.tableToken, 10L, 11L,
-                    any(), any(), null, true, MiniAppFallbackVisit(null),
-                )
-            }
-            coVerify {
-                dialogStateRepository.set(
-                    100,
-                    DialogState(
-                        DialogStateType.QUICK_ORDER_WAIT_TEXT,
-                        mapOf("tableToken" to "TOKEN", "tableSessionId" to "55", "tabId" to "1"),
+            commands.forEachIndexed { index, data ->
+                val id = 81140L + index
+                router.process(
+                    TelegramUpdate(
+                        id,
+                        message =
+                            Message(
+                                id,
+                                Chat(100, "private"),
+                                fromUser = User(id = 200),
+                                webAppData = WebAppData(data),
+                            ),
                     ),
                 )
             }
-            coVerify { outboxEnqueuer.enqueueSendMessage(100, "Опишите, что хотите заказать.", null) }
+            coVerify(exactly = 0) {
+                guestTableContextLifecycleRepository.activate(
+                    any(), any(), any(), any(), any(), any(), any(),
+                    any(), any(),
+                )
+            }
+            coVerify(exactly = 0) { dialogStateRepository.set(any(), any()) }
+            coVerify(exactly = 0) {
+                guestTabsRepository.withActiveOrdinarySession<Any?>(any(), any(), any(), any(), any(), any(), any())
+            }
         }
 
     @Test
@@ -2412,9 +2616,10 @@ class TelegramBotRouterTableTokenTest {
     fun `fallback cannot rejoin an exited guest while a new bot start explicitly can`() =
         runBlocking {
             val context = stubBotGiftCartContext(Instant.now())
+            coEvery { chatContextRepository.get(100L) } returns null
             coEvery {
                 guestTableContextLifecycleRepository.activate(
-                    200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true, MiniAppFallbackVisit(null),
+                    200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true, MiniAppFallbackVisit(55, 0, 77),
                 )
             } returns
                 GuestTableActivationResult.Denied(GuestTableActivationDeniedReason.INVALID_CONTEXT)
@@ -2428,13 +2633,17 @@ class TelegramBotRouterTableTokenTest {
                             messageId = 81_001L,
                             chat = Chat(id = 100L, type = "private"),
                             fromUser = User(id = 200L),
-                            webAppData = WebAppData("""{"cmd":"start_quick_order","table_token":"TOKEN"}"""),
+                            webAppData =
+                                WebAppData(
+                                    """{"cmd":"start_quick_order","table_token":"TOKEN",""" +
+                                        """"table_session_id":55,"visit_generation":0,"tab_id":77}""",
+                                ),
                         ),
                 ),
             )
             coVerify(exactly = 1) {
                 guestTableContextLifecycleRepository.activate(
-                    200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true, MiniAppFallbackVisit(null),
+                    200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true, MiniAppFallbackVisit(55, 0, 77),
                 )
             }
             coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
@@ -2483,13 +2692,13 @@ class TelegramBotRouterTableTokenTest {
             }
             coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) { dialogStateRepository.set(100L, any()) }
-            coVerify(exactly = 1) {
+            coVerify(exactly = 0) {
                 guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
             }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
-                    "Откройте QR-код ещё раз и подтвердите вход в Telegram.",
+                    "Обновите Mini App или выберите действие заново в меню стола.",
                     null,
                 )
             }
@@ -2501,7 +2710,7 @@ class TelegramBotRouterTableTokenTest {
             val context = platformGuestQrContext()
             stubPlatformGuestQrAccess(context)
             coEvery { chatContextRepository.get(100L) } returns
-                StoredChatContext(userId = 999L, tableToken = context.tableToken)
+                StoredChatContext(userId = 999L, tableToken = context.tableToken, tableSessionId = 55L)
             coEvery {
                 guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
             } returns PlatformGuestContextValidationResult.Inactive
@@ -2519,23 +2728,8 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.withConfirmedPlatformGuestMutation<Any?>(
-                    actorUserId = 999L,
-                    platformOwnerUserId = 999L,
-                    chatId = 100L,
-                    tableToken = context.tableToken,
-                    expectedVenueId = context.venueId,
-                    expectedTableId = context.tableId,
-                    expectedSessionId = null,
-                    ttl = any(),
-                    now = any(),
-                    mutation = any(),
-                )
-            }
-            coVerify(exactly = 0) {
-                guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
-            }
+            coVerify(exactly = 1) { guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any()) }
+            coVerify(exactly = 0) { guestTabsRepository.createSharedTab(any(), any(), any(), any()) }
             coVerify(exactly = 0) { tableSessionRepository.resolveActiveSession(any(), any(), any(), any()) }
             coVerify(exactly = 0) { guestTabsRepository.createSharedTab(any(), any(), any()) }
             coVerify(exactly = 0) { staffCallRepository.createStaffCall(any(), any(), any(), any(), any(), any()) }
@@ -4703,7 +4897,7 @@ class TelegramBotRouterTableTokenTest {
             val activeContext = platformGuestQrContext(token = "ACTIVE_TOKEN")
             val promptedContext = platformGuestQrContext(token = "NEW_TOKEN", tableId = 12L, tableNumber = 6)
             coEvery { chatContextRepository.get(100L) } returns
-                StoredChatContext(userId = 999L, tableToken = activeContext.tableToken)
+                StoredChatContext(userId = 999L, tableToken = activeContext.tableToken, tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve(activeContext.tableToken) } returns activeContext
             coEvery { tableTokenRepository.resolve(promptedContext.tableToken) } returns promptedContext
             coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
@@ -4741,7 +4935,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 10_002,
                     callbackQuery =
@@ -5770,7 +5964,7 @@ class TelegramBotRouterTableTokenTest {
     fun `existing guest exit clears platform test context and restores platform menu`() =
         runBlocking {
             val context = platformGuestQrContext()
-            val stored = StoredChatContext(userId = 999L, tableToken = "TOKEN")
+            val stored = StoredChatContext(userId = 999L, tableToken = "TOKEN", tableSessionId = 55L)
             stubPlatformGuestQrAccess(context)
             coEvery { chatContextRepository.get(100L) } returns stored
             coEvery {
@@ -5786,7 +5980,7 @@ class TelegramBotRouterTableTokenTest {
                 data = platformGuestQrConfirmCallback(),
             )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 10_172,
                     message =
@@ -5813,7 +6007,14 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(999L, 100L, any())
+                guestTableContextLifecycleRepository.teardownByChat(
+                    999L,
+                    100L,
+                    any(),
+                    expectedToken = "TOKEN",
+                    expectedSessionId = 55L,
+                    expectedGeneration = 0,
+                )
             }
             coVerify(exactly = 0) { chatContextRepository.clear(100L) }
             coVerify(exactly = 0) {
@@ -5830,10 +6031,12 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify(exactly = 1) {
-                outboxEnqueuer.enqueueSendMessage(
-                    100L,
+                outboxEnqueuer.enqueueGuestTeardownMenu(
+                    100,
                     "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
-                    match { it is ReplyKeyboardMarkup },
+                    match {
+                        it is ReplyKeyboardMarkup
+                    },
                 )
             }
         }
@@ -5848,7 +6051,7 @@ class TelegramBotRouterTableTokenTest {
             val bookingDate = LocalDate.now(ZoneId.of("Europe/Moscow")).plusDays(1)
             val venueZone = ZoneId.of("Europe/Moscow")
             coEvery { chatContextRepository.get(100L) } returns
-                StoredChatContext(userId = 999L, tableToken = activeContext.tableToken)
+                StoredChatContext(userId = 999L, tableToken = activeContext.tableToken, tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve(activeContext.tableToken) } returns activeContext
             coEvery { tableTokenRepository.resolve(promptedContext.tableToken) } returns promptedContext
             coEvery { platformVenueRepository.getVenueDetail(10L) } returns platformGuestQrVenue()
@@ -5897,7 +6100,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 10_173_1,
                     callbackQuery =
@@ -5926,7 +6129,7 @@ class TelegramBotRouterTableTokenTest {
                 actorUserId = 999L,
                 token = promptedContext.tableToken,
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 10_173_4,
                     message =
@@ -5998,6 +6201,8 @@ class TelegramBotRouterTableTokenTest {
             coEvery {
                 guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
             } returns platformGuestContextActive(activeContext)
+            coEvery { chatContextRepository.get(100) } returns
+                StoredChatContext(userId = 999, tableToken = activeContext.tableToken, tableSessionId = 55)
             router.process(
                 TelegramUpdate(
                     updateId = 10_173_10,
@@ -6012,7 +6217,14 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(999L, 100L, any())
+                guestTableContextLifecycleRepository.teardownByChat(
+                    999L,
+                    100L,
+                    any(),
+                    expectedToken = activeContext.tableToken,
+                    expectedSessionId = 55L,
+                    expectedGeneration = 0,
+                )
             }
             coVerify(exactly = 1) {
                 auditLogRepository.appendJson(
@@ -6052,41 +6264,45 @@ class TelegramBotRouterTableTokenTest {
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
-                    match { it.contains("QR") && it.contains("подтверд", ignoreCase = true) },
-                    any(),
+                    "Обновите Mini App или выберите действие заново в меню стола.",
+                    null,
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
                     "Срок подтверждения истёк. Выберите дату и время заново.",
                     any(),
                 )
-                outboxEnqueuer.enqueueSendMessage(
-                    100L,
+                outboxEnqueuer.enqueueGuestTeardownMenu(
+                    100,
                     "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
-                    match { it is ReplyKeyboardMarkup },
+                    match {
+                        it is ReplyKeyboardMarkup
+                    },
                 )
             }
         }
 
     @Test
-    fun `platform Mini App teardown completion restores platform menu and clears pending prompt`() =
+    fun `late Mini App teardown preserves a subsequent Platform Guest QR confirmation`() =
         runBlocking {
             stubPlatformGuestQrAccess()
             processTableStart(updateId = 10_173_01, actorUserId = 999L)
 
-            router.completePlatformGuestTeardownFromMiniApp(chatId = 100L, actorUserId = 999L)
+            coEvery { chatContextRepository.get(100) } returns null
+            router.completePlatformGuestTeardownFromMiniApp(
+                GuestTableTeardownResult.Cleared(platformGuestIdentity(), 42L, true, 0L),
+            )
             processPlatformGuestQrCallback(
                 updateId = 10_173_02,
                 callbackId = "platform-miniapp-exit-stale-confirm",
                 data = platformGuestQrConfirmCallback(),
             )
 
-            coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
-            coVerify(exactly = 0) {
+            coVerify(exactly = 1) {
                 guestTableContextLifecycleRepository.activate(any(), any(), any(), any(), any(), any(), any())
             }
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueGuestTeardownMenu(
                     100L,
                     "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
                     match {
@@ -6094,17 +6310,11 @@ class TelegramBotRouterTableTokenTest {
                             it.keyboard.flatten().any { button -> button.text == "📨 Заявки на подключение" }
                     },
                 )
-                outboxEnqueuer.enqueueAnswerCallbackQuery(
-                    100L,
-                    "platform-miniapp-exit-stale-confirm",
-                    "Действие недоступно. Откройте QR ещё раз.",
-                    false,
-                )
             }
         }
 
     @Test
-    fun `platform stale availability teardown consumes pending confirmation`() =
+    fun `platform pause preserves participation and a refused confirmation cannot be replayed`() =
         runBlocking {
             val context = platformGuestQrContext()
             val targetRouter = routerWithWebAppPublicUrl("https://mini.app/miniapp/")
@@ -6131,6 +6341,12 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
+            processPlatformGuestQrCallback(
+                targetRouter = targetRouter,
+                updateId = 10_173_11,
+                callbackId = "platform-paused-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
             coEvery { platformVenueRepository.getVenueDetail(context.venueId) } returns platformGuestQrVenue()
             processPlatformGuestQrCallback(
                 targetRouter = targetRouter,
@@ -6139,8 +6355,15 @@ class TelegramBotRouterTableTokenTest {
                 data = platformGuestQrConfirmCallback(),
             )
 
-            coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(999L, 100L, any())
+            coVerify(exactly = 0) {
+                guestTableContextLifecycleRepository.teardownByActorAndToken(
+                    999L,
+                    context.tableToken,
+                    any(),
+                    any(),
+                    false,
+                    any(),
+                )
             }
             coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
@@ -6155,8 +6378,8 @@ class TelegramBotRouterTableTokenTest {
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
-                    "Заведение пока не доступно для гостей. Гостевой режим завершён.",
-                    match { it is ReplyKeyboardMarkup },
+                    "Обслуживание временно приостановлено. Вернитесь после возобновления работы заведения.",
+                    null,
                 )
             }
         }
@@ -6177,15 +6400,21 @@ class TelegramBotRouterTableTokenTest {
             contexts.forEachIndexed { index, context ->
                 val chatId = 300L + index
                 coEvery {
-                    guestTableContextLifecycleRepository.teardownByChat(999L, chatId, any())
-                } returns
+                    guestTableContextLifecycleRepository.teardownByChat(
+                        999L, chatId, any(), expectedToken = context.tableToken,
+                        expectedSessionId = 550L + index, expectedGeneration = 0,
+                    )
+                } answers {
+                    coEvery { chatContextRepository.get(chatId) } returns null
                     GuestTableTeardownResult.Cleared(
                         identity = platformGuestIdentity(actorUserId = 999L, chatId = chatId, context = context),
                         tableSessionId = 550L + index,
                         exitRecorded = true,
+                        visitGeneration = 0,
                     )
+                }
                 coEvery { chatContextRepository.get(chatId) } returns
-                    StoredChatContext(userId = 999L, tableToken = context.tableToken)
+                    StoredChatContext(userId = 999L, tableToken = context.tableToken, tableSessionId = 550L + index)
             }
             coEvery { tableTokenRepository.resolve("VALID") } returns contexts[0]
             coEvery { tableTokenRepository.resolve("ROTATED") } returns null
@@ -6210,7 +6439,7 @@ class TelegramBotRouterTableTokenTest {
 
             contexts.indices.forEach { index ->
                 val chatId = 300L + index
-                router.process(
+                router.performGuestAction(
                     TelegramUpdate(
                         updateId = 10_174L + index,
                         message =
@@ -6224,8 +6453,17 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
 
-            coVerify(exactly = contexts.size) {
-                guestTableContextLifecycleRepository.teardownByChat(999L, any(), any())
+            contexts.forEachIndexed { index, context ->
+                coVerify(exactly = 1) {
+                    guestTableContextLifecycleRepository.teardownByChat(
+                        999L,
+                        300L + index,
+                        any(),
+                        expectedToken = context.tableToken,
+                        expectedSessionId = 550L + index,
+                        expectedGeneration = 0,
+                    )
+                }
             }
             coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
             coVerify(exactly = 0) { tableTokenRepository.resolveInactiveTable(any()) }
@@ -6233,7 +6471,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 0) { subscriptionRepository.getSubscriptionStatus(any()) }
             coVerify(exactly = 0) { tableSessionRepository.endUserTableSession(any(), any(), any(), any(), any()) }
             coVerify(exactly = contexts.size) {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueGuestTeardownMenu(
                     any(),
                     "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
                     match { it is ReplyKeyboardMarkup },
@@ -6578,7 +6816,7 @@ class TelegramBotRouterTableTokenTest {
                                 ?.flatten()
                                 ?.mapNotNull { it.callbackData }
                                 .orEmpty()
-                        callbacks.any { it.startsWith("staff_call_reason:") }
+                        callbacks.any { it.matchesGuestAction("staff_call_reason:COME") }
                     },
                 )
             }
@@ -16556,7 +16794,7 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "Кальян классический — 250.00 ₽" &&
-                                    button.callbackData == "bot_menu_item:500:1000"
+                                    button.callbackData.matchesGuestAction("bot_menu_item:500:1000")
                             }
                     },
                 )
@@ -28000,8 +28238,9 @@ class TelegramBotRouterTableTokenTest {
             }
         }
 
-    @Test
-    fun `guest bot menu section list includes shift extension when enabled and configured`() =
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `guest bot menu offers paid shift extension only for an eligible physical session`(managedSeating: Boolean) =
         runBlocking {
             val context =
                 TableContext(
@@ -28018,6 +28257,7 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
+            coEvery { shiftExtensionRepository.hasStaffManagedSeating(10L, 55L) } returns managedSeating
             coEvery { guestMenuRepository.getMenu(10L) } returns
                 MenuModel(
                     venueId = 10L,
@@ -28062,7 +28302,10 @@ class TelegramBotRouterTableTokenTest {
                     match { markup ->
                         markup is InlineKeyboardMarkup &&
                             markup.hasInlineButton("Кальяны", "bot_menu_category:500") &&
-                            markup.hasInlineButton("Продление работы заведения", "guest_shift_extension_open")
+                            markup.hasInlineButton(
+                                "Продление работы заведения",
+                                "guest_shift_extension_open",
+                            ) == !managedSeating
                     },
                 )
             }
@@ -28209,8 +28452,9 @@ class TelegramBotRouterTableTokenTest {
             }
         }
 
-    @Test
-    fun `guest bot shift extension screen shows configured request action`() =
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `guest bot shift extension screen checks current seating before offering the tariff`(managedSeating: Boolean) =
         runBlocking {
             val context =
                 TableContext(
@@ -28227,6 +28471,7 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
+            coEvery { shiftExtensionRepository.hasStaffManagedSeating(10L, 55L) } returns managedSeating
             coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
                 ActiveOrderSummary(id = 19L, status = "ACTIVE")
             coEvery { guestMenuRepository.getMenu(10L) } returns
@@ -28273,6 +28518,16 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
+            if (managedSeating) {
+                coVerify {
+                    outboxEnqueuer.enqueueSendMessage(
+                        100,
+                        "Время этой посадки меняет персонал в зале. Обратитесь к сотруднику.",
+                    )
+                }
+                coVerify(exactly = 0) { outboxEnqueuer.enqueueEditMessageText(100, 22, any(), any()) }
+                return@runBlocking
+            }
             coVerify {
                 outboxEnqueuer.enqueueEditMessageText(
                     100,
@@ -28340,6 +28595,7 @@ class TelegramBotRouterTableTokenTest {
             } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            every { guestTabsRepository.isTabMember(any(), 1, 10, 55, 200, true) } returns true
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
             coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
                 ActiveOrderSummary(id = 19L, status = "ACTIVE")
@@ -28352,7 +28608,7 @@ class TelegramBotRouterTableTokenTest {
                     pendingShiftExtension = pendingShiftExtension(),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 18_603,
                     callbackQuery =
@@ -28374,7 +28630,7 @@ class TelegramBotRouterTableTokenTest {
                             command.tabId == 1L &&
                             command.orderId == 19L &&
                             command.requestedByUserId == 200L &&
-                            command.idempotencyKey == "guest-bot-shift-extension:100:23"
+                            command.idempotencyKey?.startsWith("guest-bot-shift-extension:100:23:") == true
                     },
                 )
             }
@@ -28403,12 +28659,16 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             val context = platformGuestQrContext()
             coEvery { chatContextRepository.get(100L) } returns
-                StoredChatContext(userId = 999L, tableToken = context.tableToken)
+                StoredChatContext(userId = 999L, tableToken = context.tableToken, tableSessionId = 55L)
             stubPlatformGuestQrAccess(context)
             coEvery {
                 guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
             } returns platformGuestContextActive(context)
             stubConfirmedPlatformGuestMutation(context)
+            every { guestTabsRepository.isTabMember(any(), 1, context.venueId, 55, 999, true) } returns true
+            every {
+                tableSessionRepository.touchActiveSession(any<Connection>(), 55, any(), any(), any(), any())
+            } returns platformGuestTableSession(context)
             coEvery { shiftExtensionRepository.getSettings(context.venueId) } returns enabledShiftExtensionSettings()
             coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
                 ActiveOrderSummary(id = 19L, status = "ACTIVE")
@@ -28443,7 +28703,7 @@ class TelegramBotRouterTableTokenTest {
                                 command.tabId == 1L &&
                                 command.orderId == 19L &&
                                 command.requestedByUserId == 999L &&
-                                command.idempotencyKey == "guest-bot-shift-extension:100:218605"
+                                command.idempotencyKey?.startsWith("guest-bot-shift-extension:100:218605:") == true
                         },
                     now = any(),
                 )
@@ -28473,12 +28733,16 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             val context = platformGuestQrContext()
             coEvery { chatContextRepository.get(100L) } returns
-                StoredChatContext(userId = 999L, tableToken = context.tableToken)
+                StoredChatContext(userId = 999L, tableToken = context.tableToken, tableSessionId = 55L)
             stubPlatformGuestQrAccess(context)
             coEvery {
                 guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
             } returns platformGuestContextActive(context)
             stubConfirmedPlatformGuestMutation(context)
+            every { guestTabsRepository.isTabMember(any(), 1, context.venueId, 55, 999, true) } returns true
+            every {
+                tableSessionRepository.touchActiveSession(any<Connection>(), 55, any(), any(), any(), any())
+            } returns platformGuestTableSession(context)
             coEvery { shiftExtensionRepository.getSettings(context.venueId) } returns enabledShiftExtensionSettings()
             coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
                 ActiveOrderSummary(id = 19L, status = "ACTIVE")
@@ -28526,12 +28790,16 @@ class TelegramBotRouterTableTokenTest {
         runBlocking {
             val context = platformGuestQrContext()
             coEvery { chatContextRepository.get(100L) } returns
-                StoredChatContext(userId = 999L, tableToken = context.tableToken)
+                StoredChatContext(userId = 999L, tableToken = context.tableToken, tableSessionId = 55L)
             stubPlatformGuestQrAccess(context)
             coEvery {
                 guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
             } returns platformGuestContextActive(context)
             stubConfirmedPlatformGuestMutation(context, denyAfterAppliedCalls = 1)
+            every { guestTabsRepository.isTabMember(any(), 1, context.venueId, 55, 999, true) } returns true
+            every {
+                tableSessionRepository.touchActiveSession(any<Connection>(), 55, any(), any(), any(), any())
+            } returns platformGuestTableSession(context)
             coEvery { shiftExtensionRepository.getSettings(context.venueId) } returns enabledShiftExtensionSettings()
             coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
                 ActiveOrderSummary(id = 19L, status = "ACTIVE")
@@ -28562,7 +28830,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 1) {
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
-                    "Откройте QR-код ещё раз и подтвердите вход в Telegram.",
+                    "Продление сейчас недоступно. Выберите доступный счёт и попробуйте снова.",
                     null,
                 )
             }
@@ -28585,12 +28853,15 @@ class TelegramBotRouterTableTokenTest {
             } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+            every { guestTabsRepository.isTabMember(any(), 1, 10, 55, 200, true) } returns true
             coEvery { shiftExtensionRepository.getSettings(10L) } returns enabledShiftExtensionSettings()
             coEvery { shiftExtensionRepository.findPendingRequest(55L, 1L) } returns
                 shiftExtensionRequestRecord(ShiftExtensionRequestStatus.PENDING)
             coEvery { ordersRepository.findActiveOrderSummaryForTab(55L, 1L) } returns
                 ActiveOrderSummary(id = 19L, status = "ACTIVE")
 
+            every { shiftExtensionRepository.findExactReplay(any(), any()) } returns
+                shiftExtensionRequestRecord(ShiftExtensionRequestStatus.PENDING)
             router.process(
                 TelegramUpdate(
                     updateId = 18_604,
@@ -28613,6 +28884,49 @@ class TelegramBotRouterTableTokenTest {
                     match { it is InlineKeyboardMarkup },
                 )
             }
+        }
+
+    @Test
+    fun `review10 Bot replays decided extension status from the original button after restart`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.now())
+            coEvery { shiftExtensionRepository.getSettings(10) } returns enabledShiftExtensionSettings()
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55, 77) } returns ActiveOrderSummary(19, "ACTIVE")
+            every { guestTabsRepository.isTabMember(any(), 77, 10, 55, 200, true) } returns true
+            val originalTab = GuestTabModel(77, 10, 55, "PERSONAL", 200, status = "ACTIVE")
+            coEvery { guestTabsRepository.listTabsForUser(10, 55, 200) } returns listOf(originalTab)
+            val actor = User(id = 200)
+            val message = Message(messageId = 23, chat = Chat(id = 100, type = "private"))
+
+            fun action(
+                id: Long,
+                wire: String,
+            ) = TelegramUpdate(id, callbackQuery = CallbackQuery("extension-$id", actor, message, wire))
+            router.process(action(396501, "guest_shift_extension_open"))
+            val wire = checkNotNull(offeredGuestAction)
+            assertTrue(wire.toByteArray().size <= 64)
+            val restarted = routerWithWebAppPublicUrl(null)
+            coEvery { guestTabsRepository.listTabsForUser(10, 55, 200) } returns
+                listOf(
+                    originalTab, originalTab.copy(id = 78, type = "SHARED"),
+                )
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55, 78) } returns ActiveOrderSummary(19, "ACTIVE")
+            coEvery { shiftExtensionRepository.getSettings(10) } returns
+                enabledShiftExtensionSettings(priceMinor = 10000).copy(durationMinutes = 120)
+            for ((index, state) in listOf(
+                ShiftExtensionRequestStatus.PENDING to "Ожидает подтверждения",
+                ShiftExtensionRequestStatus.APPROVED to "Продление подтверждено. Сумма добавлена в счёт.",
+                ShiftExtensionRequestStatus.REJECTED to "Запрос на продление отклонён. Счёт не изменён.",
+            ).withIndex()) {
+                every { shiftExtensionRepository.findExactReplay(any(), any()) } returns
+                    shiftExtensionRequestRecord(state.first)
+                restarted.process(action(396502L + index, wire))
+                coVerify(exactly = 1) {
+                    outboxEnqueuer.enqueueEditMessageText(100, 23, match { it.endsWith(state.second) }, any())
+                }
+            }
+            coVerify(exactly = 0) { shiftExtensionRepository.createPendingRequest(any()) }
+            coVerify(exactly = 0) { staffChatNotifier.notifyBillUpdatedNow(any()) }
         }
 
     @Test
@@ -28826,11 +29140,11 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "👥 Создать общий счёт" &&
-                                    button.callbackData == "bot_tabs_create_shared"
+                                    button.callbackData.matchesGuestAction("bot_tabs_create_shared")
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "🔑 Присоединиться к общему счёту" &&
-                                    button.callbackData == "bot_tabs_join_prompt"
+                                    button.callbackData.matchesGuestAction("bot_tabs_join_prompt")
                             }
                     },
                 )
@@ -28893,6 +29207,23 @@ class TelegramBotRouterTableTokenTest {
                 )
 
             router.process(update)
+            val choice = "guest_tab:55:0:9"
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Выберите счёт для этого посещения.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any {
+                                    b ->
+                                b.callbackData == choice
+                            }
+                    },
+                )
+            }
+            coEvery { guestTabsRepository.isTabMember(9, 10, 55, 200) } returns true
+            processBotCallback(11_003, "choose-owner-tab", choice)
+            router.process(update.copy(updateId = 11_004))
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -28982,11 +29313,11 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "Кальян классический — 250.00 ₽" &&
-                                    button.callbackData == "bot_menu_item:500:1000"
+                                    button.callbackData.matchesGuestAction("bot_menu_item:500:1000")
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "Лимонад — 45.00 ₽" &&
-                                    button.callbackData == "bot_menu_item:500:1001"
+                                    button.callbackData.matchesGuestAction("bot_menu_item:500:1001")
                             }
                     },
                 )
@@ -29132,10 +29463,10 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "Позиция 1 — 10.00 ₽" &&
-                                    button.callbackData == "bot_menu_item:500:1000"
+                                    button.callbackData.matchesGuestAction("bot_menu_item:500:1000")
                             } &&
                             it.inlineKeyboard.flatten().none { button ->
-                                button.callbackData == "bot_menu_item:500:1005"
+                                button.callbackData.matchesGuestAction("bot_menu_item:500:1005")
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "▶️" &&
@@ -29212,7 +29543,7 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "Позиция 6 — 60.00 ₽" &&
-                                    button.callbackData == "bot_menu_item:500:1005"
+                                    button.callbackData.matchesGuestAction("bot_menu_item:500:1005")
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "◀️" &&
@@ -29285,7 +29616,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(update)
+            router.performGuestAction(update)
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -29367,7 +29698,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(update)
+            router.performGuestAction(update)
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -29452,7 +29783,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(update)
+            router.performGuestAction(update)
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -29782,7 +30113,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(update)
+            router.performGuestAction(update)
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -29895,6 +30226,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
+                    expectedOrderId = 900L,
+                    expectedTableToken = "TOKEN",
                     idempotencyKey = "bot-reorder:cb-item-reorder",
                     tabId = 77L,
                     comment = null,
@@ -29908,6 +30241,9 @@ class TelegramBotRouterTableTokenTest {
                     idempotencyReplay = false,
                 )
 
+            coEvery { guestTabsRepository.listTabsForUser(10, 55, 200) } returns
+                listOf(GuestTabModel(77, 10, 55, "PERSONAL", 200, "ACTIVE"))
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55, 77) } returns ActiveOrderSummary(900, "ACTIVE")
             val update =
                 TelegramUpdate(
                     updateId = 21,
@@ -29921,11 +30257,11 @@ class TelegramBotRouterTableTokenTest {
                                     chat = Chat(id = 100, type = "private"),
                                     text = null,
                                 ),
-                            data = "bot_menu_item_reorder:500:1000",
+                            data = "guest_reorder:dw:rs:1j.0",
                         ),
                 )
 
-            router.process(update)
+            router.performGuestAction(update)
 
             coVerify(exactly = 1) {
                 ordersRepository.createGuestOrderBatch(
@@ -29933,6 +30269,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
+                    expectedOrderId = 900L,
+                    expectedTableToken = "TOKEN",
                     idempotencyKey = "bot-reorder:cb-item-reorder",
                     tabId = 77L,
                     comment = null,
@@ -30126,9 +30464,9 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(selectItemUpdate)
-            router.process(selectItemAgainUpdate)
-            router.process(openCartUpdate)
+            router.performGuestAction(selectItemUpdate)
+            router.performGuestAction(selectItemAgainUpdate)
+            router.performGuestAction(openCartUpdate)
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -30200,7 +30538,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 25_1,
                     callbackQuery =
@@ -30333,7 +30671,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 26,
                     callbackQuery =
@@ -30345,7 +30683,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 27,
                     callbackQuery =
@@ -30445,7 +30783,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 28_1,
                     callbackQuery =
@@ -30584,7 +30922,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 26_101,
                     callbackQuery =
@@ -30862,7 +31200,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-choice-checkout-selected",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it[0].itemId == 1000L },
@@ -30872,7 +31211,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             } returns CreatedOrderBatch(orderId = 900L, batchId = 901L, idempotencyReplay = false)
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 30_001,
                     callbackQuery =
@@ -30896,7 +31235,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 30_003,
                     callbackQuery =
@@ -30904,7 +31243,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-choice-checkout-blocked",
                             from = User(id = 200),
                             message = Message(messageId = 30_103, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_cart_checkout",
+                            data = "bot_menu_cart_checkout:1j.0",
                         ),
                 ),
             )
@@ -30932,7 +31271,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 30_006,
                     callbackQuery =
@@ -30940,7 +31279,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-choice-checkout-before-confirm",
                             from = User(id = 200),
                             message = Message(messageId = 30_106, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_cart_checkout",
+                            data = "bot_menu_cart_checkout:1j.0",
                         ),
                 ),
             )
@@ -30956,7 +31295,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 30_008,
                     callbackQuery =
@@ -30964,7 +31303,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-choice-checkout-selected",
                             from = User(id = 200),
                             message = Message(messageId = 30_108, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_cart_checkout",
+                            data = "bot_menu_cart_checkout:1j.0",
                         ),
                 ),
             )
@@ -31042,7 +31381,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-choice-checkout-selected",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it[0].itemId == 1000L },
@@ -31127,7 +31467,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-fixed-checkout",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it.single().itemId == 1000L },
@@ -31139,13 +31480,13 @@ class TelegramBotRouterTableTokenTest {
 
             processBotCallback(31_001, "cb-fixed-add", "bot_menu_item:500:1000")
             processBotCallback(31_002, "cb-fixed-cart", "bot_menu_item_cart")
-            processBotCallback(31_003, "cb-fixed-blocked", "bot_menu_cart_checkout")
+            processBotCallback(31_003, "cb-fixed-blocked", "bot_menu_cart_checkout:1j.0")
             processBotCallback(
                 31_004,
                 "cb-fixed-accept",
                 "bot_gift_accept_fixed:$firstBotGiftCallbackTag",
             )
-            processBotCallback(31_005, "cb-fixed-checkout", "bot_menu_cart_checkout")
+            processBotCallback(31_005, "cb-fixed-checkout", "bot_menu_cart_checkout:1j.0")
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -31185,7 +31526,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-fixed-checkout",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it.single().itemId == 1000L },
@@ -31265,7 +31607,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-skip-checkout",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it.single().itemId == 1000L },
@@ -31289,7 +31632,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-skip-checkout",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = any(),
@@ -31299,7 +31643,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
 
-            processBotCallback(32_004, "cb-skip-checkout", "bot_menu_cart_checkout")
+            processBotCallback(32_004, "cb-skip-checkout", "bot_menu_cart_checkout:1j.0")
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(100, "Подарок пропущен. Заказ ещё не оформлен.", null)
@@ -31315,7 +31659,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-skip-checkout",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it.single().itemId == 1000L },
@@ -31360,7 +31705,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-unavailable-checkout",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it.single().itemId == 1000L },
@@ -31373,7 +31719,7 @@ class TelegramBotRouterTableTokenTest {
 
             processBotCallback(33_001, "cb-unavailable-add", "bot_menu_item:500:1000")
             processBotCallback(33_002, "cb-unavailable-cart", "bot_menu_item_cart")
-            processBotCallback(33_003, "cb-unavailable-checkout", "bot_menu_cart_checkout")
+            processBotCallback(33_003, "cb-unavailable-checkout", "bot_menu_cart_checkout:1j.0")
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -31381,7 +31727,7 @@ class TelegramBotRouterTableTokenTest {
                     match { it.contains("Подарок по акции сейчас недоступен.") },
                     match { markup ->
                         val buttons = (markup as? InlineKeyboardMarkup)?.inlineKeyboard?.flatten().orEmpty()
-                        buttons.any { it.callbackData == "bot_menu_cart_checkout" } &&
+                        buttons.any { it.callbackData.matchesGuestAction("bot_menu_cart_checkout:1j.0") } &&
                             buttons.none {
                                 it.callbackData?.startsWith("bot_gift_accept_fixed:") == true ||
                                     it.callbackData?.startsWith("bot_menu_gift_choice:") == true ||
@@ -31396,7 +31742,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-unavailable-checkout",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it.single().itemId == 1000L },
@@ -31492,7 +31839,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-stale-checkout",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it.single().itemId == 1000L },
@@ -31509,7 +31857,7 @@ class TelegramBotRouterTableTokenTest {
                 "cb-stale-accept",
                 "bot_gift_accept_fixed:$firstBotGiftCallbackTag",
             )
-            processBotCallback(35_004, "cb-stale-checkout", "bot_menu_cart_checkout")
+            processBotCallback(35_004, "cb-stale-checkout", "bot_menu_cart_checkout:1j.0")
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -31702,6 +32050,9 @@ class TelegramBotRouterTableTokenTest {
     fun `direct reorder with gift offer moves item to cart before batch submit`() =
         runBlocking {
             stubBotGiftCartContext(Instant.parse("2026-03-30T10:00:00Z"))
+            coEvery { guestTabsRepository.listTabsForUser(10, 55, 200) } returns
+                listOf(GuestTabModel(77, 10, 55, "PERSONAL", 200, "ACTIVE"))
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55, 77) } returns ActiveOrderSummary(900, "ACTIVE")
             val reward =
                 PromotionGiftRewardItem(
                     menuItemId = 2000L,
@@ -31745,7 +32096,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             } returns giftCartPreview(availableOffer, "reorder-gift")
 
-            processBotCallback(34_001, "cb-reorder-gift", "bot_menu_item_reorder:500:1000")
+            processBotCallback(34_001, "cb-reorder-gift", "guest_reorder:dw:rs:1j.0")
 
             coVerify(exactly = 0) {
                 ordersRepository.createGuestOrderBatch(
@@ -31753,6 +32104,7 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
+                    expectedTableToken = "TOKEN",
                     idempotencyKey = "bot-reorder:cb-reorder-gift",
                     tabId = 77L,
                     comment = null,
@@ -31779,6 +32131,341 @@ class TelegramBotRouterTableTokenTest {
                     },
                 )
             }
+        }
+
+    @Test
+    fun `review09 committed Bot checkout remains recoverable after staff enqueue fails`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.now())
+            val keys = mutableListOf<String>()
+            coEvery { staffChatNotifier.notifyNewBatchNow(any()) } returnsMany
+                listOf(
+                    StaffChatNotificationResult.FAILED_ENQUEUE,
+                    StaffChatNotificationResult.SKIPPED_DUPLICATE,
+                )
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11, venueId = 10, tableSessionId = 55, userId = 200,
+                    idempotencyKey = any(), tabId = 77, comment = any(), items = any(),
+                    expectedPreviewFingerprint = any(), giftDecisionCommand = any(),
+                    expectedTableToken = "TOKEN", analyticsChannel = AnalyticsChannel.TELEGRAM,
+                )
+            } answers {
+                keys += arg<String>(4)
+                CreatedOrderBatch(901, 902, idempotencyReplay = keys.size > 1)
+            }
+            processBotCallback(66801, "before-notify-item", "bot_menu_item:500:1000")
+            processBotCallback(66802, "before-notify-submit", "bot_menu_cart_checkout:1j.0")
+            val scope = BotCheckoutScope(100, 200, 55, 0)
+            assertNotNull(preparedCheckouts.find(scope))
+            val restarted = routerWithWebAppPublicUrl(null)
+            offeredGuestAction = null
+            restarted.process(
+                TelegramUpdate(66803, message = Message(66803, Chat(100, "private"), User(id = 200), "🧺 Корзина")),
+            )
+            assertEquals(1, keys.size)
+            processBotCallback(66804, "after-notify-retry", checkNotNull(offeredGuestAction), restarted)
+            assertEquals(listOf(keys.first(), keys.first()), keys)
+            assertNull(preparedCheckouts.find(scope))
+            coVerify(exactly = 2) { staffChatNotifier.notifyNewBatchNow(match { it.batchId == 902L }) }
+        }
+
+    @Test
+    fun `review09 reopened Bot releases a closed menu rejection and allows a fresh checkout`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.now())
+            val menu = checkNotNull(guestMenuRepository.getMenu(10))
+            val category = menu.categories.single()
+            val delivered = mutableListOf<String>()
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11, venueId = 10, tableSessionId = 55, userId = 200,
+                    idempotencyKey = any(), tabId = 77, comment = any(), items = any(),
+                    expectedPreviewFingerprint = any(), giftDecisionCommand = any(),
+                    expectedTableToken = "TOKEN", analyticsChannel = AnalyticsChannel.TELEGRAM,
+                )
+            } answers {
+                delivered += arg<String>(4)
+                when (delivered.size) {
+                    1 -> throw DatabaseUnavailableException()
+                    2 -> throw FinalOrderBatchRejection(
+                        OrderBatchRejection(
+                            CartMenuSelectionUnavailableException(
+                                listOf(
+                                    CartMenuSelectionIssue(
+                                        "1", 1000, null, CartMenuSelectionKind.ITEM,
+                                        CartMenuSelectionReason.UNAVAILABLE,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    )
+                    else -> CreatedOrderBatch(901, 902, idempotencyReplay = false)
+                }
+            }
+            processBotCallback(66701, "reserve-before-menu-change", "bot_menu_item:500:1000")
+            processBotCallback(66702, "first-without-answer", "bot_menu_cart_checkout:1j.0")
+            assertEquals(1, delivered.size)
+            val stopped = category.copy(items = category.items.map { it.copy(isAvailable = false) })
+            coEvery { guestMenuRepository.getMenu(10) } returns menu.copy(categories = listOf(stopped))
+            val restarted = routerWithWebAppPublicUrl(null)
+            offeredGuestAction = null
+            restarted.process(
+                TelegramUpdate(66703, message = Message(66703, Chat(100, "private"), User(id = 200), "🧺 Корзина")),
+            )
+            assertEquals(1, delivered.size)
+            processBotCallback(66704, "verify-closed-original", checkNotNull(offeredGuestAction), restarted)
+            assertEquals(listOf(delivered.first(), delivered.first()), delivered)
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, match { it.contains("Недоступны:") }) }
+
+            coEvery { guestMenuRepository.getMenu(10) } returns menu
+            processBotCallback(66705, "intentional-fresh-item", "bot_menu_item:500:1000", restarted)
+            processBotCallback(66706, "intentional-fresh-submit", "bot_menu_cart_checkout:1j.0", restarted)
+            assertEquals(3, delivered.size)
+            assertNotEquals(delivered.first(), delivered.last())
+        }
+
+    @Test
+    fun `review08 bot retries the original prepared checkout after a new router starts`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.now())
+            val delivered = mutableListOf<Pair<String, List<OrderBatchItemInput>>>()
+            coEvery {
+                ordersRepository.createGuestOrderBatch(
+                    tableId = 11, venueId = 10, tableSessionId = 55, userId = 200,
+                    idempotencyKey = any(), tabId = 77, comment = any(), items = any(),
+                    analyticsChannel = AnalyticsChannel.TELEGRAM, expectedPreviewFingerprint = any(),
+                    expectedTableToken = "TOKEN", giftDecisionCommand = any(),
+                )
+            } answers {
+                delivered += arg<String>(4) to arg<List<OrderBatchItemInput>>(7)
+                if (delivered.size == 1) throw DatabaseUnavailableException()
+                CreatedOrderBatch(901, 902, idempotencyReplay = delivered.size == 2)
+            }
+            processBotCallback(64801, "reserve-item", "bot_menu_item:500:1000")
+            processBotCallback(64802, "commit-uncertain", "bot_menu_cart_checkout:1j.0")
+            assertEquals(1, delivered.size)
+            processBotCallback(64803, "new-item", "bot_menu_item:500:1000")
+            router.process(
+                TelegramUpdate(64804, message = Message(64804, Chat(100, "private"), User(id = 200), "🧺 Корзина")),
+            )
+            assertEquals(1, delivered.size)
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100, match { it.contains("Количество: 1") }, any())
+            }
+            val restarted = routerWithWebAppPublicUrl(null)
+            offeredGuestAction = null
+            restarted.process(
+                TelegramUpdate(64805, message = Message(64805, Chat(100, "private"), User(id = 200), "🧺 Корзина")),
+            )
+            assertEquals(1, delivered.size)
+            val retry = checkNotNull(offeredGuestAction)
+            processBotCallback(64806, "retry-after-restart", retry, restarted)
+            assertEquals(listOf(delivered.first(), delivered.first()), delivered)
+            processBotCallback(64807, "intentional-add-on", "bot_menu_item:500:1000", restarted)
+            processBotCallback(64808, "submit-add-on", "bot_menu_cart_checkout:1j.0", restarted)
+            assertEquals(3, delivered.size)
+            assertNotEquals(delivered[0].first, delivered[2].first)
+            assertEquals(delivered[0].second, delivered[2].second)
+        }
+
+    @Test
+    fun `review08 bot confirmation retains the invitation and bill shown to the guest`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.now())
+            val first = GuestTabModel(77, 10, 55, "SHARED", 201, "ACTIVE")
+            val replacement = first.copy(id = 78)
+            var live = 17L to first
+            every { guestTabsRepository.findInviteForUpdate(any(), 10, 55, "1234") } answers { live }
+            every { guestTabsRepository.joinByInvite(any(), 10, 55, 200, "1234", any(), any()) } answers {
+                if (arg<Long>(5) == live.first && arg<Long>(6) == live.second.id) live.second else null
+            }
+            dialogStateRepository.set(
+                100,
+                DialogState(DialogStateType.BOT_JOIN_SHARED_WAIT_CODE, mapOf("participation" to "1j.0")),
+            )
+            offeredGuestAction = null
+            router.process(
+                TelegramUpdate(64891, message = Message(64891, Chat(100, "private"), User(id = 200), "1234")),
+            )
+            val wire = checkNotNull(offeredGuestAction)
+            live = 18L to replacement
+            processBotCallback(64892, "old-shared-invitation", wire)
+            verify(exactly = 1) { guestTabsRepository.joinByInvite(any(), 10, 55, 200, "1234", 17, 77) }
+            verify(exactly = 0) { guestTabsRepository.joinByInvite(any(), 10, 55, 200, "1234", 18, 78) }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(100, "✅ Вы присоединились к общему счёту.") }
+        }
+
+    @Test
+    fun `review08 old clear confirmation leaves new lines in the same participation`() =
+        runBlocking {
+            stubBotGiftCartContext(Instant.now())
+            processBotCallback(64991L, "item-before-clear", "bot_menu_item:500:1000")
+
+            fun callback(
+                id: Long,
+                data: String,
+            ) = TelegramUpdate(
+                id,
+                callbackQuery = CallbackQuery("clear-$id", User(id = 200), Message(id, Chat(100, "private")), data),
+            )
+
+            offeredGuestAction = null
+            router.process(callback(64992L, "bot_menu_cart_clear"))
+            val previous = checkNotNull(offeredGuestAction)
+            processBotCallback(64993L, "item-after-clear", "bot_menu_item:500:1000")
+            offeredGuestAction = null
+            router.process(callback(64994L, previous))
+            val current = checkNotNull(offeredGuestAction)
+            assertNotEquals(previous, current)
+            processBotCallback(64995L, "show-revised-cart", "bot_menu_item_cart")
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(100L, match { it.contains("Количество: 2") }, any())
+            }
+        }
+
+    @Test
+    fun `review08 sessionless binding can be explicitly cleared by text or callback`() =
+        runBlocking {
+            val updatedAt = Instant.parse("2026-11-26T10:00:00Z")
+            for ((index, text) in listOf(true, false).withIndex()) {
+                val id = 65001L + index * 10
+                coEvery { chatContextRepository.get(100) } returns
+                    StoredChatContext(200, "TOKEN", updatedAt = updatedAt)
+                coEvery {
+                    guestTableContextLifecycleRepository.teardownByChat(
+                        200, 100, any(), true, "TOKEN", null, 0, updatedAt,
+                    )
+                } answers {
+                    coEvery { chatContextRepository.get(100) } returns null
+                    GuestTableTeardownResult.Cleared(platformGuestIdentity(200, 100), null, false)
+                }
+                val user = User(id = 200)
+                val chat = Chat(100, "private")
+                offeredGuestAction = null
+                val start =
+                    if (text) {
+                        TelegramUpdate(id, message = Message(id, chat, user, "🚪 Завершить визит"))
+                    } else {
+                        TelegramUpdate(
+                            id,
+                            callbackQuery = CallbackQuery("exit-$id", user, Message(id, chat), "guest_end_visit"),
+                        )
+                    }
+                router.process(start)
+                router.process(
+                    TelegramUpdate(
+                        id + 1,
+                        callbackQuery =
+                            CallbackQuery(
+                                "confirm-$id",
+                                user,
+                                Message(id, chat),
+                                checkNotNull(offeredGuestAction),
+                            ),
+                    ),
+                )
+                assertNull(chatContextRepository.get(100))
+            }
+            coVerify(exactly = 2) {
+                outboxEnqueuer.enqueueGuestTeardownMenu(100, match { it.contains("Контекст стола очищен") }, any())
+            }
+        }
+
+    @Test
+    fun `review07 buttons for an older participation require a fresh confirmation before any mutation`() =
+        runBlocking {
+            val table = stubBotGiftCartContext(Instant.now())
+            var generation = 0L
+            coEvery { chatContextRepository.get(100) } answers {
+                StoredChatContext(200, table.tableToken, tableSessionId = 55, visitGeneration = generation)
+            }
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55, 1) } returns ActiveOrderSummary(901, "ACTIVE")
+            val actions =
+                listOf(
+                    "guest_end_visit", "bot_tabs_create_shared", "bot_menu_cart_clear",
+                    "bot_menu_cart_inc:1", "bot_menu_cart_dec:1", "bot_menu_cart_remove:1", "bot_menu_item:500:1000",
+                    "bot_menu_cart_checkout:1j.0", "staff_call_reason:COME", "staff_call_bill_payment:CARD",
+                    "guest_reorder:dw:rs:1j.0",
+                )
+
+            suspend fun press(
+                id: Int,
+                data: String,
+            ): String {
+                offeredGuestAction = null
+                val from = User(id = 200L)
+                val message = Message(id.toLong(), Chat(100, "private"))
+                router.process(
+                    TelegramUpdate(id.toLong(), callbackQuery = CallbackQuery("cb-$id", from, message, data)),
+                )
+                return requireNotNull(offeredGuestAction) { "Missing explicit confirmation for $data" }
+            }
+            val previous = actions.mapIndexed { index, data -> press(5000 + index, data) }
+            generation = 17
+            previous.forEachIndexed { index, data ->
+                val current = press(6000 + index, data)
+                assertNotEquals(data, current)
+                assertTrue(current.toByteArray().size <= 64)
+            }
+            coVerify(exactly = 0) {
+                guestTabsRepository.withActiveOrdinarySession<Any?>(any(), any(), any(), any(), any(), any(), any())
+            }
+            coVerify(exactly = 0) {
+                guestTableContextLifecycleRepository.teardownByChat(any(), any(), any(), any(), any(), any(), any())
+            }
+        }
+
+    @Test
+    fun `review07 late teardown and stale cart buttons preserve a new participation at the same table`() =
+        runBlocking {
+            val table = stubBotGiftCartContext(Instant.now())
+            var generation = 0L
+            coEvery { chatContextRepository.get(100) } answers {
+                StoredChatContext(
+                    userId = 200,
+                    tableToken = table.tableToken,
+                    tableSessionId = 55,
+                    visitGeneration = generation,
+                )
+            }
+
+            fun callback(
+                id: Long,
+                wire: String,
+            ) = TelegramUpdate(
+                id,
+                callbackQuery =
+                    CallbackQuery(
+                        id = "test-$id",
+                        from = User(id = 200),
+                        message = Message(id, Chat(100, "private")),
+                        data = wire,
+                    ),
+            )
+            router.process(callback(701, "bot_menu_cart_clear"))
+            val oldButton = requireNotNull(offeredGuestAction)
+            generation = 17
+            processBotCallback(702, "create-current", "bot_menu_item:500:1000")
+            offeredGuestAction = null
+            router.process(callback(703, oldButton))
+            val newButton = requireNotNull(offeredGuestAction)
+            assertNotEquals(oldButton, newButton)
+            router.completePlatformGuestTeardownFromMiniApp(
+                GuestTableTeardownResult.Cleared(platformGuestIdentity(200, 100, table), 55, true, visitGeneration = 0),
+            )
+            io.mockk.clearMocks(outboxEnqueuer, answers = false)
+            router.process(callback(704, "bot_menu_item_cart"))
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100,
+                    match { it.contains("Количество: 1") && it.contains("Кальян") },
+                    any(),
+                )
+            }
+            coVerify(exactly = 0) { outboxEnqueuer.enqueueSendMessage(100, "Корзина пуста.", any()) }
+            router.process(callback(705, newButton))
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "Корзина пуста.", any()) }
         }
 
     @Test
@@ -31823,7 +32510,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 28,
                     callbackQuery =
@@ -31835,7 +32522,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 29,
                     callbackQuery =
@@ -31906,7 +32593,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 30,
                     callbackQuery =
@@ -31918,7 +32605,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 31,
                     callbackQuery =
@@ -31990,7 +32677,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 32,
                     callbackQuery =
@@ -32002,7 +32689,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 33,
                     callbackQuery =
@@ -32014,7 +32701,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 34,
                     callbackQuery =
@@ -32118,8 +32805,8 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(addItemUpdate)
-            router.process(clearCartUpdate)
+            router.performGuestAction(addItemUpdate)
+            router.performGuestAction(clearCartUpdate)
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -32148,7 +32835,7 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 100,
                     callbackQuery =
@@ -32156,7 +32843,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-empty-checkout",
                             from = User(id = 200),
                             message = Message(messageId = 200, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_cart_checkout",
+                            data = "bot_menu_cart_checkout:1j.0",
                         ),
                 ),
             )
@@ -32264,7 +32951,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-checkout",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it[0].itemId == 1000L && it[0].qty == 1 },
@@ -32290,7 +32978,7 @@ class TelegramBotRouterTableTokenTest {
                     recalculated = true,
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 101,
                     callbackQuery =
@@ -32302,7 +32990,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 102,
                     callbackQuery =
@@ -32310,7 +32998,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-checkout",
                             from = User(id = 200),
                             message = Message(messageId = 202, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_cart_checkout",
+                            data = "bot_menu_cart_checkout:1j.0",
                         ),
                 ),
             )
@@ -32333,7 +33021,8 @@ class TelegramBotRouterTableTokenTest {
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = 200L,
-                    idempotencyKey = "bot-cart-checkout:cb-checkout",
+                    expectedTableToken = "TOKEN",
+                    idempotencyKey = match { it.startsWith("bot-cart-checkout:") },
                     tabId = 77L,
                     comment = null,
                     items = match { it.size == 1 && it[0].itemId == 1000L && it[0].qty == 1 },
@@ -32427,7 +33116,7 @@ class TelegramBotRouterTableTokenTest {
                     status = "ACTIVE",
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 104,
                     callbackQuery =
@@ -32439,7 +33128,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 105,
                     callbackQuery =
@@ -32451,7 +33140,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 106,
                     callbackQuery =
@@ -32459,7 +33148,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-checkout-after-shared-switch",
                             from = User(id = 200),
                             message = Message(messageId = 206, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_cart_checkout",
+                            data = "bot_menu_cart_checkout:1j.0",
                         ),
                 ),
             )
@@ -32521,7 +33210,8 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery { guestTabsRepository.listTabsForUser(10L, 55L, 200L) } returns listOf(sharedTab)
-            coEvery { guestTabsRepository.isTabMember(9L, 10L, 55L, 200L) } returns false
+            var member = true
+            coEvery { guestTabsRepository.isTabMember(9L, 10L, 55L, 200L) } answers { member }
             coEvery { venueSettingsRepository.resolveZoneId(10L, any()) } returns ZoneId.of("Europe/Moscow")
             coEvery { guestMenuRepository.getMenu(10L) } returns
                 MenuModel(
@@ -32586,6 +33276,18 @@ class TelegramBotRouterTableTokenTest {
 
             router.process(
                 TelegramUpdate(
+                    updateId = 106,
+                    callbackQuery =
+                        CallbackQuery(
+                            id = "cb-select-shared",
+                            from = User(id = 200),
+                            message = Message(messageId = 206, chat = Chat(id = 100, type = "private"), text = null),
+                            data = "guest_tab:55:0:9",
+                        ),
+                ),
+            )
+            router.performGuestAction(
+                TelegramUpdate(
                     updateId = 107,
                     callbackQuery =
                         CallbackQuery(
@@ -32596,7 +33298,8 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
-            router.process(
+            member = false
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 108,
                     callbackQuery =
@@ -32604,7 +33307,7 @@ class TelegramBotRouterTableTokenTest {
                             id = "cb-stale-shared-checkout",
                             from = User(id = 200),
                             message = Message(messageId = 208, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_cart_checkout",
+                            data = "bot_menu_cart_checkout:1j.0",
                         ),
                 ),
             )
@@ -32673,7 +33376,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 52,
                     callbackQuery =
@@ -32777,7 +33480,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 55,
                     callbackQuery =
@@ -32842,143 +33545,174 @@ class TelegramBotRouterTableTokenTest {
             }
         }
 
-    @Test
-    fun `start with same table token clears draft cart when active table session changed`() =
-        runBlocking {
-            val context =
-                TableContext(
-                    venueId = 10L,
-                    venueName = "Venue",
-                    tableId = 11L,
-                    tableNumber = 5,
-                    tableToken = "TOKEN",
-                    staffChatId = null,
-                )
-            val session55 =
-                TableSessionRecord(
-                    id = 55L,
-                    venueId = 10L,
-                    tableId = 11L,
-                    startedAt = Instant.parse("2026-03-30T10:00:00Z").minusSeconds(60),
-                    lastActivityAt = Instant.parse("2026-03-30T10:00:00Z"),
-                    expiresAt = Instant.parse("2026-03-30T10:00:00Z").plusSeconds(7200),
-                    endedAt = null,
-                    status = TableSessionStatus.ACTIVE,
-                )
-            val session66 =
-                TableSessionRecord(
-                    id = 66L,
-                    venueId = 10L,
-                    tableId = 11L,
-                    startedAt = Instant.parse("2026-03-30T12:00:00Z").minusSeconds(60),
-                    lastActivityAt = Instant.parse("2026-03-30T12:00:00Z"),
-                    expiresAt = Instant.parse("2026-03-30T12:00:00Z").plusSeconds(7200),
-                    endedAt = null,
-                    status = TableSessionStatus.ACTIVE,
-                )
-            var bound = session55
-            coEvery { chatContextRepository.get(100) } answers {
-                StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = bound.id)
-            }
-            coEvery { tableSessionRepository.findSessionForTable(any(), 10L, 11L) } answers {
-                bound.takeIf { it.id == firstArg<Long>() }?.copy(expiresAt = Instant.now().plusSeconds(3600))
-            }
-            coEvery {
-                guestTableContextLifecycleRepository.activate(200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true)
-            } answers {
-                bound = session66
-                GuestTableActivationResult.Applied(context, bound)
-            }
-            coEvery { tableTokenRepository.resolve("TOKEN") } returns context
-            coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
-            coEvery { guestMenuRepository.getMenu(10L) } returns
-                MenuModel(
-                    venueId = 10L,
-                    categories =
-                        listOf(
-                            MenuCategoryModel(
-                                id = 500L,
-                                name = "Основное меню",
-                                sortOrder = 0,
-                                items =
-                                    listOf(
-                                        MenuItemModel(
-                                            id = 1000L,
-                                            name = "Кальян классический",
-                                            priceMinor = 25000L,
-                                            currency = "RUB",
-                                            isAvailable = true,
-                                            sortOrder = 0,
-                                        ),
-                                    ),
-                            ),
-                        ),
-                )
-
-            router.process(
-                TelegramUpdate(
-                    updateId = 59,
-                    callbackQuery =
-                        CallbackQuery(
-                            id = "cb-add-before-session-change",
-                            from = User(id = 200),
-                            message = Message(messageId = 69, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_item:500:1000",
-                        ),
-                ),
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = [true, false])
+    fun `start with same table token clears draft cart when active table session or participation changed`(
+        sameSession: Boolean,
+    ) = runBlocking {
+        val context =
+            TableContext(
+                venueId = 10L,
+                venueName = "Venue",
+                tableId = 11L,
+                tableNumber = 5,
+                tableToken = "TOKEN",
+                staffChatId = null,
             )
-            router.process(
-                TelegramUpdate(
-                    updateId = 60,
-                    message =
-                        Message(
-                            messageId = 70,
-                            chat = Chat(id = 100, type = "private"),
-                            fromUser = User(id = 200),
-                            text = "/start TOKEN",
-                        ),
-                ),
+        val session55 =
+            TableSessionRecord(
+                id = 55L,
+                venueId = 10L,
+                tableId = 11L,
+                startedAt = Instant.parse("2026-03-30T10:00:00Z").minusSeconds(60),
+                lastActivityAt = Instant.parse("2026-03-30T10:00:00Z"),
+                expiresAt = Instant.parse("2026-03-30T10:00:00Z").plusSeconds(7200),
+                endedAt = null,
+                status = TableSessionStatus.ACTIVE,
             )
-            router.process(
-                TelegramUpdate(
-                    updateId = 61,
-                    message =
-                        Message(
-                            messageId = 71,
-                            chat = Chat(id = 100, type = "private"),
-                            fromUser = User(id = 200),
-                            text = "/start TOKEN",
-                        ),
-                ),
+        val session66 =
+            TableSessionRecord(
+                id = 66L,
+                venueId = 10L,
+                tableId = 11L,
+                startedAt = Instant.parse("2026-03-30T12:00:00Z").minusSeconds(60),
+                lastActivityAt = Instant.parse("2026-03-30T12:00:00Z"),
+                expiresAt = Instant.parse("2026-03-30T12:00:00Z").plusSeconds(7200),
+                endedAt = null,
+                status = TableSessionStatus.ACTIVE,
             )
-            router.process(
-                TelegramUpdate(
-                    updateId = 62,
-                    callbackQuery =
-                        CallbackQuery(
-                            id = "cb-open-cart-after-session-change",
-                            from = User(id = 200),
-                            message = Message(messageId = 72, chat = Chat(id = 100, type = "private"), text = null),
-                            data = "bot_menu_item_cart",
-                        ),
-                ),
+        var generation = 0L
+        var bound = session55
+        coEvery { chatContextRepository.get(100) } answers {
+            StoredChatContext(
+                userId = 200,
+                tableToken = "TOKEN",
+                tableSessionId = bound.id,
+                visitGeneration = generation,
             )
-
-            coVerify {
-                outboxEnqueuer.enqueueSendMessage(
-                    100,
-                    "Корзина пуста.",
-                    match { it is InlineKeyboardMarkup },
-                )
-            }
-            coVerify(exactly = 0) {
-                outboxEnqueuer.enqueueSendMessage(
-                    100,
-                    "Кальян классический\nКоличество: 1\nСумма: 250.00 ₽",
-                    any(),
-                )
-            }
         }
+        coEvery { tableSessionRepository.findSessionForTable(any(), 10L, 11L) } answers {
+            bound.takeIf { it.id == firstArg<Long>() }?.copy(expiresAt = Instant.now().plusSeconds(3600))
+        }
+        coEvery {
+            guestTableContextLifecycleRepository.activate(200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true)
+        } answers {
+            if (sameSession) generation = 123L else bound = session66
+            GuestTableActivationResult.Applied(context, bound, generation)
+        }
+        coEvery { tableTokenRepository.resolve("TOKEN") } returns context
+        coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
+        coEvery { guestMenuRepository.getMenu(10L) } returns
+            MenuModel(
+                venueId = 10L,
+                categories =
+                    listOf(
+                        MenuCategoryModel(
+                            id = 500L,
+                            name = "Основное меню",
+                            sortOrder = 0,
+                            items =
+                                listOf(
+                                    MenuItemModel(
+                                        id = 1000L,
+                                        name = "Кальян классический",
+                                        priceMinor = 25000L,
+                                        currency = "RUB",
+                                        isAvailable = true,
+                                        sortOrder = 0,
+                                    ),
+                                ),
+                        ),
+                    ),
+            )
+
+        router.performGuestAction(
+            TelegramUpdate(
+                updateId = 59,
+                callbackQuery =
+                    CallbackQuery(
+                        id = "cb-add-before-session-change",
+                        from = User(id = 200),
+                        message = Message(messageId = 69, chat = Chat(id = 100, type = "private"), text = null),
+                        data = "bot_menu_item:500:1000",
+                    ),
+            ),
+        )
+        router.process(
+            TelegramUpdate(
+                updateId = 159,
+                callbackQuery =
+                    CallbackQuery(
+                        id = "cb-open-original-cart",
+                        from = User(id = 200),
+                        message = Message(messageId = 169, chat = Chat(id = 100, type = "private"), text = null),
+                        data = "bot_menu_item_cart",
+                    ),
+            ),
+        )
+        coVerify(exactly = 1) {
+            outboxEnqueuer.enqueueSendMessage(
+                100,
+                match {
+                    it.contains("Кальян классический") && it.contains("Количество: 1")
+                },
+                any(),
+            )
+        }
+        router.process(
+            TelegramUpdate(
+                updateId = 60,
+                message =
+                    Message(
+                        messageId = 70,
+                        chat = Chat(id = 100, type = "private"),
+                        fromUser = User(id = 200),
+                        text = "/start TOKEN",
+                    ),
+            ),
+        )
+        router.process(
+            TelegramUpdate(
+                updateId = 61,
+                message =
+                    Message(
+                        messageId = 71,
+                        chat = Chat(id = 100, type = "private"),
+                        fromUser = User(id = 200),
+                        text = "/start TOKEN",
+                    ),
+            ),
+        )
+        router.process(
+            TelegramUpdate(
+                updateId = 62,
+                callbackQuery =
+                    CallbackQuery(
+                        id = "cb-open-cart-after-session-change",
+                        from = User(id = 200),
+                        message = Message(messageId = 72, chat = Chat(id = 100, type = "private"), text = null),
+                        data = "bot_menu_item_cart",
+                    ),
+            ),
+        )
+
+        coVerify {
+            outboxEnqueuer.enqueueSendMessage(
+                100,
+                "Корзина пуста.",
+                match { it is InlineKeyboardMarkup },
+            )
+        }
+        coVerify(exactly = 1) {
+            outboxEnqueuer.enqueueSendMessage(
+                100,
+                match {
+                    it.contains("Кальян классический") && it.contains("Количество: 1")
+                },
+                any(),
+            )
+        }
+    }
 
     @Test
     fun `item consultation action opens staff reasons entry`() =
@@ -33043,18 +33777,20 @@ class TelegramBotRouterTableTokenTest {
             } returns StoredChatContext(userId = 200, tableToken = "TOKEN", tableSessionId = 55L)
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
-            coEvery {
-                staffCallRepository.createStaffCall(
-                    venueId = 10L,
-                    tableId = 11L,
-                    createdByUserId = 200L,
-                    reason = StaffCallReason.BILL,
-                    comment = "Способ оплаты: Картой",
-                    tableSessionId = 55L,
+            coEvery { ordersRepository.findActiveOrderSummaryForTab(55, 1) } returns ActiveOrderSummary(901, "ACTIVE")
+            every { guestTabsRepository.isTabMember(any(), 1L, 10L, 55L, 200L, any()) } returns true
+            every {
+                staffCallRepository.createGuestBillRequest(any(), 10, 11, 55, 1, 901, 200, BillPaymentMethod.CARD)
+            } returns
+                CreatedGuestBillRequest(
+                    1,
+                    Instant.now(),
+                    StaffCallStatus.NEW,
+                    BillPaymentMethod.CARD,
+                    false,
                 )
-            } returns 1L
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 20_101,
                     callbackQuery =
@@ -33072,7 +33808,7 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 20_102,
                     callbackQuery =
@@ -33097,10 +33833,12 @@ class TelegramBotRouterTableTokenTest {
                     match {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
-                                button.text == "💳 Картой" && button.callbackData == "staff_call_bill_payment:CARD"
+                                button.text == "💳 Картой" &&
+                                    button.callbackData.matchesGuestAction("staff_call_bill_payment:CARD")
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
-                                button.text == "💵 Наличными" && button.callbackData == "staff_call_bill_payment:CASH"
+                                button.text == "💵 Наличными" &&
+                                    button.callbackData.matchesGuestAction("staff_call_bill_payment:CASH")
                             }
                     },
                 )
@@ -33116,15 +33854,8 @@ class TelegramBotRouterTableTokenTest {
                     },
                 )
             }
-            coVerify {
-                staffCallRepository.createStaffCall(
-                    venueId = 10L,
-                    tableId = 11L,
-                    createdByUserId = 200L,
-                    reason = StaffCallReason.BILL,
-                    comment = "Способ оплаты: Картой",
-                    tableSessionId = 55L,
-                )
+            verify(exactly = 1) {
+                staffCallRepository.createGuestBillRequest(any(), 10, 11, 55, 1, 901, 200, BillPaymentMethod.CARD)
             }
         }
 
@@ -33156,7 +33887,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             } returns 1L
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 20_201,
                     callbackQuery =
@@ -33357,7 +34088,7 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "Кальян классический — 250.00 ₽" &&
-                                    button.callbackData == "bot_menu_item:500:1000"
+                                    button.callbackData.matchesGuestAction("bot_menu_item:500:1000")
                             }
                     },
                 )
@@ -33489,7 +34220,7 @@ class TelegramBotRouterTableTokenTest {
                     status = "ACTIVE",
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 210,
                     callbackQuery =
@@ -33507,7 +34238,7 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 211,
                     message =
@@ -33571,7 +34302,7 @@ class TelegramBotRouterTableTokenTest {
                     status = "ACTIVE",
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 214,
                     callbackQuery =
@@ -33627,7 +34358,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             } returns null
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 212,
                     callbackQuery =
@@ -33645,7 +34376,7 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 213,
                     message =
@@ -33661,7 +34392,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(100, "Код недействителен или истёк. Попробуйте ещё раз.", any())
             }
-            coVerify {
+            coVerify(exactly = 0) {
                 guestTabsRepository.joinByInvite(
                     venueId = 10L,
                     tableSessionId = 55L,
@@ -33672,7 +34403,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `active order resolves to shared tab when selected tab state is missing`() =
+    fun `active order waits for an explicit shared tab choice when selection is missing`() =
         runBlocking {
             val context =
                 TableContext(
@@ -33771,6 +34502,21 @@ class TelegramBotRouterTableTokenTest {
                 ),
             )
 
+            coVerify(exactly = 0) { ordersRepository.findActiveOrderDetailsForTab(55L, 23L) }
+            coVerify { outboxEnqueuer.enqueueSendMessage(100, "Выберите счёт для этого посещения.", any()) }
+            processBotCallback(3002, "choose-shared", "guest_tab:55:0:23")
+            router.process(
+                TelegramUpdate(
+                    updateId = 3003,
+                    message =
+                        Message(
+                            messageId = 4003,
+                            chat = Chat(id = 100, type = "private"),
+                            fromUser = User(id = 200),
+                            text = "📄 Мой заказ",
+                        ),
+                ),
+            )
             coVerify {
                 ordersRepository.findActiveOrderDetailsForTab(55L, 23L)
             }
@@ -34090,7 +34836,7 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "🛎 Позвать персонал для смены стола" &&
-                                    button.callbackData == "relocation_call_staff"
+                                    button.callbackData.matchesGuestAction("relocation_call_staff")
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "↩️ Назад к действиям стола" &&
@@ -34129,7 +34875,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             } returns 6L
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 20_301,
                     callbackQuery =
@@ -34205,7 +34951,7 @@ class TelegramBotRouterTableTokenTest {
                         it is InlineKeyboardMarkup &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "🛎 Позвать персонал для смены стола" &&
-                                    button.callbackData == "relocation_call_staff"
+                                    button.callbackData.matchesGuestAction("relocation_call_staff")
                             } &&
                             it.inlineKeyboard.flatten().any { button ->
                                 button.text == "↩️ Назад к действиям стола" &&
@@ -34257,7 +35003,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 302,
                     callbackQuery =
@@ -34314,15 +35060,25 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
-            } returns
+                guestTableContextLifecycleRepository.teardownByChat(
+                    200L,
+                    100L,
+                    any(),
+                    ordinaryBotVisit = true,
+                    expectedToken = "TOKEN",
+                    expectedSessionId = 55L,
+                    expectedGeneration = 0,
+                )
+            } answers {
+                coEvery { chatContextRepository.get(100) } returns null
                 GuestTableTeardownResult.Cleared(
                     identity = platformGuestIdentity(actorUserId = 200L, chatId = 100L, context = context),
                     tableSessionId = 55L,
                     exitRecorded = true,
                 )
+            }
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 304,
                     message =
@@ -34336,7 +35092,15 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
+                guestTableContextLifecycleRepository.teardownByChat(
+                    200L,
+                    100L,
+                    any(),
+                    ordinaryBotVisit = true,
+                    expectedToken = "TOKEN",
+                    expectedSessionId = 55L,
+                    expectedGeneration = 0,
+                )
             }
             coVerify(exactly = 0) { guestTabsRepository.findLatestRestorableTableContext(any(), any()) }
             coVerify(exactly = 0) { tableSessionRepository.endUserTableSession(any(), any(), any(), any(), any()) }
@@ -34344,7 +35108,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 0) { dialogStateRepository.clear(100) }
             coVerify(exactly = 0) { chatContextRepository.clear(101) }
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueGuestTeardownMenu(
                     100,
                     "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
                     any(),
@@ -34370,7 +35134,15 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
+                guestTableContextLifecycleRepository.teardownByChat(
+                    200L,
+                    100L,
+                    any(),
+                    ordinaryBotVisit = true,
+                    expectedToken = "TOKEN",
+                    expectedSessionId = 55L,
+                    expectedGeneration = 0,
+                )
             } returns
                 GuestTableTeardownResult.Blocked(
                     identity = platformGuestIdentity(actorUserId = 200L, chatId = 100L, context = context),
@@ -34378,7 +35150,7 @@ class TelegramBotRouterTableTokenTest {
                     reason = TableSessionEndBlockedReason.ACTIVE_ORDER,
                 )
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 305,
                     message =
@@ -34392,7 +35164,15 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
+                guestTableContextLifecycleRepository.teardownByChat(
+                    200L,
+                    100L,
+                    any(),
+                    ordinaryBotVisit = true,
+                    expectedToken = "TOKEN",
+                    expectedSessionId = 55L,
+                    expectedGeneration = 0,
+                )
             }
             coVerify(exactly = 0) { chatContextRepository.clear(100) }
             coVerify {
@@ -34422,15 +35202,25 @@ class TelegramBotRouterTableTokenTest {
             coEvery { tableTokenRepository.resolve("TOKEN") } returns context
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
-            } returns
+                guestTableContextLifecycleRepository.teardownByChat(
+                    200L,
+                    100L,
+                    any(),
+                    ordinaryBotVisit = true,
+                    expectedToken = "TOKEN",
+                    expectedSessionId = 55L,
+                    expectedGeneration = 0,
+                )
+            } answers {
+                coEvery { chatContextRepository.get(100) } returns null
                 GuestTableTeardownResult.Cleared(
                     identity = platformGuestIdentity(actorUserId = 200L, chatId = 100L, context = context),
                     tableSessionId = 301L,
                     exitRecorded = true,
                 )
+            }
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 306,
                     message =
@@ -34444,7 +35234,15 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(200L, 100L, any(), ordinaryBotVisit = true)
+                guestTableContextLifecycleRepository.teardownByChat(
+                    200L,
+                    100L,
+                    any(),
+                    ordinaryBotVisit = true,
+                    expectedToken = "TOKEN",
+                    expectedSessionId = 55L,
+                    expectedGeneration = 0,
+                )
             }
             coVerify(exactly = 0) { chatContextRepository.clear(100) }
             coVerify(exactly = 0) {
@@ -34458,7 +35256,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
             coVerify {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueGuestTeardownMenu(
                     100,
                     "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
                     any(),
@@ -34502,7 +35300,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             } returns 700L
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 304,
                     callbackQuery =
@@ -34589,7 +35387,7 @@ class TelegramBotRouterTableTokenTest {
                 )
             } returns 701L
 
-            router.process(
+            router.performGuestAction(
                 TelegramUpdate(
                     updateId = 306,
                     callbackQuery =
@@ -37396,7 +38194,7 @@ class TelegramBotRouterTableTokenTest {
                     DialogStateType.QUICK_ORDER_WAIT_CONFIRM,
                     mapOf(
                         "text" to "Принесите угли", "requestId" to "stable-request",
-                        "tableToken" to "TOKEN", "tableSessionId" to "55", "tabId" to "1",
+                        "tableToken" to "TOKEN", "visitGeneration" to "0", "tableSessionId" to "55", "tabId" to "1",
                     ),
                 )
             coEvery {
@@ -37459,7 +38257,7 @@ class TelegramBotRouterTableTokenTest {
                     DialogStateType.QUICK_ORDER_WAIT_CONFIRM,
                     mapOf(
                         "text" to "Принесите угли", "requestId" to "stable-request",
-                        "tableToken" to "TOKEN", "tableSessionId" to "55", "tabId" to "1",
+                        "tableToken" to "TOKEN", "visitGeneration" to "0", "tableSessionId" to "55", "tabId" to "1",
                     ),
                 )
             coEvery {
@@ -37539,7 +38337,7 @@ class TelegramBotRouterTableTokenTest {
                     DialogStateType.QUICK_ORDER_WAIT_CONFIRM,
                     mapOf(
                         "text" to "Принесите угли", "requestId" to "stable-request",
-                        "tableToken" to "TOKEN", "tableSessionId" to "55", "tabId" to "1",
+                        "tableToken" to "TOKEN", "visitGeneration" to "0", "tableSessionId" to "55", "tabId" to "1",
                     ),
                 )
             coEvery {
@@ -37746,17 +38544,57 @@ class TelegramBotRouterTableTokenTest {
                             }
                         }
                     } as DataSource
-                val appRouter =
+                val policy = TelegramTrafficPolicy.unrestricted()
+                val outbox = com.hookah.platform.backend.telegram.db.TelegramOutboxRepository(ds, policy)
+                val notices =
+                    GuestCheckoutNotifications(
+                        outbox,
+                        TelegramOutboxEnqueuer(outbox, infoJson, policy),
+                        venueOrdersRepository,
+                        staffChatNotifier,
+                        null,
+                        infoJson,
+                        true,
+                    )
+
+                fun restartBot() =
                     routerWithWebAppPublicUrl(
                         null,
                         dialogStateOverride = dialogs,
                         ordersOverride = OrdersRepository(uncertainSource, clock = seatingClock),
+                        checkoutNotices = notices,
                     )
+                var appRouter = restartBot()
+                ds.connection.use { c ->
+                    c.createStatement().use {
+                        it.executeUpdate(
+                            "UPDATE venues SET staff_chat_id=-601 WHERE id=${seat.venue}",
+                        )
+                    }
+                }
                 sendQuickOrderText(appRouter, "✍️ Быстрый заказ")
                 sendQuickOrderText(appRouter, "Synthetic checkout")
                 val original = dialogs.get(100)
                 val requestId = original.payload.getValue("requestId")
                 val before = checkoutCounts(ds)
+                ds.connection.use { c ->
+                    c.createStatement().use {
+                        it.executeUpdate(
+                            "ALTER TABLE telegram_outbox ADD CONSTRAINT fail_staff " +
+                                "CHECK (method <> 'guestCheckoutStaff')",
+                        )
+                    }
+                }
+                sendQuickOrderCallback(appRouter, requestId)
+                assertEquals(before, checkoutCounts(ds))
+                assertEquals(original, dialogs.get(100))
+                ds.connection.use { c ->
+                    c.createStatement().use {
+                        it.executeUpdate(
+                            "ALTER TABLE telegram_outbox DROP CONSTRAINT fail_staff",
+                        )
+                    }
+                }
                 sendQuickOrderCallback(appRouter, requestId)
                 assertFalse(loseCommitResponse)
                 assertEquals(original, dialogs.get(100))
@@ -37769,6 +38607,8 @@ class TelegramBotRouterTableTokenTest {
                         null,
                     )
                 }
+                assertEquals(before.getValue("telegram_outbox") + 1, committed["telegram_outbox"])
+                appRouter = restartBot()
                 // Pre-upgrade buttons only refresh the same request; they never execute a different one.
                 sendQuickOrderCallback(appRouter, null)
                 assertEquals(original, dialogs.get(100))
@@ -37851,6 +38691,7 @@ class TelegramBotRouterTableTokenTest {
                             "text" to "Synthetic checkout",
                             "requestId" to "platform-request",
                             "tableToken" to "TOKEN",
+                            "visitGeneration" to "0",
                             "tableSessionId" to "55",
                             "tabId" to "1",
                         ),
@@ -38148,6 +38989,27 @@ class TelegramBotRouterTableTokenTest {
                 subscriptionStatus = SubscriptionStatus.ACTIVE,
             )
         every {
+            guestTabsRepository.checkGeneration(connection, actorUserId, confirmed.tableSession.id, 0)
+        } returns Unit
+        every { guestTabsRepository.touchParticipation(connection, any(), any()) } returns Unit
+        every {
+            tableSessionRepository.findSessionForTable(
+                connection,
+                confirmed.tableSession.id,
+                context.venueId,
+                context.tableId,
+                true,
+            )
+        } returns confirmed.tableSession
+        every { guestTabsRepository.ordinaryPersonalTab(connection, any(), actorUserId) } answers {
+            guestTabsRepository.ensurePersonalTab(connection, context.venueId, confirmed.tableSession.id, actorUserId)
+        }
+        coEvery { ordersRepository.findActiveOrderDetailsForTab(connection, any(), any(), true) } coAnswers {
+            ordersRepository.findActiveOrderSummaryForTab(arg(1), arg(2))?.let {
+                ActiveOrderDetails(it.id, it.status, emptyList())
+            }
+        }
+        every {
             guestTabsRepository.ensurePersonalTab(
                 connection = connection,
                 venueId = context.venueId,
@@ -38192,6 +39054,7 @@ class TelegramBotRouterTableTokenTest {
                 expectedSessionId = any(),
                 ttl = any(),
                 now = any(),
+                touchSessionBeforeMutation = any(),
                 mutation = any(),
             )
         } answers {
@@ -38275,7 +39138,7 @@ class TelegramBotRouterTableTokenTest {
         chatId: Long = 100L,
         data: String,
     ) {
-        targetRouter.process(
+        targetRouter.performGuestAction(
             TelegramUpdate(
                 updateId = updateId,
                 callbackQuery =
@@ -38763,7 +39626,7 @@ class TelegramBotRouterTableTokenTest {
         data: String,
         bot: TelegramBotRouter = router,
     ) {
-        bot.process(
+        bot.performGuestAction(
             TelegramUpdate(
                 updateId = updateId,
                 callbackQuery =
@@ -39101,6 +39964,6 @@ class TelegramBotRouterTableTokenTest {
         callbackData: String,
     ): Boolean =
         inlineKeyboard.flatten().any { button ->
-            button.text == text && button.callbackData == callbackData
+            button.text == text && button.callbackData.matchesGuestAction(callbackData)
         }
 }

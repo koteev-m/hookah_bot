@@ -29,6 +29,7 @@ import type {
   GuestVisitRepeatPlanRequest,
   GuestVisitRepeatPlanResponse,
   GuestTabResponse,
+  GuestTabInviteTarget,
   GuestTabsResponse,
   GuestVisitDetailResponse,
   GuestVisitListResponse,
@@ -49,6 +50,7 @@ import type {
   BookingThreadReconciliationResponse,
   GuestThreadSurface,
   SupportMessageCreateRequest,
+  SupportVisitMutationContext,
   SupportMessageCreateResponse,
   SupportThreadDetailResponse,
   SupportThreadCreateRequest,
@@ -436,14 +438,21 @@ export async function guestResolveSupportThread(
   backendUrl: string,
   threadId: number,
   deps: RequestDependencies,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  visit?: SupportVisitMutationContext
 ): Promise<ApiResult<SupportThreadDetailResponse>> {
   if (!Number.isFinite(threadId) || !Number.isInteger(threadId) || threadId <= 0) {
     return invalidPositiveIdResult('threadId')
   }
+  const query = visit
+    ? '?' + new URLSearchParams({
+        expectedTableSessionId: String(visit.expectedTableSessionId),
+        expectedVisitGeneration: visit.expectedVisitGeneration
+      }).toString()
+    : ''
   return requestApi<SupportThreadDetailResponse>(
     backendUrl,
-    `/api/guest/support/threads/${threadId}/resolve`,
+    `/api/guest/support/threads/${threadId}/resolve${query}`,
     { method: 'POST', signal },
     deps
   )
@@ -453,17 +462,47 @@ export async function guestReopenSupportThread(
   backendUrl: string,
   threadId: number,
   deps: RequestDependencies,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  visit?: SupportVisitMutationContext
 ): Promise<ApiResult<SupportThreadDetailResponse>> {
   if (!Number.isFinite(threadId) || !Number.isInteger(threadId) || threadId <= 0) {
     return invalidPositiveIdResult('threadId')
   }
+  const query = visit
+    ? '?' + new URLSearchParams({
+        expectedTableSessionId: String(visit.expectedTableSessionId),
+        expectedVisitGeneration: visit.expectedVisitGeneration
+      }).toString()
+    : ''
   return requestApi<SupportThreadDetailResponse>(
     backendUrl,
-    `/api/guest/support/threads/${threadId}/reopen`,
+    `/api/guest/support/threads/${threadId}/reopen${query}`,
     { method: 'POST', signal },
     deps
   )
+}
+
+// Limit passive reads, including time spent waiting for Telegram authentication.
+async function readTableContext<T>(
+  backendUrl: string, path: string, deps: RequestDependencies, signal?: AbortSignal
+): Promise<ApiResult<T>> {
+  const controller = new AbortController()
+  const cancel = () => controller.abort()
+  if (signal?.aborted) cancel()
+  else signal?.addEventListener('abort', cancel, { once: true })
+  let timer: number | undefined
+  try {
+    const deadline = new Promise<ApiResult<T>>(resolve => {
+      timer = window.setTimeout(() => {
+        resolve({ ok: false, error: { status: 408, code: ApiErrorCodes.NETWORK_ERROR } })
+        cancel()
+      }, 15000)
+    })
+    return await Promise.race([requestApi<T>(backendUrl, path, { signal: controller.signal }, deps), deadline])
+  } finally {
+    window.clearTimeout(timer)
+    signal?.removeEventListener('abort', cancel)
+  }
 }
 
 export async function guestResolveTable(
@@ -488,12 +527,10 @@ export async function guestResolveTable(
   if (options?.allowCreateSession === true) {
     search.set('resolveMode', 'create')
   }
-  return requestApi<TableResolveResponse>(
-    backendUrl,
-    `/api/guest/table/resolve?${search.toString()}`,
-    { signal },
-    deps
-  )
+  const path = `/api/guest/table/resolve?${search}`
+  return options?.allowCreateSession
+    ? requestApi<TableResolveResponse>(backendUrl, path, { signal }, deps)
+    : readTableContext<TableResolveResponse>(backendUrl, path, deps, signal)
 }
 
 export function guestRejoinTable(
@@ -522,12 +559,8 @@ export async function guestRestoreTable(
     query.set('tableToken', visit.tableToken)
     query.set('tableSessionId', String(visit.tableSessionId))
   }
-  return requestApi<TableRestoreResponse>(
-    backendUrl,
-    query.size ? `/api/guest/table/restore?${query}` : '/api/guest/table/restore',
-    { signal },
-    deps
-  )
+  const path = query.size ? `/api/guest/table/restore?${query}` : '/api/guest/table/restore'
+  return readTableContext<TableRestoreResponse>(backendUrl, path, deps, signal)
 }
 
 export async function guestEndTableSession(
@@ -553,6 +586,7 @@ export async function guestEndTableSession(
       },
       body: JSON.stringify({
         tableToken: normalizedToken,
+        expectedVisitGeneration: request.expectedVisitGeneration,
         tableSessionId: request.tableSessionId
       }),
       signal
@@ -839,6 +873,19 @@ export async function guestCreateSharedTab(
       body: JSON.stringify(payload),
       signal
     },
+    deps
+  )
+}
+
+export async function guestInspectTabInvite(
+  backendUrl: string,
+  payload: Pick<JoinTabRequest, 'expectedVisitGeneration' | 'tableSessionId' | 'token'>,
+  deps: RequestDependencies,
+  signal?: AbortSignal
+): Promise<ApiResult<GuestTabInviteTarget>> {
+  return requestApi<GuestTabInviteTarget>(
+    backendUrl, '/api/guest/tabs/join-target',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal },
     deps
   )
 }

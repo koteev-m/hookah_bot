@@ -9,6 +9,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.sql.Connection
 
+internal const val GUEST_TEARDOWN_MENU_METHOD = "guestTeardownMenu"
+
 enum class TelegramOutboxEnqueueOutcome {
     ENQUEUED,
     SKIPPED_TRAFFIC_POLICY,
@@ -38,6 +40,20 @@ class TelegramOutboxEnqueuer(
                 payloadJson = json.encodeToString(SendMessagePayload.serializer(), payload),
                 dedupeKey = dedupeKey,
             ).toEnqueueOutcome()
+    }
+
+    suspend fun enqueueGuestTeardownMenu(
+        chatId: Long,
+        text: String,
+        markup: ReplyMarkup,
+    ): TelegramOutboxEnqueueOutcome {
+        if (!allowsOutboundChat(chatId)) return TelegramOutboxEnqueueOutcome.SKIPPED_TRAFFIC_POLICY
+        val payload = buildSendMessagePayload(json, chatId, text, markup)
+        return repository.enqueue(
+            chatId,
+            GUEST_TEARDOWN_MENU_METHOD,
+            json.encodeToString(SendMessagePayload.serializer(), payload),
+        ).toEnqueueOutcome()
     }
 
     suspend fun enqueueVenueSendMessage(
@@ -83,6 +99,19 @@ class TelegramOutboxEnqueuer(
                 dedupeKey = dedupeKey,
             ).toEnqueueOutcome()
     }
+
+    fun enqueueCheckoutReceiptInTransaction(
+        connection: Connection,
+        chatId: Long,
+        text: String,
+        dedupeKey: String,
+    ): TelegramOutboxEnqueueOutcome =
+        enqueueBookingSendMessageInTransaction(
+            connection,
+            chatId,
+            text,
+            dedupeKey = dedupeKey,
+        )
 
     fun enqueueVenueBookingSendMessageInTransaction(
         connection: Connection,

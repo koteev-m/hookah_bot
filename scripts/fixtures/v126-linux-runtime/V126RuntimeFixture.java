@@ -23,12 +23,12 @@ public final class V126RuntimeFixture {
                 .locations("classpath:db/migration/postgresql").load();
             flyway.validate();
             MigrationInfoService info = flyway.info();
-            if (info.current() == null || !info.current().getVersion().toString().equals("143")
-                || info.applied().length != 143 || info.pending().length != 0
+            if (info.current() == null || !info.current().getVersion().toString().equals("147")
+                || info.applied().length != 147 || info.pending().length != 0
                 || Arrays.stream(info.all()).anyMatch(migration -> migration.getState().isFailed())) {
-                throw new IllegalStateException("Current runtime must have exact validated V143 head");
+                throw new IllegalStateException("Current runtime must have exact validated V147 head");
             }
-            System.out.println("FIXTURE_VALIDATED_CURRENT_143");
+            System.out.println("FIXTURE_VALIDATED_CURRENT_147");
         } else if (args.length == 2 && args[0].equals("identity")) {
             // Execute the production identity SQL unchanged through actual backend JDBC.
             try (Connection connection = DriverManager.getConnection(url, user, password);

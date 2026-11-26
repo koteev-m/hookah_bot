@@ -8285,6 +8285,14 @@ extra = {
     'h2/V143__telegram_chat_table_session.sql': '7cd69b144e88d605c2ddac6ff93ef13382ee1f20e6b65f4158825aeaf17a0e0c',
     'postgresql/V143__billing_courtesy_operation.sql': '5c691365880e08b2cbff794d60d1bd046d58737c78ad82a555d0c9a3e839ffa6',
     'h2/V144__billing_courtesy_operation.sql': '5c691365880e08b2cbff794d60d1bd046d58737c78ad82a555d0c9a3e839ffa6',
+    'postgresql/V144__guest_visit_generations.sql': 'c913bfc1523b20236934b5b740810875dce3b84cb836ac7d1a8900c16c6d71e6',
+    'h2/V145__guest_visit_generations.sql': 'c913bfc1523b20236934b5b740810875dce3b84cb836ac7d1a8900c16c6d71e6',
+    'postgresql/V145__bot_prepared_checkouts.sql': 'd361dcb16539b41250c69050e865b37f5cc356f0efbe226b7194fe7d7fe28256',
+    'h2/V146__bot_prepared_checkouts.sql': 'd361dcb16539b41250c69050e865b37f5cc356f0efbe226b7194fe7d7fe28256',
+    'postgresql/V146__shift_extension_request_keys.sql': '5945fbea072190bf1ae499f4fcfda18ef700096baf5ae05723c9aeba9d08df03',
+    'h2/V147__shift_extension_request_keys.sql': '5945fbea072190bf1ae499f4fcfda18ef700096baf5ae05723c9aeba9d08df03',
+    'postgresql/V147__shift_extension_terms_revision.sql': '8e6f7b1f9990154b7a3ebfb55b9c7ff360b5e9c13cac470228f7811ffcba4193',
+    'h2/V148__shift_extension_terms_revision.sql': '8e6f7b1f9990154b7a3ebfb55b9c7ff360b5e9c13cac470228f7811ffcba4193',
 }
 paths = {p.relative_to(root).as_posix(): p for p in root.rglob('*') if not p.is_dir() or p.is_symlink()}
 if set(paths) != set(historical) | set(extra):
@@ -8405,7 +8413,15 @@ PY
     h2/V142__guest_exit_event_id.sql \
     h2/V143__telegram_chat_table_session.sql \
     postgresql/V143__billing_courtesy_operation.sql \
-    h2/V144__billing_courtesy_operation.sql; do
+    h2/V144__billing_courtesy_operation.sql \
+    postgresql/V144__guest_visit_generations.sql \
+    h2/V145__guest_visit_generations.sql \
+    postgresql/V145__bot_prepared_checkouts.sql \
+    h2/V146__bot_prepared_checkouts.sql \
+    postgresql/V146__shift_extension_request_keys.sql \
+    h2/V147__shift_extension_request_keys.sql \
+    postgresql/V147__shift_extension_terms_revision.sql \
+    h2/V148__shift_extension_terms_revision.sql; do
     printf '\n-- forbidden reviewed tail drift\n' >> "${fixture}/${addition}"
     expect_failure "changed reviewed tail SQL rejects lineage: ${addition}" 'reviewed migration drift' \
       verify_current_migration_lineage "${fixture}"
@@ -8431,7 +8447,15 @@ PY
     h2/V142__guest_exit_event_id.sql \
     h2/V143__telegram_chat_table_session.sql \
     postgresql/V143__billing_courtesy_operation.sql \
-    h2/V144__billing_courtesy_operation.sql; do
+    h2/V144__billing_courtesy_operation.sql \
+    postgresql/V144__guest_visit_generations.sql \
+    h2/V145__guest_visit_generations.sql \
+    postgresql/V145__bot_prepared_checkouts.sql \
+    h2/V146__bot_prepared_checkouts.sql \
+    postgresql/V146__shift_extension_request_keys.sql \
+    h2/V147__shift_extension_request_keys.sql \
+    postgresql/V147__shift_extension_terms_revision.sql \
+    h2/V148__shift_extension_terms_revision.sql; do
     rm "${fixture}/${addition}"
     expect_failure "missing reviewed menu SQL rejects lineage: ${addition}" 'migration inventory drift' \
       verify_current_migration_lineage "${fixture}"

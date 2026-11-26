@@ -3,15 +3,19 @@ package com.hookah.platform.backend.miniapp.shift
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.VisitGenerationChangedException
 import com.hookah.platform.backend.miniapp.guest.TableSessionConfig
 import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionContext
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.ensureGuestActionAvailable
-import com.hookah.platform.backend.miniapp.guest.requireConfirmedPlatformGuestMutation
+import com.hookah.platform.backend.miniapp.guest.mutateParticipation
 import com.hookah.platform.backend.miniapp.guest.requirePlatformGuestTokenAccessIfNeeded
+import com.hookah.platform.backend.miniapp.guest.requiredOrderId
+import com.hookah.platform.backend.miniapp.guest.requiredVisitGeneration
 import com.hookah.platform.backend.miniapp.guest.validateTableToken
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
@@ -64,38 +68,55 @@ fun Route.guestShiftExtensionRoutes(
 ) {
     get("/table/extension-options") {
         val userId = call.requireUserId()
-        val context =
-            resolveGuestShiftExtensionContext(
-                tableToken = call.request.queryParameters["tableToken"],
-                tableSessionId = parsePositiveLong(call.request.queryParameters["tableSessionId"], "tableSessionId"),
-                tabId = parsePositiveLong(call.request.queryParameters["tabId"], "tabId"),
-                userId = userId,
-                tableTokenResolver = tableTokenResolver,
-                guestVenueRepository = guestVenueRepository,
-                subscriptionRepository = subscriptionRepository,
-                tableSessionRepository = tableSessionRepository,
-                tableSessionConfig = tableSessionConfig,
-                guestTabsRepository = guestTabsRepository,
-                ordersRepository = ordersRepository,
-                platformOwnerUserId = platformOwnerUserId,
-                guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
+        val token = validateTableToken(call.request.queryParameters["tableToken"])
+        val sessionId = parsePositiveLong(call.request.queryParameters["tableSessionId"], "tableSessionId")
+        val tabId = parsePositiveLong(call.request.queryParameters["tabId"], "tabId")
+        val table = tableTokenResolver(token) ?: throw NotFoundException()
+        ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository, readOnly = true)
+        requirePlatformGuestTokenAccessIfNeeded(
+            userId,
+            platformOwnerUserId,
+            guestTableContextLifecycleRepository,
+            token,
+            table,
+            sessionId,
+            tableSessionConfig.ttl,
+        )
+        val zoneId = resolveVenueZoneId(venueSettingsRepository, table.venueId)
+        val window =
+            shiftExtensionRepository.guestExtensionWindow(
+                table.venueId,
+                table.tableId,
+                sessionId,
+                tabId,
+                userId,
             )
-        val zoneId = resolveVenueZoneId(venueSettingsRepository, context.table.venueId)
-
-        val settings = shiftExtensionRepository.getSettings(context.table.venueId)
+        if (window.paidUntil == null) {
+            call.respond(
+                GuestShiftExtensionOptionsResponse(
+                    available = false,
+                    unavailableReason = "STAFF_MANAGED_SEATING",
+                    tableSessionId = sessionId,
+                    tabId = tabId,
+                    orderId = window.orderId,
+                ),
+            )
+            return@get
+        }
+        val settings = shiftExtensionRepository.getSettings(table.venueId)
         val pending =
             shiftExtensionRepository.findPendingRequest(
-                tableSessionId = context.tableSession.id,
-                tabId = context.tabId,
+                tableSessionId = sessionId,
+                tabId = tabId,
             )
         if (!settings.enabled) {
             call.respond(
                 GuestShiftExtensionOptionsResponse(
                     available = false,
                     unavailableReason = "EXTENSION_DISABLED",
-                    tableSessionId = context.tableSession.id,
-                    tabId = context.tabId,
-                    orderId = context.orderId,
+                    tableSessionId = sessionId,
+                    tabId = tabId,
+                    orderId = window.orderId,
                     pendingRequest = pending?.toDto(zoneId),
                 ),
             )
@@ -106,9 +127,9 @@ fun Route.guestShiftExtensionRoutes(
                 GuestShiftExtensionOptionsResponse(
                     available = false,
                     unavailableReason = "EXTENSION_NOT_CONFIGURED",
-                    tableSessionId = context.tableSession.id,
-                    tabId = context.tabId,
-                    orderId = context.orderId,
+                    tableSessionId = sessionId,
+                    tabId = tabId,
+                    orderId = window.orderId,
                     pendingRequest = pending?.toDto(zoneId),
                 ),
             )
@@ -121,13 +142,14 @@ fun Route.guestShiftExtensionRoutes(
                 durationMinutes = settings.durationMinutes,
                 priceMinor = settings.priceMinor,
                 currency = settings.currency,
-                tableSessionId = context.tableSession.id,
-                tabId = context.tabId,
-                orderId = context.orderId,
-                currentOrderableUntil = formatInstant(context.tableSession.expiresAt, zoneId),
+                confirmedTerms = settings.terms(),
+                tableSessionId = sessionId,
+                tabId = tabId,
+                orderId = window.orderId,
+                currentOrderableUntil = formatInstant(window.paidUntil, zoneId),
                 proposedOrderableUntil =
                     formatInstant(
-                        context.tableSession.expiresAt.plusSeconds(settings.durationMinutes.toLong() * 60L),
+                        window.paidUntil.plusSeconds(settings.durationMinutes.toLong() * 60L),
                         zoneId,
                     ),
                 pendingRequest = pending?.toDto(zoneId),
@@ -138,110 +160,81 @@ fun Route.guestShiftExtensionRoutes(
     post("/table/extension-requests") {
         val userId = call.requireUserId()
         val request = call.receive<GuestShiftExtensionRequest>()
+        val generation = requiredVisitGeneration(request.tableSessionId, request.expectedVisitGeneration)
+        val expectedOrder = requiredOrderId(request.expectedOrderId)
+        val idempotencyKey = requireShiftExtensionKey(request.idempotencyKey)
+        val token = validateTableToken(request.tableToken)
+        val table = tableTokenResolver(token) ?: throw NotFoundException()
         val context =
-            if (userId == platformOwnerUserId) {
-                val token = validateTableToken(request.tableToken)
-                val table = tableTokenResolver(token) ?: throw NotFoundException()
+            guestTabsRepository.mutateParticipation(
+                userId,
+                TableSessionContext(request.tableSessionId, table.venueId, table.tableId),
+                generation,
+                platformOwnerUserId,
+                guestTableContextLifecycleRepository,
+                tableSessionConfig.ttl,
+                token,
+                requiredTab = request.tabId,
+                touchOnSuccess = false,
+            ) { connection ->
+                if (userId == platformOwnerUserId) {
+                    guestTabsRepository.ensurePersonalTab(connection, table.venueId, request.tableSessionId, userId)
+                }
                 val activeOrder =
-                    ordersRepository.findActiveOrderSummaryForTab(request.tableSessionId, request.tabId)
-                        ?: throw NotFoundException("Active order not found")
-                requireConfirmedPlatformGuestMutation(
-                    userId = userId,
-                    platformOwnerUserId = platformOwnerUserId,
-                    lifecycleRepository = guestTableContextLifecycleRepository,
-                    tableToken = token,
-                    expectedVenueId = table.venueId,
-                    expectedTableId = table.tableId,
-                    expectedTableSessionId = request.tableSessionId,
-                    ttl = tableSessionConfig.ttl,
-                ) { connection, confirmed ->
-                    guestTabsRepository.ensurePersonalTab(
-                        connection = connection,
-                        venueId = table.venueId,
-                        tableSessionId = confirmed.tableSession.id,
-                        userId = userId,
+                    ordersRepository.findActiveOrderDetailsForTab(
+                        connection,
+                        request.tableSessionId,
+                        request.tabId,
+                        forUpdate = true,
                     )
-                    if (
-                        !guestTabsRepository.isTabMember(
-                            connection = connection,
-                            tabId = request.tabId,
-                            venueId = table.venueId,
-                            tableSessionId = confirmed.tableSession.id,
-                            userId = userId,
-                        )
-                    ) {
-                        throw ForbiddenException("Tab access denied")
-                    }
-                    val record =
-                        shiftExtensionRepository.createPendingRequest(
-                            connection = connection,
-                            command =
-                                CreateShiftExtensionRequestCommand(
-                                    venueId = table.venueId,
-                                    tableSessionId = confirmed.tableSession.id,
-                                    tableId = table.tableId,
-                                    tabId = request.tabId,
-                                    orderId = activeOrder.id,
-                                    requestedByUserId = userId,
-                                    currentOrderableUntil = confirmed.tableSession.expiresAt,
-                                    idempotencyKey = request.idempotencyKey,
-                                    comment = request.comment,
-                                ),
-                        )
-                    PlatformGuestShiftExtensionMutation(
-                        context =
-                            GuestShiftExtensionContext(
-                                table = table,
-                                tableSession = confirmed.tableSession,
-                                tabId = request.tabId,
-                                orderId = activeOrder.id,
-                            ),
-                        record = record,
+                if (activeOrder == null) throw NotFoundException("Active order not found")
+                if (activeOrder.orderId != expectedOrder) throw VisitGenerationChangedException()
+                val current =
+                    tableSessionRepository.findSessionForTable(
+                        connection, request.tableSessionId, table.venueId, table.tableId, forUpdate = true,
+                    ) ?: throw NotFoundException()
+                val command =
+                    CreateShiftExtensionRequestCommand(
+                        venueId = table.venueId, tableSessionId = current.id, tableId = table.tableId,
+                        tabId = request.tabId, orderId = expectedOrder, requestedByUserId = userId,
+                        currentOrderableUntil = current.expiresAt, idempotencyKey = idempotencyKey,
+                        comment = request.comment,
+                        visitGeneration = generation,
+                        confirmedTerms = request.confirmedTerms,
+                    )
+                val replay = shiftExtensionRepository.findExactReplay(connection, command)
+                if (replay != null) {
+                    return@mutateParticipation PlatformGuestShiftExtensionMutation(
+                        GuestShiftExtensionContext(table, current, request.tabId, expectedOrder),
+                        replay,
+                        replay = true,
                     )
                 }
-            } else {
-                val ordinaryContext =
-                    resolveGuestShiftExtensionContext(
-                        tableToken = request.tableToken,
-                        tableSessionId = request.tableSessionId,
-                        tabId = request.tabId,
-                        userId = userId,
-                        tableTokenResolver = tableTokenResolver,
-                        guestVenueRepository = guestVenueRepository,
-                        subscriptionRepository = subscriptionRepository,
-                        tableSessionRepository = tableSessionRepository,
-                        tableSessionConfig = tableSessionConfig,
-                        guestTabsRepository = guestTabsRepository,
-                        ordersRepository = ordersRepository,
-                        platformOwnerUserId = platformOwnerUserId,
-                        guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
+                val session =
+                    tableSessionRepository.touchActiveSession(
+                        connection, current.id, table.venueId, table.tableId,
+                        tableSessionConfig.ttl, java.time.Instant.now(),
+                    ) ?: throw NotFoundException()
+                val record =
+                    shiftExtensionRepository.createPendingRequest(
+                        connection,
+                        command.copy(currentOrderableUntil = session.expiresAt),
                     )
                 PlatformGuestShiftExtensionMutation(
-                    context = ordinaryContext,
-                    record =
-                        shiftExtensionRepository.createPendingRequest(
-                            CreateShiftExtensionRequestCommand(
-                                venueId = ordinaryContext.table.venueId,
-                                tableSessionId = ordinaryContext.tableSession.id,
-                                tableId = ordinaryContext.table.tableId,
-                                tabId = ordinaryContext.tabId,
-                                orderId = ordinaryContext.orderId,
-                                requestedByUserId = userId,
-                                currentOrderableUntil = ordinaryContext.tableSession.expiresAt,
-                                idempotencyKey = request.idempotencyKey,
-                                comment = request.comment,
-                            ),
-                        ),
+                    GuestShiftExtensionContext(table, session, request.tabId, expectedOrder),
+                    record,
                 )
             }
         val zoneId = resolveVenueZoneId(venueSettingsRepository, context.context.table.venueId)
-        refreshStaffChatBill(
-            notifier = staffBillUpdateNotifier,
-            venueOrdersRepository = venueOrdersRepository,
-            venueId = context.context.table.venueId,
-            orderId = context.context.orderId,
-            change = StaffBillUpdateChange.SHIFT_EXTENSION_REQUESTED,
-        )
+        if (!context.replay) {
+            refreshStaffChatBill(
+                notifier = staffBillUpdateNotifier,
+                venueOrdersRepository = venueOrdersRepository,
+                venueId = context.context.table.venueId,
+                orderId = context.context.orderId,
+                change = StaffBillUpdateChange.SHIFT_EXTENSION_REQUESTED,
+            )
+        }
         call.respond(ShiftExtensionRequestResponse(request = context.record.toDto(zoneId)))
     }
 }
@@ -358,63 +351,8 @@ private data class GuestShiftExtensionContext(
 private data class PlatformGuestShiftExtensionMutation(
     val context: GuestShiftExtensionContext,
     val record: ShiftExtensionRequestRecord,
+    val replay: Boolean = false,
 )
-
-private suspend fun resolveGuestShiftExtensionContext(
-    tableToken: String?,
-    tableSessionId: Long,
-    tabId: Long,
-    userId: Long,
-    tableTokenResolver: suspend (String) -> TableContext?,
-    guestVenueRepository: GuestVenueRepository,
-    subscriptionRepository: SubscriptionRepository,
-    tableSessionRepository: TableSessionRepository,
-    tableSessionConfig: TableSessionConfig,
-    guestTabsRepository: GuestTabsRepository,
-    ordersRepository: OrdersRepository,
-    platformOwnerUserId: Long?,
-    guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository?,
-): GuestShiftExtensionContext {
-    val token = validateTableToken(tableToken)
-    val table = tableTokenResolver(token) ?: throw NotFoundException()
-    ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
-    val tableSession =
-        requirePlatformGuestTokenAccessIfNeeded(
-            userId = userId,
-            platformOwnerUserId = platformOwnerUserId,
-            lifecycleRepository = guestTableContextLifecycleRepository,
-            tableToken = token,
-            table = table,
-            requestedTableSessionId = tableSessionId,
-            ttl = tableSessionConfig.ttl,
-        )?.tableSession
-            ?: tableSessionRepository.touchActiveSession(
-                tableSessionId = tableSessionId,
-                venueId = table.venueId,
-                tableId = table.tableId,
-                ttl = tableSessionConfig.ttl,
-            ) ?: throw NotFoundException("Active table session not found")
-    val member =
-        guestTabsRepository.isTabMember(
-            tabId = tabId,
-            venueId = table.venueId,
-            tableSessionId = tableSession.id,
-            userId = userId,
-        )
-    if (!member) {
-        throw ForbiddenException("Tab access denied")
-    }
-    val activeOrder = ordersRepository.findActiveOrderSummaryForTab(tableSession.id, tabId)
-    if (activeOrder == null) {
-        throw NotFoundException("Active order not found")
-    }
-    return GuestShiftExtensionContext(
-        table = table,
-        tableSession = tableSession,
-        tabId = tabId,
-        orderId = activeOrder.id,
-    )
-}
 
 private suspend fun requireVenuePermission(
     venueAccessRepository: VenueAccessRepository,

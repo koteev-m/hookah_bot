@@ -69,12 +69,15 @@ export type SupportThreadDetailResponse = {
   messages: SupportMessageDto[]
 }
 
-export type SupportMessageCreateRequest = {
+export type SupportVisitMutationContext = { expectedTableSessionId: number; expectedVisitGeneration: string }
+
+export type SupportMessageCreateRequest = Partial<SupportVisitMutationContext> & {
   message: string
   clientMessageId?: string
 }
 
 export type SupportThreadCreateRequest = {
+  expectedVisitGeneration?: string
   category: 'ORDER_SERVICE' | 'MINIAPP_TECHNICAL' | 'BOOKING' | 'BILLING' | 'OTHER'
   title?: string | null
   message: string

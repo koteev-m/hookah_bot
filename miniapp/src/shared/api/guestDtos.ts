@@ -160,6 +160,7 @@ export type MenuItemOptionDto = {
 export type MenuSemanticType = 'HOOKAH' | 'TEA' | 'DRINK' | 'FOOD' | 'OTHER' | string
 
 export type TableResolveResponse = {
+  visitProtocol?: number
   venueId: number
   venueName: string
   tableId: number
@@ -167,6 +168,7 @@ export type TableResolveResponse = {
   tableSessionStatus: string
   tableSessionActive: boolean
   exitEventId?: string | null
+  visitGeneration?: string | null
   tableSessionInactiveReason?: string | null
   tableNumber: string
   venueStatus: string
@@ -181,12 +183,15 @@ export type TableRestoreContextResponse = TableResolveResponse & {
 }
 
 export type TableRestoreResponse = {
+  visitProtocol?: number
   context: TableRestoreContextResponse | null
+  unavailableReason?: string | null
 }
 
 export type TableSessionEndBlockedReason = 'ACTIVE_ORDER' | 'ACTIVE_STAFF_CALL'
 
 export type TableSessionEndRequest = {
+  expectedVisitGeneration: string
   tableToken: string
   tableSessionId: number
 }
@@ -302,6 +307,7 @@ export type GiftDecisionDto = {
 }
 
 export type AddBatchRequest = {
+  expectedVisitGeneration: string
   tableToken: string
   tableSessionId: number
   tabId: number
@@ -329,10 +335,12 @@ export type GuestTabResponse = {
 }
 
 export type CreateSharedTabRequest = {
+  expectedVisitGeneration: string
   tableSessionId: number
 }
 
 export type CreateTabInviteRequest = {
+  expectedVisitGeneration: string
   tableSessionId: number
   ttlSeconds?: number | null
 }
@@ -343,7 +351,12 @@ export type CreateTabInviteResponse = {
   expiresAtEpochSeconds: number
 }
 
+export type GuestTabInviteTarget = { inviteId: string; tabId: number }
+
 export type JoinTabRequest = {
+  inviteId: string
+  expectedTabId: number
+  expectedVisitGeneration: string
   tableSessionId: number
   token: string
   consent: boolean
@@ -370,6 +383,7 @@ export type CartMenuSelectionIssue = {
 }
 
 export type AddBatchResponse = {
+  operationClosed?: boolean
   submitted?: boolean
   orderId?: number | null
   batchId?: number | null
@@ -378,6 +392,7 @@ export type AddBatchResponse = {
 }
 
 export type CartPreviewRequest = {
+  expectedVisitGeneration: string
   tableToken: string
   tableSessionId: number
   tabId: number
@@ -453,6 +468,7 @@ export type SelectedOrderItemOptionDto = {
 }
 
 export type StaffCallRequest = {
+  expectedVisitGeneration: string
   tableToken: string
   tableSessionId: number
   reason: string
@@ -469,6 +485,8 @@ export type StaffCallResponse = {
 export type BillPaymentMethod = 'CARD' | 'CASH' | 'UNKNOWN'
 
 export type GuestBillRequestRequest = {
+  expectedVisitGeneration: string
+  expectedOrderId: number
   tableToken: string
   tableSessionId: number
   tabId: number
@@ -500,7 +518,15 @@ export type StaffCallStatusDto = {
   comment?: string | null
 }
 
+export type ShiftExtensionTerms = {
+  durationMinutes: number
+  priceMinor: number
+  currency: string
+  revision: string
+}
+
 export type GuestShiftExtensionOptionsResponse = {
+  confirmedTerms?: ShiftExtensionTerms | null
   available: boolean
   unavailableReason?: string | null
   durationMinutes?: number | null
@@ -515,6 +541,9 @@ export type GuestShiftExtensionOptionsResponse = {
 }
 
 export type GuestShiftExtensionRequest = {
+  confirmedTerms?: ShiftExtensionTerms | null
+  expectedVisitGeneration: string
+  expectedOrderId: number
   tableToken: string
   tableSessionId: number
   tabId: number

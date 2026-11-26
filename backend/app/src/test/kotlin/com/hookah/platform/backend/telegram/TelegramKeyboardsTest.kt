@@ -2281,9 +2281,10 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `guest shift extension actions return to bot menu categories`() {
-        val buttons = TelegramKeyboards.inlineGuestShiftExtensionActions(canRequest = true).inlineKeyboard.flatten()
+        val confirmation = InlineKeyboardButton("Продлить на 2 часа", callbackData = "guest_shift_extension_request")
+        val buttons = TelegramKeyboards.inlineGuestShiftExtensionActions(confirmation).inlineKeyboard.flatten()
 
-        assertEquals("Продлить на 1 час", buttons[0].text)
+        assertEquals("Продлить на 2 часа", buttons[0].text)
         assertEquals("guest_shift_extension_request", buttons[0].callbackData)
         assertEquals("⬅️ К категориям", buttons[1].text)
         assertEquals("bot_menu_back_categories", buttons[1].callbackData)
@@ -2414,11 +2415,12 @@ class TelegramKeyboardsTest {
                 categoryId = 10L,
                 itemId = 101L,
                 hasActiveOrder = true,
+                participation = "1j.0",
             )
         val buttons = markup.inlineKeyboard.flatten()
 
         assertEquals("➕ Дозаказать", buttons[0].text)
-        assertEquals("bot_menu_item_reorder:10:101", buttons[0].callbackData)
+        assertEquals("guest_reorder:a:2t:1j.0", buttons[0].callbackData)
     }
 
     @Test
@@ -2464,13 +2466,13 @@ class TelegramKeyboardsTest {
 
     @Test
     fun `inline cart summary actions render checkout and clear`() {
-        val markup = TelegramKeyboards.inlineBotMenuCartSummaryActions()
+        val markup = TelegramKeyboards.inlineBotMenuCartSummaryActions(participation = "1j.0")
         val buttons = markup.inlineKeyboard.flatten()
 
         assertEquals("💬 Добавить комментарий", buttons[0].text)
         assertEquals("bot_menu_cart_comment", buttons[0].callbackData)
         assertEquals("✅ Оформить заказ", buttons[1].text)
-        assertEquals("bot_menu_cart_checkout", buttons[1].callbackData)
+        assertEquals("bot_menu_cart_checkout:1j.0", buttons[1].callbackData)
         assertEquals("🗑️ Очистить корзину", buttons[2].text)
         assertEquals("bot_menu_cart_clear", buttons[2].callbackData)
     }
@@ -2489,7 +2491,7 @@ class TelegramKeyboardsTest {
         assertEquals("💬 Добавить комментарий", buttons[3].text)
         assertEquals("bot_menu_cart_comment", buttons[3].callbackData)
         assertEquals("✅ Оформить заказ", buttons[4].text)
-        assertEquals("bot_menu_cart_checkout", buttons[4].callbackData)
+        assertEquals("bot_menu_item_cart", buttons[4].callbackData)
         assertEquals("🗑️ Очистить корзину", buttons[5].text)
         assertEquals("bot_menu_cart_clear", buttons[5].callbackData)
     }

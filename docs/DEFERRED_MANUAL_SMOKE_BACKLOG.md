@@ -55,13 +55,75 @@
 | ID | Feature | Priority | Current status | Blocking impact |
 | --- | --- | --- | --- | --- |
 | [`GROWTH-LOYALTY-PRODUCTIZE-001`](#growth-loyalty-productize-001) | Nth Hookah financial cycle | P1 | `PLANNED` | Local paid-lifecycle validation/review precedes separately authorized financial/device acceptance. |
+| [`GUEST-VISIT-COLD-RESTART-MANUAL-001`](#guest-visit-cold-restart-manual-001) | Guest visit after closing Telegram | P1 | `BLOCKED_BY_ENVIRONMENT` | Required on the repaired staging build before closing the reported iPhone regression. |
 | [`ORDER-CONTEXT-MANUAL-001`](#order-context-manual-001) | Guest order/tab authorization and monetary isolation | P0 privacy | `BLOCKED_BY_ENVIRONMENT` | The merged feature has green CI; staging privacy/order release evidence remains blocked by environment prerequisites. |
 | [`REPEAT-MANUAL-001`](#repeat-manual-001) | Repeat as Template Phase 1 | P1 | `BLOCKED_BY_ENVIRONMENT` | Repeat production-readiness remains open for environment-dependent parity/privacy/context scenarios; independent bounded development may continue. |
 | [`CATALOG-SEARCH-MANUAL-001`](#catalog-search-manual-001) | Catalog Search and Filter Phase 1 | P2 | `BLOCKED_BY_ENVIRONMENT` | Does not block the current MVP/release; required before catalog pagination, ranking, map/geo or a large pilot rollout. |
 | [`STAFF-IDENTITY-MANUAL-001`](#staff-identity-manual-001) | Staff Identity create-from-member free-account scenario | P2 | `BLOCKED_BY_ENVIRONMENT` | Non-blocking coverage gap only; Identity Linking remains `DONE / MVP / STAGING-SMOKE-PASSED`. |
 
+## GUEST-VISIT-COLD-RESTART-MANUAL-001
+
+- **Feature / priority:** Guest visit recovery, `HT-GUEST-VISIT-RESTORE-FIX-01`, P1.
+- **Status:** `BLOCKED_BY_ENVIRONMENT`. The local candidate awaits independent review and a
+  separately authorized release. Real iPhone acceptance is pending.
+- **Prerequisites:** iPhone with Telegram, a published disposable staging venue and table, a
+  second disposable venue, an ordinary Guest and the controlled Platform Guest actor. Confirm access to the chat menu and
+  Main Mini App entry on this bot.
+- **Automated coverage:** Chromium/WebKit new contexts and H2/PostgreSQL authority and
+  no-write checks. See [QA strategy](TESTING_QA_SMOKE_STRATEGY.md).
+- **Manual steps / expected results:** Start with a fresh QR. For an empty visit, a local basket,
+  a submitted order, and after closing the order while the table session is active, close the
+  Mini App and reopen it. Then fully quit Telegram and repeat through the bot menu and Main
+  Mini App. The table and session match. The current account can see its accessible bill and
+  its draft if the device retained origin storage. Verify the controlled Platform Guest can
+  resume before opening a bill. Keep an older bill at A and confirm B through the bot. Reopen and
+  check B. Interrupt connectivity during exact restore with a draft, restore connectivity, use
+  «Повторить загрузку стола» and check the same table and draft. End B, confirm the next visit,
+  and reopen. Check the new visit and verify a second account sees none of the first guest’s data.
+  With two Mini App windows under the same account, interrupt the first window's entry into B.
+  In the second, scan A again. Retry B in the first, close both and reopen from the menu.
+  Verify A and its draft. On upgrade, start with an unversioned historical draft and check
+  the active cart is empty. Add a new item and verify it survives full closure. End the visit,
+  rejoin the same table in the Bot, and verify the previous item stays out of the new cart.
+  Repeat with Mini App rejoin. Temporarily interrupt the connection during exit and verify the
+  next server-confirmed participation shows the corresponding cart. Record the release,
+  Telegram and iOS versions, and which operations the server actually confirmed. For REVIEW-06
+  also verify two-window cart edits, conflict resolution, a stale checkout after rejoin,
+  exit during a storage outage, selection from multiple accessible bills and the old-client
+  refusal (HTTP 428). The old preview screen displays its generic error. On the staging iPhone
+  fully close and reopen the Mini App, match the loaded assets to the candidate and confirm
+  exactly one new batch from a fresh checkout. The V144 cutover needs the separately reviewed
+  maintenance procedure. For REVIEW-07, withhold a checkout acknowledgment, close Telegram,
+  reopen and check that only explicit retry returns the same order and batch. Make a deliberate
+  identical reorder and verify one extra batch. Pause and republish the venue. Reopen an old
+  Bot button after rejoin and verify that the new cart survives. Record the observed batch
+  counts and visible result for both guest roles. This device check remains pending.
+- **Cleanup / result:** End the disposable visits and remove fixtures only under staging
+  authorization. Record release, date, device, actor role and each result without QR tokens.
+  For REVIEW-09, confirm an original checkout remains closed after menu recovery and a deliberate
+  fresh checkout works. On two independent Mini App sessions, repeat coalesced extensions after
+  a staff decision. Verify generation checks on table-linked support actions and quick-order
+  handoff from an ordinary Mini App visit without a prior Bot binding.
+  For REVIEW-08, verify permission loss on a shared bill, retained products and successful submit on a
+  different bill. Confirm a newly issued invitation in both clients. Close Telegram after an
+  uncertain extension response and verify the original request and current order charge after reopen.
+  Check that a late exit message does not replace the menu of a rejoined visit before it reaches Telegram.
+
+  For REVIEW-11 on an authorized staging build, use two bills at one table. At a limit of
+  one, concurrently approve both requests and compare the single billed duration with the
+  actual change in time. Verify a staff-recorded seating has no paid extension, then check
+  its agreed end and release in Venue Mode. In the linked Telegram staff chat, compare a
+  quick order and a discounted reorder with the original bill. Record actual delivery
+  separately from outbox registration. Keep operational reset tests on disposable local DBs.
+
 ## ORDER-CONTEXT-MANUAL-001
 
+  For REVIEW-10, change the tariff from 50 ₽ for 60 minutes to 100 ₽ for 120 minutes
+  while the guest is viewing the old quote. Verify that both Mini App and Bot ask
+  for fresh confirmation and the staff decision uses the saved tariff. Repeat an
+  approved and a rejected Bot confirmation. For a finalized Bot order with an
+  expired visit, verify the recovered receipt and staff notification, with no old
+  keyboard or duplicate batch. Record queuing and real Telegram delivery separately.
 - **Feature / date:** Guest Order / Session / Tab Isolation Consolidation, 2026-09-16.
 - **Priority / status:** P0 privacy / `BLOCKED_BY_ENVIRONMENT`.
 - **Reason deferred:** staging still runs V125 and the merged candidate is not deployed. The V126

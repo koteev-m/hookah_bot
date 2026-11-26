@@ -65,7 +65,7 @@ def migrated_source(root, image):
 class Migrate {
     public static void main(String[] args) {
         Flyway.configure().dataSource(args[0], "hookah_app", "synthetic-app")
-            .locations("classpath:db/migration/postgresql").load().migrate();
+            .locations("classpath:db/migration/postgresql").target("143").load().migrate();
     }
 }""")
         subprocess.run(["java", "-cp", str(libs / "*"), java, f"jdbc:postgresql://127.0.0.1:{port}/hookah_prod"],

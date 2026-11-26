@@ -4,8 +4,10 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.ServiceSuspendedException
 import com.hookah.platform.backend.api.SubscriptionBlockedException
 import com.hookah.platform.backend.api.TableRejoinStaleException
+import com.hookah.platform.backend.api.VisitVersionRequiredException
 import com.hookah.platform.backend.miniapp.guest.api.RestoredTableContextResponse
 import com.hookah.platform.backend.miniapp.guest.api.TableRejoinRequest
 import com.hookah.platform.backend.miniapp.guest.api.TableResolveResponse
@@ -17,7 +19,6 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRe
 import com.hookah.platform.backend.miniapp.guest.db.GuestTableTeardownResult
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
-import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestContextValidationResult
 import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableResolveResult
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
@@ -48,7 +49,7 @@ fun Route.guestTableResolveRoutes(
     guestTabsRepository: GuestTabsRepository,
     platformOwnerUserId: Long? = null,
     guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository? = null,
-    afterPlatformGuestTeardown: (suspend (chatId: Long, actorUserId: Long) -> Unit)? = null,
+    afterPlatformGuestTeardown: (suspend (GuestTableTeardownResult.Cleared) -> Unit)? = null,
 ) {
     suspend fun ordinaryResolve(
         userId: Long,
@@ -229,7 +230,58 @@ fun Route.guestTableResolveRoutes(
                 available = availability.available,
                 unavailableReason = availability.reason,
                 exitEventId = challenge?.toString(),
+                visitGeneration =
+                    if (state.active && availability.available) {
+                        tableSessionRepository.visitGeneration(
+                            connection,
+                            userId,
+                            state.tableSessionId,
+                        ).toString()
+                    } else {
+                        null
+                    },
             )
+        }
+
+    suspend fun restorePlatformVisit(
+        userId: Long,
+        tableToken: String,
+        venueId: Long,
+        tableId: Long,
+        sessionId: Long,
+        memberTabId: Long? = null,
+    ): RestoredTableContextResponse? =
+        when (
+            val guarded =
+                guestTableContextLifecycleRepository?.resolvePlatformMiniApp(
+                    actorUserId = userId,
+                    tableToken = tableToken,
+                    expectedVenueId = venueId,
+                    expectedTableId = tableId,
+                    requestedTableSessionId = sessionId,
+                    ttl = tableSessionConfig.ttl,
+                    verifyOnly = true,
+                ) ?: PlatformGuestTableResolveResult.DatabaseUnavailable
+        ) {
+            is PlatformGuestTableResolveResult.Allowed ->
+                RestoredTableContextResponse(
+                    tableToken = guarded.context.tableToken,
+                    tabId = guarded.personalTab?.id ?: memberTabId,
+                    venueId = guarded.context.venueId,
+                    venueName = guarded.context.venueName,
+                    tableId = guarded.context.tableId,
+                    tableSessionId = guarded.tableSession.id,
+                    visitGeneration = guarded.visitGeneration.toString(),
+                    tableSessionStatus = guarded.tableSession.status.name,
+                    tableSessionActive = true,
+                    tableNumber = guarded.context.tableNumber.toString(),
+                    venueStatus = guarded.venueStatus.dbValue,
+                    subscriptionStatus = guarded.subscriptionStatus.wire,
+                    available = true,
+                    unavailableReason = null,
+                )
+            PlatformGuestTableResolveResult.Denied -> null
+            PlatformGuestTableResolveResult.DatabaseUnavailable -> throw DatabaseUnavailableException()
         }
 
     get("/table/restore") {
@@ -238,7 +290,6 @@ fun Route.guestTableResolveRoutes(
         val exact = query.contains("tableToken") || query.contains("tableSessionId")
         val allVisits = query["scope"] == "active-visits"
         if (allVisits && exact) throw InvalidInputException("Choose either active visits or an exact session")
-        val verifyOnly = exact || allVisits
         val exactToken = if (exact) validateTableToken(query["tableToken"]) else null
         val exactSession =
             if (exact) {
@@ -247,139 +298,124 @@ fun Route.guestTableResolveRoutes(
             } else {
                 null
             }
-        val candidates =
-            when {
-                allVisits -> guestTabsRepository.activeVisitContexts(userId)
-                exactToken != null && exactSession != null ->
-                    listOfNotNull(
-                        guestTabsRepository.findLatestRestorableTableContext(userId, exactToken, exactSession),
-                    )
-                else -> listOfNotNull(guestTabsRepository.findLatestRestorableTableContext(userId))
-            }
-        for (restored in candidates.distinctBy { it.tableSessionId to it.tableToken }) {
-            if (userId == platformOwnerUserId) {
-                when (
-                    val guarded =
-                        guestTableContextLifecycleRepository?.resolvePlatformMiniApp(
-                            actorUserId = userId,
-                            tableToken = restored.tableToken,
-                            expectedVenueId = restored.venueId,
-                            expectedTableId = restored.tableId,
-                            requestedTableSessionId = restored.tableSessionId,
-                            ttl = tableSessionConfig.ttl,
-                            verifyOnly = verifyOnly,
-                        ) ?: PlatformGuestTableResolveResult.DatabaseUnavailable
-                ) {
-                    is PlatformGuestTableResolveResult.Allowed ->
-                        call.respond(
-                            TableRestoreResponse(
-                                context =
-                                    RestoredTableContextResponse(
-                                        tableToken = guarded.context.tableToken,
-                                        tabId = guarded.personalTab?.id ?: continue,
-                                        venueId = guarded.context.venueId,
-                                        venueName = guarded.context.venueName,
-                                        tableId = guarded.context.tableId,
-                                        tableSessionId = guarded.tableSession.id,
-                                        tableSessionStatus = guarded.tableSession.status.name,
-                                        tableSessionActive = true,
-                                        tableSessionInactiveReason = null,
-                                        tableNumber = guarded.context.tableNumber.toString(),
-                                        venueStatus = guarded.venueStatus.dbValue,
-                                        subscriptionStatus = guarded.subscriptionStatus.wire,
-                                        available = true,
-                                        unavailableReason = null,
-                                    ),
-                            ),
-                        )
-                    PlatformGuestTableResolveResult.Denied -> continue
-                    PlatformGuestTableResolveResult.DatabaseUnavailable -> throw DatabaseUnavailableException()
-                }
-                return@get
-            }
-
-            val venue = guestVenueRepository.findVenueByIdForGuest(restored.venueId)
-            if (venue == null || venue.status != VenueStatus.PUBLISHED) {
-                continue
-            }
-
-            val subscriptionStatus =
-                subscriptionRepository.findSubscriptionState(restored.venueId)?.status ?: SubscriptionStatus.UNKNOWN
-            val availability = VenueAvailabilityResolver.resolve(venue.status, subscriptionStatus)
-            if (!availability.available) {
-                continue
-            }
-
-            if (!verifyOnly &&
-                tableSessionRepository.touchActiveSession(
-                    tableSessionId = restored.tableSessionId,
-                    venueId = restored.venueId,
-                    tableId = restored.tableId,
-                    ttl = tableSessionConfig.ttl,
-                ) == null
-            ) {
-                continue
-            }
-
-            call.respond(
-                TableRestoreResponse(
-                    context =
-                        RestoredTableContextResponse(
-                            tableToken = restored.tableToken,
-                            tabId = restored.tabId,
-                            venueId = restored.venueId,
-                            venueName = venue.name,
-                            tableId = restored.tableId,
-                            tableSessionId = restored.tableSessionId,
-                            tableSessionStatus = restored.tableSessionStatus,
-                            tableSessionActive = true,
-                            tableSessionInactiveReason = null,
-                            tableNumber = restored.tableNumber.toString(),
-                            venueStatus = availability.venueStatus.dbValue,
-                            subscriptionStatus = availability.subscriptionStatus,
-                            available = true,
-                            unavailableReason = null,
-                        ),
-                ),
-            )
+        val botVisits =
+            guestTableContextLifecycleRepository?.activeBotVisits(
+                userId,
+                allowMember = allVisits && userId != platformOwnerUserId,
+                expectedToken = exactToken,
+                expectedSession = exactSession,
+            ) ?: throw DatabaseUnavailableException()
+        // Confirmation belongs to this actor. Order edits and other guests' activity
+        // cannot select a different venue. Equal confirmations do not break a tie.
+        val latestConfirmation = botVisits.maxOfOrNull { it.identity.confirmedAt ?: Instant.MIN }
+        val latest =
+            botVisits.filter { (it.identity.confirmedAt ?: Instant.MIN) == latestConfirmation }
+                .distinctBy { it.tableSession.id to it.context.tableToken }
+        if (!allVisits && latest.size > 1) {
+            call.respondNoRestoredTableContext()
             return@get
         }
-        if (allVisits || exact) {
-            val bot =
-                guestTableContextLifecycleRepository?.activeBotVisit(
-                    userId,
-                    allowMember = allVisits && userId != platformOwnerUserId,
-                    expectedToken = exactToken,
-                    expectedSession = exactSession,
-                )
-            when (bot) {
-                is PlatformGuestContextValidationResult.Active -> {
+        for (bot in if (allVisits) botVisits else latest) {
+            if (bot.venueStatus == VenueStatus.PAUSED || bot.subscriptionStatus.isBlockedForGuest()) {
+                if (exact && (userId != platformOwnerUserId || botVisits.size == 1)) {
                     call.respond(
                         TableRestoreResponse(
-                            RestoredTableContextResponse(
-                                tableToken = bot.context.tableToken,
-                                tabId = null,
-                                venueId = bot.context.venueId,
-                                venueName = bot.context.venueName,
-                                tableId = bot.context.tableId,
-                                tableSessionId = bot.tableSession.id,
-                                tableSessionStatus = bot.tableSession.status.name,
-                                tableSessionActive = true,
-                                tableNumber = bot.context.tableNumber.toString(),
-                                venueStatus = bot.venueStatus.dbValue,
-                                subscriptionStatus = bot.subscriptionStatus.wire,
-                                available = true,
-                                unavailableReason = null,
-                            ),
+                            null,
+                            if (bot.venueStatus == VenueStatus.PAUSED) "SERVICE_SUSPENDED" else "SUBSCRIPTION_BLOCKED",
                         ),
                     )
                     return@get
                 }
-                PlatformGuestContextValidationResult.Inactive -> Unit
-                null, PlatformGuestContextValidationResult.DatabaseUnavailable -> throw DatabaseUnavailableException()
+                continue
+            }
+            val table = bot.context
+            val member =
+                guestTabsRepository.findLatestRestorableTableContext(userId, table.tableToken, bot.tableSession.id)
+            val context =
+                if (userId == platformOwnerUserId) {
+                    restorePlatformVisit(
+                        userId,
+                        table.tableToken,
+                        table.venueId,
+                        table.tableId,
+                        bot.tableSession.id,
+                        member?.tabId,
+                    )
+                } else {
+                    RestoredTableContextResponse(
+                        tableToken = table.tableToken,
+                        tabId = member?.tabId,
+                        venueId = table.venueId,
+                        venueName = table.venueName,
+                        tableId = table.tableId,
+                        tableSessionId = bot.tableSession.id,
+                        visitGeneration = bot.visitGeneration.toString(),
+                        tableSessionStatus = bot.tableSession.status.name,
+                        tableSessionActive = true,
+                        tableNumber = table.tableNumber.toString(),
+                        venueStatus = bot.venueStatus.dbValue,
+                        subscriptionStatus = bot.subscriptionStatus.wire,
+                        available = true,
+                        unavailableReason = null,
+                    )
+                }
+            if (context != null) {
+                call.respond(TableRestoreResponse(context))
+                return@get
             }
         }
-        call.respondNoRestoredTableContext()
+        if (userId == platformOwnerUserId) {
+            call.respondNoRestoredTableContext()
+            return@get
+        }
+        val candidates =
+            if (exactToken != null && exactSession != null) {
+                listOfNotNull(guestTabsRepository.findLatestRestorableTableContext(userId, exactToken, exactSession))
+            } else {
+                guestTabsRepository.activeVisitContexts(userId)
+            }
+        var selected: RestoredTableContextResponse? = null
+        for (restored in candidates.distinctBy { it.tableSessionId to it.tableToken }) {
+            val venue = guestVenueRepository.findVenueByIdForGuest(restored.venueId)
+            if (exact && venue?.status == VenueStatus.PAUSED) {
+                call.respond(TableRestoreResponse(null, "SERVICE_SUSPENDED"))
+                return@get
+            }
+            if (venue == null || venue.status != VenueStatus.PUBLISHED) continue
+            val subscriptionStatus =
+                subscriptionRepository.findSubscriptionState(restored.venueId)?.status ?: SubscriptionStatus.UNKNOWN
+            val availability = VenueAvailabilityResolver.resolve(venue.status, subscriptionStatus)
+            if (!availability.available) {
+                if (exact) {
+                    call.respond(TableRestoreResponse(null, availability.reason))
+                    return@get
+                }
+                continue
+            }
+            if (selected != null) {
+                call.respondNoRestoredTableContext()
+                return@get
+            }
+            selected =
+                RestoredTableContextResponse(
+                    tableToken = restored.tableToken,
+                    tabId = restored.tabId,
+                    venueId = restored.venueId,
+                    venueName = venue.name,
+                    tableId = restored.tableId,
+                    tableSessionId = restored.tableSessionId,
+                    visitGeneration = restored.visitGeneration.toString(),
+                    tableSessionStatus = restored.tableSessionStatus,
+                    tableSessionActive = true,
+                    tableNumber = restored.tableNumber.toString(),
+                    venueStatus = availability.venueStatus.dbValue,
+                    subscriptionStatus = availability.subscriptionStatus,
+                    available = true,
+                    unavailableReason = null,
+                )
+            if (allVisits) break // Work-mode admission only needs proof that a visit exists.
+        }
+        call.respond(TableRestoreResponse(selected))
     }
 
     get("/table/resolve") {
@@ -397,11 +433,31 @@ fun Route.guestTableResolveRoutes(
             throw InvalidInputException("Verification requires an exact existing session")
         }
 
+        suspend fun checkSuspendedParticipation() {
+            if (requestedTableSessionId == null) return
+            val member =
+                if (userId == platformOwnerUserId) {
+                    null
+                } else {
+                    guestTabsRepository.findLatestRestorableTableContext(userId, token, requestedTableSessionId)
+                }
+            if (member != null &&
+                guestVenueRepository.findVenueByIdForGuest(member.venueId)?.status == VenueStatus.PAUSED
+            ) {
+                throw ServiceSuspendedException()
+            }
+            if (member == null && guestTableContextLifecycleRepository?.activeBotVisits(
+                    userId, false, token, requestedTableSessionId,
+                )?.singleOrNull()?.venueStatus == VenueStatus.PAUSED
+            ) {
+                throw ServiceSuspendedException()
+            }
+        }
         val table =
             tableTokenResolver(token)
-                ?: if (userId == platformOwnerUserId) {
-                    throw ForbiddenException(PLATFORM_GUEST_RECONFIRM_MESSAGE)
-                } else {
+                ?: run {
+                    checkSuspendedParticipation()
+                    if (userId == platformOwnerUserId) throw ForbiddenException(PLATFORM_GUEST_RECONFIRM_MESSAGE)
                     throw NotFoundException()
                 }
         if (userId == platformOwnerUserId) {
@@ -414,7 +470,7 @@ fun Route.guestTableResolveRoutes(
                         expectedTableId = table.tableId,
                         requestedTableSessionId = requestedTableSessionId,
                         ttl = tableSessionConfig.ttl,
-                        verifyOnly = verifyOnly,
+                        verifyOnly = !allowCreateSession,
                         createPersonalTab = allowCreateSession && requestedTableSessionId == null,
                     ) ?: PlatformGuestTableResolveResult.DatabaseUnavailable
             ) {
@@ -425,6 +481,7 @@ fun Route.guestTableResolveRoutes(
                             venueName = guarded.context.venueName,
                             tableId = guarded.context.tableId,
                             tableSessionId = guarded.tableSession.id,
+                            visitGeneration = guarded.visitGeneration.toString(),
                             tableSessionStatus = guarded.tableSession.status.name,
                             tableSessionActive = true,
                             tableSessionInactiveReason = null,
@@ -435,15 +492,31 @@ fun Route.guestTableResolveRoutes(
                             unavailableReason = null,
                         ),
                     )
-                PlatformGuestTableResolveResult.Denied ->
+                PlatformGuestTableResolveResult.Denied -> {
+                    if (requestedTableSessionId != null) {
+                        val exact =
+                            guestTableContextLifecycleRepository?.activeBotVisits(
+                                userId, false, token, requestedTableSessionId,
+                            ) ?: throw DatabaseUnavailableException()
+                        if (exact.singleOrNull()?.venueStatus == VenueStatus.PAUSED) throw ServiceSuspendedException()
+                        if (exact.singleOrNull()?.subscriptionStatus?.isBlockedForGuest() == true) {
+                            throw SubscriptionBlockedException()
+                        }
+                    }
                     throw ForbiddenException(PLATFORM_GUEST_RECONFIRM_MESSAGE)
+                }
                 PlatformGuestTableResolveResult.DatabaseUnavailable -> throw DatabaseUnavailableException()
             }
             return@get
         }
-        call.respond(
-            ordinaryResolve(userId, table, requestedTableSessionId, allowCreateSession, verifyOnly = verifyOnly),
-        )
+        val resolved =
+            try {
+                ordinaryResolve(userId, table, requestedTableSessionId, allowCreateSession, verifyOnly = verifyOnly)
+            } catch (failure: NotFoundException) {
+                checkSuspendedParticipation()
+                throw failure
+            }
+        call.respond(resolved)
     }
 
     post("/table/session/rejoin") {
@@ -463,6 +536,7 @@ fun Route.guestTableResolveRoutes(
         val userId = call.requireUserId()
         val request = call.receive<TableSessionEndRequest>()
         val token = validateTableToken(request.tableToken)
+        val expected = parseVisitGeneration(request.expectedVisitGeneration) ?: throw VisitVersionRequiredException()
         val tableSessionId =
             request.tableSessionId.takeIf { it > 0 }
                 ?: throw InvalidInputException("tableSessionId must be a positive number")
@@ -475,6 +549,7 @@ fun Route.guestTableResolveRoutes(
                     venueId = table.venueId,
                     tableId = table.tableId,
                     tableSessionId = tableSessionId,
+                    expectedVisitGeneration = expected,
                 )
             if (result != null) {
                 call.respond(
@@ -495,15 +570,13 @@ fun Route.guestTableResolveRoutes(
                     tableToken = token,
                     expectedTableSessionId = tableSessionId,
                     ordinaryBotVisit = userId != platformOwnerUserId,
+                    expectedVisitGeneration = expected,
                 ) ?: GuestTableTeardownResult.DatabaseUnavailable
         ) {
             is GuestTableTeardownResult.Cleared -> {
                 try {
                     if (userId == platformOwnerUserId) {
-                        afterPlatformGuestTeardown?.invoke(
-                            guarded.identity.chatId,
-                            userId,
-                        )
+                        afterPlatformGuestTeardown?.invoke(guarded)
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -530,14 +603,15 @@ fun Route.guestTableResolveRoutes(
                 )
             GuestTableTeardownResult.Missing,
             GuestTableTeardownResult.Denied,
-            ->
-                if (userId == platformOwnerUserId) {
-                    throw ForbiddenException(
-                        PLATFORM_GUEST_RECONFIRM_MESSAGE,
-                    )
+            -> {
+                if (tableSessionRepository.hasCommittedExit(userId, token, tableSessionId, expected)) {
+                    call.respond(TableSessionEndResponse(true, tableSessionId, null, null))
+                } else if (userId == platformOwnerUserId) {
+                    throw ForbiddenException(PLATFORM_GUEST_RECONFIRM_MESSAGE)
                 } else {
                     throw NotFoundException()
                 }
+            }
             GuestTableTeardownResult.DatabaseUnavailable -> throw DatabaseUnavailableException()
         }
     }
@@ -575,3 +649,9 @@ private fun TableSessionEndBlockedReason?.endVisitMessage(ended: Boolean): Strin
 
 internal const val PLATFORM_GUEST_RECONFIRM_MESSAGE =
     "Откройте QR-код ещё раз и подтвердите вход в Telegram."
+
+internal fun parseVisitGeneration(raw: String?): Long? =
+    raw?.let {
+        it.toLongOrNull()?.takeIf { version -> version >= 0 && version.toString() == raw }
+            ?: throw InvalidInputException("Invalid expectedVisitGeneration")
+    }

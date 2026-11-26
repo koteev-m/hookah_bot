@@ -17,6 +17,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.config.MapApplicationConfig
@@ -99,6 +100,7 @@ class AccountingPercentChannelsPostgresTest {
                     "billing.subscriptionJob.enabled" to "false",
                 )
             val outbound = ConcurrentLinkedQueue<String>()
+            val buttons = ConcurrentLinkedQueue<JsonObject>()
             val server =
                 embeddedServer(Netty, environment = applicationEnvironment { this.config = config }, configure = {
                     connectors =
@@ -125,6 +127,12 @@ class AccountingPercentChannelsPostgresTest {
                                                 request.url.protocol.name == "https",
                                         )
                                         outbound.add(request.url.encodedPath.substringAfterLast('/'))
+                                        val markup =
+                                            json.parseToJsonElement((request.body as TextContent).text).jsonObject
+                                                .get("reply_markup")?.jsonObject
+                                        markup?.get("inline_keyboard")?.jsonArray?.forEach { row ->
+                                            row.jsonArray.forEach { buttons.add(it.jsonObject) }
+                                        }
                                         val result =
                                             if (request.url.encodedPath.endsWith(
                                                     "answerCallbackQuery",
@@ -219,7 +227,20 @@ class AccountingPercentChannelsPostgresTest {
                 webhook(text = "/start percent-11")
                 webhook(data = "continue_in_bot:41")
                 webhook(data = "bot_menu_item_add_to_cart:21:21")
-                webhook(data = "bot_menu_cart_checkout")
+
+                fun button(label: String): String {
+                    val end = System.nanoTime() + 15_000_000_000L
+                    while (System.nanoTime() < end) {
+                        val match = buttons.firstOrNull { it["text"]?.jsonPrimitive?.content == label }
+                        if (match != null) return match.getValue("callback_data").jsonPrimitive.content
+                        Thread.sleep(30)
+                    }
+                    error("Telegram did not offer $label")
+                }
+                webhook(data = button("Добавить позицию"))
+                webhook(data = "bot_menu_item_cart")
+                val checkout = button("✅ Оформить заказ")
+                webhook(data = checkout)
                 assertEquals(
                     "1",
                     scalar("SELECT COUNT(*) FROM orders"),
@@ -233,12 +254,12 @@ class AccountingPercentChannelsPostgresTest {
                     "/telegram/webhook",
                     """{"update_id":$oldUpdate,"callback_query":{"id":"percent-$oldUpdate",""" +
                         """"from":{"id":301},"message":{"message_id":1,"chat":{"id":301,""" +
-                        """"type":"private"}},"data":"bot_menu_cart_checkout"}}""",
+                        """"type":"private"}},"data":"$checkout"}}""",
                     null,
                 )
                 assertEquals("1", scalar("SELECT COUNT(*) FROM orders"))
                 val add =
-                    """{"tableToken":"percent-11","tableSessionId":41,"tabId":51,""" +
+                    """{"tableToken":"percent-11","tableSessionId":41,"tabId":51,"expectedVisitGeneration":"0",""" +
                         """"idempotencyKey":"miniapp-percent-1","items":[{"itemId":21,"qty":1}]}"""
                 val added = request("/api/guest/order/add-batch", add, 301)
                 assertEquals(firstOrder, added["orderId"]!!.jsonPrimitive.long)

@@ -7,6 +7,7 @@ import com.hookah.platform.backend.miniapp.guest.api.AddBatchRequest
 import com.hookah.platform.backend.miniapp.guest.api.CreateSharedTabRequest
 import com.hookah.platform.backend.miniapp.guest.api.CreateTabInviteRequest
 import com.hookah.platform.backend.miniapp.guest.api.CreateTabInviteResponse
+import com.hookah.platform.backend.miniapp.guest.api.GuestTabInviteTarget
 import com.hookah.platform.backend.miniapp.guest.api.GuestTabResponse
 import com.hookah.platform.backend.miniapp.guest.api.GuestTabsResponse
 import com.hookah.platform.backend.miniapp.guest.api.JoinTabRequest
@@ -103,6 +104,7 @@ class GuestTabsRoutesTest {
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Lemonade")
 
+            admit(jdbcUrl, venueId, tableSessionId, 20202)
             val ownerToken = issueToken(config, userId = 20202)
             val sharedTabResponse =
                 client.post("/api/guest/tabs/shared") {
@@ -111,7 +113,7 @@ class GuestTabsRoutesTest {
                     setBody(
                         json.encodeToString(
                             CreateSharedTabRequest.serializer(),
-                            CreateSharedTabRequest(tableSessionId),
+                            CreateSharedTabRequest(tableSessionId, "0"),
                         ),
                     )
                 }
@@ -125,7 +127,7 @@ class GuestTabsRoutesTest {
                     setBody(
                         json.encodeToString(
                             CreateTabInviteRequest.serializer(),
-                            CreateTabInviteRequest(tableSessionId, 600),
+                            CreateTabInviteRequest(tableSessionId, 600, "0"),
                         ),
                     )
                 }
@@ -133,6 +135,7 @@ class GuestTabsRoutesTest {
             val inviteToken =
                 json.decodeFromString(CreateTabInviteResponse.serializer(), inviteResponse.bodyAsText()).token
 
+            admit(jdbcUrl, venueId, tableSessionId, 30303)
             val guestToken = issueToken(config, userId = 30303)
             val preJoinBatchResponse =
                 client.post("/api/guest/order/add-batch") {
@@ -142,6 +145,7 @@ class GuestTabsRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "tabs-shared-token",
                                 tableSessionId = tableSessionId,
                                 tabId = sharedTab.id,
@@ -153,7 +157,7 @@ class GuestTabsRoutesTest {
                     )
                 }
             assertEquals(HttpStatusCode.Forbidden, preJoinBatchResponse.status)
-            assertApiErrorEnvelope(preJoinBatchResponse, ApiErrorCodes.FORBIDDEN)
+            assertApiErrorEnvelope(preJoinBatchResponse, "ORDER_BATCH_TAB_ACCESS_DENIED")
 
             val noConsentResponse =
                 client.post("/api/guest/tabs/join") {
@@ -162,12 +166,18 @@ class GuestTabsRoutesTest {
                     setBody(
                         json.encodeToString(
                             JoinTabRequest.serializer(),
-                            JoinTabRequest(tableSessionId = tableSessionId, token = inviteToken, consent = false),
+                            JoinTabRequest(
+                                expectedVisitGeneration = "0",
+                                tableSessionId = tableSessionId,
+                                token = inviteToken,
+                                consent = false,
+                            ),
                         ),
                     )
                 }
             assertEquals(HttpStatusCode.BadRequest, noConsentResponse.status)
 
+            val target = inspectInvite(client, guestToken, tableSessionId, inviteToken)
             val joinResponse =
                 client.post("/api/guest/tabs/join") {
                     contentType(ContentType.Application.Json)
@@ -175,7 +185,14 @@ class GuestTabsRoutesTest {
                     setBody(
                         json.encodeToString(
                             JoinTabRequest.serializer(),
-                            JoinTabRequest(tableSessionId = tableSessionId, token = inviteToken, consent = true),
+                            JoinTabRequest(
+                                expectedVisitGeneration = "0",
+                                tableSessionId = tableSessionId,
+                                token = inviteToken,
+                                consent = true,
+                                inviteId = target.inviteId,
+                                expectedTabId = target.tabId,
+                            ),
                         ),
                     )
                 }
@@ -189,6 +206,7 @@ class GuestTabsRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "tabs-shared-token",
                                 tableSessionId = tableSessionId,
                                 tabId = sharedTab.id,
@@ -225,11 +243,12 @@ class GuestTabsRoutesTest {
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
 
+            admit(jdbcUrl, venueId, tableSessionId, 90909)
             val ownerToken = issueToken(config, userId = 90909)
             val requestBody =
                 json.encodeToString(
                     CreateSharedTabRequest.serializer(),
-                    CreateSharedTabRequest(tableSessionId),
+                    CreateSharedTabRequest(tableSessionId, "0"),
                 )
 
             val firstCreateResponse =
@@ -281,6 +300,8 @@ class GuestTabsRoutesTest {
             val categoryId = seedMenuCategory(jdbcUrl, venueId)
             val itemId = seedMenuItem(jdbcUrl, venueId, categoryId, "Session item")
 
+            admit(jdbcUrl, venueId, firstSessionId, 81818)
+            admit(jdbcUrl, venueId, secondSessionId, 81818)
             val ownerToken = issueToken(config, userId = 81818)
             val firstSharedTabId = createSharedTab(client, ownerToken, firstSessionId)
             val secondSharedTabId = createSharedTab(client, ownerToken, secondSessionId)
@@ -293,6 +314,7 @@ class GuestTabsRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "tabs-session-token",
                                 tableSessionId = firstSessionId,
                                 tabId = firstSharedTabId,
@@ -355,6 +377,7 @@ class GuestTabsRoutesTest {
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
             val ownerUserId = 88888L
+            admit(jdbcUrl, venueId, tableSessionId, ownerUserId)
             val ownerToken = issueToken(config, userId = ownerUserId)
             val tabId = createSharedTab(client, ownerToken, tableSessionId)
 
@@ -382,7 +405,9 @@ class GuestTabsRoutesTest {
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
 
+            admit(jdbcUrl, venueId, tableSessionId, 11111)
             val ownerToken = issueToken(config, userId = 11111)
+            admit(jdbcUrl, venueId, tableSessionId, 22222)
             val anotherOwnerToken = issueToken(config, userId = 22222)
 
             val ownSharedTabId = createSharedTab(client, ownerToken, tableSessionId)
@@ -420,7 +445,9 @@ class GuestTabsRoutesTest {
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
 
+            admit(jdbcUrl, venueId, tableSessionId, 33333)
             val ownerToken = issueToken(config, userId = 33333)
+            admit(jdbcUrl, venueId, tableSessionId, 44444)
             val anotherOwnerToken = issueToken(config, userId = 44444)
 
             val ownSharedTabId = createSharedTab(client, ownerToken, tableSessionId)
@@ -449,8 +476,11 @@ class GuestTabsRoutesTest {
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
 
+            admit(jdbcUrl, venueId, tableSessionId, 55555)
             val ownerToken = issueToken(config, userId = 55555)
+            admit(jdbcUrl, venueId, tableSessionId, 66666)
             val anotherOwnerToken = issueToken(config, userId = 66666)
+            admit(jdbcUrl, venueId, tableSessionId, 77777)
             val memberToken = issueToken(config, userId = 77777)
 
             val ownSharedTabId = createSharedTab(client, ownerToken, tableSessionId)
@@ -489,7 +519,12 @@ class GuestTabsRoutesTest {
                     setBody(
                         json.encodeToString(
                             JoinTabRequest.serializer(),
-                            JoinTabRequest(tableSessionId = tableSessionId, token = tooLongToken, consent = true),
+                            JoinTabRequest(
+                                expectedVisitGeneration = "0",
+                                tableSessionId = tableSessionId,
+                                token = tooLongToken,
+                                consent = true,
+                            ),
                         ),
                     )
                 }
@@ -525,6 +560,19 @@ class GuestTabsRoutesTest {
         return service.issueToken(userId).token
     }
 
+    private fun admit(
+        jdbcUrl: String,
+        venueId: Long,
+        sessionId: Long,
+        guest: Long,
+    ) {
+        DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+            com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository(
+                null,
+            ).ensurePersonalTab(connection, venueId, sessionId, guest)
+        }
+    }
+
     private suspend fun createSharedTab(
         client: HttpClient,
         authToken: String,
@@ -537,7 +585,7 @@ class GuestTabsRoutesTest {
                 setBody(
                     json.encodeToString(
                         CreateSharedTabRequest.serializer(),
-                        CreateSharedTabRequest(tableSessionId),
+                        CreateSharedTabRequest(tableSessionId, "0"),
                     ),
                 )
             }
@@ -558,12 +606,28 @@ class GuestTabsRoutesTest {
                 setBody(
                     json.encodeToString(
                         CreateTabInviteRequest.serializer(),
-                        CreateTabInviteRequest(tableSessionId, 600),
+                        CreateTabInviteRequest(tableSessionId, 600, "0"),
                     ),
                 )
             }
         assertEquals(HttpStatusCode.OK, response.status)
         return json.decodeFromString(CreateTabInviteResponse.serializer(), response.bodyAsText()).token
+    }
+
+    private suspend fun inspectInvite(
+        client: HttpClient,
+        authToken: String,
+        sessionId: Long,
+        invite: String,
+    ): GuestTabInviteTarget {
+        val response =
+            client.post("/api/guest/tabs/join-target") {
+                contentType(ContentType.Application.Json)
+                headers { append(HttpHeaders.Authorization, "Bearer $authToken") }
+                setBody("""{"tableSessionId":$sessionId,"expectedVisitGeneration":"0","token":"$invite"}""")
+            }
+        assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+        return json.decodeFromString(GuestTabInviteTarget.serializer(), response.bodyAsText())
     }
 
     private suspend fun joinSharedTab(
@@ -572,6 +636,7 @@ class GuestTabsRoutesTest {
         tableSessionId: Long,
         token: String,
     ) {
+        val target = inspectInvite(client, authToken, tableSessionId, token)
         val response =
             client.post("/api/guest/tabs/join") {
                 contentType(ContentType.Application.Json)
@@ -579,7 +644,14 @@ class GuestTabsRoutesTest {
                 setBody(
                     json.encodeToString(
                         JoinTabRequest.serializer(),
-                        JoinTabRequest(tableSessionId = tableSessionId, token = token, consent = true),
+                        JoinTabRequest(
+                            expectedVisitGeneration = "0",
+                            tableSessionId = tableSessionId,
+                            token = token,
+                            consent = true,
+                            inviteId = target.inviteId,
+                            expectedTabId = target.tabId,
+                        ),
                     ),
                 )
             }

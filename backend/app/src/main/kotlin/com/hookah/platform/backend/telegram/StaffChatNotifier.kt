@@ -221,7 +221,10 @@ class StaffChatNotifier(
         }
     }
 
-    suspend fun notifyNewBatchNow(event: NewBatchNotification): StaffChatNotificationResult {
+    suspend fun notifyNewBatchNow(
+        event: NewBatchNotification,
+        checkoutChatId: Long? = null,
+    ): StaffChatNotificationResult {
         if (event.status != null && event.bill != null && event.updatedAt != null) {
             return notifyLiveOrderMessageNow(
                 event =
@@ -236,6 +239,7 @@ class StaffChatNotifier(
                         batches = event.batches,
                         updatedAt = event.updatedAt,
                     ),
+                checkoutChatId = checkoutChatId,
                 notificationKey = event.batchId,
                 radarText =
                     if (!event.isReplacementBeforeAccept) {
@@ -254,6 +258,7 @@ class StaffChatNotifier(
             venueId = event.venueId,
             notificationKey = event.batchId,
             setting = StaffChatNotificationSetting.ORDERS,
+            checkoutChatId = checkoutChatId,
             messageBuilder = { venue ->
                 buildNewBatchNotificationText(
                     venueName = venue.name,
@@ -528,6 +533,7 @@ class StaffChatNotifier(
         event: StaffOrderLiveMessage,
         notificationKey: Long?,
         radarText: String? = null,
+        checkoutChatId: Long? = null,
     ): StaffChatNotificationResult {
         val logKey = notificationKey ?: event.orderId
         if (!isTelegramActive()) {
@@ -536,7 +542,7 @@ class StaffChatNotifier(
         }
         val venue = venueRepository.findVenueById(event.venueId)
         val chatId = venue?.staffChatId
-        if (venue == null || chatId == null) {
+        if (venue == null || chatId == null || (checkoutChatId != null && checkoutChatId != chatId)) {
             logResult(event.venueId, logKey, StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT)
             return StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
         }
@@ -609,6 +615,7 @@ class StaffChatNotifier(
         val claimResult =
             if (notificationKey != null) {
                 notificationRepository.tryClaimAndEnqueueOrderMessage(
+                    checkoutHandoff = checkoutChatId != null,
                     notificationKey = notificationKey,
                     orderId = event.orderId,
                     venueId = event.venueId,
@@ -750,6 +757,7 @@ class StaffChatNotifier(
         setting: StaffChatNotificationSetting?,
         messageBuilder: (com.hookah.platform.backend.telegram.db.VenueShort) -> String,
         replyMarkup: ReplyMarkup? = ReplyKeyboardRemove(removeKeyboard = true),
+        checkoutChatId: Long? = null,
     ): StaffChatNotificationResult {
         if (!isTelegramActive()) {
             logResult(venueId, notificationKey, StaffChatNotificationResult.SKIPPED_INACTIVE)
@@ -757,7 +765,7 @@ class StaffChatNotifier(
         }
         val venue = venueRepository.findVenueById(venueId)
         val chatId = venue?.staffChatId
-        if (venue == null || chatId == null) {
+        if (venue == null || chatId == null || (checkoutChatId != null && checkoutChatId != chatId)) {
             logResult(venueId, notificationKey, StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT)
             return StaffChatNotificationResult.SKIPPED_NO_STAFF_CHAT
         }
@@ -781,8 +789,9 @@ class StaffChatNotifier(
                 ),
             )
         val claimResult =
-            if (trafficPolicy.productMode) {
+            if (trafficPolicy.productMode || checkoutChatId != null) {
                 notificationRepository.tryClaimAndEnqueueForVenue(
+                    checkoutHandoff = checkoutChatId != null,
                     notificationKey = notificationKey,
                     venueId = venueId,
                     chatId = chatId,
@@ -975,10 +984,9 @@ internal fun buildNewBatchNotificationText(
         if (promotionDiscounts.isNotEmpty()) {
             append('\n')
             append(formatStaffChatPromotionDiscounts(promotionDiscounts))
-            if (totalPayableMinor != null && !totalCurrency.isNullOrBlank()) {
-                append('\n')
-                append("Итого к оплате: ").append(formatStaffChatMoney(totalPayableMinor, totalCurrency))
-            }
+        }
+        if (totalPayableMinor != null && !totalCurrency.isNullOrBlank()) {
+            append('\n').append("Итого к оплате: ").append(formatStaffChatMoney(totalPayableMinor, totalCurrency))
         }
         if (!comment.isNullOrBlank()) {
             append('\n').append("Комментарий: ").append(comment)
@@ -1474,7 +1482,7 @@ private fun formatStaffChatOrderItems(itemsSummary: String?): String {
     return items.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: "без деталей"
 }
 
-private fun formatStaffChatMoney(
+internal fun formatStaffChatMoney(
     minor: Long,
     currency: String,
 ): String {

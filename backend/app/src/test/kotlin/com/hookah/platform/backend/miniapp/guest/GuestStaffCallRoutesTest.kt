@@ -82,6 +82,7 @@ class GuestStaffCallRoutesTest {
 
             val request =
                 StaffCallRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "token",
                     tableSessionId = 1,
                     reason = "BILL",
@@ -126,8 +127,8 @@ class GuestStaffCallRoutesTest {
                     )
                 }
 
-            assertEquals(HttpStatusCode.BadRequest, response.status)
-            assertApiErrorEnvelope(response, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(HttpStatusCode(428, "Precondition Required"), response.status)
+            assertApiErrorEnvelope(response, "VISIT_VERSION_REQUIRED")
         }
 
     @Test
@@ -146,12 +147,18 @@ class GuestStaffCallRoutesTest {
             seedTableToken(jdbcUrl, tableId, "staff-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository(
+                    null,
+                ).ensurePersonalTab(connection, venueId, tableSessionId, TELEGRAM_USER_ID)
+            }
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "staff-token",
                     tableSessionId = tableSessionId,
-                    reason = " bill ",
+                    reason = " coals ",
                     comment = "  Нужны угли  ",
                 )
             val response =
@@ -170,7 +177,7 @@ class GuestStaffCallRoutesTest {
 
             val stored = fetchStaffCall(jdbcUrl, payload.staffCallId)
             assertNotNull(stored)
-            assertEquals("BILL", stored.reason)
+            assertEquals("COALS", stored.reason)
             assertEquals("Нужны угли", stored.comment)
             assertEquals(tableSessionId, stored.tableSessionId)
             assertEquals(TELEGRAM_USER_ID, stored.createdByUserId)
@@ -191,8 +198,8 @@ class GuestStaffCallRoutesTest {
             assertEquals(payload.staffCallId.toString(), statusPayload.getValue("staffCallId").jsonPrimitive.content)
             assertEquals("NEW", statusPayload.getValue("status").jsonPrimitive.content)
             assertEquals("Вызов отправлен", statusPayload.getValue("statusLabel").jsonPrimitive.content)
-            assertEquals("BILL", statusPayload.getValue("reason").jsonPrimitive.content)
-            assertEquals("Принести счёт", statusPayload.getValue("reasonLabel").jsonPrimitive.content)
+            assertEquals("COALS", statusPayload.getValue("reason").jsonPrimitive.content)
+            assertEquals("Заменить угли", statusPayload.getValue("reasonLabel").jsonPrimitive.content)
             assertEquals("Нужны угли", statusPayload.getValue("comment").jsonPrimitive.content)
 
             updateStaffCallStatus(jdbcUrl, payload.staffCallId, "ACK")
@@ -308,6 +315,13 @@ class GuestStaffCallRoutesTest {
             val subscriptionRepository: SubscriptionRepository = mockk()
             val staffCallRepository: StaffCallRepository = mockk()
             val tableSessionRepository: TableSessionRepository = mockk()
+            val tabs: com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository = mockk()
+            val transaction: java.sql.Connection = mockk()
+            val orders: OrdersRepository = mockk()
+            coEvery { orders.findSafelyLinkableStaffCallOrderId(transaction, 10L, 55L, TELEGRAM_USER_ID) } returns null
+            coEvery {
+                tabs.withActiveOrdinarySession<Any?>(any(), TELEGRAM_USER_ID, null, 0L, "staff-token", null, any())
+            } coAnswers { arg<(java.sql.Connection) -> Any?>(6).invoke(transaction) }
             val staffChatNotifier: StaffChatNotifier = mockk()
             val rateLimiter =
                 object : RateLimiter {
@@ -330,6 +344,7 @@ class GuestStaffCallRoutesTest {
 
             coEvery {
                 tableSessionRepository.touchActiveSession(
+                    connection = transaction,
                     tableSessionId = 55L,
                     venueId = 10L,
                     tableId = 11L,
@@ -358,11 +373,12 @@ class GuestStaffCallRoutesTest {
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
                 staffCallRepository.createGuestStaffCall(
+                    connection = transaction,
                     venueId = 10L,
                     tableId = 11L,
                     tableSessionId = 55L,
                     createdByUserId = TELEGRAM_USER_ID,
-                    reason = StaffCallReason.BILL,
+                    reason = StaffCallReason.COALS,
                     comment = "Нужны угли",
                 )
             } returns CreatedStaffCall(id = 6L, createdAt = Instant.parse("2026-04-29T10:10:00Z"))
@@ -400,6 +416,8 @@ class GuestStaffCallRoutesTest {
                             subscriptionRepository = subscriptionRepository,
                             staffCallRepository = staffCallRepository,
                             tableSessionRepository = tableSessionRepository,
+                            guestTabsRepository = tabs,
+                            ordersRepository = orders,
                             tableSessionConfig =
                                 TableSessionConfig(
                                     ttl = Duration.ofHours(2),
@@ -414,9 +432,10 @@ class GuestStaffCallRoutesTest {
             val token = SessionTokenService(sessionConfig).issueToken(TELEGRAM_USER_ID).token
             val request =
                 StaffCallRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "staff-token",
                     tableSessionId = 55L,
-                    reason = "BILL",
+                    reason = "COALS",
                     comment = "Нужны угли",
                 )
             val response =
@@ -433,7 +452,7 @@ class GuestStaffCallRoutesTest {
                         it.venueId == 10L &&
                             it.staffCallId == 6L &&
                             it.tableLabel == "105" &&
-                            it.reason == StaffCallReason.BILL &&
+                            it.reason == StaffCallReason.COALS &&
                             it.comment == "Нужны угли" &&
                             it.tableSessionId == 55L &&
                             it.orderId == null &&
@@ -457,6 +476,11 @@ class GuestStaffCallRoutesTest {
             val subscriptionRepository: SubscriptionRepository = mockk()
             val staffCallRepository: StaffCallRepository = mockk()
             val tableSessionRepository: TableSessionRepository = mockk()
+            val tabs: com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository = mockk()
+            val transaction: java.sql.Connection = mockk()
+            coEvery {
+                tabs.withActiveOrdinarySession<Any?>(any(), TELEGRAM_USER_ID, null, 0L, "staff-token", null, any())
+            } coAnswers { arg<(java.sql.Connection) -> Any?>(6).invoke(transaction) }
             val staffChatNotifier: StaffChatNotifier = mockk()
             val ordersRepository: OrdersRepository = mockk()
             val rateLimiter =
@@ -480,6 +504,7 @@ class GuestStaffCallRoutesTest {
 
             coEvery {
                 tableSessionRepository.touchActiveSession(
+                    connection = transaction,
                     tableSessionId = 55L,
                     venueId = 10L,
                     tableId = 11L,
@@ -508,14 +533,16 @@ class GuestStaffCallRoutesTest {
             coEvery { subscriptionRepository.getSubscriptionStatus(10L) } returns SubscriptionStatus.ACTIVE
             coEvery {
                 ordersRepository.findSafelyLinkableStaffCallOrderId(
+                    connection = transaction,
                     venueId = 10L,
                     tableSessionId = 55L,
                     userId = TELEGRAM_USER_ID,
                 )
             } returns 19L
-            coEvery { staffCallRepository.countActiveOrderActivity(10L, 19L) } returns 0
+            coEvery { staffCallRepository.countActiveOrderActivity(transaction, 10L, 19L) } returns 0
             coEvery {
                 staffCallRepository.createGuestStaffCall(
+                    connection = transaction,
                     venueId = 10L,
                     tableId = 11L,
                     tableSessionId = 55L,
@@ -559,6 +586,7 @@ class GuestStaffCallRoutesTest {
                             subscriptionRepository = subscriptionRepository,
                             staffCallRepository = staffCallRepository,
                             tableSessionRepository = tableSessionRepository,
+                            guestTabsRepository = tabs,
                             tableSessionConfig =
                                 TableSessionConfig(
                                     ttl = Duration.ofHours(2),
@@ -574,6 +602,7 @@ class GuestStaffCallRoutesTest {
             val token = SessionTokenService(sessionConfig).issueToken(TELEGRAM_USER_ID).token
             val request =
                 StaffCallRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "staff-token",
                     tableSessionId = 55L,
                     reason = "COME",
@@ -589,6 +618,7 @@ class GuestStaffCallRoutesTest {
             assertEquals(HttpStatusCode.OK, response.status)
             coVerify {
                 staffCallRepository.createGuestStaffCall(
+                    connection = transaction,
                     venueId = 10L,
                     tableId = 11L,
                     tableSessionId = 55L,
@@ -633,6 +663,7 @@ class GuestStaffCallRoutesTest {
             invalidReasons.forEach { reason ->
                 val request =
                     StaffCallRequest(
+                        expectedVisitGeneration = "0",
                         tableToken = "valid-token",
                         tableSessionId = 1,
                         reason = reason,
@@ -666,9 +697,10 @@ class GuestStaffCallRoutesTest {
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "valid-token",
                     tableSessionId = 1,
-                    reason = "BILL",
+                    reason = "COALS",
                     comment = "a".repeat(501),
                 )
             val response =
@@ -703,12 +735,18 @@ class GuestStaffCallRoutesTest {
             seedTableToken(jdbcUrl, tableId, "staff-rate-limit-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository(
+                    null,
+                ).ensurePersonalTab(connection, venueId, tableSessionId, TELEGRAM_USER_ID)
+            }
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "staff-rate-limit-token",
                     tableSessionId = tableSessionId,
-                    reason = "BILL",
+                    reason = "COALS",
                     comment = null,
                 )
 
@@ -747,9 +785,10 @@ class GuestStaffCallRoutesTest {
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "missing-token",
                     tableSessionId = 1,
-                    reason = "BILL",
+                    reason = "COALS",
                     comment = null,
                 )
             val response =
@@ -779,12 +818,18 @@ class GuestStaffCallRoutesTest {
             seedTableToken(jdbcUrl, tableId, "suspended-token")
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository(
+                    null,
+                ).ensurePersonalTab(connection, venueId, tableSessionId, TELEGRAM_USER_ID)
+            }
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "suspended-token",
                     tableSessionId = tableSessionId,
-                    reason = "BILL",
+                    reason = "COALS",
                     comment = null,
                 )
             val response =
@@ -814,12 +859,18 @@ class GuestStaffCallRoutesTest {
             seedTableToken(jdbcUrl, tableId, "blocked-token")
             seedSubscription(jdbcUrl, venueId, "SUSPENDED_BY_PLATFORM")
             val tableSessionId = seedTableSession(jdbcUrl, venueId, tableId)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository(
+                    null,
+                ).ensurePersonalTab(connection, venueId, tableSessionId, TELEGRAM_USER_ID)
+            }
             val token = issueToken(config)
             val request =
                 StaffCallRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "blocked-token",
                     tableSessionId = tableSessionId,
-                    reason = "BILL",
+                    reason = "COALS",
                     comment = null,
                 )
             val response =

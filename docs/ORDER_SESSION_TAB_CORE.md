@@ -119,9 +119,11 @@ rolls back the call and cannot produce a successful notification. Existing BILL 
 seating command replay contracts remain unchanged. Physical operations never open an accounting
 shift. Auto-opening belongs only to a successful manual sale or digital checkout and shares the
 venue-first lock order with physical operations.
-The existing paid extension of ordering/service time remains a separate contract: it does not
-silently extend the physical seating agreement. Staff must use the conflict-checked seating
-extension for that agreement. Offline/walk-in physical visits retain NULL user identity; personal
+For a staff-recorded seating, staff extend the agreed end on the floor after checking
+the next booking. The guest has no paid technical-session extension offer. Creating a new
+request or approving an outstanding one for this seating leaves the bill and agreed end intact.
+The internal open-ended expiry stays out of guest quotes. Registered-seating analytics count
+the physical start and table release records the actual end. Offline/walk-in physical visits retain NULL user identity; personal
 history remains scoped to verified order participants. Feedback scheduling excludes offline visits.
 
 Дата актуализации: 2026-08-12.
@@ -153,6 +155,83 @@ The active order belongs to a verified table session/visit, not to a physical ta
 ## Core Invariants
 
 - QR/table token sets context, not permissions.
+- Tokenless Mini App startup restores an authenticated active visit without updating its expiry.
+  A closed order does not end an active physical session. The read requires an active tab
+  membership or an eligible confirmed Bot visit and checks table, token, venue, subscription and
+  the guest's exit marker. Controlled Platform Guest requires its exact confirmed Bot binding.
+  A saved device pointer is verified by token and session. A rejected pointer does not select
+  another table. Without a pointer, the most recent eligible Bot confirmation for this actor
+  takes priority. Tied confirmations for different visits or several eligible memberships
+  without a Bot selection leave the table unselected. Automatic reads of staff-call status,
+  tabs, active orders and extension options preserve both session timestamps. A guest action
+  such as a confirmed QR scan can still renew the session.
+- A temporary restore failure retains the exact visit and the local cart for retry. A confirmed
+  exit removes the matching user/token/session pointers and draft. A later confirmed visit
+  can then be discovered independently.
+- The server identifies a guest's participation by authenticated actor, physical session and
+  `visitGeneration`. The initial generation is the decimal string `"0"`. Only a successful
+  rejoin advances it to the consumed exit event ID. Bot and Mini App take the same session lock
+  and commit consumption and generation together. Resolve and restore return this value only
+  for an authorized active participation. Reads leave the generation and expiry unchanged.
+- A Mini App exit sends `expectedVisitGeneration`. The server checks it under the session lock
+  before changing the visit or its bills. A stale exit returns HTTP 409
+  (`VISIT_GENERATION_CHANGED`). A repeated end for the same generation keeps its first exit event.
+  Preview and add-batch carry the same expected version. The server checks the active actor
+  and version under the physical session lock. Price, signed gift decision and request
+  fingerprints are scoped to participation. An exact authorized replay returns the stored batch.
+  Versionless new commands require a client update (HTTP 428). Previously shipped preview
+  screens display a generic calculation error until the guest closes and reopens the app.
+  Reads retain their access checks. Opening a link or
+  observing an active session does not acknowledge a rejoin or cancel a pending exit.
+- Within one account and origin, each explicit scan or Bot entry registers a new choice in the
+  shared IndexedDB store. Only that choice can publish its authenticated result. Retrying
+  keeps its identity. Passive launch, reload, and focus take a snapshot before requesting the
+  server and recheck the affected session before publishing a reply. Choosing B does not
+  prevent cleanup of a definitively rejected A. A later confirmation at A protects its draft.
+  A cold window records its start before opening IndexedDB. If a newer choice registered in
+  the meantime or the readings are indistinguishable, the cold window asks for a new scan.
+  Coordination covers windows sharing the same website data and browser clock.
+- A cart key contains the account, table token, physical session and server generation, including
+  generation zero. Reopening the same participation restores its draft. An exit followed by a
+  confirmed rejoin starts with an empty cart even when either HTTP response was lost. Drafts
+  created before generation tracking remain untouched under their historical local keys.
+  Their original participation cannot be verified, so the updated client does not import them.
+  This transition has no separate UI. The basket stays on the device.
+- Exact restore can return `context: null` with `unavailableReason: "SUBSCRIPTION_BLOCKED"`
+  when participation is still authorized but service is suspended. Ordering stays disabled.
+  Restore responses carry `visitProtocol: 1`. An unmarked null response from an older server
+  leaves the cart and pointer intact and offers retry. The sole local store for an active cart
+  is the existing IndexedDB object store. Each cart mutation merges its changes in a read/write
+  transaction. Independent changes and quantity deltas combine. Conflicting replacements
+  require a guest decision. Versioned LocalStorage drafts migrate on first access. The original
+  survives until commit. Historical unversioned drafts stay archived. If a write fails, edits
+  remain in the living WebView for retry. Destroying that WebView can lose uncommitted edits.
+  Exit invalidates the exact generation. Same-origin peers use IndexedDB and an exit signal.
+  Isolated storage or unavailable messaging can prevent immediate peer notification. The server
+  still rejects commands for a retired participation. Current accessible bills and explicit
+  choices are checked again within the next generation. Bot carts, choices and quick-order
+  confirmations likewise belong to one actor, physical session and generation.
+  A definitive exit or rejection affects only its participation. Account switching selects the
+  new account's storage and invalidates outstanding requests.
+
+### Guest participation commands
+
+A participation is identified by the authenticated guest, venue, table, physical session and server-issued generation. Venue pause and a blocked subscription suspend service. Exact verification of an authorized active participation preserves its basket until service resumes. Expiry, exit and lost access invalidate that participation. A missing protocol marker on an older server leaves the outcome unknown.
+
+| Guest action | Target and authority | Atomic effect and handling of a lost reply |
+| --- | --- | --- |
+| Open or resume the Mini App | Exact pointer or authorized discovery. Platform Guest requires the confirmed Bot binding. | Verify participation without extending its lifetime. Recheck after a temporary error. |
+| Edit the Mini App basket | Account, table and generation in the existing IndexedDB store. | One transaction per edit. A variant change consumes the original line and writes its replacement together. Incompatible edits require an explicit choice. Following a failed write, the accepted draft stays in memory and editing pauses until retry. |
+| Preview and submit a batch | Server checks membership of the selected bill, physical session and generation. Pricing fingerprint and business contents belong to that submission. | Before sending, IndexedDB commits the immutable payload, bill, key and submitted quantities. An explicit retry sends the same operation. Opening the app sends nothing. A committed key returns the original batch after a bill membership change. An authoritative membership, menu or gift refusal closes the same key in the order ledger without a batch. Only a committed outcome releases the local reservation. Temporary failures, ordinary conflicts and unverifiable legacy results keep the immutable request for review or exact retry. Success removes submitted quantities and leaves new items available. |
+| Create a personal or shared bill, issue an invitation or join | Session and generation, authenticated guest, scoped invitation or bill owner as applicable. | Resolve the short code to an invitation ID and bill before confirmation. Join checks that exact instance, expiry, bill, guest and participation in the membership transaction. After an unknown result, reload accessible bills. |
+| Request payment | Session, generation, bill membership, specific active order and payment method. | Lock the order and create or return its open payment request. A subsequent order needs its own request. |
+| Call staff or request a shift extension | Staff call belongs to the table and participation. An extension and a payment call also target a bill and order. | Recheck authority before writing. Check staff-call status after a lost reply. Mini App prepares extension requests in IndexedDB. Each new extension needs a nonblank idempotency key and confirmation of the specific bill, order, duration, price, currency and tariff revision. The request transaction locks the venue settings and compares the quote. A stale quote changes neither the request ledger nor visit timing. The server binds accepted keys to one request, including coalesced requests with matching agreed terms. A retry returns the recorded status and terms. Approval locks the venue and physical session, checks that the session, bill and order are active and counts approvals across all bills against the current session limit. Each accepted decision adds its saved minutes to the current deadline and posts one saved-price charge to its original bill in the same transaction. A repeat returns the decision. The Mini App displays confirmation against the matching order. |
+| Use a Bot action or enter free text | The Bot addresses the action to the actor, chat and original participation. Order-specific actions include the bill and order. Prepared quick orders retain their request ID. | An old unaddressed button offers a fresh confirmation. Checkout records the original request in PostgreSQL before submission. Retry uses the same key and contents after a restart. Draft buttons include the bill and draft revision. A committed rejection restores eligible lines and lists unavailable choices. A successful prepared checkout atomically queues an internal staff handoff and the guest receipt before deleting the preparation. Mini App checkout, quick text orders and direct Bot reorders stage the same staff handoff within the batch transaction for ordinary and controlled Platform Guests. The initial checkout key replays the committed batch. A venue without a bound staff chat can still take orders. Retired Bot preparations with a committed batch remain recoverable through the outbox worker, using their original chat, actor, venue and batch. A recovered receipt carries no table keyboard. New unsent draft edits stay in the live Bot process. A direct reorder confirms the item, bill and active order. The SQL writer rejects an order change. Web App Data names the original session, generation and bill for quick order. An unbound ordinary Guest can bind that active participation and open the addressed dialog in one transaction after bill membership is confirmed. Platform Guest uses the existing controlled binding. Legacy write commands direct the guest to the current menu. Guest-entered shared-bill codes and comments require a current confirmation. |
+| End and rejoin | Expected generation on exit. Rejoin consumes the specific outstanding exit event. | The exit and checks commit together. Late Bot cleanup addresses the ended participation. A sessionless binding can be cleaned by exact actor, token and binding timestamp. The Bot checks for a fresh binding before queuing an exit keyboard and again before dispatch. Messages already accepted by Telegram can still arrive. |
+| Create, reply to, resolve or reopen a Platform Guest support ticket at a table | Authenticated Platform Guest, confirmed Bot binding, physical session, generation and verified order reference when supplied. Replies and status changes also address the ticket and expected generation. | Recheck the ticket, binding and participation in the same transaction as the write. Support tickets without a table context follow their own access rules. |
+
+Incomplete writes from an older Mini App return HTTP 428 before mutation. Read access follows existing authorization. A previously completed add-batch can be replayed when its original key and contents are verifiable. General staff calls and the creation of shared bills have no durable client retry key. Check current state before issuing another action.
+
 - Ordinary Guest Mini App `/api/guest/table/resolve` with `available=false` does not create or touch table
   sessions, create personal tabs/memberships, clear user exit markers or emit session-start events. An
   explicitly requested session may be read within the resolved venue/table scope; its status does not override
@@ -204,19 +283,40 @@ The active order belongs to a verified table session/visit, not to a physical ta
 - Exact replay returns the already committed batch before current menu/gift validation and produces
   no duplicate order, batch, analytics, outbox or staff notification. Reuse with a different
   fingerprint fails closed as `ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH`.
-- Mini App keeps the key for an exact in-screen network retry, rotates it after business or
-  account/venue/table-session/tab mutation, and ignores server-only price/availability/pricing-
-  fingerprint changes. Mismatch keeps the cart and creates a new key only on explicit retry;
-  unverifiable legacy replay offers active-order review or an explicit new submit and never resends
-  automatically. A success for an older in-flight payload acknowledges that committed order but does
-  not clear or navigate away from a newer cart mutation.
+- Mini App persists the submitted payload and key before sending. After a lost response, the guest
+  can explicitly retry that operation in a new WebView. Edits and price refreshes leave the pending
+  payload intact. Confirmation subtracts its reserved quantities and preserves subsequent edits.
+  A payload mismatch or unverifiable legacy replay preserves the reservation and allows active-order
+  review. A confirmed success or durably closed refusal releases the reservation. Each deliberate
+  new batch gets a fresh key, including a batch with identical contents.
 - A legacy idempotency row with a `NULL` fingerprint is reconstructed only from unambiguous immutable
   committed facts. Missing option identity or another required component fails closed as
   `ORDER_IDEMPOTENCY_REPLAY_UNVERIFIABLE`; multiple physical legacy rows in one logical session/key
   namespace are likewise unverifiable. Mutable menu names/prices are never used to guess identity.
-- The additive fingerprint column stores only `v1:<sha256>`; raw request/canonical JSON is not stored,
-  `response_snapshot` is not repurposed, legacy rows are not bulk-backfilled and table-session scope
-  is not widened by a global unique constraint.
+- The fingerprint column stores `v1:<sha256>` and remains scoped to the table session. For
+  durably rejected checkout keys, `response_snapshot` stores the structured refusal, including
+  actionable menu errors when available. A legacy rejection row with an empty snapshot represents
+  the earlier shared-bill denial. Existing successful batch receipts retain their original format.
+- Fee settings use their existing monotonic `updated_at` revision. A quote that was rejected after
+  a tariff change stays obsolete if the previous price returns. An accepted key uses the saved
+  amount, duration, currency and exact confirmed revision even after tariff changes.
+  V147 records the revision per accepted key, including aliases. Older keys with NULL revision
+  can replay the fields actually recorded. The original key on an older extension
+  request remains an authorized read-only replay through its guest, venue, session, bill, order and
+  stored comment. Its historical participation generation is unknown, so it is kept in the original
+  row. Additional historical keys never recorded by a writer cannot be recovered.
+- The dev-only operational reset locks the selected venue before checkout. It ends its active
+  physical sessions, closes their bill access, releases recorded seatings and removes Bot
+  preparations and operational order history in one transaction. Old commands retain the
+  retired physical session even if supplied a new order ID. The next explicit QR entry creates
+  a fresh session. Other venues retain their sessions, preparations and orders.
+- The existing outbox records the staff handoff by batch before the order commits. Its worker
+  verifies the original recipient and active handoff while claiming the batch and queuing its
+  Telegram message. Rebinding cancels pending work, including a rebind back to the initial
+  chat. External dispatch locks the claimed row through the Bot API call. Telegram may already
+  have accepted a message before relinking or loss of its acknowledgement. The staff message
+  shows stored item amounts, currency, applied discounts and the batch total when available. Guest receipts are deduplicated by batch. A queued row records local
+  responsibility. Telegram delivery follows its usual retry and failure rules.
 - Item name, price, selected options/flavors and price deltas are snapshotted at order time according to `docs/MENU_OPTIONS_STOPLIST.md`.
 - Removed, stop-listed or otherwise unavailable items/options are rejected by the same server-owned
   validation at preview and submit. Deterministic own-venue stale selections use typed line issues;

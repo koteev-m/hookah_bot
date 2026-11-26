@@ -121,6 +121,7 @@ data class ResolvedChatContext(
     val table: TableContext,
     val userId: Long,
     val tableSessionId: Long?,
+    val visitGeneration: Long = 0,
 )
 
 data class ActiveOrderSummary(
@@ -128,4 +129,19 @@ data class ActiveOrderSummary(
     val status: String,
     val displayNumber: Int? = null,
     val displayDate: LocalDate? = null,
+)
+
+internal fun quickOrderDialog(
+    tableToken: String,
+    sessionId: Long,
+    tabId: Long,
+    generation: Long,
+) = DialogState(
+    DialogStateType.QUICK_ORDER_WAIT_TEXT,
+    mapOf(
+        "tableToken" to tableToken,
+        "visitGeneration" to generation.toString(),
+        "tableSessionId" to sessionId.toString(),
+        "tabId" to tabId.toString(),
+    ),
 )
