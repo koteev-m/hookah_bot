@@ -81,6 +81,7 @@ class ProdCriticalGuestVenueFlowTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "e2e-token",
                                 tableSessionId = resolvePayload.tableSessionId,
                                 tabId = personalTabId,
@@ -206,6 +207,7 @@ class ProdCriticalGuestVenueFlowTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "unavailable-item-token",
                                 tableSessionId = resolvePayload.tableSessionId,
                                 tabId = personalTabId,

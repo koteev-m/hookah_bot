@@ -276,7 +276,9 @@ class GuestTableContextTeardownRepositoryTest {
                 )
 
             val cleared = assertIs<GuestTableTeardownResult.Cleared>(result)
-            assertNull(cleared.tableSessionId)
+            assertEquals(oldTableSessionId, cleared.tableSessionId)
+            assertEquals(0L, cleared.visitGeneration)
+            assertNull(database.exitSnapshot(oldTableSessionId))
             assertEquals(false, cleared.exitRecorded)
             assertNull(database.exitSnapshot(newTableSessionId))
             assertNull(database.contextSnapshot())
@@ -304,6 +306,40 @@ class GuestTableContextTeardownRepositoryTest {
             assertEquals(false, cleared.exitRecorded)
             assertNull(database.contextSnapshot())
             assertNull(database.dialogSnapshot())
+        }
+
+    @Test
+    fun `review08 cleans a sessionless binding only while it is still the confirmed target`() =
+        runBlocking {
+            val database = GuestTableContextLifecycleTestDatabase.create("guest-teardown-sessionless")
+            val now = Instant.parse("2026-08-05T10:00:00Z")
+            database.insertContext(updatedAt = now)
+            database.insertDialog()
+            val lifecycle = database.lifecycleRepository()
+
+            suspend fun leave(at: Instant) =
+                lifecycle.teardownByChat(
+                    database.actorUserId,
+                    database.chatId,
+                    expectedToken = database.tableToken,
+                    expectedGeneration = 0,
+                    expectedUnboundUpdatedAt = at,
+                )
+            assertEquals(GuestTableTeardownResult.Denied, leave(now.minusSeconds(1)))
+            assertNotNull(database.contextSnapshot())
+            assertIs<GuestTableTeardownResult.Cleared>(leave(now))
+            assertNull(database.contextSnapshot())
+            assertNull(database.dialogSnapshot())
+            val later =
+                database.createActiveSession(
+                    startedAt = now,
+                    lastActivityAt = now,
+                    expiresAt = now.plusSeconds(1800),
+                )
+            database.insertContext(tableSessionId = later, updatedAt = now.plusSeconds(1))
+            assertEquals(GuestTableTeardownResult.Denied, leave(now))
+            assertNotNull(database.contextSnapshot())
+            assertNull(database.exitSnapshot(later))
         }
 
     @Test

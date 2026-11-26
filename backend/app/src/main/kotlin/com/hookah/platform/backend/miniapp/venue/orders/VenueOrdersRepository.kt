@@ -720,11 +720,16 @@ class VenueOrdersRepository(
     suspend fun loadOrderDetail(
         venueId: Long,
         orderId: Long,
+        checkoutSnapshot: Boolean = false,
+        useMenuFallback: Boolean = !checkoutSnapshot,
     ): OrderDetail? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
             try {
-                ds.connection.use { connection -> loadOrderDetail(connection, venueId, orderId) }
+                ds.connection.use {
+                        connection ->
+                    loadOrderDetail(connection, venueId, orderId, checkoutSnapshot, useMenuFallback)
+                }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
@@ -735,6 +740,8 @@ class VenueOrdersRepository(
         connection: Connection,
         venueId: Long,
         orderId: Long,
+        checkoutSnapshot: Boolean = false,
+        useMenuFallback: Boolean = !checkoutSnapshot,
     ): OrderDetail? {
         val orderHeader =
             connection.prepareStatement(
@@ -861,8 +868,8 @@ class VenueOrdersRepository(
             }
 
         val batchIds = batches.map { it.batchId }
-        val itemsByBatch = loadBatchItems(connection, batchIds)
-        val promotionDiscountsByBatch = loadPromotionDiscountsByBatch(connection, batchIds)
+        val itemsByBatch = loadBatchItems(connection, batchIds, useMenuFallback)
+        val promotionDiscountsByBatch = loadPromotionDiscountsByBatch(connection, batchIds, checkoutSnapshot)
         val serviceCharges = loadServiceCharges(connection, orderId)
         val pendingShiftExtension =
             loadPendingShiftExtensionsByOrderIds(connection, venueId, listOf(orderId))[orderId]
@@ -2623,6 +2630,7 @@ class VenueOrdersRepository(
     private fun loadBatchItems(
         connection: Connection,
         batchIds: List<Long>,
+        useMenuFallback: Boolean,
     ): Map<Long, List<OrderBatchItemDetail>> {
         if (batchIds.isEmpty()) {
             return emptyMap()
@@ -2671,7 +2679,7 @@ class VenueOrdersRepository(
                    END AS price_minor,
                    COALESCE(promo.currency, obi.currency_snapshot, mi.currency) AS currency
             FROM order_batch_items obi
-            LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id
+            LEFT JOIN menu_items mi ON mi.id = obi.menu_item_id AND $useMenuFallback
             LEFT JOIN order_batch_item_options obiop ON obiop.order_batch_item_id = obi.id
             LEFT JOIN (
                 SELECT order_batch_item_id,
@@ -2738,6 +2746,7 @@ class VenueOrdersRepository(
     private fun loadPromotionDiscountsByBatch(
         connection: Connection,
         batchIds: List<Long>,
+        checkoutSnapshot: Boolean,
     ): Map<Long, List<OrderPromotionDiscount>> {
         if (batchIds.isEmpty()) {
             return emptyMap()
@@ -2754,7 +2763,8 @@ class VenueOrdersRepository(
                     END AS promo_label,
                     opa.rule_type,
                     opa.currency,
-                    COALESCE(SUM(obipa.discount_minor), 0) AS discount_minor,
+                    CASE WHEN $checkoutSnapshot THEN MAX(opa.discount_total_minor)
+                         ELSE COALESCE(SUM(obipa.discount_minor), 0) END AS discount_minor,
                     MIN(opa.id) AS first_application_id
                 FROM order_promotion_applications opa
                 JOIN order_batch_item_promotion_adjustments obipa ON obipa.application_id = opa.id
@@ -2762,12 +2772,12 @@ class VenueOrdersRepository(
                 JOIN order_batches ob ON ob.id = obi.order_batch_id
                 LEFT JOIN order_promotion_reward_items opri ON opri.application_id = opa.id
                 WHERE opa.batch_id IN ($placeholders)
-                  AND ob.status <> 'REJECTED'
+                  AND ($checkoutSnapshot OR (ob.status <> 'REJECTED'
                   AND ob.status <> 'CLOSED'
                   AND ob.rejected_reason_code IS NULL
                   AND ob.rejected_reason_text IS NULL
                   AND obi.is_excluded = FALSE
-                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'
+                  AND COALESCE(obi.item_status, 'ACTIVE') = 'ACTIVE'))
                 GROUP BY opa.id, opa.batch_id, opa.title_snapshot, opa.rule_type, opa.currency
             )
             SELECT batch_id,

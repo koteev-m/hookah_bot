@@ -10,9 +10,19 @@ import com.hookah.platform.backend.api.CartMenuSelectionKind
 import com.hookah.platform.backend.api.CartMenuSelectionReason
 import com.hookah.platform.backend.api.CartMenuSelectionUnavailableException
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.FinalOrderBatchRejection
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.api.OrderBatchRejection
+import com.hookah.platform.backend.api.OrderBatchTabAccessDeniedException
 import com.hookah.platform.backend.api.OrderIdempotencyPayloadMismatchException
 import com.hookah.platform.backend.api.OrderIdempotencyReplayUnverifiableException
+import com.hookah.platform.backend.api.ServiceSuspendedException
+import com.hookah.platform.backend.api.SubscriptionBlockedException
+import com.hookah.platform.backend.api.VisitGenerationChangedException
+import com.hookah.platform.backend.api.VisitVersionRequiredException
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
+import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
 import com.hookah.platform.backend.miniapp.venue.accounting.AccountingShiftOpening
 import com.hookah.platform.backend.miniapp.venue.menu.MenuSemanticType
 import com.hookah.platform.backend.promotions.GiftDecisionCartItem
@@ -54,6 +64,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import javax.sql.DataSource
 
+@kotlinx.serialization.Serializable
 data class OrderBatchItemInput(
     val cartLineRef: String? = null,
     val itemId: Long,
@@ -205,7 +216,30 @@ data class GuestOrderCartPreviewItem(
     val promotionAdjustment: GuestOrderPromotionLineAdjustment? = null,
 )
 
-private fun GuestOrderCartPreview.calculatePricingFingerprint(): String {
+private fun previewParticipation(
+    userId: Long,
+    venueId: Long,
+    sessionId: Long?,
+    tabId: Long?,
+    generation: Long?,
+): String? =
+    if (sessionId != null && tabId != null && generation != null) {
+        val scope = "$userId:$venueId:$sessionId:$tabId:$generation"
+        "p1:" + sha256(scope) + ":"
+    } else {
+        null
+    }
+
+private fun checkPreviewParticipation(
+    fingerprint: String?,
+    scope: String?,
+) {
+    if (fingerprint?.startsWith("p1:") == true && (scope == null || !fingerprint.startsWith(scope))) {
+        throw VisitGenerationChangedException()
+    }
+}
+
+private fun GuestOrderCartPreview.calculatePricingFingerprint(scope: String?): String {
     val canonical =
         buildString {
             append(grossTotalMinor)
@@ -277,11 +311,14 @@ private fun GuestOrderCartPreview.calculatePricingFingerprint(): String {
                 append(reward.currency)
             }
         }
-    return MessageDigest
-        .getInstance("SHA-256")
-        .digest(canonical.toByteArray(Charsets.UTF_8))
-        .joinToString("") { byte -> "%02x".format(byte) }
+    return scope.orEmpty() + sha256(canonical)
 }
+
+private fun sha256(value: String): String =
+    MessageDigest
+        .getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
 
 private fun giftDecisionCartScope(
     userId: Long,
@@ -290,12 +327,14 @@ private fun giftDecisionCartScope(
     tabId: Long,
     items: List<OrderBatchItemInput>,
     comment: String?,
+    expectedVisitGeneration: Long?,
 ): GiftDecisionCartScope =
     GiftDecisionCartScope(
         userId = userId,
         venueId = venueId,
         tableSessionId = tableSessionId,
         tabId = tabId,
+        expectedVisitGeneration = expectedVisitGeneration,
         comment = comment,
         items =
             items.map { item ->
@@ -468,62 +507,71 @@ class OrdersRepository(
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val activeOrderIds =
-                        connection.prepareStatement(
-                            """
-                            SELECT id
-                            FROM orders
-                            WHERE venue_id = ?
-                              AND table_session_id = ?
-                              AND status = 'ACTIVE'
-                            ORDER BY id
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, venueId)
-                            statement.setLong(2, tableSessionId)
-                            statement.executeQuery().use { rs ->
-                                buildList {
-                                    while (rs.next()) {
-                                        add(rs.getLong("id"))
-                                    }
-                                }
-                            }
-                        }
-                    val orderId = activeOrderIds.singleOrNull() ?: return@use null
-                    val participant =
-                        connection.prepareStatement(
-                            """
-                            SELECT 1
-                            FROM order_batches ob
-                            LEFT JOIN guest_batch_idempotency gbi
-                              ON gbi.batch_id = ob.id
-                             AND gbi.user_id = ?
-                            WHERE ob.order_id = ?
-                              AND (
-                                  ob.author_user_id = ?
-                                  OR gbi.user_id IS NOT NULL
-                                  OR EXISTS (
-                                      SELECT 1
-                                      FROM tab_member tm
-                                      WHERE tm.tab_id = ob.tab_id
-                                        AND tm.user_id = ?
-                                  )
-                              )
-                            LIMIT 1
-                            """.trimIndent(),
-                        ).use { statement ->
-                            statement.setLong(1, userId)
-                            statement.setLong(2, orderId)
-                            statement.setLong(3, userId)
-                            statement.setLong(4, userId)
-                            statement.executeQuery().use { rs -> rs.next() }
-                        }
-                    orderId.takeIf { participant }
+                    findSafelyLinkableStaffCallOrderId(connection, venueId, tableSessionId, userId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
+    }
+
+    internal fun findSafelyLinkableStaffCallOrderId(
+        connection: java.sql.Connection,
+        venueId: Long,
+        tableSessionId: Long,
+        userId: Long,
+    ): Long? {
+        val activeOrderIds =
+            connection.prepareStatement(
+                """
+                SELECT id
+                FROM orders
+                WHERE venue_id = ?
+                  AND table_session_id = ?
+                  AND status = 'ACTIVE'
+                ORDER BY id
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, venueId)
+                statement.setLong(2, tableSessionId)
+                statement.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(rs.getLong("id"))
+                        }
+                    }
+                }
+            }
+        val orderId = activeOrderIds.singleOrNull() ?: return null
+        val participant =
+            connection.prepareStatement(
+                """
+                SELECT 1
+                FROM order_batches ob
+                LEFT JOIN guest_batch_idempotency gbi
+                  ON gbi.batch_id = ob.id
+                 AND gbi.user_id = ?
+                WHERE ob.order_id = ?
+                  AND (
+                      ob.author_user_id = ?
+                      OR gbi.user_id IS NOT NULL
+                      OR EXISTS (
+                          SELECT 1
+                          FROM tab_member tm
+                          WHERE tm.tab_id = ob.tab_id
+                            AND tm.user_id = ?
+                      )
+                  )
+                LIMIT 1
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.setLong(2, orderId)
+                statement.setLong(3, userId)
+                statement.setLong(4, userId)
+                statement.executeQuery().use { rs -> rs.next() }
+            }
+        return orderId.takeIf { participant }
     }
 
     suspend fun findActiveOrderDetails(tableSessionId: Long): ActiveOrderDetails? {
@@ -635,6 +683,7 @@ class OrdersRepository(
         connection: Connection,
         tableSessionId: Long,
         tabId: Long,
+        forUpdate: Boolean = false,
     ): ActiveOrderDetails? {
         val order =
             connection.prepareStatement(
@@ -651,6 +700,7 @@ class OrdersRepository(
                   )
                 ORDER BY o.id DESC
                 LIMIT 1
+                ${if (forUpdate) "FOR UPDATE" else ""}
                 """.trimIndent(),
             ).use { statement ->
                 statement.setLong(1, tableSessionId)
@@ -1086,13 +1136,18 @@ class OrdersRepository(
         expectedTableToken: String? = null,
         quickOrderRequest: QuickOrderRequest? = null,
         analyticsChannel: AnalyticsChannel = AnalyticsChannel.UNKNOWN,
+        expectedVisitGeneration: Long? = 0,
+        expectedOrderId: Long? = null,
+        stageNewBatch: ((Connection, Long, Long) -> Unit)? = null,
     ): CreatedOrderBatch? {
         if (chatOrder && (items.isNotEmpty() || comment.isNullOrBlank() || expectedTableToken.isNullOrBlank())) {
             throw InvalidInputException("A chat order requires a table token, text and no menu items")
         }
         if (!chatOrder && items.isEmpty()) throw InvalidInputException("Добавьте позиции заказа.")
+        val pricingScope = previewParticipation(userId, venueId, tableSessionId, tabId, expectedVisitGeneration)
         val requestFingerprint =
             guestOrderRequestFingerprint(
+                expectedVisitGeneration = expectedVisitGeneration,
                 userId = userId,
                 venueId = venueId,
                 tableSessionId = tableSessionId,
@@ -1145,6 +1200,7 @@ class OrdersRepository(
                             val createdItems = loadCreatedOrderBatchItems(connection, existing.batchId)
                             val pricing =
                                 buildPersistedBatchPricing(
+                                    pricingScope = pricingScope,
                                     items = createdItems,
                                     discounts = promotionDiscounts,
                                     giftOffer = loadPersistedGiftOffer(connection, existing.batchId),
@@ -1202,6 +1258,7 @@ class OrdersRepository(
                             val createdItems = loadCreatedOrderBatchItems(connection, concurrentExisting.batchId)
                             val pricing =
                                 buildPersistedBatchPricing(
+                                    pricingScope = pricingScope,
                                     items = createdItems,
                                     discounts = promotionDiscounts,
                                     giftOffer = loadPersistedGiftOffer(connection, concurrentExisting.batchId),
@@ -1221,8 +1278,19 @@ class OrdersRepository(
                                         expectedPreviewFingerprint != pricing.pricingFingerprint,
                             )
                         }
+                        checkActiveParticipation(connection, userId, tableSessionId, expectedVisitGeneration)
+                        checkGuestWriteTarget(
+                            connection,
+                            venueId,
+                            tableId,
+                            tableSessionId,
+                            expectedTableToken,
+                            expectedOrderId,
+                        )
+                        checkPreviewParticipation(expectedPreviewFingerprint, pricingScope)
                         val giftResolution =
                             resolveAuthoritativeGiftDecision(
+                                expectedVisitGeneration = expectedVisitGeneration,
                                 userId = userId,
                                 venueId = venueId,
                                 tableSessionId = tableSessionId,
@@ -1310,6 +1378,7 @@ class OrdersRepository(
                             batchId = batchId,
                             requestFingerprint = requestFingerprint,
                         )
+                        stageNewBatch?.invoke(connection, orderId, batchId)
                         guestOrderWriteCheckpoint(GuestOrderWriteCheckpoint.AFTER_IDEMPOTENCY_WRITE)
                         analyticsEventRepository?.append(
                             connection = connection,
@@ -1340,6 +1409,7 @@ class OrdersRepository(
                         val discounts = promotionResult.discounts + listOfNotNull(loyaltyRedemption?.discount)
                         val pricing =
                             buildPersistedBatchPricing(
+                                pricingScope = pricingScope,
                                 items = createdItems,
                                 discounts = discounts,
                                 giftOffer = promotionResult.giftOffer,
@@ -1378,6 +1448,7 @@ class OrdersRepository(
                                 val createdItems = loadCreatedOrderBatchItems(connection, existing.batchId)
                                 val pricing =
                                     buildPersistedBatchPricing(
+                                        pricingScope = pricingScope,
                                         items = createdItems,
                                         discounts = promotionDiscounts,
                                         giftOffer = loadPersistedGiftOffer(connection, existing.batchId),
@@ -1436,6 +1507,10 @@ class OrdersRepository(
         expectedTableToken: String? = null,
         quickOrderRequest: QuickOrderRequest? = null,
         analyticsChannel: AnalyticsChannel = AnalyticsChannel.UNKNOWN,
+        expectedVisitGeneration: Long? = 0,
+        expectedOrderId: Long? = null,
+        authorizeNewBatch: (() -> Boolean)? = null,
+        stageNewBatch: ((Connection, Long, Long) -> Unit)? = null,
     ): CreatedOrderBatch? {
         if (chatOrder && (items.isNotEmpty() || comment.isNullOrBlank() || expectedTableToken.isNullOrBlank())) {
             throw InvalidInputException("A chat order requires a table token, text and no menu items")
@@ -1459,8 +1534,10 @@ class OrdersRepository(
             rejectQuickOrder(connection, quickOrderRequest)
             return null
         }
+        val pricingScope = previewParticipation(userId, venueId, tableSessionId, tabId, expectedVisitGeneration)
         val requestFingerprint =
             guestOrderRequestFingerprint(
+                expectedVisitGeneration = expectedVisitGeneration,
                 userId = userId,
                 venueId = venueId,
                 tableSessionId = tableSessionId,
@@ -1468,29 +1545,49 @@ class OrdersRepository(
                 comment = comment,
                 items = items,
             )
+        val existing =
+            findBatchIdempotency(
+                connection = connection,
+                venueId = venueId,
+                tableSessionId = tableSessionId,
+                idempotencyKey = idempotencyKey,
+            )
+        if (existing != null) {
+            verifyIdempotencyReplay(
+                connection = connection,
+                existing = existing,
+                tableId = tableId,
+                requestFingerprint = requestFingerprint,
+            )
+            return buildIdempotentCreatedBatch(
+                pricingScope = pricingScope,
+                connection = connection,
+                existing = existing,
+                expectedPreviewFingerprint = expectedPreviewFingerprint,
+            )
+        }
+        if (!requestActive) return null
+
+        fun reject(rejection: OrderBatchRejection): Nothing {
+            recordBatchRejection(
+                connection,
+                venueId,
+                tableSessionId,
+                userId,
+                idempotencyKey,
+                requestFingerprint,
+                tableId,
+                rejection,
+            )
+            throw FinalOrderBatchRejection(rejection)
+        }
+
+        if (authorizeNewBatch?.invoke() == false) {
+            checkActiveParticipation(connection, userId, tableSessionId, expectedVisitGeneration)
+            reject(OrderBatchRejection(OrderBatchTabAccessDeniedException()))
+        }
         val savepoint = connection.setSavepoint()
         return try {
-            val existing =
-                findBatchIdempotency(
-                    connection = connection,
-                    venueId = venueId,
-                    tableSessionId = tableSessionId,
-                    idempotencyKey = idempotencyKey,
-                )
-            if (existing != null) {
-                verifyIdempotencyReplay(
-                    connection = connection,
-                    existing = existing,
-                    tableId = tableId,
-                    requestFingerprint = requestFingerprint,
-                )
-                return buildIdempotentCreatedBatch(
-                    connection = connection,
-                    existing = existing,
-                    expectedPreviewFingerprint = expectedPreviewFingerprint,
-                )
-            }
-            if (!requestActive) return null
             if (
                 !lockActiveGuestOrderScope(
                     connection = connection,
@@ -1520,13 +1617,18 @@ class OrdersRepository(
                     requestFingerprint = requestFingerprint,
                 )
                 return buildIdempotentCreatedBatch(
+                    pricingScope = pricingScope,
                     connection = connection,
                     existing = concurrentExisting,
                     expectedPreviewFingerprint = expectedPreviewFingerprint,
                 )
             }
+            checkActiveParticipation(connection, userId, tableSessionId, expectedVisitGeneration)
+            checkGuestWriteTarget(connection, venueId, tableId, tableSessionId, expectedTableToken, expectedOrderId)
+            checkPreviewParticipation(expectedPreviewFingerprint, pricingScope)
             val giftResolution =
                 resolveAuthoritativeGiftDecision(
+                    expectedVisitGeneration = expectedVisitGeneration,
                     userId = userId,
                     venueId = venueId,
                     tableSessionId = tableSessionId,
@@ -1539,12 +1641,18 @@ class OrdersRepository(
                     giftDecisionCommand = giftDecisionCommand,
                 )
             lockGuestOrderMenuSelections(connection, items)
-            validateCartMenuSelections(connection, venueId, items)
-            val checkoutMenuItems = loadCheckoutMenuItems(connection, venueId, items.map { it.itemId }.toSet())
-            if (checkoutMenuItems.size != items.map { it.itemId }.toSet().size) {
-                throw InvalidInputException("Some items are unavailable")
-            }
-            val selectedOptionsByKey = resolveSelectedOptions(connection, venueId, items)
+            val (checkoutMenuItems, selectedOptionsByKey) =
+                try {
+                    validateCartMenuSelections(connection, venueId, items)
+                    val menuItems = loadCheckoutMenuItems(connection, venueId, items.map { it.itemId }.toSet())
+                    if (menuItems.size != items.map { it.itemId }.toSet().size) {
+                        throw InvalidInputException("Some items are unavailable")
+                    }
+                    menuItems to resolveSelectedOptions(connection, venueId, items)
+                } catch (e: InvalidInputException) {
+                    if (authorizeNewBatch == null) throw e
+                    throw PreparedMenuValidationFailure(e)
+                }
             val authoritativeVenueZoneId = venueZoneIdProvider?.invoke(connection) ?: venueZoneId
             beforeAuthoritativeWrites?.invoke()
             AccountingShiftOpening(clock).open(connection, venueId, userId, "DIGITAL_ORDER")
@@ -1613,6 +1721,7 @@ class OrdersRepository(
                 batchId = batchId,
                 requestFingerprint = requestFingerprint,
             )
+            stageNewBatch?.invoke(connection, orderId, batchId)
             guestOrderWriteCheckpoint(GuestOrderWriteCheckpoint.AFTER_IDEMPOTENCY_WRITE)
             analyticsEventRepository?.append(
                 connection = connection,
@@ -1641,6 +1750,7 @@ class OrdersRepository(
             val discounts = promotionResult.discounts + listOfNotNull(loyaltyRedemption?.discount)
             val pricing =
                 buildPersistedBatchPricing(
+                    pricingScope = pricingScope,
                     items = createdItems,
                     discounts = discounts,
                     giftOffer = promotionResult.giftOffer,
@@ -1675,6 +1785,7 @@ class OrdersRepository(
                         requestFingerprint = requestFingerprint,
                     )
                     return buildIdempotentCreatedBatch(
+                        pricingScope = pricingScope,
                         connection = connection,
                         existing = existing,
                         expectedPreviewFingerprint = expectedPreviewFingerprint,
@@ -1684,9 +1795,54 @@ class OrdersRepository(
             throw e
         } catch (e: Exception) {
             connection.rollback(savepoint)
+            if (authorizeNewBatch != null) {
+                when (e) {
+                    is CartMenuSelectionUnavailableException -> reject(OrderBatchRejection(e))
+                    is PreparedMenuValidationFailure -> reject(OrderBatchRejection(e.error))
+                    is GiftDecisionRequiredException ->
+                        reject(
+                            OrderBatchRejection(
+                                OrderBatchRejection.GIFT_DECISION_REQUIRED,
+                                409,
+                                "Условия подарка изменились. Проверьте состав и отправьте корзину снова.",
+                            ),
+                        )
+                }
+            }
             throw e
         } finally {
             runCatching { connection.releaseSavepoint(savepoint) }
+        }
+    }
+
+    private class PreparedMenuValidationFailure(val error: InvalidInputException) : RuntimeException(error)
+
+    private fun recordBatchRejection(
+        connection: Connection,
+        venueId: Long,
+        sessionId: Long,
+        userId: Long,
+        key: String,
+        fingerprint: String,
+        tableId: Long,
+        rejection: OrderBatchRejection,
+    ) {
+        val snapshot = if (connection.metaData.databaseProductName == "PostgreSQL") "CAST(? AS JSONB)" else "?"
+        connection.prepareStatement(
+            """
+            INSERT INTO guest_batch_idempotency (
+                venue_id, table_session_id, user_id, idempotency_key, request_fingerprint, rejected_table_id, response_snapshot
+            ) VALUES (?, ?, ?, ?, ?, ?, $snapshot)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, sessionId)
+            statement.setLong(3, userId)
+            statement.setString(4, key)
+            statement.setString(5, fingerprint)
+            statement.setLong(6, tableId)
+            statement.setString(7, Json.encodeToString(OrderBatchRejection.serializer(), rejection))
+            statement.executeUpdate()
         }
     }
 
@@ -1694,11 +1850,13 @@ class OrdersRepository(
         connection: Connection,
         existing: StoredBatchIdempotency,
         expectedPreviewFingerprint: String?,
+        pricingScope: String?,
     ): CreatedOrderBatch {
         val promotionDiscounts = loadPromotionDiscountsForBatch(connection, existing.batchId)
         val createdItems = loadCreatedOrderBatchItems(connection, existing.batchId)
         val pricing =
             buildPersistedBatchPricing(
+                pricingScope = pricingScope,
                 items = createdItems,
                 discounts = promotionDiscounts,
                 giftOffer = loadPersistedGiftOffer(connection, existing.batchId),
@@ -1779,10 +1937,47 @@ class OrdersRepository(
         return state != null && state.tokenActive && state.tableActive
     }
 
-    private fun lockActiveGuestOrderScope(
+    // The physical session row must already be locked by the caller.
+    private fun checkGuestWriteTarget(
         connection: Connection,
         venueId: Long,
         tableId: Long,
+        tableSessionId: Long,
+        tableToken: String?,
+        expectedOrderId: Long?,
+    ) {
+        if (expectedOrderId != null && findActiveOrderForUpdate(connection, tableSessionId) != expectedOrderId) {
+            throw VisitGenerationChangedException()
+        }
+        // Standalone Bot writes must recheck service inside the same transaction as the batch.
+        if (tableToken != null) {
+            val table = TableTokenRepository(dataSource).resolveForUpdate(connection, tableToken, venueId, tableId)
+            if (table == null || !table.tokenActive || !table.tableActive) throw VisitGenerationChangedException()
+            if (table.venueStatus != VenueStatus.PUBLISHED) throw ServiceSuspendedException()
+            val subscription =
+                SubscriptionRepository(
+                    dataSource,
+                ).getSubscriptionStatus(connection, venueId, forUpdate = true)
+            if (subscription.isBlockedForGuest()) throw SubscriptionBlockedException()
+        }
+    }
+
+    private fun checkActiveParticipation(
+        connection: Connection,
+        userId: Long,
+        sessionId: Long,
+        expected: Long?,
+    ) {
+        if (expected == null) throw VisitVersionRequiredException()
+        val sessions = TableSessionRepository(dataSource)
+        sessions.checkVisitGeneration(connection, userId, sessionId, expected)
+        if (sessions.hasUserExit(connection, userId, sessionId)) throw VisitGenerationChangedException()
+    }
+
+    private fun lockActiveGuestOrderScope(
+        connection: Connection,
+        venueId: Long,
+        tableId: Long?,
         tableSessionId: Long,
         tabId: Long,
         userId: Long,
@@ -1803,7 +1998,7 @@ class OrdersRepository(
              AND tm.role IN ('OWNER', 'MEMBER')
             WHERE ts.id = ?
               AND ts.venue_id = ?
-              AND ts.table_id = ?
+              ${if (tableId != null) "AND ts.table_id = ?" else ""}
               AND ts.status = 'ACTIVE'
               AND ts.ended_at IS NULL
               AND ts.expires_at > ?
@@ -1814,8 +2009,9 @@ class OrdersRepository(
             statement.setLong(2, userId)
             statement.setLong(3, tableSessionId)
             statement.setLong(4, venueId)
-            statement.setLong(5, tableId)
-            statement.setTimestamp(6, Timestamp.from(now))
+            var index = 5
+            if (tableId != null) statement.setLong(index++, tableId)
+            statement.setTimestamp(index, Timestamp.from(now))
             statement.executeQuery().use { rs -> rs.next() }
         }
 
@@ -2393,6 +2589,7 @@ class OrdersRepository(
         tabId: Long? = null,
         comment: String? = null,
         giftDecisionCommand: GiftDecisionCommand? = null,
+        expectedVisitGeneration: Long? = 0,
     ): GuestOrderCartPreview? {
         if (items.isEmpty()) {
             return null
@@ -2415,6 +2612,7 @@ class OrdersRepository(
                 tabId != null
             ) {
                 giftDecisionCartScope(
+                    expectedVisitGeneration = expectedVisitGeneration,
                     userId = userId,
                     venueId = venueId,
                     tableSessionId = tableSessionId,
@@ -2467,6 +2665,16 @@ class OrdersRepository(
                         val originalAutoCommit = connection.autoCommit
                         connection.autoCommit = false
                         try {
+                            if (tableSessionId != null && tabId != null) {
+                                val accessible =
+                                    lockActiveGuestOrderScope(
+                                        connection, venueId, null, tableSessionId, tabId, userId, now,
+                                    )
+                                if (!accessible) {
+                                    return@use null
+                                }
+                                checkActiveParticipation(connection, userId, tableSessionId, expectedVisitGeneration)
+                            }
                             validateCartMenuSelections(connection, venueId, items)
                             val checkoutMenuItems = loadCheckoutMenuItems(connection, venueId, itemIds)
                             if (checkoutMenuItems.size != itemIds.size) {
@@ -2752,7 +2960,8 @@ class OrdersRepository(
                 giftChoices = promotionPreview.giftChoices,
                 giftOffer = promotionPreview.giftOffer,
             )
-        val pricedResult = result.copy(pricingFingerprint = result.calculatePricingFingerprint())
+        val pricingScope = previewParticipation(userId, venueId, tableSessionId, tabId, expectedVisitGeneration)
+        val pricedResult = result.copy(pricingFingerprint = result.calculatePricingFingerprint(pricingScope))
         if (giftDecisionScopeTokenService == null || decisionCartScope == null) {
             return pricedResult
         }
@@ -2791,6 +3000,7 @@ class OrdersRepository(
         items: List<CreatedOrderBatchItem>,
         discounts: List<CreatedOrderPromotionDiscount>,
         giftOffer: PromotionGiftOffer = PromotionGiftOffer(PromotionGiftOfferStatus.NO_GIFT),
+        pricingScope: String?,
     ): GuestOrderCartPreview {
         val promotionDiscounts =
             discounts.filterNot { discount ->
@@ -2860,7 +3070,7 @@ class OrdersRepository(
                 pricingFingerprint = "",
                 giftOffer = giftOffer,
             )
-        return result.copy(pricingFingerprint = result.calculatePricingFingerprint())
+        return result.copy(pricingFingerprint = result.calculatePricingFingerprint(pricingScope))
     }
 
     private fun applyPromotionRulesForBatch(
@@ -3568,6 +3778,8 @@ class OrdersRepository(
         val displayNumber: Int?,
         val displayDate: LocalDate?,
         val requestFingerprint: String?,
+        val rejected: Boolean,
+        val rejectionSnapshot: String?,
     )
 
     private data class CanonicalGuestOrderLineKey(
@@ -3700,6 +3912,7 @@ class OrdersRepository(
         skippedGiftRuleIds: Set<Long>,
         giftDecision: PromotionGiftDecision?,
         giftDecisionCommand: GiftDecisionCommand?,
+        expectedVisitGeneration: Long?,
     ): AuthoritativeGiftDecisionResolution {
         val service = giftDecisionScopeTokenService
         if (
@@ -3720,6 +3933,7 @@ class OrdersRepository(
                             token = command.decisionScopeToken,
                             expectedScope =
                                 giftDecisionCartScope(
+                                    expectedVisitGeneration = expectedVisitGeneration,
                                     userId = userId,
                                     venueId = venueId,
                                     tableSessionId = tableSessionId,
@@ -3756,6 +3970,7 @@ class OrdersRepository(
         tabId: Long,
         comment: String?,
         items: List<OrderBatchItemInput>,
+        expectedVisitGeneration: Long? = null,
     ): String {
         val mergedLines = linkedMapOf<CanonicalGuestOrderLineKey, Long>()
         items.forEach { item ->
@@ -3779,6 +3994,7 @@ class OrdersRepository(
         val canonicalJson =
             buildJsonObject {
                 put("version", REQUEST_FINGERPRINT_VERSION)
+                expectedVisitGeneration?.let { put("visitGeneration", it) }
                 put("actorUserId", userId)
                 put("venueId", venueId)
                 put("tableSessionId", tableSessionId)
@@ -3843,6 +4059,17 @@ class OrdersRepository(
         }
         if (persistedFingerprint != requestFingerprint) {
             throw OrderIdempotencyPayloadMismatchException()
+        }
+        if (existing.rejected) {
+            val rejection =
+                existing.rejectionSnapshot?.let { snapshot ->
+                    try {
+                        Json.decodeFromString<OrderBatchRejection>(snapshot)
+                    } catch (_: IllegalArgumentException) {
+                        throw OrderIdempotencyReplayUnverifiableException()
+                    }
+                } ?: OrderBatchRejection(OrderBatchTabAccessDeniedException())
+            throw FinalOrderBatchRejection(rejection)
         }
         if (existing.requestFingerprint == null) {
             val updated =
@@ -3932,6 +4159,7 @@ class OrdersRepository(
             throw OrderIdempotencyReplayUnverifiableException()
         }
         return guestOrderRequestFingerprint(
+            expectedVisitGeneration = null,
             userId = existing.userId,
             venueId = existing.venueId,
             tableSessionId = existing.tableSessionId,
@@ -3963,16 +4191,18 @@ class OrdersRepository(
                    gbi.order_id,
                    gbi.batch_id,
                    gbi.request_fingerprint,
-                   o.table_id,
+                   COALESCE(o.table_id, gbi.rejected_table_id) AS table_id,
+                   gbi.rejected_table_id,
+                   gbi.response_snapshot,
                    ob.tab_id,
                    o.display_number,
                    o.display_date
             FROM guest_batch_idempotency gbi
-            JOIN orders o ON o.id = gbi.order_id
-            JOIN order_batches ob ON ob.id = gbi.batch_id
+            LEFT JOIN orders o ON o.id = gbi.order_id
+            LEFT JOIN order_batches ob ON ob.id = gbi.batch_id
             WHERE gbi.venue_id = ? AND gbi.table_session_id = ? AND gbi.idempotency_key = ?
             ORDER BY gbi.id
-            FOR UPDATE
+            ${if (connection.metaData.databaseProductName == "PostgreSQL") "FOR UPDATE OF gbi" else "FOR UPDATE"}
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, venueId)
@@ -3996,6 +4226,8 @@ class OrdersRepository(
                                 },
                             displayDate = rs.getDate("display_date")?.toLocalDate(),
                             requestFingerprint = rs.getString("request_fingerprint"),
+                            rejected = rs.getObject("rejected_table_id") != null,
+                            rejectionSnapshot = rs.getString("response_snapshot"),
                         )
                     if (rs.next()) {
                         throw OrderIdempotencyReplayUnverifiableException()

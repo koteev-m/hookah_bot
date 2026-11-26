@@ -239,7 +239,11 @@ private val StaffCallRateLimitPlugin =
             if (body !is StaffCallRequest) {
                 return@onCallReceive
             }
-            normalizeStaffCallReason(body.reason)
+            requiredVisitGeneration(body.tableSessionId, body.expectedVisitGeneration)
+            if (normalizeStaffCallReason(body.reason) == com.hookah.platform.backend.telegram.StaffCallReason.BILL) {
+                requiredOrderId(body.tabId)
+                requiredOrderId(body.expectedOrderId)
+            }
             normalizeStaffCallComment(body.comment)
             enforceGuestRateLimit(
                 call = call,

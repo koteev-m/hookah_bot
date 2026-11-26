@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.guest
 
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.VisitGenerationChangedException
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallRequest
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallResponse
 import com.hookah.platform.backend.miniapp.guest.api.StaffCallStatusDto
@@ -9,6 +10,7 @@ import com.hookah.platform.backend.miniapp.guest.api.StaffCallStatusResponse
 import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTabsRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestVenueRepository
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionContext
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.requireUserId
@@ -64,75 +66,63 @@ fun Route.guestStaffCallRoutes(
             val reason = normalizeStaffCallReason(request.reason)
             val comment = normalizeStaffCallComment(request.comment)
 
+            val generation = requiredVisitGeneration(request.tableSessionId, request.expectedVisitGeneration)
+            val billTab = if (reason == StaffCallReason.BILL) requiredOrderId(request.tabId) else null
+            val billOrder = if (billTab != null) requiredOrderId(request.expectedOrderId) else null
             val table =
                 call.rateLimitResolvedTableOrNull(staffCallResolvedTableAttribute)
                     ?: (tableTokenResolver(token) ?: throw NotFoundException())
             val userId = call.requireUserId()
-            if (userId != platformOwnerUserId) {
-                ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
-            }
-            val tableSession =
-                if (userId == platformOwnerUserId) {
-                    null
-                } else {
-                    tableSessionRepository.touchActiveSession(
-                        tableSessionId = request.tableSessionId,
-                        venueId = table.venueId,
-                        tableId = table.tableId,
-                        ttl = tableSessionConfig.ttl,
-                    ) ?: throw NotFoundException()
-                }
-            val resolvedTableSessionId = tableSession?.id ?: request.tableSessionId
-            val linkedOrderId =
-                resolveSafeStaffCallOrderId(
-                    ordersRepository = ordersRepository,
-                    staffCallRepository = staffCallRepository,
-                    venueId = table.venueId,
-                    tableSessionId = resolvedTableSessionId,
-                    userId = userId,
-                    reason = reason,
-                    comment = comment,
-                )
-
-            val created =
-                if (userId == platformOwnerUserId) {
-                    requireConfirmedPlatformGuestMutation(
-                        userId = userId,
-                        platformOwnerUserId = platformOwnerUserId,
-                        lifecycleRepository = guestTableContextLifecycleRepository,
-                        tableToken = token,
-                        expectedVenueId = table.venueId,
-                        expectedTableId = table.tableId,
-                        expectedTableSessionId = request.tableSessionId,
-                        ttl = tableSessionConfig.ttl,
-                    ) { connection, confirmed ->
-                        guestTabsRepository.ensurePersonalTab(
-                            connection = connection,
-                            venueId = table.venueId,
-                            tableSessionId = confirmed.tableSession.id,
-                            userId = userId,
-                        )
-                        staffCallRepository.createGuestStaffCall(
-                            connection = connection,
-                            venueId = table.venueId,
-                            tableId = table.tableId,
-                            tableSessionId = confirmed.tableSession.id,
-                            createdByUserId = userId,
-                            reason = reason,
-                            comment = comment,
-                            orderId = linkedOrderId,
-                        )
+            val resolvedTableSessionId = request.tableSessionId
+            val (created, linkedOrderId) =
+                guestTabsRepository.mutateParticipation(
+                    userId,
+                    TableSessionContext(resolvedTableSessionId, table.venueId, table.tableId),
+                    generation,
+                    platformOwnerUserId,
+                    guestTableContextLifecycleRepository,
+                    tableSessionConfig.ttl,
+                    token,
+                    requiredTab = billTab,
+                ) { connection ->
+                    val linkedOrderId =
+                        if (billTab != null) {
+                            val order =
+                                ordersRepository.findActiveOrderDetailsForTab(
+                                    connection,
+                                    resolvedTableSessionId,
+                                    billTab,
+                                    forUpdate = true,
+                                )
+                            if (order == null || order.orderId != billOrder) throw VisitGenerationChangedException()
+                            order.orderId
+                        } else {
+                            resolveSafeStaffCallOrderId(
+                                connection,
+                                ordersRepository,
+                                staffCallRepository,
+                                table.venueId,
+                                resolvedTableSessionId,
+                                userId,
+                                reason,
+                                comment,
+                            )
+                        }
+                    if (userId == platformOwnerUserId) {
+                        guestTabsRepository.ensurePersonalTab(connection, table.venueId, resolvedTableSessionId, userId)
+                    } else {
+                        tableSessionRepository.touchActiveSession(
+                            connection, resolvedTableSessionId, table.venueId,
+                            table.tableId, tableSessionConfig.ttl, java.time.Instant.now(),
+                        ) ?: throw NotFoundException()
                     }
-                } else {
                     staffCallRepository.createGuestStaffCall(
+                        connection = connection,
                         venueId = table.venueId,
                         tableId = table.tableId,
-                        tableSessionId = checkNotNull(tableSession).id,
-                        createdByUserId = userId,
-                        reason = reason,
-                        comment = comment,
-                        orderId = linkedOrderId,
-                    )
+                        tableSessionId = resolvedTableSessionId,
+                        createdByUserId = userId, reason = reason, comment = comment, orderId = linkedOrderId,
+                    ) to linkedOrderId
                 }
             staffChatNotifier?.notifyStaffCallNow(
                 StaffCallNotification(
@@ -177,13 +167,12 @@ fun Route.guestStaffCallRoutes(
                     requestedTableSessionId = tableSessionId,
                     ttl = tableSessionConfig.ttl,
                 )?.tableSession
-                    ?: tableSessionRepository.touchActiveSession(
+                    ?: tableSessionRepository.findActiveSessionForTable(
                         tableSessionId = tableSessionId,
                         venueId = table.venueId,
                         tableId = table.tableId,
-                        ttl = tableSessionConfig.ttl,
                     ) ?: throw NotFoundException()
-            ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository)
+            ensureGuestActionAvailable(table.venueId, guestVenueRepository, subscriptionRepository, readOnly = true)
             val calls =
                 staffCallRepository.listByGuestTableSession(
                     venueId = table.venueId,
@@ -197,7 +186,8 @@ fun Route.guestStaffCallRoutes(
     }
 }
 
-private suspend fun resolveSafeStaffCallOrderId(
+private fun resolveSafeStaffCallOrderId(
+    connection: java.sql.Connection,
     ordersRepository: OrdersRepository,
     staffCallRepository: StaffCallRepository,
     venueId: Long,
@@ -210,21 +200,8 @@ private suspend fun resolveSafeStaffCallOrderId(
         return null
     }
     val orderId =
-        runCatching {
-            ordersRepository.findSafelyLinkableStaffCallOrderId(
-                venueId = venueId,
-                tableSessionId = tableSessionId,
-                userId = userId,
-            )
-        }.getOrNull() ?: return null
-    val activeActivityCount =
-        runCatching {
-            staffCallRepository.countActiveOrderActivity(
-                venueId = venueId,
-                orderId = orderId,
-            )
-        }.getOrElse { Int.MAX_VALUE }
-    return orderId.takeIf { activeActivityCount == 0 }
+        ordersRepository.findSafelyLinkableStaffCallOrderId(connection, venueId, tableSessionId, userId) ?: return null
+    return orderId.takeIf { staffCallRepository.countActiveOrderActivity(connection, venueId, orderId) == 0 }
 }
 
 private fun StaffCallQueueItem.toGuestStatusDto(): StaffCallStatusDto {

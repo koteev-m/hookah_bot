@@ -1,8 +1,9 @@
 import type { OrderDetailDto } from '../src/shared/api/venueDtos'
 import { infoMediaPdf } from './fixtures/info-media'
+import { visitRecord, storedPointer, storedCart, seedCart } from './fixtures/visit-record.cjs'
 import { statsResponse } from './fixtures/venue-stats'
 import { readFileSync } from 'node:fs'
-import { expect, type Locator, type Page, type Route, test } from '@playwright/test'
+import { expect, type BrowserContext, type Locator, type Page, type Route, test } from '@playwright/test'
 import tableQrFixture from './fixtures/table-qr.json' with { type: 'json' }
 
 const giftDecisionExpiresAtEpochSeconds = 4_102_444_800
@@ -26,6 +27,7 @@ type RestoreContext = {
   tableId: number
   tableSessionId: number
   tableSessionStatus: string
+  visitGeneration?: string
   tableSessionActive: boolean
   tableNumber: string
   venueStatus: string
@@ -58,6 +60,7 @@ type ShiftExtensionRequest = {
 }
 
 type ShiftExtensionOptions = {
+  confirmedTerms?: { durationMinutes: number; priceMinor: number; currency: string; revision: string }
   available: boolean
   unavailableReason?: string | null
   durationMinutes?: number | null
@@ -533,6 +536,7 @@ type CartPreviewFixture = {
 }
 
 type AddBatchResponseFixture = {
+  operationClosed?: boolean
   submitted?: boolean
   orderId?: number | null
   batchId?: number | null
@@ -822,6 +826,7 @@ async function fixtureAuthSession(page: Page, route: Route) {
 }
 
 function jsonResponse(data: unknown, status = 200) {
+  if (data && typeof data === 'object' && ('context' in data || 'tableSessionActive' in data)) data = { visitProtocol: 1, ...data }
   return {
     status,
     contentType: 'application/json',
@@ -838,6 +843,7 @@ function buildRestoreContext(overrides: Partial<RestoreContext> = {}): RestoreCo
     tableId: 7,
     tableSessionId: 77,
     tableSessionStatus: 'ACTIVE',
+    visitGeneration: '0',
     tableSessionActive: true,
     tableNumber: '4',
     venueStatus: 'PUBLISHED',
@@ -882,6 +888,12 @@ function buildShiftExtensionOptions(overrides: Partial<ShiftExtensionOptions> = 
     tabId: 88,
     orderId: 900,
     pendingRequest: null,
+    confirmedTerms: overrides.available ? {
+      durationMinutes: overrides.durationMinutes ?? 60,
+      priceMinor: overrides.priceMinor ?? 5000,
+      currency: overrides.currency ?? 'RUB',
+      revision: '42'
+    } : undefined,
     ...overrides
   }
 }
@@ -1932,14 +1944,7 @@ async function mockGuestApi(
   let menuCategories = options.menuCategories ?? buildDefaultGuestMenu()
   let bookings = options.bookings ?? []
   let bookingCreateError = options.bookingCreateError ?? null
-  let tableSessionEndResponse =
-    options.tableSessionEndResponse ??
-    {
-      ended: true,
-      tableSessionId: 77,
-      blockedReason: null,
-      message: 'Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.'
-    }
+  let tableSessionEndResponse = options.tableSessionEndResponse
   let activeOrderOptions: ActiveOrderFixtureOptions | null = options.activeOrder === undefined ? {} : options.activeOrder
   const todayStaff = options.todayStaff ?? []
   let promotions = options.promotions ?? []
@@ -2507,6 +2512,7 @@ async function mockGuestApi(
         tableId: 7,
         tableSessionId: tableScope.tableSessionId,
         tableSessionStatus: 'ACTIVE',
+        visitGeneration: '0',
         tableSessionActive: true,
         tableNumber: '4',
         venueStatus: 'PUBLISHED',
@@ -2533,10 +2539,12 @@ async function mockGuestApi(
       contentType: request.headers()['content-type'],
       body
     })
-    if (tableSessionEndResponse.ended) {
-      restoreContext = null
+    const response = tableSessionEndResponse ?? {
+      ended: true, tableSessionId: body.tableSessionId, blockedReason: null,
+      message: 'Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.'
     }
-    await route.fulfill(jsonResponse(tableSessionEndResponse))
+    if (response.ended && restoreContext?.tableSessionId === body.tableSessionId) restoreContext = null
+    await route.fulfill(jsonResponse(response))
   })
 
   await page.route('**/api/guest/venue/1/menu', async (route) => {
@@ -11842,7 +11850,7 @@ test('guest cart preserves a business mutation made while submit response is in 
       'Заказ отправлен. Изменения, внесённые во время отправки, сохранены в корзине. Проверьте их и нажмите «Отправить» для нового заказа.'
     )
   ).toBeVisible()
-  await expect(quantityInput).toHaveValue('2')
+  await expect(quantityInput).toHaveValue('1')
   await expect(page.locator('.cart-item')).toHaveCount(1)
   await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
   await expect(send).toBeEnabled()
@@ -11853,7 +11861,7 @@ test('guest cart preserves a business mutation made while submit response is in 
   await expect(page).toHaveURL(/#\/order$/)
 })
 
-test('guest cart idempotency rotates the key after quantity and normalized comment mutations', async ({ page }) => {
+test('guest cart retries the original command after editing quantity and comment, then sends only new items', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   let attempts = 0
   const api = await mockGuestApi(page, {
@@ -11879,24 +11887,29 @@ test('guest cart idempotency rotates the key after quantity and normalized comme
   await quantityInput.fill('2')
   await quantityInput.press('Enter')
   await expect.poll(() => api.getPreviewRequests().at(-1)?.items[0]?.qty).toBe(2)
-  await expect(send).toBeEnabled()
+  await expect(send).toBeDisabled()
 
-  await send.click()
+  await page.getByRole('button', { name: 'Повторить исходную отправку' }).click()
   await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
   const comment = page.getByPlaceholder('Комментарий к заказу')
   await comment.fill('  у окна  ')
   await expect.poll(() => api.getPreviewRequests().at(-1)?.comment).toBe('у окна')
-  await expect(send).toBeEnabled()
+  await expect(send).toBeDisabled()
 
-  await send.click()
+  await page.getByRole('button', { name: 'Повторить исходную отправку' }).click()
   await expect.poll(() => api.getAddBatchRequests()).toHaveLength(3)
-  const keys = api.getAddBatchRequests().map((request) => request.idempotencyKey)
-  expect(keys[0]).toBeTruthy()
-  expect(keys[1]).not.toBe(keys[0])
-  expect(keys[2]).not.toBe(keys[1])
+  const requests = api.getAddBatchRequests()
+  expect(requests.slice(1)).toEqual([requests[0], requests[0]])
+  await expect(quantityInput).toHaveValue('1')
+  await expect(comment).toHaveValue('  у окна  ')
+  await expect(send).toBeEnabled()
+  await send.click()
+  await expect.poll(() => api.getAddBatchRequests()).toHaveLength(4)
+  expect(api.getAddBatchRequests()[3].idempotencyKey).not.toBe(requests[0].idempotencyKey)
+  expect(api.getAddBatchRequests()[3].comment).toBe('у окна')
 })
 
-test('guest cart idempotency mismatch keeps the cart and uses a new key only after explicit retry', async ({ page }) => {
+test('guest cart idempotency mismatch preserves the original key and draft', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   let attempts = 0
   const api = await mockGuestApi(page, {
@@ -11925,7 +11938,41 @@ test('guest cart idempotency mismatch keeps the cart and uses a new key only aft
 
   await submitError.getByRole('button', { name: 'Повторить' }).click()
   await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
-  expect(api.getAddBatchRequests()[1].idempotencyKey).not.toBe(conflictingKey)
+  expect(api.getAddBatchRequests()[1].idempotencyKey).toBe(conflictingKey)
+})
+
+test('review09 a menu conflict keeps the original key until the server confirms closure', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  let attempts = 0
+  const api = await mockGuestApi(page, {
+    addBatchResponseResolver: request => {
+      attempts++
+      if (attempts >= 3) return submittedBatchResponse(request)
+      return {
+        error: {
+          status: 409,
+          code: 'CART_MENU_SELECTION_UNAVAILABLE',
+          message: 'Проверьте состав заказа.',
+          details: attempts === 2 ? { operationClosed: true } : {}
+        }
+      }
+    }
+  })
+  await openDefaultGuestCart(page)
+  const send = page.getByRole('button', { name: 'Отправить', exact: true })
+  const retry = page.getByRole('button', { name: 'Повторить исходную отправку' })
+  await send.click()
+  await expect(retry).toBeEnabled()
+  await expect(send).toBeDisabled()
+  await retry.click()
+  await expect(retry).toBeHidden()
+  await expect(page.locator('.cart-item')).toHaveCount(1)
+  await expect(send).toBeEnabled()
+  await send.click()
+  await expect.poll(() => api.getAddBatchRequests().length).toBe(3)
+  const [first, repeated, fresh] = api.getAddBatchRequests()
+  expect(repeated).toEqual(first)
+  expect(fresh.idempotencyKey).not.toBe(first.idempotencyKey)
 })
 
 test('guest cart unverifiable replay waits for an explicit safe recovery action', async ({ page }) => {
@@ -11952,14 +11999,14 @@ test('guest cart unverifiable replay waits for an explicit safe recovery action'
   const submitError = page.locator('.error-card')
   await expect(submitError).toContainText('Не удалось безопасно повторить старую отправку.')
   await expect(submitError.getByRole('button', { name: 'Проверить активный заказ' })).toBeVisible()
-  await expect(submitError.getByRole('button', { name: 'Отправить как новый заказ' })).toBeVisible()
+  await expect(submitError.getByRole('button', { name: 'Отправить как новый заказ' })).toHaveCount(0)
   await expect(page.locator('.cart-item')).toHaveCount(1)
   await expect.poll(() => api.getAddBatchRequests()).toHaveLength(1)
   const unverifiableKey = api.getAddBatchRequests()[0].idempotencyKey
 
-  await submitError.getByRole('button', { name: 'Отправить как новый заказ' }).click()
+  await page.getByRole('button', { name: 'Повторить исходную отправку' }).click()
   await expect.poll(() => api.getAddBatchRequests()).toHaveLength(2)
-  expect(api.getAddBatchRequests()[1].idempotencyKey).not.toBe(unverifiableKey)
+  expect(api.getAddBatchRequests()[1].idempotencyKey).toBe(unverifiableKey)
 })
 
 for (const scenario of [
@@ -12079,6 +12126,7 @@ test('guest cart stale option correction rotates the prior submit key', async ({
               code: 'CART_MENU_SELECTION_UNAVAILABLE',
               message: 'Корзину нужно обновить.',
               details: {
+                operationClosed: true,
                 issues: [
                   {
                     cartLineRef: line.cartLineRef,
@@ -12183,6 +12231,7 @@ for (const scenario of [
             code: 'CART_MENU_SELECTION_UNAVAILABLE',
             message: 'Корзину нужно обновить.',
             details: {
+              operationClosed: true,
               issues: [
                 {
                   cartLineRef: affectedLine.cartLineRef,
@@ -12304,6 +12353,7 @@ test('guest cart removes a removed item in place and recalculates the remaining 
           code: 'CART_MENU_SELECTION_UNAVAILABLE',
           message: 'Корзину нужно обновить.',
           details: {
+            operationClosed: true,
             issues: [
               {
                 cartLineRef: removedLine.cartLineRef,
@@ -12403,6 +12453,7 @@ test('guest cart keeps an unavailable-item warning across retry and recovers aft
           code: 'CART_MENU_SELECTION_UNAVAILABLE',
           message: 'Корзину нужно обновить.',
           details: {
+            operationClosed: true,
             issues: [
               {
                 cartLineRef: line.cartLineRef,
@@ -12507,6 +12558,7 @@ for (const scenario of [
             code: 'CART_MENU_SELECTION_UNAVAILABLE',
             message: 'Корзину нужно обновить.',
             details: {
+              operationClosed: true,
               issues: [
                 {
                   cartLineRef: staleLine.cartLineRef,
@@ -12710,6 +12762,26 @@ test('guest cart keeps unknown preview failures generic', async ({ page }) => {
   await expect(page.getByText(/больше нет в меню|временно недоступ/)).toHaveCount(0)
 })
 
+for (const refusal of [
+  { status: 428, code: 'VISIT_VERSION_REQUIRED', message: /Обновите Mini App/ },
+  { status: 409, code: 'VISIT_GENERATION_CHANGED', message: /Посещение изменилось/ }
+]) {
+  test('guest cart explains a participation refusal ' + refusal.status, async ({ page }) => {
+    await installTelegramWebApp(page, 123456789)
+    const api = await mockGuestApi(page, {
+      cartPreviewResponseResolver: () => ({ error: { status: refusal.status, code: refusal.code } })
+    })
+    await page.goto('?mode=guest&screen=menu&table_token=' + tableToken)
+    await page.getByRole('button', { name: /Кальянное меню/ }).click()
+    await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+    await page.getByRole('button', { name: 'Корзина (1)' }).click()
+    await expect(page.getByText(refusal.message)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeDisabled()
+    await expect(page.getByText('Double Apple', { exact: true }).first()).toBeVisible()
+    expect(api.getAddBatchRequests()).toEqual([])
+  })
+}
+
 test('guest cart requires explicit fixed gift accept and clears the decision after a cart mutation', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const rewardItem: GiftRewardItemFixture = {
@@ -12856,11 +12928,13 @@ test('guest cart requires explicit fixed gift accept and clears the decision aft
   await minusButton.click()
   await minusButton.click()
   await expect(page.locator('.cart-item')).toHaveCount(0)
-  const persistedAfterTriggerRemoval = await page.evaluate((key) => {
-    const raw = window.localStorage.getItem(key)
-    return raw ? JSON.parse(raw) as Record<string, unknown> : null
-  }, `hookah_guest_cart_draft:user:123456789:${tableToken}:session:77`)
-  expect(persistedAfterTriggerRemoval?.giftDecisionDraft).toBeUndefined()
+  await expect(async () => {
+    const raw = await storedCart(page, `hookah_guest_cart_draft:user:123456789:${tableToken}:session:77:visit:0`)
+    expect(raw).toBeTruthy()
+    const draft = JSON.parse(raw!)
+    expect(draft.items).toEqual([])
+    expect(draft.giftDecisionDraft ?? null).toBeNull()
+  }).toPass()
 })
 
 test('initial tab restore rejects a gift draft from a replaced table session on the same QR', async ({ page }) => {
@@ -12912,11 +12986,13 @@ test('initial tab restore rejects a gift draft from a replaced table session on 
   expect(replacementRequests.every((request) => request.giftDecision == null)).toBe(true)
   await expect(page.locator('.cart-gift-offer')).toContainText('Вам доступен подарок: Чай')
   await expect(page.getByText('Подарок добавлен: Чай')).toHaveCount(0)
-  const persistedDraft = await page.evaluate((key) => {
-    const raw = window.localStorage.getItem(key)
-    return raw ? JSON.parse(raw) as Record<string, unknown> : null
-  }, `hookah_guest_cart_draft:user:123456789:${tableToken}:session:177`)
-  expect(persistedDraft?.giftDecisionDraft).toBeUndefined()
+  await expect(async () => {
+    const raw = await storedCart(page, `hookah_guest_cart_draft:user:123456789:${tableToken}:session:177:visit:0`)
+    expect(raw).toBeTruthy()
+    const draft = JSON.parse(raw!)
+    expect(draft.items).toHaveLength(1)
+    expect(draft.giftDecisionDraft ?? null).toBeNull()
+  }).toPass()
 })
 
 test('switching tab in the same table session clears the gift decision', async ({ page }) => {
@@ -12947,6 +13023,7 @@ test('switching tab in the same table session clears the gift decision', async (
   await page.getByRole('button', { name: /Кальянное меню/ }).click()
   await page.getByRole('button', { name: 'Добавить' }).click()
   await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await page.getByRole('combobox', { name: 'Выберите счёт' }).selectOption('88')
   await page.getByRole('button', { name: 'Добавить подарок' }).click()
   await expect(page.getByText('Подарок добавлен: Чай')).toBeVisible()
   expect(api.getPreviewRequests().at(-1)?.tabId).toBe(88)
@@ -12960,12 +13037,12 @@ test('switching tab in the same table session clears the gift decision', async (
   await expect(page.locator('.cart-gift-offer')).toContainText('Вам доступен подарок: Чай')
 })
 
-test('expired gift scope is not restored from LocalStorage', async ({ page }) => {
+test('expired gift scope is not restored from the saved cart', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockGuestApi(page, {
     cartPreviewResolver: buildScopedFixedGiftPreview
   })
-  const draftKey = `hookah_guest_cart_draft:user:123456789:${tableToken}:session:77`
+  const draftKey = `hookah_guest_cart_draft:user:123456789:${tableToken}:session:77:visit:0`
 
   await page.goto(
     `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
@@ -12976,26 +13053,17 @@ test('expired gift scope is not restored from LocalStorage', async ({ page }) =>
   await page.getByRole('button', { name: 'Добавить подарок' }).click()
   await expect(page.getByText('Подарок добавлен: Чай')).toBeVisible()
 
-  await page.evaluate((key) => {
-    const raw = window.localStorage.getItem(key)
-    if (!raw) throw new Error('Expected persisted cart draft')
-    const draft = JSON.parse(raw) as {
-      giftDecisionDraft?: { expiresAtEpochSeconds?: number }
-    }
-    if (!draft.giftDecisionDraft) throw new Error('Expected persisted gift decision')
-    draft.giftDecisionDraft.expiresAtEpochSeconds = 1
-    window.localStorage.setItem(key, JSON.stringify(draft))
-  }, draftKey)
+  const saved = JSON.parse((await storedCart(page, draftKey))!)
+  expect(saved.giftDecisionDraft).toBeTruthy()
+  saved.giftDecisionDraft.expiresAtEpochSeconds = 1
+  await seedCart(page, draftKey, JSON.stringify(saved))
   const requestsBeforeReload = api.getPreviewRequests().length
   await page.reload()
 
   await expect.poll(() => api.getPreviewRequests().length).toBeGreaterThan(requestsBeforeReload)
   expect(api.getPreviewRequests().slice(requestsBeforeReload).every((request) => request.giftDecision == null)).toBe(true)
   await expect(page.locator('.cart-gift-offer')).toContainText('Вам доступен подарок: Чай')
-  const persistedDraft = await page.evaluate((key) => {
-    const raw = window.localStorage.getItem(key)
-    return raw ? JSON.parse(raw) as Record<string, unknown> : null
-  }, draftKey)
+  const persistedDraft = JSON.parse((await storedCart(page, draftKey))!)
   expect(persistedDraft?.giftDecisionDraft).toBeUndefined()
 })
 
@@ -13005,7 +13073,7 @@ test('account switch clears the prior user gift decision cache', async ({ page }
     isolateFavoriteUsers: true,
     cartPreviewResolver: buildScopedFixedGiftPreview
   })
-  const firstUserDraftKey = `hookah_guest_cart_draft:user:123456789:${tableToken}:session:77`
+  const firstUserDraftKey = `hookah_guest_cart_draft:user:123456789:${tableToken}:session:77:visit:0`
 
   await page.goto(
     `?mode=guest&screen=menu&table_token=${tableToken}#tgWebAppData=${encodeURIComponent(mockInitData)}`
@@ -13016,6 +13084,9 @@ test('account switch clears the prior user gift decision cache', async ({ page }
   await page.getByRole('button', { name: 'Добавить подарок' }).click()
   await expect(page.getByText('Подарок добавлен: Чай')).toBeVisible()
 
+  const unrelated = { key: firstUserDraftKey.replace(':123456789:', ':501:'),
+    value: '{ "items": [], "commentDraft": "other actor", "giftDecisionDraft": {} }' }
+  await page.evaluate(({ key, value }) => localStorage.setItem(key, value), unrelated)
   await page.evaluate(
     ({ userId, initData }) => {
       window.localStorage.setItem('__e2e_telegram_user_id', String(userId))
@@ -13026,11 +13097,10 @@ test('account switch clears the prior user gift decision cache', async ({ page }
   await page.reload()
 
   await expect(page.locator('.cart-item')).toHaveCount(0)
-  const priorUserDraft = await page.evaluate((key) => {
-    const raw = window.localStorage.getItem(key)
-    return raw ? JSON.parse(raw) as Record<string, unknown> : null
-  }, firstUserDraftKey)
+  const priorUserDraft = JSON.parse((await storedCart(page, firstUserDraftKey))!)
+  expect(priorUserDraft.items).toHaveLength(1)
   expect(priorUserDraft?.giftDecisionDraft).toBeUndefined()
+  expect(await page.evaluate(k => localStorage.getItem(k), unrelated.key)).toBe(unrelated.value)
 })
 
 test('guest selects one allowlisted gift and duplicate submit sends one authoritative decision', async ({ page }) => {
@@ -13271,6 +13341,7 @@ test('submitted false keeps the cart, clears a stale gift decision and allows an
         rewardUnavailable = true
         return {
           submitted: false,
+          operationClosed: true,
           pricing: buildPricing(null),
           recalculated: true
         }
@@ -13632,12 +13703,12 @@ test('table context leave session clears current guest restore state', async ({ 
   page.once('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: 'Завершить визит' }).click()
 
-  expect(api.getTableSessionEndRequests()).toHaveLength(1)
+  await expect.poll(() => api.getTableSessionEndRequests()).toHaveLength(1)
   const endRequest = api.getTableSessionEndRequests()[0]
   expect(new URL(endRequest.url).pathname).toBe('/api/guest/table/session/end')
   expect(endRequest.method).toBe('POST')
   expect(endRequest.contentType).toContain('application/json')
-  expect(endRequest.body).toEqual({ tableToken, tableSessionId: 77 })
+  expect(endRequest.body).toEqual({ tableToken, tableSessionId: 77, expectedVisitGeneration: '0' })
   await expect(page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'QR' })).toBeVisible()
   await expect(page.getByText('Вы за столом №4 · Микс')).toHaveCount(0)
 
@@ -13647,6 +13718,7 @@ test('table context leave session clears current guest restore state', async ({ 
 })
 
 test('table context with active order hides leave session action', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
   const api = await mockGuestApi(page, {
     restoreContext: buildRestoreContext(),
     tableSessionEndResponse: {
@@ -13690,7 +13762,9 @@ test('guest fallback chat order sends supported quick order payload through Tele
   expect(JSON.parse(payloads[0])).toEqual({
     cmd: 'start_quick_order',
     table_token: tableToken,
-    table_session_id: 77
+    table_session_id: 77,
+    visit_generation: '0',
+    tab_id: 88
   })
   await expect(page.getByText('Откройте чат с ботом вручную.')).toHaveCount(0)
   await expect(page.getByText('Откройте чат с ботом и отправьте заказ там.')).toHaveCount(0)
@@ -13730,6 +13804,7 @@ test('guest creates staff call from active table and sees lifecycle status', asy
     {
       tableToken,
       tableSessionId: 77,
+      expectedVisitGeneration: '0',
       reason: 'COALS',
       comment: 'Нужны угли'
     }
@@ -13745,6 +13820,7 @@ test('guest creates staff call from active table and sees lifecycle status', asy
       status: 'ACK',
       statusLabel: 'Персонал принял вызов',
       createdAtEpochSeconds: 1894302000,
+      expectedVisitGeneration: '0',
       reason: 'COALS',
       reasonLabel: 'Заменить угли',
       comment: 'Нужны угли'
@@ -13761,6 +13837,7 @@ test('guest creates staff call from active table and sees lifecycle status', asy
       status: 'DONE',
       statusLabel: 'Вызов закрыт',
       createdAtEpochSeconds: 1894302000,
+      expectedVisitGeneration: '0',
       reason: 'COALS',
       reasonLabel: 'Заменить угли',
       comment: 'Нужны угли'
@@ -13973,7 +14050,7 @@ test('guest creates shift extension request and sees pending then confirmed stat
       durationMinutes: 60,
       priceMinor: 300000,
       currency: 'RUB',
-      currentOrderableUntil: extensionRequest.currentOrderableUntil,
+      currentOrderableUntil: '2026-01-01T23:45:00+03:00',
       proposedOrderableUntil: extensionRequest.requestedUntil,
       pendingRequest: null
     })
@@ -13993,10 +14070,115 @@ test('guest creates shift extension request and sees pending then confirmed stat
 
   await page.getByRole('button', { name: 'Обновить' }).click()
 
-  await expect(page.getByText('Продление подтверждено до 23:00. Сумма добавлена в счёт.')).toBeVisible()
+  await expect(page.getByText('Продление подтверждено до 23:45. Сумма добавлена в счёт.')).toBeVisible()
   await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
   await expect(page.getByText('Продление работы на 1 час')).toBeVisible()
   await expect(page.getByText('Сначала отсканируйте QR')).toHaveCount(0)
+})
+
+test('review11 staff-managed seating hides paid shift extension after a pending quote', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, {
+    restoreContext: buildRestoreContext(),
+    extensionOptions: buildShiftExtensionOptions({ available: true, pendingRequest: buildShiftExtensionRequest() })
+  })
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  const action = page.getByRole('button', { name: /Продление работы заведения/ })
+  await expect(action).toBeVisible()
+  api.setExtensionOptions(buildShiftExtensionOptions({
+    available: false, unavailableReason: 'STAFF_MANAGED_SEATING', pendingRequest: null
+  }))
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Выберите раздел меню' })).toBeVisible()
+  await expect(action).toHaveCount(0)
+  await expect(page.getByText(/9999/)).toHaveCount(0)
+  expect(api.getCreateExtensionRequestCalls()).toBe(0)
+})
+
+test('review10 shift extension shows the changed tariff before a second confirmation', async ({ page }) => {
+  const original = { durationMinutes: 60, priceMinor: 5000, currency: 'RUB', revision: '42' }
+  const revised = { durationMinutes: 120, priceMinor: 10000, currency: 'RUB', revision: '43' }
+  const option = buildShiftExtensionOptions({ available: true, ...original, confirmedTerms: original })
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: buildRestoreContext(), extensionOptions: option })
+  const payloads: Array<{ idempotencyKey: string; confirmedTerms: typeof original }> = []
+  await page.route('**/api/guest/table/extension-options?**', async route => {
+    await route.fulfill(jsonResponse(payloads.length ? {
+      ...option, ...revised, confirmedTerms: revised
+    } : option))
+  })
+  await page.route('**/api/guest/table/extension-requests', async route => {
+    payloads.push(route.request().postDataJSON())
+    if (payloads.length === 1) {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: { code: 'SHIFT_EXTENSION_TERMS_CHANGED', message: 'Условия изменились' }
+        })
+      })
+    } else {
+      await route.fulfill(jsonResponse({
+        request: buildShiftExtensionRequest({ durationMinutes: 120, priceMinor: 10000 })
+      }))
+    }
+  })
+  await page.goto(`?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`)
+  await page.getByRole('button', { name: /Продление работы заведения/ }).click()
+  await expect(page.getByText(/Продление на 1 час.*50/)).toBeVisible()
+  await page.getByRole('button', { name: 'Продлить на 1 час' }).click()
+  const revisedAction = page.getByRole('button', { name: 'Продлить на 2 часа' })
+  await expect(revisedAction).toBeEnabled()
+  await expect(page.getByText(/Продление на 2 часа.*100/)).toBeVisible()
+  await expect(page.getByText(/Проверьте их и подтвердите заново/)).toBeVisible()
+  expect(payloads).toHaveLength(1)
+  await revisedAction.click()
+  await expect(page.getByRole('button', { name: 'Ожидает подтверждения' })).toBeDisabled()
+  expect(payloads.map(payload => payload.confirmedTerms)).toEqual([original, revised])
+  expect(payloads[0].idempotencyKey).not.toBe(payloads[1].idempotencyKey)
+})
+
+test('review08 repeats the original extension in a new WebView and verifies the charge on its order', async ({ page, context }) => {
+  const option = buildShiftExtensionOptions({ available: true, durationMinutes: 60, priceMinor: 5000, currency: 'RUB' })
+  const opening = `?mode=guest#tgWebAppData=${encodeURIComponent(mockInitData)}`
+  const payloads: unknown[] = []
+  const openExtension = async (view: Page) => {
+    await view.goto(opening)
+    await view.getByRole('button', { name: /Продление работы заведения/ }).click()
+  }
+  await installTelegramWebApp(page, 123456789)
+  await mockGuestApi(page, { restoreContext: buildRestoreContext(), extensionOptions: option })
+  await page.route('**/api/guest/table/extension-requests', async route => {
+    payloads.push(route.request().postDataJSON())
+    await route.abort('failed')
+  })
+  await openExtension(page)
+  await page.getByRole('button', { name: 'Продлить на 1 час' }).click()
+  await expect(page.getByRole('button', { name: 'Повторить исходный запрос' })).toBeEnabled()
+  await page.close()
+
+  const reopened = await context.newPage()
+  await installTelegramWebApp(reopened, 123456789)
+  const api = await mockGuestApi(reopened, { restoreContext: buildRestoreContext(), extensionOptions: option })
+  await reopened.route('**/api/guest/table/extension-requests', async route => {
+    payloads.push(route.request().postDataJSON())
+    await route.fulfill(jsonResponse({ request: buildShiftExtensionRequest({ status: 'approved' }) }))
+  })
+  api.setActiveOrderServiceCharges([{
+    id: 700, source: 'SHIFT_EXTENSION', sourceRequestId: 501, label: 'Продление',
+    qty: 1, unitPriceMinor: 5000, totalMinor: 5000, currency: 'RUB'
+  }])
+  await openExtension(reopened)
+  const retry = reopened.getByRole('button', { name: 'Повторить исходный запрос' })
+  await expect(retry).toBeEnabled()
+  expect(payloads).toHaveLength(1)
+  await retry.click()
+  await expect(reopened.getByText(/Сумма добавлена в счёт/)).toBeVisible()
+  expect(payloads).toHaveLength(2)
+  expect(payloads[0]).toEqual(payloads[1])
+  api.setExtensionOptions({ ...option, orderId: 901 })
+  await reopened.getByRole('button', { name: 'Обновить' }).click()
+  await expect(reopened.getByText(/Сумма добавлена в счёт/)).toHaveCount(0)
 })
 
 test('venue staff sees pending shift extension requests and can approve or reject', async ({ page }) => {
@@ -16572,7 +16754,7 @@ test('venue guest preview ignores table cart and order context and uses GET-only
       JSON.stringify({ 'user:123456789:session:77': 88 })
     )
     window.localStorage.setItem(
-      `hookah_guest_cart_draft:user:123456789:${token}:session:77`,
+      `hookah_guest_cart_draft:user:123456789:${token}:session:77:visit:0`,
       JSON.stringify({
         items: [{ itemId: 200, qty: 3 }],
         commentDraft: 'Этот гостевой заказ не относится к preview.'
@@ -22957,6 +23139,8 @@ test('guest bill request payment method posts json from order screen and shows d
     tableToken,
     tableSessionId: 77,
     tabId: 88,
+    expectedOrderId: 900,
+    expectedVisitGeneration: '0',
     paymentMethod: 'CARD'
   })
 
@@ -23090,6 +23274,12 @@ async function installQrScanner(page: Page, startParam?: string) {
   })
 }
 
+async function expectVisitUnchanged(page: Page, key: string, before: Awaited<ReturnType<typeof visitRecord>>) {
+  const after = await visitRecord(page, key)
+  expect(after).toEqual({ ...before, ...(after?.lastIntentAt === undefined ? {} : { lastIntentAt: after.lastIntentAt }) })
+  expect(after?.lastIntentAt ?? 0).toBeGreaterThanOrEqual(before?.lastIntentAt ?? 0)
+}
+
 async function scanQr(page: Page, text: string, repetitions = 1) {
   return page.evaluate(({ text, repetitions }) => {
     const scannerWindow = window as unknown as ScannerWindow
@@ -23160,6 +23350,7 @@ for (const scenario of ['invalid', 'foreign', 'conflict', 'revoked', 'forbidden'
     await page.getByRole('button', { name: /Кальянное меню/ }).click()
     await page.getByRole('button', { name: 'Добавить' }).click()
     await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+    const visitBefore = await visitRecord(page, 'hookah_guest_table_session_context:user:123456789')
     const before = await page.evaluate(() => ({ url: window.location.href, session: { ...window.sessionStorage }, local: { ...window.localStorage } }))
     if (scenario === 'cancel') {
       await page.evaluate(() => (window as unknown as ScannerWindow).__qrCancel?.())
@@ -23180,6 +23371,7 @@ for (const scenario of ['invalid', 'foreign', 'conflict', 'revoked', 'forbidden'
       ])
     }
     expect(resolutions).toHaveLength(backendDenied ? 1 : 0)
+    await expectVisitUnchanged(page, 'hookah_guest_table_session_context:user:123456789', visitBefore)
     expect(await page.evaluate(() => ({ url: window.location.href, session: { ...window.sessionStorage }, local: { ...window.localStorage } }))).toEqual(before)
     await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
@@ -23326,7 +23518,7 @@ for (const status of [404, 403, 500]) {
     await expect.poll(() => page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts)).toEqual([
       status === 404 ? 'Стол не найден. Обновите QR.'
         : status === 403 ? 'Требуется новое подтверждение входа Откройте QR-код ещё раз и подтвердите вход в Telegram.'
-        : 'Не удалось загрузить стол. Попробуйте позже.'
+        : 'Не удалось загрузить стол. Проверьте соединение и повторите попытку.'
     ])
     const qrEntry = page.getByRole('navigation', { name: 'Гостевая навигация' }).getByRole('button', { name: 'QR' })
     await expect(qrEntry).toBeVisible()
@@ -28183,6 +28375,7 @@ test('personal links browse B retain visit cart and order A and explicit catalog
   await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Добавить', exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+  await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
   await page.goto('?mode=home&startapp=venue_2')
   await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
   await page.getByRole('button', { name: 'К столу · Микс', exact: true }).click()
@@ -28512,12 +28705,14 @@ for (const outcome of ['denied', 'error', 'unavailable', 'invalid', 'cancel'] as
     await expect(page.locator('.venue-location').first()).toContainText('Баумана, 2')
     await page.getByRole('button', { name: 'QR', exact: true }).first().click()
     const before = await personalLinkProtectedState(page)
+    const visitBefore = await visitRecord(page, 'hookah_guest_table_session_context:user:123456789')
     const storageBefore = await page.evaluate(() => ({ url: location.href, local: { ...localStorage } }))
     if (outcome === 'cancel') await page.evaluate(() => (window as unknown as ScannerWindow).__qrCancel?.())
     await scanQr(page, outcome === 'invalid' ? 'not a QR URL' : tableQrFixture.qrText)
     if (outcome !== 'cancel') await expect.poll(() => page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts.length)).toBe(1)
     expect(resolves).toHaveLength(outcome === 'invalid' || outcome === 'cancel' ? 0 : 1)
     expect(await personalLinkProtectedState(page)).toEqual(before)
+    await expectVisitUnchanged(page, 'hookah_guest_table_session_context:user:123456789', visitBefore)
     expect(await page.evaluate(() => ({ url: location.href, local: { ...localStorage } }))).toEqual(storageBefore)
     await page.getByRole('button', { name: 'Меню', exact: true }).click()
     await page.getByRole('button', { name: 'Кальянное меню · 1 позиций', exact: true }).click()
@@ -30953,9 +31148,23 @@ test('guest navigation review ended visit stays ended through browser history an
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expectTelegramBackButtonHidden(page)
   await expect(page.getByRole('button', { name: 'Мои заказы' })).toHaveCount(0)
+  let rejoined = false
+  await page.route('**/api/guest/table/resolve?**', route => route.fulfill(jsonResponse(buildRestoreContext(rejoined
+    ? { visitGeneration: '7' }
+    : { tableSessionActive: false, tableSessionInactiveReason: 'TABLE_SESSION_EXITED', exitEventId: '7' }))))
+  await page.route('**/api/guest/table/session/rejoin', route => {
+    expect(route.request().postDataJSON().exitEventId).toBe('7')
+    rejoined = true
+    return route.fulfill(jsonResponse(buildRestoreContext({visitGeneration: '7'})))
+  })
   await page.goForward()
   await page.getByRole('button', { name: 'QR', exact: true }).click()
+  const confirmation = page.waitForEvent('dialog').then(async dialog => {
+    expect(dialog.message()).toContain('Снова подключиться')
+    await dialog.accept()
+  })
   await scanQr(page, tableToken)
+  await confirmation
   await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
   await page.getByRole('button', { name: 'Корзина', exact: true }).click()
   await clickTelegramBackButton(page)
@@ -32426,7 +32635,7 @@ test('guest context continuity keeps the shared tab and requires a choice if it 
   await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
   const cart = page.getByRole('button', { name: 'Корзина (1)' })
   await cart.click()
-  await page.getByRole('button', { name: 'Переключить на Общий счёт' }).click()
+  await page.getByRole('combobox', { name: 'Выберите счёт' }).selectOption('122')
   await expect.poll(() => api.getPreviewRequests().at(-1)?.tabId).toBe(122)
   for (const state of ['active', 'lost', 'closed'] as const) {
     const closed = state === 'closed'
@@ -32446,6 +32655,37 @@ test('guest context continuity keeps the shared tab and requires a choice if it 
     await expect.poll(() => api.getPreviewRequests().slice(before).map(x => x.tabId)).toContain(closed ? 121 : 122)
     if (!closed) expect(api.getPreviewRequests().slice(before).every(x => x.tabId === 122)).toBe(true)
   }
+  expect(api.getAddBatchRequests()).toEqual([])
+})
+
+test('review06 a shared bill selected in an earlier participation requires a fresh choice', async ({ page }) => {
+  await installQrScanner(page)
+  const personal = { id: 121, tableSessionId: 77, type: 'PERSONAL', ownerUserId: 123456789, status: 'ACTIVE' } as const
+  const api = await mockGuestApi(page, {
+    restoreContext: buildRestoreContext({ tabId: 121 }),
+    tabs: [personal, { ...personal, type: 'SHARED', id: 122 }]
+  })
+  const add = async () => {
+    await page.getByRole('button', { name: /Кальянное меню/ }).first().click()
+    await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+    await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  }
+  await page.goto('?mode=guest')
+  await add()
+  const bills = page.getByRole('combobox', { name: 'Выберите счёт' })
+  await bills.selectOption('122')
+  await expect.poll(() => api.getPreviewRequests().at(-1)?.tabId).toBe(122)
+  const before = api.getPreviewRequests().length
+  const rejoined = buildRestoreContext({ tabId: 121, visitGeneration: '73' })
+  await page.route('**/api/guest/table/restore*', r => r.fulfill(jsonResponse({ context: rejoined })))
+  await page.route('**/api/guest/table/resolve?**', r => r.fulfill(jsonResponse(rejoined)))
+  await page.goto('?mode=guest')
+  await expect(page.getByRole('button', { name: 'Корзина', exact: true })).toBeVisible()
+  await add()
+  await expect(bills).toBeVisible()
+  expect(api.getPreviewRequests()).toHaveLength(before)
+  await bills.selectOption('121')
+  await expect.poll(() => api.getPreviewRequests().at(-1)).toMatchObject({ tabId: 121, expectedVisitGeneration: '73' })
   expect(api.getAddBatchRequests()).toEqual([])
 })
 
@@ -32603,7 +32843,7 @@ test('guest explicit rejoin requires a fresh scan and confirmation for each exit
       latest++
       return route.fulfill(jsonResponse({ error: { code: 'TABLE_REJOIN_STALE', message: 'Сканируйте QR заново' } }, 409))
     }
-    await route.fulfill(jsonResponse(active))
+    await route.fulfill(jsonResponse({ ...active, visitGeneration: events[latest] }))
   })
   await page.goto('?mode=guest')
   const scan = async (confirm: boolean) => {
@@ -32721,31 +32961,112 @@ test('guest reconciliation expiring an older window preserves the new session ca
   expect(fresh.getAddBatchRequests()).toEqual([])
 })
 
-test('guest reconciliation reopens a persisted cart with explicit accessible tab selection', async ({ page, context }) => {
+for (const readFailure of [false, true]) {
+  test('guest reconciliation reopens a persisted cart with explicit accessible tab selection, read failure=' + readFailure, async ({ page, context }) => {
+    const personal = { id: 121, tableSessionId: 77, type: 'PERSONAL', ownerUserId: 123456789, status: 'ACTIVE' } as const
+    const options = { restoreContext: buildRestoreContext({ tabId: 121 }), tabs: [personal, { ...personal, type: 'SHARED' as const, id: 122 }] }
+    await installQrScanner(page)
+    const api = await mockGuestApi(page, options)
+    await page.goto('?mode=guest')
+    await page.getByRole('button', { name: /Кальянное меню/ }).click()
+    await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+    await page.getByRole('button', { name: 'Корзина (1)' }).click()
+    await page.getByRole('combobox', { name: 'Выберите счёт' }).selectOption('122')
+    await expect.poll(() => api.getPreviewRequests().at(-1)?.tabId).toBe(122)
+    const reopened = await context.newPage()
+    await installQrScanner(reopened)
+    const next = await mockGuestApi(reopened, options)
+    if (readFailure) {
+      await reopened.addInitScript(() => {
+        const get = IDBObjectStore.prototype.get
+        IDBObjectStore.prototype.get = function (key) {
+          if (typeof key === 'string' && key.startsWith('hookah_guest_cart_draft:user:')) {
+            throw new DOMException('Temporary read failure', 'SecurityError')
+          }
+          return get.call(this, key)
+        }
+        Object.assign(window, { recoverCartRead: () => { IDBObjectStore.prototype.get = get } })
+      })
+    }
+    await reopened.goto('?mode=guest')
+    if (readFailure) {
+      const retry = reopened.getByRole('button', { name: 'Повторить загрузку корзины' })
+      await expect(retry).toBeVisible()
+      await reopened.evaluate(() => (window as Window & { recoverCartRead(): void }).recoverCartRead())
+      await retry.click()
+    }
+    await reopened.getByRole('button', { name: 'Корзина (1)' }).click()
+    const select = reopened.getByRole('combobox', { name: 'Выберите счёт' })
+    await expect(select).toBeVisible()
+    expect(next.getPreviewRequests()).toEqual([])
+    expect(next.getAddBatchRequests()).toEqual([])
+    await select.selectOption('122')
+    await expect.poll(() => next.getPreviewRequests().map(x => [x.tableSessionId, x.tabId])).toContainEqual([77, 122])
+    await reopened.getByRole('button', { name: 'Отправить', exact: true }).click()
+    await expect.poll(() => next.getAddBatchRequests().map(x => [x.tableSessionId, x.tabId])).toEqual([[77, 122]])
+    expect(next.getPreviewRequests().every(x => x.tabId === 122)).toBe(true)
+  })
+}
+
+test('review08 releases a definitively rejected order after membership loss and keeps the basket', async ({ page }) => {
   const personal = { id: 121, tableSessionId: 77, type: 'PERSONAL', ownerUserId: 123456789, status: 'ACTIVE' } as const
-  const options = { restoreContext: buildRestoreContext({ tabId: 121 }), tabs: [personal, { ...personal, type: 'SHARED' as const, id: 122 }] }
+  const shared = { ...personal, type: 'SHARED' as const, id: 122 }
   await installQrScanner(page)
-  const api = await mockGuestApi(page, options)
+  const api = await mockGuestApi(page, { restoreContext: buildRestoreContext({ tabId: 121 }), tabs: [personal, shared] })
+  const initial: Array<{ tabId: number; idempotencyKey: string }> = []
+  await page.route('**/api/guest/order/add-batch', async route => {
+    initial.push(route.request().postDataJSON())
+    await route.fulfill(jsonResponse({ error: { code: 'FORBIDDEN', message: 'Доступ изменился' } }, 403))
+  }, { times: 1 })
   await page.goto('?mode=guest')
   await page.getByRole('button', { name: /Кальянное меню/ }).click()
   await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
   await page.getByRole('button', { name: 'Корзина (1)' }).click()
-  await page.getByRole('button', { name: 'Переключить на Общий счёт' }).click()
-  await expect.poll(() => api.getPreviewRequests().at(-1)?.tabId).toBe(122)
-  const reopened = await context.newPage()
-  await installQrScanner(reopened)
-  const next = await mockGuestApi(reopened, options)
-  await reopened.goto('?mode=guest')
-  await reopened.getByRole('button', { name: 'Корзина (1)' }).click()
-  const select = reopened.getByRole('combobox', { name: 'Выберите счёт' })
-  await expect(select).toBeVisible()
-  expect(next.getPreviewRequests()).toEqual([])
-  expect(next.getAddBatchRequests()).toEqual([])
-  await select.selectOption('122')
-  await expect.poll(() => next.getPreviewRequests().map(x => [x.tableSessionId, x.tabId])).toContainEqual([77, 122])
-  await reopened.getByRole('button', { name: 'Отправить', exact: true }).click()
-  await expect.poll(() => next.getAddBatchRequests().map(x => [x.tableSessionId, x.tabId])).toEqual([[77, 122]])
-  expect(next.getPreviewRequests().every(x => x.tabId === 122)).toBe(true)
+  await page.getByRole('combobox', { name: 'Выберите счёт' }).selectOption('122')
+  const send = page.getByRole('button', { name: 'Отправить', exact: true })
+  await send.click()
+  const retry = page.getByRole('button', { name: 'Повторить исходную отправку' })
+  await expect(retry).toBeEnabled()
+  await page.route('**/api/guest/order/add-batch', async route => {
+    initial.push(route.request().postDataJSON())
+    api.setTabs([personal])
+    await route.fulfill(jsonResponse({ error: { code: 'ORDER_BATCH_TAB_ACCESS_DENIED', message: 'Доступ к счёту изменился' } }, 403))
+  }, { times: 1 })
+  await retry.click()
+  await expect(retry).toBeHidden()
+  expect(initial).toHaveLength(2)
+  expect(initial[0]).toEqual(initial[1])
+  await expect(page.getByRole('button', { name: 'Корзина (1)' }).first()).toBeVisible()
+  const selector = page.getByRole('combobox', { name: 'Выберите счёт' })
+  if (await selector.isVisible()) await selector.selectOption('121')
+  await send.click()
+  await expect.poll(() => api.getAddBatchRequests().at(-1)?.tabId).toBe(121)
+  const fresh = api.getAddBatchRequests().at(-1)
+  expect(fresh?.idempotencyKey).not.toBe(initial[0].idempotencyKey)
+})
+
+test('review08 confirms the displayed invitation instance before joining a shared bill', async ({ page }) => {
+  const personal = { id: 121, tableSessionId: 77, type: 'PERSONAL', ownerUserId: 123456789, status: 'ACTIVE' } as const
+  await installQrScanner(page)
+  await mockGuestApi(page, { restoreContext: buildRestoreContext({ tabId: 121 }), tabs: [personal] })
+  let offer = { inviteId: '17', tabId: 122 }
+  const joins: unknown[] = []
+  await page.route('**/api/guest/tabs/join-target', route => route.fulfill(jsonResponse(offer)))
+  await page.route('**/api/guest/tabs/join', async route => {
+    joins.push(route.request().postDataJSON())
+    await route.fulfill(jsonResponse({ code: 'NOT_FOUND', message: 'Приглашение истекло' }, 404))
+  })
+  await page.goto('?mode=guest')
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await page.getByRole('button', { name: 'Присоединиться к общему счёту' }).click()
+  await page.getByPlaceholder('Код приглашения').fill('0123')
+  await page.getByRole('button', { name: 'Проверить код' }).click()
+  await expect(page.getByText(/Вступить в общий счёт №122/)).toBeVisible()
+  expect(joins).toHaveLength(0)
+  offer = { inviteId: '18', tabId: 123 }
+  await page.getByRole('button', { name: 'Вступить', exact: true }).click()
+  await expect(page.getByText('Не удалось присоединиться к общему счёту.')).toBeVisible()
+  expect(joins).toEqual([expect.objectContaining({ inviteId: '17', expectedTabId: 122, token: '0123' })])
 })
 
 test('guest reconciliation remembers the ordinary catalog card across business reload', async ({ page }) => {
@@ -33051,7 +33372,7 @@ for (const committed of [false, true, 'replaced'] as const) {
         probes++
         expect(query.get('resolveMode')).toBeNull()
         expect(query.get('tableSessionId')).toBe(String(table.tableSessionId))
-        return route.fulfill(jsonResponse({ ...table, available: true, tableSessionId: committed === 'replaced' ? table.tableSessionId + 1 : table.tableSessionId, tableSessionActive: committed !== false, exitEventId: committed === false ? '2' : null, tableSessionInactiveReason: committed === false ? 'TABLE_SESSION_EXITED' : null }))
+        return route.fulfill(jsonResponse({ ...table, available: true, tableSessionId: committed === 'replaced' ? table.tableSessionId + 1 : table.tableSessionId, tableSessionActive: committed !== false, visitGeneration: committed === false ? null : '1', exitEventId: committed === false ? '2' : null, tableSessionInactiveReason: committed === false ? 'TABLE_SESSION_EXITED' : null }))
       }
       scans++
       if (query.get('tableToken') === 'SDK-FRESH-QR') {
@@ -33069,7 +33390,7 @@ for (const committed of [false, true, 'replaced'] as const) {
         await wait
         return route.abort('failed')
       }
-      return route.fulfill(jsonResponse({...table, available:true, tableSessionActive:true}))
+      return route.fulfill(jsonResponse({ ...table, available: true, tableSessionActive: true, visitGeneration: attempts.at(-1) }))
     })
     page.on('dialog', dialog => dialog.accept())
     await page.goto('?mode=home&screen=menu&tableSessionId=77')
@@ -33305,4 +33626,1372 @@ test('rejoin ux keeps the visit when the server refuses exit', async ({ page }) 
   await exit.click()
   await expect(page.getByText(/Сервер не подтвердил выход.*Проверьте номер стола и заведение в меню бота/)).toBeVisible()
   await expect(exit).toBeEnabled()
+})
+
+for (const scenario of ['empty', 'cart', 'sent', 'closed', 'platform'] as const) {
+  test(`guest visit cold restart resumes ${scenario} in a new WebView`, async ({ browser, baseURL }) => {
+    const visit = buildRestoreContext({ tableToken: tableQrFixture.tableToken })
+    const tab = { id: 88, tableSessionId: 77, type: 'PERSONAL', ownerUserId: 123456789, status: 'ACTIVE' } as const
+    const platform = scenario === 'platform'
+    if (platform) visit.tabId = null
+    const initial = await browser.newContext({ baseURL })
+    let saved: Awaited<ReturnType<typeof initial.storageState>>
+    try {
+      const page = await initial.newPage()
+      await installQrScanner(page)
+      const api = await mockGuestApi(page, { tabs: platform ? [] : [tab], activeOrder: null })
+      if (platform) {
+        // The bot had already confirmed this visit. This URL reads the pinned session.
+        await page.goto(`?mode=guest&screen=menu&table_token=${visit.tableToken}&tableSessionId=77`)
+      } else {
+        await page.goto('?mode=guest')
+        await page.getByRole('button', { name: 'QR', exact: true }).click()
+        await scanQr(page, tableQrFixture.qrText)
+      }
+      await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+
+      if (scenario === 'cart' || scenario === 'sent') {
+        await page.getByRole('button', { name: /Кальянное меню/ }).click()
+        await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+        await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+        if (scenario === 'sent') {
+          await page.getByRole('button', { name: 'Корзина (1)' }).click()
+          await page.getByRole('button', { name: 'Отправить', exact: true }).click()
+          await expect.poll(() => api.getAddBatchRequests().map(batch => [batch.tableSessionId, batch.tabId])).toEqual([[77, 88]])
+          await expect(page.getByRole('button', { name: 'Корзина (1)' })).toHaveCount(0)
+        }
+      }
+      if (scenario === 'empty') {
+        await page.reload()
+        await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+      }
+      saved = await initial.storageState({ indexedDB: true })
+    } finally {
+      await initial.close()
+    }
+
+    // Keep only same-origin visit/cart storage in the draft case. Other launches have
+    // fresh credentials and no retained origin storage, URL, history or sessionStorage.
+    const origins = scenario === 'cart' ? saved.origins.map(origin => ({
+      ...origin,
+      localStorage: origin.localStorage.filter(({ name }) => name.startsWith('hookah_guest_cart_draft:') ||
+        name === 'hookah_guest_table_session_context:user:123456789')
+    })) : []
+    const reopened = await browser.newContext({ baseURL, storageState: { cookies: [], origins } })
+    try {
+      const page = await reopened.newPage()
+      await page.addInitScript(() => {
+        Object.assign(window, { coldVisitState: [history.state, sessionStorage.length, location.hash] })
+      })
+      if (platform) {
+        await page.addInitScript(() => {
+          const getItem = Storage.prototype.getItem
+          Storage.prototype.getItem = function (key: string) {
+            if (this === sessionStorage && key.startsWith('hookah_guest_table_session_context:')) {
+              throw new DOMException('Visit storage unavailable', 'SecurityError')
+            }
+            return getItem.call(this, key)
+          }
+        })
+      }
+      await installQrScanner(page)
+      const restarted = await mockGuestApi(page, {
+        restoreContext: visit, tabs: platform ? [] : [tab], activeOrder: scenario === 'sent' ? {} : null,
+        tableScope: { tableSessionId: 77, venueId: 1, tabId: 88, ownerUserId: 123456789 }
+      })
+      await mockHomeRoles(page, { platform })
+      const reads: URL[] = []
+      const writes: string[] = []
+      await page.route('**/api/guest/table/restore*', route => {
+        const url = new URL(route.request().url())
+        reads.push(url)
+        if (scenario === 'cart' && !url.searchParams.size) {
+          // Other active bills can rank higher than this WebView's last explicitly scanned table.
+          return route.fulfill(jsonResponse({ context: buildRestoreContext({ tableNumber: '9', tableSessionId: 99 }) }))
+        }
+        return route.fulfill(jsonResponse({ context: visit }))
+      })
+      page.on('request', request => {
+        const url = new URL(request.url())
+        const createsSession = url.pathname === '/api/guest/table/resolve' && url.searchParams.get('resolveMode') === 'create'
+        const writesVisit = request.method() === 'POST' &&
+          /^\/api\/guest\/(table\/session\/|tabs\/|order\/(add-batch|bill-request))/.test(url.pathname)
+        if (createsSession || writesVisit) writes.push(url.pathname)
+      })
+      // Chat menu uses mode=home. Main Mini App also works from the bare entry URL.
+      await page.goto(scenario === 'empty' || scenario === 'cart' ? '?mode=home' : './')
+      expect(await page.evaluate(() => (window as unknown as { coldVisitState: unknown }).coldVisitState)).toEqual([null, 0, ''])
+      await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+      expect(reads.map(url => [url.searchParams.get('scope'), url.searchParams.get('tableSessionId')]))
+        .toEqual([['active-visits', null], [null, scenario === 'cart' ? '77' : null]])
+      if (scenario === 'cart') {
+        await page.getByRole('button', { name: 'Корзина (1)' }).click()
+        const select = page.getByRole('combobox', { name: 'Выберите счёт' })
+        await expect(select).toBeVisible()
+        expect(restarted.getPreviewRequests()).toEqual([])
+        await select.selectOption('88')
+        await expect.poll(() => restarted.getPreviewRequests().map(x => [x.tableSessionId, x.tabId])).toContainEqual([77, 88])
+      }
+      if (scenario === 'sent') {
+        await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
+        await expect(page.getByRole('heading', { name: 'Заказ №123' })).toBeVisible()
+        await expect(page.getByText('Счёт: Личный счёт')).toBeVisible()
+      }
+      if (scenario === 'closed') {
+        await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
+        await expect(page.getByText('Активного заказа нет.')).toBeVisible()
+      }
+      expect(restarted.getAddBatchRequests()).toEqual([])
+      expect(writes).toEqual([])
+    } finally {
+      await reopened.close()
+    }
+  })
+}
+
+test('guest visit cold restart rejects an obsolete stored scan without falling back to an older table', async ({ browser, baseURL }) => {
+  const first = await browser.newContext({ baseURL })
+  let saved: Awaited<ReturnType<typeof first.storageState>>
+  try {
+    const page = await first.newPage()
+    await installQrScanner(page)
+    await mockGuestApi(page)
+    await page.goto('?mode=guest')
+    await page.getByRole('button', { name: 'QR', exact: true }).click()
+    await scanQr(page, tableQrFixture.qrText)
+    await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+    saved = await first.storageState({ indexedDB: true })
+  } finally {
+    await first.close()
+  }
+  const next = await browser.newContext({ baseURL, storageState: saved })
+  try {
+    const page = await next.newPage()
+    await installQrScanner(page)
+    await mockGuestApi(page)
+    await mockHomeRoles(page)
+    const reads: URLSearchParams[] = []
+    await page.route('**/api/guest/table/restore*', route => {
+      const params = new URL(route.request().url()).searchParams
+      reads.push(params)
+      return route.fulfill(jsonResponse({ context: params.has('tableSessionId') ? null : buildRestoreContext({ tableSessionId: 9 }) }))
+    })
+    await page.goto('?mode=home')
+    await expect(page.getByText(/Не удалось восстановить выбранный стол/)).toBeVisible()
+    expect(reads.map(params => [params.get('scope'), params.get('tableSessionId')])).toEqual([['active-visits', null], [null, '77']])
+    await expect(page.getByRole('button', { name: 'Мои заказы', exact: true })).toHaveCount(0)
+  } finally {
+    await next.close()
+  }
+})
+
+test('guest visit cold restart pins retries through 503 timeout offline reload and another WebView', async ({ browser, baseURL }) => {
+  const visit = buildRestoreContext()
+  const pointerKey = 'hookah_guest_table_session_context:user:123456789'
+  const draftKey = `hookah_guest_cart_draft:user:123456789:${visit.tableToken}:session:77:visit:0`
+  const pointer = JSON.stringify({ tableToken: visit.tableToken, tableSessionId: 77 })
+  const draft = JSON.stringify({ items: [{ itemId: 1, qty: 1 }], commentDraft: 'К столику' })
+  let state = { cookies: [], origins: [{ origin: new URL(baseURL!).origin, localStorage: [
+    { name: pointerKey, value: pointer }, { name: draftKey, value: draft }
+  ] }] } as Awaited<ReturnType<BrowserContext['storageState']>>
+  const reads: (string | null)[][] = []
+  for (const fresh of [false, true]) {
+    const context = await browser.newContext({ baseURL, storageState: state })
+    try {
+      const page = await context.newPage()
+      await installQrScanner(page)
+      await mockGuestApi(page, { activeOrder: null })
+      await page.clock.install()
+      await page.route('**/api/guest/table/restore*', async route => {
+        const params = new URL(route.request().url()).searchParams
+        reads.push([params.get('tableToken'), params.get('tableSessionId')])
+        if (reads.length === 1) return route.fulfill(jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE' } }, 503))
+        if (reads.length === 2) return // The client deadline aborts this pending read.
+        if (reads.length === 3) return route.abort('internetdisconnected')
+        return route.fulfill(jsonResponse({ context: visit }))
+      })
+      await page.goto('?mode=guest')
+      if (!fresh) {
+        const retry = page.getByRole('button', { name: 'Повторить загрузку стола' })
+        await expect(retry).toBeVisible()
+        await retry.click()
+        await expect.poll(() => reads.length).toBe(2)
+        await page.clock.fastForward(16000)
+        await expect(retry).toBeVisible()
+        await page.reload()
+        await expect(retry).toBeVisible()
+        expect(await page.evaluate(([key, cart]) => [
+          sessionStorage.getItem(key), localStorage.getItem(key), localStorage.getItem(cart)
+        ], [pointerKey, draftKey])).toEqual([pointer, null, draft])
+        expect(await storedPointer(page, pointerKey)).toBe(pointer)
+        state = await context.storageState({ indexedDB: true })
+      } else {
+        await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+        await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+      }
+    } finally {
+      await context.close()
+    }
+  }
+  expect(reads).toEqual(Array(4).fill([visit.tableToken, '77']))
+})
+
+test('guest visit cold restart clears only the confirmed exit then discovers the next Bot visit', async ({ browser, baseURL }) => {
+  const visit = buildRestoreContext({ tableToken: tableQrFixture.tableToken })
+  const pointerKey = 'hookah_guest_table_session_context:user:123456789'
+  const initial = await browser.newContext({ baseURL })
+  let state: Awaited<ReturnType<typeof initial.storageState>>
+  try {
+    const page = await initial.newPage()
+    await installQrScanner(page)
+    await mockGuestApi(page, { activeOrder: null, tabs: [] })
+    await page.goto('?mode=guest')
+    await page.getByRole('button', { name: 'QR', exact: true }).click()
+    await scanQr(page, tableQrFixture.qrText)
+    await expect(page.getByText('Вы за столом №4 · Микс')).toBeVisible()
+    await page.getByRole('button', { name: /Кальянное меню/ }).click()
+    await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+    await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+    const cart = `hookah_guest_cart_draft:user:123456789:${visit.tableToken}:session:77:visit:0`
+    const saved = () => Promise.all([
+      page.evaluate(key => sessionStorage.getItem(key), pointerKey),
+      storedPointer(page, pointerKey),
+      storedCart(page, cart)
+    ])
+    const before = await saved()
+    expect(before.every(Boolean)).toBe(true)
+    let ended = false
+    await page.route('**/api/guest/table/session/end', route => route.fulfill(ended
+      ? jsonResponse({ ended: true, tableSessionId: 77 })
+      : jsonResponse({ error: { code: 'DATABASE_UNAVAILABLE', message: 'Временно недоступно' } }, 503)))
+    page.on('dialog', dialog => dialog.accept())
+    const exit = page.getByRole('button', { name: 'Завершить визит' })
+    await exit.click()
+    await expect(page.getByText('Временно недоступно', { exact: true })).toBeVisible()
+    expect(await saved()).toEqual(before)
+    ended = true
+    await exit.click()
+    await expect.poll(saved).toEqual([null, null, null])
+    state = await initial.storageState({ indexedDB: true })
+  } finally {
+    await initial.close()
+  }
+  const next = await browser.newContext({ baseURL, storageState: state })
+  try {
+    const page = await next.newPage()
+    await installQrScanner(page)
+    await mockGuestApi(page, { restoreContext: buildRestoreContext({ tableSessionId: 99, tableNumber: '9' }), activeOrder: null })
+    const read = page.waitForRequest(request => request.url().includes('/api/guest/table/restore'))
+    await page.goto('?mode=guest')
+    expect(new URL((await read).url()).search).toBe('')
+    await expect(page.getByText('Вы за столом №9 · Микс')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Корзина (1)' })).toHaveCount(0)
+  } finally {
+    await next.close()
+  }
+})
+
+test.describe('shared WebView visit selection', () => {
+  const key = 'hookah_guest_table_session_context:user:123456789'
+  const visits = ['A', 'B', 'C'].map((name, index) => buildRestoreContext({
+    tableToken: 'SHARED-' + name, tableSessionId: 77 + index, tableNumber: name
+  }))
+  const [a, b, c] = visits
+  const pointer = (visit: RestoreContext) => JSON.stringify({ tableToken: visit.tableToken, tableSessionId: visit.tableSessionId })
+  const drafts = [
+    { key: 'hookah_guest_cart_draft:user:123456789:SHARED-A:session:77:visit:0', value: '{"items":[],"commentDraft":"A"}' },
+    { key: 'hookah_guest_cart_draft:user:987654321:SHARED-A:session:77:visit:0', value: '{"items":[],"commentDraft":"Other guest"}' }
+  ]
+  async function setup(page: Page, sdkToken?: string) {
+    await installQrScanner(page, sdkToken)
+    await mockGuestApi(page, { tabs: [], activeOrder: null })
+    await page.route('**/api/guest/table/resolve?**', route => {
+      const token = new URL(route.request().url()).searchParams.get('tableToken')
+      return route.fulfill(jsonResponse(visits.find(v => v.tableToken === token)))
+    })
+    await page.route('**/api/guest/table/restore*', route => {
+      const params = new URL(route.request().url()).searchParams
+      return route.fulfill(jsonResponse({ context: visits.find(v => v.tableToken === params.get('tableToken') &&
+        String(v.tableSessionId) === params.get('tableSessionId')) ?? null }))
+    })
+  }
+  const at = (page: Page, visit: RestoreContext) => expect(page.getByText('Вы за столом №' + visit.tableNumber + ' · Микс')).toBeVisible()
+  const read = (page: Page) => storedPointer(page, key)
+  const generationKey = (event: string) => drafts[0].key.replace(/:visit:0$/, ':visit:' + event)
+  const viewDrafts = (page: Page) => Promise.all(drafts.map(d => storedCart(page, d.key)))
+  async function choose(page: Page, visit: RestoreContext, source: 'scan' | 'bot' | 'url') {
+    if (source === 'scan') {
+      await page.getByRole('button', { name: 'QR', exact: true }).click()
+      await scanQr(page, visit.tableToken)
+    } else {
+      await page.goto(source === 'bot'
+        ? `?mode=guest&screen=menu&table_token=${visit.tableToken}&tableSessionId=${visit.tableSessionId}`
+        : `?mode=guest&startapp=${visit.tableToken}`)
+    }
+  }
+  // Hold the actual HTTP response until the competing user action has reached the desired boundary.
+  async function hold(page: Page, visit: RestoreContext) {
+    let release!: () => void
+    let started!: () => void
+    const pending = new Promise<void>(resolve => { started = resolve })
+    const barrier = new Promise<void>(resolve => { release = resolve })
+    await page.route('**/api/guest/table/resolve?**', async route => {
+      if (new URL(route.request().url()).searchParams.get('tableToken') !== visit.tableToken) return route.fallback()
+      started()
+      await barrier
+      await route.fulfill(jsonResponse(visit))
+    }, { times: 1 })
+    return { pending, release }
+  }
+  async function seed(page: Page) {
+    await setup(page)
+    await choose(page, a, 'bot')
+    await at(page, a)
+    await seedCart(page, drafts[0].key, drafts[0].value)
+    await page.evaluate(d => localStorage.setItem(d.key, d.value), drafts[1])
+  }
+  for (const scenario of [
+    { name: 'delayed scan B then Bot C', old: b, source: 'scan', next: c, nextSource: 'bot' },
+    { name: 'delayed Bot B retry then rescan A', old: b, source: 'bot', next: a, nextSource: 'scan', retry: true },
+    { name: 'delayed scan C then successful Bot B retry', old: c, source: 'scan', next: b, nextSource: 'bot', nextRetry: true },
+    { name: 'A to C to A while an older B is pending', old: b, source: 'url', next: a, nextSource: 'url', viaC: true },
+    { name: 'old Bot B completes before newer scan C', old: b, source: 'bot', next: c, nextSource: 'scan', oldFirst: true }
+  ] as const) {
+    test(scenario.name, async ({ page, context }) => {
+      await seed(page)
+      const old = await context.newPage()
+      const next = await context.newPage()
+      for (const view of [old, next]) { await setup(view); await view.goto('?mode=guest'); await at(view, a) }
+      const slow = await hold(old, scenario.old)
+      if ('retry' in scenario) await old.route('**/api/guest/table/resolve?**', route => route.fulfill({ status: 503 }), { times: 1 })
+      await choose(old, scenario.old, scenario.source)
+      if ('retry' in scenario) {
+        expect(await read(old)).toBe(pointer(a))
+        await old.getByRole('button', { name: 'Повторить загрузку стола' }).click()
+      }
+      await slow.pending
+      if ('viaC' in scenario) {
+        await choose(next, c, 'scan')
+        await at(next, c)
+        expect(await read(next)).toBe(pointer(c))
+      }
+      const later = 'oldFirst' in scenario ? await hold(next, scenario.next) : null
+      if ('nextRetry' in scenario) await next.route('**/api/guest/table/resolve?**', route => route.fulfill({ status: 503 }), { times: 1 })
+      await choose(next, scenario.next, scenario.nextSource)
+      if ('nextRetry' in scenario) {
+        expect(await read(next)).toBe(pointer(a))
+        await next.getByRole('button', { name: 'Повторить загрузку стола' }).click()
+      }
+      if (later) await later.pending
+      else await at(next, scenario.next)
+      slow.release()
+      // Wait for the superseded response to have been processed, including the storage check.
+      if (scenario.source === 'scan') {
+        await expect.poll(() => old.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts)).toContainEqual(expect.stringContaining('Отсканируйте QR'))
+      } else {
+        await expect(old.getByText(/Не удалось восстановить выбранный стол/)).toBeVisible()
+      }
+      if (later) {
+        expect(await read(next)).toBe(pointer(a))
+        later.release()
+        await at(next, scenario.next)
+      }
+      expect(await read(next)).toBe(pointer(scenario.next))
+      expect(await viewDrafts(next)).toEqual(drafts.map(d => d.value))
+      for (const view of [old, next, page]) await view.close()
+      const reopened = await context.newPage()
+      await setup(reopened)
+      const request = reopened.waitForRequest(r => r.url().includes('/api/guest/table/restore'))
+      await reopened.goto('?mode=guest')
+      const query = new URL((await request).url()).searchParams
+      expect([query.get('tableToken'), query.get('tableSessionId')]).toEqual([scenario.next.tableToken, String(scenario.next.tableSessionId)])
+      await at(reopened, scenario.next)
+      expect(await viewDrafts(reopened)).toEqual(drafts.map(d => d.value))
+    })
+  }
+
+  test('passive startup in another window preserves the pending explicit choice', async ({ page, context }) => {
+    await seed(page)
+    const slow = await hold(page, b)
+    await choose(page, b, 'scan')
+    await slow.pending
+    const passive = await context.newPage()
+    await setup(passive)
+    await passive.goto('?mode=guest')
+    await at(passive, a)
+    await passive.reload()
+    await at(passive, a)
+    expect(await read(passive)).toBe(pointer(a))
+    slow.release()
+    await at(page, b)
+    expect(await read(passive)).toBe(pointer(b))
+    expect(await viewDrafts(passive)).toEqual(drafts.map(d => d.value))
+  })
+
+  test('confirmed exit fences a matching response in another window', async ({ page, context }) => {
+    await seed(page)
+    const old = await context.newPage()
+    await setup(old)
+    const slow = await hold(old, a)
+    await choose(old, a, 'bot')
+    await slow.pending
+    page.on('dialog', dialog => dialog.accept())
+    await page.route('**/api/guest/table/session/end', route => route.fulfill(jsonResponse({ ended: true, tableSessionId: a.tableSessionId })))
+    await page.getByRole('button', { name: 'Завершить визит' }).click()
+    await expect.poll(() => read(page)).toBeNull()
+    slow.release()
+    await expect(old.getByText(/Не удалось восстановить выбранный стол/)).toBeVisible()
+    expect(await read(old)).toBeNull()
+    expect(await viewDrafts(old)).toEqual([null, drafts[1].value])
+  })
+
+  test('account switch while a confirmed response waits for another IndexedDB transaction', async ({ page, context }) => {
+    await seed(page)
+    const old = await context.newPage()
+    await setup(old)
+    const slow = await hold(old, b)
+    await choose(old, b, 'bot')
+    await slow.pending
+    // Queue the response behind a real competing read/write transaction.
+    await page.evaluate(() => new Promise<void>(held => {
+      const open = indexedDB.open('hookah-guest-visits', 1)
+      open.onsuccess = () => {
+        const db = open.result
+        const tx = db.transaction('visits', 'readwrite')
+        const store = tx.objectStore('visits')
+        let holding = true
+        Object.assign(window, { releaseSelectionLock: () => { holding = false } })
+        function wait() {
+          if (holding) store.get('test-barrier').onsuccess = wait
+        }
+        store.get('test-barrier').onsuccess = () => { wait(); held() }
+        tx.oncomplete = () => db.close()
+      }
+    }))
+    await old.evaluate(() => {
+      const get = IDBObjectStore.prototype.get
+      IDBObjectStore.prototype.get = function (k) {
+        Object.assign(window, { selectionQueued: true })
+        return get.call(this, k)
+      }
+    })
+    slow.release()
+    await expect.poll(() => old.evaluate(() => Boolean((window as Window & { selectionQueued?: boolean }).selectionQueued))).toBe(true)
+    await old.evaluate(() => {
+      const sdk = (window as unknown as ScannerWindow).Telegram.WebApp
+      sdk.initDataUnsafe = { user: { id: 987654321 } }
+    })
+    await page.evaluate(() => (window as Window & { releaseSelectionLock(): void }).releaseSelectionLock())
+    expect(await read(old)).toBe(pointer(a))
+    expect(await storedPointer(old, key.replace('123456789', '987654321'))).toBeNull()
+    expect(await viewDrafts(old)).toEqual(drafts.map(d => d.value))
+  })
+
+  for (const retry of ['button', 'reload'] as const) {
+    test('an earlier 503 cannot become a new selection on ' + retry, async ({ page, context }) => {
+      await seed(page)
+      const old = await context.newPage()
+      await setup(old)
+      await old.route('**/api/guest/table/resolve?**', route => route.fulfill({ status: 503 }), { times: 1 })
+      await choose(old, b, 'bot')
+      const button = old.getByRole('button', { name: 'Повторить загрузку стола' })
+      await expect(button).toBeVisible()
+      expect(await read(old)).toBe(pointer(a))
+      await choose(page, a, 'scan')
+      // A repeat selection has the same table/session pair. Wait for this scan's commit.
+      await expect.poll(async () => (await visitRecord(page, key)).pending).toBeNull()
+      const requests: string[] = []
+      old.on('request', request => { if (request.url().includes('/api/guest/table/resolve')) requests.push(request.url()) })
+      if (retry === 'button') await button.click()
+      else await old.reload()
+      await expect(old.getByText(/Не удалось восстановить выбранный стол/)).toBeVisible()
+      expect(requests).toEqual([])
+      expect(await read(old)).toBe(pointer(a))
+      expect(await viewDrafts(old)).toEqual(drafts.map(d => d.value))
+    })
+  }
+
+  test('an SDK retry after reload keeps the original selection', async ({ page, context }) => {
+    await seed(page)
+    const sdk = await context.newPage()
+    await setup(sdk, b.tableToken)
+    await sdk.addInitScript(k => sessionStorage.setItem(k, JSON.stringify('lost')), key)
+    await sdk.route('**/api/guest/table/resolve?**', route => route.fulfill({ status: 503 }), { times: 1 })
+    await sdk.goto('?mode=guest')
+    await sdk.getByRole('button', { name: 'Подключиться по QR из Telegram' }).click()
+    const retry = sdk.getByRole('button', { name: 'Повторить подключение по QR' })
+    await expect(retry).toBeVisible()
+    await choose(page, c, 'scan')
+    await at(page, c)
+    let resolves = 0
+    sdk.on('request', r => { if (r.url().includes('/api/guest/table/resolve')) resolves++ })
+    await sdk.reload()
+    await retry.click()
+    await expect.poll(() => sdk.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts)).toContainEqual(expect.stringContaining('Отсканируйте QR'))
+    expect(resolves).toBe(0)
+    expect(await read(sdk)).toBe(pointer(c))
+    expect(await viewDrafts(sdk)).toEqual(drafts.map(d => d.value))
+  })
+
+  for (const choices of [[a], [a, c], [c]]) {
+    test('late exit of A after choosing ' + choices.map(v => v.tableNumber).join(' then '), async ({ page, context }) => {
+      await seed(page)
+      const next = await context.newPage()
+      await setup(next)
+      let release!: () => void
+      const barrier = new Promise<void>(r => { release = r })
+      await page.route('**/api/guest/table/session/end', async route => {
+        await barrier
+        await route.fulfill(jsonResponse({ ended: true, tableSessionId: a.tableSessionId }))
+      })
+      page.on('dialog', dialog => dialog.accept())
+      const sent = page.waitForRequest('**/api/guest/table/session/end')
+      await page.getByRole('button', { name: 'Завершить визит' }).click()
+      await sent
+      for (const visit of choices) {
+        await choose(next, visit, 'bot')
+        await at(next, visit)
+      }
+      release()
+      await expect(page.getByRole('button', { name: 'Завершить визит' })).toBeHidden()
+      expect(await read(next)).toBe(choices.at(-1) === a ? null : pointer(choices.at(-1)!))
+      expect(await viewDrafts(next)).toEqual([null, drafts[1].value])
+    })
+  }
+
+  for (const ack of ['before', 'after'] as const) {
+    test('review04 exit reply ' + ack + ' the confirmed rejoin of the same scan', async ({ page, context }) => {
+      await seed(page)
+      const scan = await context.newPage()
+      await setup(scan)
+      await scan.goto('?mode=guest')
+      await at(scan, a)
+      let releaseRead!: () => void
+      const allowRead = new Promise<void>(resolve => { releaseRead = resolve })
+      await scan.route('**/api/guest/table/resolve?**', async route => {
+        await allowRead
+        await route.fulfill(jsonResponse({ ...a, tableSessionActive: false, tableSessionInactiveReason: 'TABLE_SESSION_EXITED', exitEventId: '21' }))
+      })
+      const started = scan.waitForRequest('**/api/guest/table/resolve?**')
+      scan.on('dialog', dialog => dialog.accept())
+      await choose(scan, a, 'scan')
+      await started
+      await page.evaluate(() => {
+        let registered = false
+        const put = IDBObjectStore.prototype.put
+        IDBObjectStore.prototype.put = function (value, ...args) {
+          const write = put.call(this, value, ...args)
+          if (this.name === 'visits' && value.exits?.length) {
+            write.addEventListener('success', () => { registered = true })
+          }
+          return write
+        }
+        const fetch = window.fetch
+        window.fetch = function (input, init) {
+          const url = input instanceof Request ? input.url : String(input)
+          if (url.includes('/api/guest/table/session/end')) Object.assign(window, { registeredAtDispatch: registered })
+          return fetch.call(this, input, init)
+        }
+      })
+      let end!: () => void
+      const allowEnd = new Promise<void>(resolve => { end = resolve })
+      await page.route('**/api/guest/table/session/end', async route => {
+        await allowEnd
+        await route.fulfill(jsonResponse({ ended: true, tableSessionId: a.tableSessionId }))
+      })
+      const ending = page.waitForRequest('**/api/guest/table/session/end')
+      page.on('dialog', dialog => dialog.accept())
+      await page.getByRole('button', { name: 'Завершить визит' }).click()
+      await ending
+      expect(await page.evaluate(() => (window as Window & { registeredAtDispatch?: boolean }).registeredAtDispatch)).toBe(true)
+      let rejoin!: () => void
+      const allowRejoin = new Promise<void>(resolve => { rejoin = resolve })
+      await scan.route('**/api/guest/table/session/rejoin', async route => {
+        expect(route.request().postDataJSON().exitEventId).toBe('21')
+        await allowRejoin
+        await route.fulfill(jsonResponse({ ...a, visitGeneration: '21' }))
+      })
+      const rejoining = scan.waitForRequest('**/api/guest/table/session/rejoin')
+      releaseRead()
+      await rejoining
+      const ended = () => expect(page.getByRole('heading', { name: 'Заведения', exact: true })).toBeVisible()
+      if (ack === 'before') { end(); await ended() }
+      rejoin()
+      await at(scan, a)
+      await expect.poll(() => viewDrafts(scan)).toEqual([null, drafts[1].value])
+      const freshDraft = '{"items":[],"commentDraft":"After rejoin"}'
+      await seedCart(scan, generationKey('21'), freshDraft)
+      if (ack === 'after') { end(); await ended() }
+      expect(JSON.parse((await read(scan))!)).toEqual({ ...JSON.parse(pointer(a)), visitGeneration: '21' })
+      expect(await viewDrafts(scan)).toEqual([null, drafts[1].value])
+      expect(await storedCart(scan, generationKey('21'))).toBe(freshDraft)
+    })
+  }
+
+  test('review04 rejected scan then temporary and final denial of the saved visit', async ({ page, context }) => {
+    await seed(page)
+    await page.route('**/api/guest/table/resolve?**', route => route.fulfill({ status: 403 }))
+    await choose(page, b, 'scan')
+    await expect.poll(() => page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts.length)).toBe(1)
+    const reopen = await context.newPage()
+    await setup(reopen)
+    let temporary = true
+    await reopen.route('**/api/guest/table/restore*', route => route.fulfill(temporary ? { status: 503 } : jsonResponse({ context: null })))
+    await reopen.goto('?mode=guest')
+    const retry = reopen.getByRole('button', { name: 'Повторить загрузку стола' })
+    await expect(retry).toBeVisible()
+    expect(await viewDrafts(reopen)).toEqual(drafts.map(d => d.value))
+    expect(await read(reopen)).toBe(pointer(a))
+    temporary = false
+    await retry.click()
+    await expect(reopen.getByText(/Не удалось восстановить выбранный стол/)).toBeVisible()
+    expect(await viewDrafts(reopen)).toEqual([null, drafts[1].value])
+    await choose(reopen, a, 'scan')
+    await at(reopen, a)
+    expect(await viewDrafts(reopen)).toEqual([null, drafts[1].value])
+  })
+
+  test('a delayed exact 404 cannot erase a newly confirmed visit at the same table', async ({ page, context }) => {
+    await seed(page)
+    const stale = await context.newPage()
+    await setup(stale)
+    let release!: () => void
+    const barrier = new Promise<void>(resolve => { release = resolve })
+    await stale.route('**/api/guest/table/restore*', async route => {
+      await barrier
+      await route.fulfill({ status: 404 })
+    })
+    const verifying = stale.waitForRequest('**/api/guest/table/restore?**')
+    await stale.goto('?mode=guest')
+    await verifying
+    const original = (await visitRecord(page, key)).revision
+    await choose(page, a, 'scan')
+    await expect.poll(async () => (await visitRecord(page, key)).revision).not.toBe(original)
+    release()
+    await expect(stale.getByText(/Не удалось восстановить выбранный стол/)).toBeVisible()
+    expect(await read(page)).toBe(pointer(a))
+    expect(await viewDrafts(page)).toEqual(drafts.map(d => d.value))
+  })
+
+  for (const outage of ['locks', 'storage', 'IndexedDB'] as const) {
+    test('review04 confirmed exit recovers after ' + outage + ' outage', async ({ page, context }) => {
+      await seed(page)
+      await page.evaluate(mode => {
+        if (mode === 'locks') Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined })
+        else if (mode === 'IndexedDB') {
+          const transaction = IDBDatabase.prototype.transaction
+          IDBDatabase.prototype.transaction = function (...args) {
+            if (this.name === 'hookah-guest-visits') throw new DOMException('Connection lost', 'InvalidStateError')
+            return transaction.apply(this, args)
+          }
+        } else {
+          for (const method of ['setItem','removeItem'] as const) {
+            const original = Storage.prototype[method]
+            Object.defineProperty(Storage.prototype, method, { configurable: true, value: function (k: string, ...args: string[]) {
+              if (this === localStorage && k.startsWith('hookah_guest_')) throw new DOMException('Storage unavailable', 'SecurityError')
+              return Reflect.apply(original, this, [k, ...args])
+            } })
+          }
+        }
+      }, outage)
+      page.on('dialog', dialog => dialog.accept())
+      await page.route('**/api/guest/table/session/end', route => route.fulfill(jsonResponse({ ended: true, tableSessionId: a.tableSessionId })))
+      await page.getByRole('button', { name: 'Завершить визит' }).click()
+      await expect(page.getByRole('heading', { name: 'Заведения', exact: true })).toBeVisible()
+      await page.close()
+      const queries: (string | null)[] = []
+      for (let i = 0; i < 2; i++) {
+        const next = await context.newPage()
+        await setup(next)
+        await next.route('**/api/guest/table/restore*', route => {
+          queries.push(new URL(route.request().url()).searchParams.get('tableSessionId'))
+          return route.fulfill(jsonResponse({ context: null }))
+        })
+        await next.goto('?mode=guest')
+        await expect.poll(() => queries.length).toBe(i + 1)
+        await expect.poll(() => read(next)).toBeNull()
+        expect(await viewDrafts(next)).toEqual([null, drafts[1].value])
+        await next.close()
+      }
+      expect(queries[1]).toBeNull()
+    })
+  }
+
+  test('review04 interrupted legacy migration retains the only pointer and both drafts', async ({ page }) => {
+    await setup(page)
+    const legacy = JSON.stringify({ latest: 'first', confirmed: 'first', ended: [] })
+    await page.addInitScript(({ key, a, legacy, drafts }) => {
+      localStorage.setItem(key, a)
+      localStorage.setItem(key + ':selection', legacy)
+      for (const draft of drafts) localStorage.setItem(draft.key, draft.value)
+      const put = IDBObjectStore.prototype.put
+      let first = true
+      IDBObjectStore.prototype.put = function (...args) {
+        const request = put.apply(this, args)
+        if (first && this.name === 'visits') { first = false; this.transaction.abort() }
+        return request
+      }
+    }, { key, a: pointer(a), legacy, drafts })
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    await page.route('**/api/guest/table/restore*', async route => { await gate; await route.fulfill(jsonResponse({ context: a })) })
+    const reads: string[] = []
+    page.on('request', req => { if (req.url().includes('/api/guest/table/restore')) reads.push(req.url()) })
+    await page.goto('?mode=guest')
+    const retry = page.getByRole('button', { name: 'Повторить загрузку стола' })
+    await expect(retry).toBeVisible()
+    const old = () => page.evaluate(k => [localStorage.getItem(k), localStorage.getItem(k + ':selection')], key)
+    expect(await old()).toEqual([pointer(a), legacy])
+    expect(await visitRecord(page, key)).toBeNull()
+    expect(await viewDrafts(page)).toEqual(drafts.map(d => d.value))
+    expect(reads).toEqual([])
+    await retry.click()
+    await expect.poll(() => reads.length).toBe(1)
+    expect(new URL(reads[0]).searchParams.get('tableSessionId')).toBe(String(a.tableSessionId))
+    expect(await read(page)).toBe(pointer(a))
+    expect(await old()).toEqual([null, null])
+    expect(await viewDrafts(page)).toEqual(drafts.map(d => d.value))
+    release()
+    await at(page, a)
+    // Obsolete writers cannot re-import another pointer over the committed record.
+    await page.evaluate(([k, v]) => localStorage.setItem(k, v), [key, pointer(c)])
+    const next = await page.context().newPage()
+    await setup(next)
+    await next.goto('?mode=guest')
+    await at(next, a)
+    expect(await read(next)).toBe(pointer(a))
+  })
+
+  test('an aborted confirmation of an exact restore preserves the same visit for retry', async ({ page, context }) => {
+    await seed(page)
+    const next = await context.newPage()
+    await setup(next)
+    const reads: string[] = []
+    await next.route('**/api/guest/table/restore?**', async route => {
+      reads.push(new URL(route.request().url()).search)
+      if (reads.length === 1) {
+        await next.evaluate(() => {
+          const put = IDBObjectStore.prototype.put
+          IDBObjectStore.prototype.put = function (...args) {
+            const request = put.apply(this, args)
+            if (this.name === 'visits') {
+              IDBObjectStore.prototype.put = put
+              this.transaction.abort()
+            }
+            return request
+          }
+        })
+      }
+      await route.fulfill(jsonResponse({ context: a }))
+    })
+    await next.goto('?mode=guest')
+    const retry = next.getByRole('button', { name: 'Повторить загрузку стола' })
+    await expect(retry).toBeVisible()
+    expect(await read(next)).toBe(pointer(a))
+    expect(await viewDrafts(next)).toEqual(drafts.map(d => d.value))
+    await retry.click()
+    await at(next, a)
+    expect(reads).toHaveLength(2)
+    expect(reads[0]).toBe(reads[1])
+    expect(new URLSearchParams(reads[1]).get('tableSessionId')).toBe(String(a.tableSessionId))
+  })
+
+  test('a migrated exit prevents a stale window from restoring its private pointer after a 503', async ({ page }) => {
+    await setup(page)
+    await page.addInitScript(({ key, pointer, sessionId, draft }) => {
+      sessionStorage.setItem(key, pointer)
+      localStorage.setItem(key + ':selection', JSON.stringify({ latest: null, confirmed: null, ended: [sessionId] }))
+      localStorage.setItem(draft.key, draft.value)
+    }, { key, pointer: pointer(a), sessionId: a.tableSessionId, draft: drafts[1] })
+    await page.route('**/api/guest/table/restore*', route => route.fulfill({ status: 503 }))
+    await page.goto('?mode=guest')
+    await expect(page.getByRole('button', { name: 'Повторить загрузку стола' })).toBeVisible()
+    expect(await read(page)).toBeNull()
+    expect(await viewDrafts(page)).toEqual([null, drafts[1].value])
+  })
+
+  test('review04 aborting IndexedDB publication retains the confirmed visit and cart', async ({ page }) => {
+    await seed(page)
+    const before = await visitRecord(page, key)
+    await page.evaluate(deniedToken => {
+      const put = IDBObjectStore.prototype.put
+      IDBObjectStore.prototype.put = function (record, ...args) {
+        const request = put.call(this, record, ...args)
+        if (this.name === 'visits' && record.pointer?.tableToken === deniedToken) {
+          IDBObjectStore.prototype.put = put
+          this.transaction.abort()
+        }
+        return request
+      }
+    }, b.tableToken)
+    await choose(page, b, 'scan')
+    await expect.poll(() => page.evaluate(() => (window as unknown as ScannerWindow).__qrAlerts)).toContainEqual(expect.stringContaining('Не удалось сохранить выбор стола'))
+    await expectVisitUnchanged(page, key, before)
+    expect(await viewDrafts(page)).toEqual(drafts.map(d => d.value))
+    await choose(page, b, 'scan')
+    await at(page, b)
+    expect(await read(page)).toBe(pointer(b))
+  })
+
+  test('review04 failed exit transaction preserves a newer admission and its draft', async ({ page, context }) => {
+    await seed(page)
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    await page.route('**/api/guest/table/session/end', async route => {
+      await gate
+      await route.fulfill(jsonResponse({ ended: true, tableSessionId: a.tableSessionId }))
+    })
+    page.on('dialog', dialog => dialog.accept())
+    const sent = page.waitForRequest('**/api/guest/table/session/end')
+    await page.getByRole('button', { name: 'Завершить визит' }).click()
+    await sent
+    const other = await context.newPage()
+    await setup(other)
+    const renewed = { ...a, visitGeneration: '32' }
+    await other.route('**/api/guest/table/resolve?**', r => r.fulfill(jsonResponse(renewed)))
+    await choose(other, a, 'bot')
+    await at(other, a)
+    const after = '{"items":[],"commentDraft":"New visit"}'
+    await seedCart(other, generationKey('32'), after)
+    await page.evaluate(() => { IDBDatabase.prototype.transaction = () => { throw new DOMException('Closed', 'InvalidStateError') } })
+    release()
+    await expect(page.getByRole('heading', { name: 'Заведения', exact: true })).toBeVisible()
+    const fresh = await context.newPage()
+    await setup(fresh)
+    await fresh.route('**/api/guest/table/restore*', r => r.fulfill(jsonResponse({ context: renewed })))
+    await fresh.goto('?mode=guest')
+    await at(fresh, a)
+    expect(JSON.parse((await read(fresh))!).visitGeneration).toBe('32')
+    expect(await viewDrafts(fresh)).toEqual([null, drafts[1].value])
+    expect(await storedCart(fresh, generationKey('32'))).toBe(after)
+  })
+
+  const endedUi = (p: Page) => expect(p.getByRole('heading', { name: 'Заведения', exact: true })).toBeVisible()
+  const rich = JSON.stringify({ items: [{ itemId: 1, qty: 2 }], commentDraft: 'before exit' })
+  test('final rejection of A arrives after choosing unrelated B', async ({ page, context }) => {
+    await seed(page)
+    const reader = await context.newPage()
+    await setup(reader)
+    let release!: () => void
+    const gate = new Promise<void>(r => release = r)
+    await reader.route('**/api/guest/table/restore?**', async route => {
+      await gate
+      await route.fulfill(jsonResponse({ context: null }))
+    })
+    const request = reader.waitForRequest('**/api/guest/table/restore?**')
+    await reader.goto('?mode=guest')
+    expect(new URL((await request).url()).searchParams.get('tableSessionId')).toBe('77')
+    await choose(page, b, 'scan')
+    await at(page, b)
+    release()
+    await expect(reader.getByText(/Не удалось восстановить выбранный стол/)).toBeVisible()
+    expect(await read(page)).toBe(pointer(b))
+    expect(await viewDrafts(page)).toEqual([null, drafts[1].value])
+  })
+
+  test('a late positive restore cannot display the visit after acknowledged exit', async ({ page, context }) => {
+    await seed(page)
+    const reader = await context.newPage()
+    await setup(reader)
+    let release!: () => void
+    const gate = new Promise<void>(r => release = r)
+    await reader.route('**/api/guest/table/restore?**', async route => {
+      await gate
+      await route.fulfill(jsonResponse({ context: a }))
+    })
+    const readStarted = reader.waitForRequest('**/api/guest/table/restore?**')
+    await reader.goto('?mode=guest')
+    await readStarted
+    page.on('dialog', d => d.accept())
+    await page.route('**/api/guest/table/session/end', r => r.fulfill(jsonResponse({ ended: true, tableSessionId: 77 })))
+    await page.getByRole('button', { name: 'Завершить визит' }).click()
+    await endedUi(page)
+    expect(await read(page)).toBeNull()
+    expect((await viewDrafts(page))[0]).toBeNull()
+    release()
+    await expect(reader.getByText(/Не удалось восстановить выбранный стол/)).toBeVisible()
+    await expect(reader.getByRole('button', { name: 'Завершить визит' })).toBeHidden()
+    expect(await reader.evaluate(k => JSON.parse(sessionStorage.getItem(k)!), key)).toBe('unavailable')
+    expect(await read(reader)).toBeNull()
+  })
+
+  test('focus while ordering is suspended preserves the confirmed visit and draft', async ({ page }) => {
+    await seed(page)
+    await page.route('**/api/guest/table/resolve?**', route => route.fulfill(jsonResponse({
+      ...a, tableSessionActive: true, available: false, visitGeneration: null, unavailableReason: 'SUBSCRIPTION_BLOCKED'
+    })))
+    const read = page.waitForRequest('**/api/guest/table/resolve?**')
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    expect(new URL((await read).url()).searchParams.get('tableSessionId')).toBe('77')
+    await expect(page.getByRole('button', { name: 'Завершить визит' })).toBeHidden()
+    expect(await storedPointer(page, key)).toBe(pointer(a))
+    expect(await viewDrafts(page)).toEqual(drafts.map(draft => draft.value))
+  })
+
+  for (const reason of ['SUBSCRIPTION_BLOCKED', 'SERVICE_SUSPENDED']) test(`temporary venue block ${reason} keeps the cart until ordering resumes`, async ({ page }) => {
+    await seed(page)
+    await seedCart(page, drafts[0].key, rich)
+    await page.route('**/api/guest/table/restore?**', route => route.fulfill(jsonResponse({
+      context: null, unavailableReason: reason
+    })), { times: 1 })
+    await page.goto('?mode=guest')
+    const retry = page.getByRole('button', { name: 'Повторить загрузку стола' })
+    await expect(retry).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Завершить визит' })).toBeHidden()
+    expect(await read(page)).toBe(pointer(a))
+    expect(await viewDrafts(page)).toEqual([rich, drafts[1].value])
+    await retry.click()
+    await at(page, a)
+    await expect(page.getByRole('button', { name: 'Корзина (2)' })).toBeVisible()
+    expect(await viewDrafts(page)).toEqual([rich, drafts[1].value])
+  })
+
+  test('a stale exit keeps the confirmed cart and asks the guest to refresh', async ({ page }) => {
+    await seed(page)
+    const before = await viewDrafts(page)
+    page.on('dialog', dialog => dialog.accept())
+    const message = 'Посещение изменилось. Обновите стол перед завершением визита.'
+    await page.route('**/api/guest/table/session/end', route => {
+      expect(route.request().postDataJSON().expectedVisitGeneration).toBe('0')
+      return route.fulfill(jsonResponse({ error: { code: 'VISIT_GENERATION_CHANGED', message } }, 409))
+    })
+    await page.getByRole('button', { name: 'Завершить визит' }).click()
+    await expect(page.getByText(message, { exact: true })).toBeVisible()
+    await at(page, a)
+    expect(await read(page)).toBe(pointer(a))
+    expect(await viewDrafts(page)).toEqual(before)
+  })
+
+  test('cold older explicit Bot entry yields to later confirmed selection', async ({ page, context }) => {
+    await seed(page)
+    const cold = await context.newPage()
+    await setup(cold)
+    await cold.addInitScript(() => {
+      const descriptor = Object.getOwnPropertyDescriptor(IDBRequest.prototype, 'onsuccess')!
+      Object.defineProperty(IDBOpenDBRequest.prototype, 'onsuccess', {
+        configurable: true,
+        set(fn) {
+          descriptor.set!.call(this, function (event: Event) {
+            if (this.result.name === 'hookah-guest-visits' && !(window as any).releasedColdOpen) {
+              Object.assign(window, {
+                deliverOpen: () => {
+                  (window as any).releasedColdOpen = true
+                  fn.call(this, event)
+                }
+              })
+            } else fn.call(this, event)
+          })
+        }, get: descriptor.get
+      })
+    })
+    await choose(cold, b, 'bot')
+    await expect.poll(() => cold.evaluate(() => typeof (window as any).deliverOpen)).toBe('function')
+    await choose(page, c, 'scan')
+    await at(page, c)
+    expect(await read(page)).toBe(pointer(c))
+    await cold.evaluate(() => (window as any).deliverOpen())
+    await expect(cold.getByText(/Не удалось восстановить выбранный стол/)).toBeVisible()
+    expect(await read(page)).toBe(pointer(c))
+  })
+
+  for (const status of [408, 429]) test('temporary SDK resolve ' + status + ' permits retry', async ({ page }) => {
+    await setup(page, b.tableToken)
+    await page.addInitScript(k => sessionStorage.setItem(k, JSON.stringify('lost')), key)
+    await page.route('**/api/guest/table/resolve?**', r => r.fulfill({ status }), { times: 1 })
+    await page.goto('?mode=guest')
+    await page.getByRole('button', { name: 'Подключиться по QR из Telegram' }).click()
+    await expect.poll(() => page.evaluate(() => (window as any).__qrAlerts.length)).toBe(1)
+    expect((await visitRecord(page, key)).pending?.id).toBeTruthy()
+    await page.getByRole('button', { name: 'Повторить подключение по QR' }).click()
+    await at(page, b)
+  })
+
+  test('transient cart read failure at restore preserves a valid draft', async ({ page, context }) => {
+    await seed(page)
+    await seedCart(page, drafts[0].key, rich)
+    const view = await context.newPage()
+    await setup(view)
+    await view.addInitScript(k => {
+      const original = IDBObjectStore.prototype.get
+      IDBObjectStore.prototype.get = function (s) {
+        if (s === k) throw new DOMException('Cart read unavailable', 'InvalidStateError')
+        return original.call(this, s)
+      }
+    }, drafts[0].key)
+    await view.goto('?mode=guest')
+    await at(view, a)
+    expect(await viewDrafts(page)).toEqual([rich, drafts[1].value])
+    await expect(view.getByRole('button', { name: 'Повторить загрузку корзины' })).toBeVisible()
+  })
+
+  test('reading the same admission leaves a pending exit in force', async ({ page, context }) => {
+    await seed(page)
+    let end!: () => void
+    const gate = new Promise<void>(r => end = r)
+    await page.route('**/api/guest/table/session/end', async route => {
+      await gate
+      await route.fulfill(jsonResponse({ ended: true, tableSessionId: 77 }))
+    })
+    page.on('dialog', d => d.accept())
+    const inFlight = page.waitForRequest('**/api/guest/table/session/end')
+    await page.getByRole('button', { name: 'Завершить визит' }).click()
+    await inFlight
+    const reader = await context.newPage()
+    await setup(reader)
+    await choose(reader, a, 'bot')
+    await at(reader, a)
+    // The server confirmed the prior active session, then processes end. No rejoin intervened.
+    end()
+    await endedUi(page)
+    expect(await read(reader)).toBeNull()
+    expect(await viewDrafts(reader)).toEqual([null, drafts[1].value])
+  })
+  test('whole draft storage outage then first item after recovery extends prior basket', async ({ page, context }) => {
+    await seed(page)
+    await seedCart(page, drafts[0].key, rich)
+    const view = await context.newPage()
+    await setup(view)
+    await view.addInitScript(k => {
+      const original = IDBObjectStore.prototype.get
+      IDBObjectStore.prototype.get = function (s) {
+        if (s === k && !(window as any).draftStorageRecovered) throw new DOMException('Offline', 'InvalidStateError')
+        return original.call(this, s)
+      }
+    }, drafts[0].key)
+    await view.goto('?mode=guest')
+    await at(view, a)
+    expect((await viewDrafts(page))[0]).toBe(rich)
+    await view.evaluate(() => { Object.assign(window, { draftStorageRecovered: true }) })
+    await view.getByRole('button', {name: 'Повторить загрузку корзины'}).click()
+    await view.getByRole('button', { name: /Кальянное меню/ }).first().click()
+    await view.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+    await expect(view.getByRole('button', { name: 'Корзина (3)' })).toBeVisible()
+    const saved = JSON.parse((await viewDrafts(page))[0]!)
+    expect(saved.items.reduce((n, x) => n + x.qty, 0)).toBe(3)
+    expect(saved.commentDraft).toBe('before exit')
+    expect((await viewDrafts(page))[1]).toBe(drafts[1].value)
+  })
+  test('unversioned draft stays archived when the server confirms baseline participation', async ({ page, context }) => {
+    const archive = drafts[0].key.replace(/:visit:0$/, '')
+    await setup(page)
+    await page.addInitScript(({ archive, rich }) => { if (!localStorage.getItem(archive)) localStorage.setItem(archive, rich) }, { archive, rich })
+    await choose(page, a, 'bot')
+    await at(page, a)
+    await expect(page.getByRole('button', { name: 'Корзина', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: /Кальянное меню/ }).first().click()
+    await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+    await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+    await page.close()
+    const reopened = await context.newPage()
+    await setup(reopened)
+    await reopened.goto('?mode=guest')
+    await at(reopened, a)
+    await expect(reopened.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+    expect(await reopened.evaluate(k => localStorage.getItem(k), archive)).toBe(rich)
+    expect(JSON.parse((await viewDrafts(reopened))[0]!).commentDraft).toBeUndefined()
+  })
+
+  for (const method of ['setItem', 'removeItem'] as const) {
+    test('cart retries a failed ' + method + ' without losing the saved draft', async ({ page }) => {
+      await seed(page)
+      await page.getByRole('button', { name: /Кальянное меню/ }).first().click()
+      await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+      const before = await viewDrafts(page)
+      await page.evaluate(key => {
+        const original = IDBObjectStore.prototype.put
+        IDBObjectStore.prototype.put = function (v, k) {
+          if (k === key) throw new DOMException('Cart write unavailable', 'QuotaExceededError')
+          return original.call(this, v, k)
+        }
+        Object.assign(window, { recoverCart: () => { IDBObjectStore.prototype.put = original } })
+      }, drafts[0].key)
+      if (method === 'setItem') {
+        await page.getByRole('button', { name: '+', exact: true }).first().click()
+      } else {
+        await page.getByRole('button', { name: 'Корзина (1)' }).click()
+        await page.getByRole('button', { name: '−', exact: true }).first().click()
+      }
+      const retry = page.getByRole('button', { name: 'Повторить сохранение корзины' })
+      await expect(retry).toBeVisible()
+      expect(await viewDrafts(page)).toEqual(before)
+      if (method === 'setItem') {
+        const checked = page.waitForResponse('**/api/guest/table/resolve?**')
+        await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+        await checked
+        await at(page, a)
+        await expect(page.getByRole('button', { name: 'Корзина (2)' })).toBeVisible()
+      }
+      await page.evaluate(() => (window as Window & { recoverCart(): void }).recoverCart())
+      await retry.click()
+      await expect(retry).toBeHidden()
+      const [saved, other] = await viewDrafts(page)
+      expect(other).toBe(drafts[1].value)
+      if (method === 'setItem') expect(JSON.parse(saved!).items[0].qty).toBe(2)
+      else { expect(JSON.parse(saved!).items).toEqual([]); expect(JSON.parse(saved!).commentDraft).toBe('A') }
+    })
+  }
+  test('review07 a failed write keeps the accepted comment and visibly locks subsequent input until retry', async ({ page }) => {
+    await seed(page)
+    await seedCart(page, drafts[0].key, rich)
+    await page.reload()
+    await page.getByRole('button', { name: 'Корзина (2)' }).click()
+    const field = page.getByPlaceholder('Комментарий к заказу')
+    await expect(field).toBeEditable()
+    await page.evaluate(key => {
+      const put = IDBObjectStore.prototype.put
+      IDBObjectStore.prototype.put = function (record, id) {
+        if (id === key) throw new DOMException('Fixture quota', 'QuotaExceededError')
+        return put.call(this, record, id!)
+      }
+      Object.assign(window, { recover: () => { IDBObjectStore.prototype.put = put } })
+    }, drafts[0].key)
+    await field.fill('Первая правка')
+    const retry = page.getByRole('button', { name: 'Повторить сохранение корзины' })
+    await expect(retry).toBeVisible()
+    await expect(field).not.toBeEditable()
+    await field.focus()
+    await page.keyboard.type('unaccepted')
+    await expect(field).toHaveValue('Первая правка')
+    await page.evaluate(() => (window as Window & { recover(): void }).recover())
+    await retry.click()
+    await expect(field).toBeEditable()
+    await field.fill('Сохранённый комментарий')
+    await expect.poll(async () => JSON.parse((await viewDrafts(page))[0]!).commentDraft).toBe('Сохранённый комментарий')
+    expect((await viewDrafts(page))[1]).toBe(drafts[1].value)
+  })
+
+  for (const concurrent of ['replace', 'quantity', 'remove'] as const) {
+    test(`review07 replacing a line conflicts with a concurrent ${concurrent} without adding another item`, async ({ page, context }) => {
+      await context.addInitScript(() => Object.defineProperty(window, 'BroadcastChannel', { value: undefined }))
+      await seed(page)
+      const initial = JSON.parse(rich)
+      initial.items = [{ itemId: 10, qty: 1, selectedOptionId: 101, selectedOptionName: 'Исходный' }]
+      await seedCart(page, drafts[0].key, JSON.stringify(initial))
+      await page.reload()
+      const peer = await context.newPage()
+      await setup(peer)
+      await peer.goto('?mode=guest')
+      for (const view of [page, peer]) await view.getByRole('button', { name: 'Корзина (1)' }).click()
+      // Invoke the same SKU-replacement action as the menu picker with both editors displaying the original line.
+      const edit = (view: Page, action: string, option: number) => view.evaluate(async ([action, id]) => {
+        const url = '/miniapp/src/shared/state/cartStore.ts'
+        const cart = await import(url)
+        const line = [...cart.getCartSnapshot().items.keys()][0]
+        if (action === 'quantity') cart.setCartLineQty(line, 2)
+        else if (action === 'remove') cart.removeCartLine(line)
+        else cart.replaceCartLineOption(line, { id, name: 'Вариант ' + id, priceDeltaMinor: 0 })
+      }, [action, option] as const)
+      await edit(page, concurrent, 102)
+      await expect.poll(async () => JSON.parse((await viewDrafts(page))[0]!).items.map((line: { qty: number; selectedOptionId: number }) => [line.selectedOptionId, line.qty]))
+        .toEqual(concurrent === 'replace' ? [[102, 1]] : concurrent === 'quantity' ? [[101, 2]] : [])
+      await edit(peer, 'replace', 103)
+      await expect(peer.getByText(/Та же позиция или комментарий изменены/)).toBeVisible()
+      await peer.getByRole('button', { name: 'Принять сохранённую корзину' }).click()
+      await peer.reload()
+      await expect(peer.getByRole('button', { name: concurrent === 'remove' ? 'Корзина' : `Корзина (${concurrent === 'quantity' ? 2 : 1})`, exact: true }).first()).toBeVisible()
+      expect((await viewDrafts(peer))[1]).toBe(drafts[1].value)
+    })
+  }
+
+  test('review06 concurrent additions survive reopening both WebViews', async ({ page, context }) => {
+    await context.addInitScript(() => { Object.defineProperty(window, 'BroadcastChannel', { value: undefined }) })
+    await seed(page)
+    const other = await context.newPage()
+    await setup(other)
+    await other.goto('?mode=guest')
+    await at(other, a)
+    for (const view of [page, other]) await view.getByRole('button', { name: /Кальянное меню/ }).first().click()
+    const add = (view: Page) => view.getByRole('button', { name: 'Добавить', exact: true }).filter({ visible: true }).first().click()
+    await Promise.all([add(page), add(other)])
+    await expect.poll(async () => JSON.parse((await viewDrafts(page))[0]!).items[0].qty).toBe(2)
+    await page.close()
+    await other.reload()
+    await expect(other.getByRole('button', { name: 'Корзина (2)' })).toBeVisible()
+    expect((await viewDrafts(other))[1]).toBe(drafts[1].value)
+  })
+
+  test('review06 concurrent increments at the quantity limit allow an explicit resolution', async ({ page, context }) => {
+    await context.addInitScript(() => Object.defineProperty(window, 'BroadcastChannel', { value: undefined }))
+    await seed(page)
+    await page.getByRole('button', { name: /Кальянное меню/ }).first().click()
+    await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+    await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
+    const draft = JSON.parse((await storedCart(page, drafts[0].key))!)
+    draft.items[0].qty = 49
+    await seedCart(page, drafts[0].key, JSON.stringify(draft))
+    const peer = await context.newPage()
+    await setup(peer)
+    for (const view of [page, peer]) {
+      await view.goto('?mode=guest')
+      await view.getByRole('button', { name: /Кальянное меню/ }).first().click()
+      await expect(view.getByRole('button', { name: 'Корзина (49)' })).toBeVisible()
+    }
+    await page.getByRole('button', { name: '+', exact: true }).first().click()
+    await expect(page.getByRole('button', { name: 'Корзина (50)' })).toBeVisible()
+    await peer.getByRole('button', { name: '+', exact: true }).first().click()
+    const mine = peer.getByRole('button', { name: 'Применить мои правки' })
+    await mine.click()
+    await expect(mine).toBeHidden()
+    await expect(peer.getByRole('button', { name: 'Корзина (50)' })).toBeVisible()
+    expect(JSON.parse((await storedCart(page, drafts[0].key))!).items[0].qty).toBe(50)
+  })
+
+  for (const useMine of [false, true]) {
+    test('review06 resolves concurrent comments explicitly, keep local=' + useMine, async ({ page, context }) => {
+      await context.addInitScript(() => { Object.defineProperty(window, 'BroadcastChannel', { value: undefined }) })
+      await seed(page)
+      await page.getByRole('button', { name: /Кальянное меню/ }).first().click()
+      await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+      await page.getByRole('button', { name: 'Корзина (1)' }).click()
+      const peer = await context.newPage()
+      await setup(peer)
+      await peer.goto('?mode=guest')
+      await at(peer, a)
+      await peer.getByRole('button', { name: 'Корзина (1)' }).click()
+      await page.getByPlaceholder('Комментарий к заказу').fill('Первое окно')
+      await expect.poll(async () => JSON.parse((await viewDrafts(page))[0]!).commentDraft).toBe('Первое окно')
+      await peer.getByPlaceholder('Комментарий к заказу').fill('Второе окно')
+      await expect(peer.getByText(/Та же позиция или комментарий изменены/)).toBeVisible()
+      expect(JSON.parse((await viewDrafts(page))[0]!).commentDraft).toBe('Первое окно')
+      await peer.getByRole('button', { name: useMine ? 'Применить мои правки' : 'Принять сохранённую корзину' }).click()
+      await expect(peer.getByText(/Та же позиция или комментарий изменены/)).toBeHidden()
+      await peer.reload()
+      const expected = useMine ? 'Второе окно' : 'Первое окно'
+      await expect(peer.getByPlaceholder('Комментарий к заказу')).toHaveValue(expected)
+      expect(JSON.parse((await viewDrafts(peer))[0]!).items[0].qty).toBe(1)
+    })
+  }
+
+  test('review06 a confirmed exit after switching accounts only clears the original guest cart', async ({ page }) => {
+    await seed(page)
+    await seedCart(page, drafts[1].key, drafts[1].value)
+    let release!: () => void
+    const barrier = new Promise<void>(done => { release = done })
+    await page.route('**/api/guest/table/session/end', async route => {
+      await barrier
+      await route.fulfill(jsonResponse({ ended: true, tableSessionId: a.tableSessionId }))
+    })
+    page.once('dialog', dialog => dialog.accept())
+    const sent = page.waitForRequest('**/api/guest/table/session/end')
+    await page.getByRole('button', { name: 'Завершить визит' }).click()
+    await sent
+    await page.evaluate(() => {
+      const sdk = (window as unknown as ScannerWindow).Telegram.WebApp
+      sdk.initDataUnsafe = { user: { id: 987654321 } }
+    })
+    release()
+    await expect.poll(() => viewDrafts(page)).toEqual([null, drafts[1].value])
+    expect(await storedPointer(page, key)).toBeNull()
+  })
+
+  test('review06 end with unavailable IndexedDB invalidates a delayed observation', async ({ page, context }) => {
+    await seed(page)
+    const reader = await context.newPage()
+    await setup(reader)
+    let release!: () => void
+    const gate = new Promise<void>(done => { release = done })
+    await reader.route('**/api/guest/table/restore?**', async route => { await gate; await route.fulfill(jsonResponse({ context: a })) })
+    const requested = reader.waitForRequest('**/api/guest/table/restore?**')
+    await reader.goto('?mode=guest')
+    await requested
+    await page.evaluate(() => { IDBDatabase.prototype.transaction = () => { throw new DOMException('Offline', 'InvalidStateError') } })
+    page.on('dialog', dialog => dialog.accept())
+    await page.route('**/api/guest/table/session/end', route => route.fulfill(jsonResponse({ ended: true, tableSessionId: 77 })))
+    await page.getByRole('button', { name: 'Завершить визит' }).click()
+    await endedUi(page)
+    release()
+    await expect(reader.getByText(/Не удалось восстановить выбранный стол/)).toBeVisible()
+    await expect(reader.getByRole('button', { name: 'Завершить визит' })).toBeHidden()
+  })
+
+  test('review06 migration keeps the original until IndexedDB commits and preserves the historical archive', async ({ page }) => {
+    await setup(page)
+    await page.addInitScript(({ key, value }) => {
+      localStorage.setItem(key, value)
+      localStorage.setItem(key.replace(/:visit:0$/, ''), 'historical archive')
+      const put = IDBObjectStore.prototype.put
+      IDBObjectStore.prototype.put = function (record, id) {
+        if (id === key) throw new DOMException('Uncommitted migration', 'QuotaExceededError')
+        return put.call(this, record, id)
+      }
+      Object.assign(window, { recoverImport: () => { IDBObjectStore.prototype.put = put } })
+    }, { key: drafts[0].key, value: rich })
+    await choose(page, a, 'bot')
+    await at(page, a)
+    const original = () => page.evaluate(k => localStorage.getItem(k), drafts[0].key)
+    const retry = page.getByRole('button', { name: 'Повторить загрузку корзины' })
+    await expect(retry).toBeVisible()
+    expect(await original()).toBe(rich)
+    await page.evaluate(() => (window as Window & { recoverImport(): void }).recoverImport())
+    await retry.click()
+    await expect(page.getByRole('button', { name: 'Корзина (2)' })).toBeVisible()
+    await expect.poll(original).toBeNull()
+    expect(JSON.parse((await storedCart(page, drafts[0].key))!).commentDraft).toBe('before exit')
+    expect(await page.evaluate(k => localStorage.getItem(k.replace(/:visit:0$/, '')), drafts[0].key)).toBe('historical archive')
+  })
+
+  test('review06 retries interrupted LocalStorage cleanup after a successful cart import', async ({ page }) => {
+    await setup(page)
+    await page.addInitScript(({ key, value }) => {
+      localStorage.setItem(key, value)
+      const remove = Storage.prototype.removeItem
+      Storage.prototype.removeItem = function (k) {
+        if (k === key) throw new DOMException('Deletion suspended', 'SecurityError')
+        return remove.call(this, k)
+      }
+      Object.assign(window, { resumeRemoval: () => { Storage.prototype.removeItem = remove } })
+    }, { key: drafts[0].key, value: rich })
+    await choose(page, a, 'bot')
+    await at(page, a)
+    const cart = page.getByRole('button', { name: 'Корзина (2)' })
+    await expect(cart).toBeVisible()
+    const original = () => page.evaluate(k => localStorage.getItem(k), drafts[0].key)
+    expect(await original()).toBe(rich)
+    await page.evaluate(() => (window as Window & { resumeRemoval(): void }).resumeRemoval())
+    await cart.click()
+    await page.getByPlaceholder('Комментарий к заказу').fill('After import')
+    await expect.poll(original).toBeNull()
+    const saved = JSON.parse((await storedCart(page, drafts[0].key))!)
+    expect(saved.commentDraft).toBe('After import')
+    expect(saved.items[0].qty).toBe(2)
+  })
+
+  test('review06 old server resolve preserves the last confirmed visit and draft', async ({ page }) => {
+    await seed(page)
+    const legacy = { ...b, visitGeneration: undefined, visitProtocol: undefined }
+    await page.route('**/api/guest/table/resolve?**', route => route.fulfill({ json: legacy }))
+    await choose(page, b, 'bot')
+    await expect(page.getByText(/Сервер обновляется/)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Повторить загрузку стола' })).toBeVisible()
+    expect(await read(page)).toBe(pointer(a))
+    expect(await viewDrafts(page)).toEqual(drafts.map(d => d.value))
+  })
+
+  test('review06 old server ambiguous absence keeps the confirmed cart', async ({ page }) => {
+    await seed(page)
+    await page.route('**/api/guest/table/restore*', route => route.fulfill({json: {context: null}}))
+    await page.goto('?mode=guest')
+    await expect(page.getByText(/Сервер обновляется/)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Повторить загрузку стола' })).toBeVisible()
+    expect(await read(page)).toBe(pointer(a))
+    expect(await viewDrafts(page)).toEqual(drafts.map(d => d.value))
+  })
+
+  test('QR without Web Locks publishes the confirmed visit and restores it in a new WebView', async ({ page, context }) => {
+    await seed(page)
+    await context.addInitScript(() => Object.defineProperty(navigator, 'locks', { value: undefined }))
+    const scanner = await context.newPage()
+    await setup(scanner)
+    await scanner.goto('?mode=guest')
+    await at(scanner, a)
+    await choose(scanner, b, 'scan')
+    await at(scanner, b)
+    expect(await read(scanner)).toBe(pointer(b))
+    await scanner.close()
+    const next = await context.newPage()
+    await setup(next)
+    await next.goto('?mode=guest')
+    await at(next, b)
+    expect(await viewDrafts(next)).toEqual(drafts.map(d => d.value))
+  })
 })

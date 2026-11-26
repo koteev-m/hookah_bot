@@ -69,6 +69,8 @@ internal class PlatformGuestQrPendingConfirmationStore(
         return consumed
     }
 
+    fun reference(key: PlatformGuestQrPendingKey): String? = pendingByKey[key]?.reference
+
     fun clear(key: PlatformGuestQrPendingKey): PlatformGuestQrPendingConfirmation? = pendingByKey.remove(key)
 
     private fun sweepExpired(now: Instant) {

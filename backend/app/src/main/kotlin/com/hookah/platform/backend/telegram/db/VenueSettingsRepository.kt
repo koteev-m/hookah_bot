@@ -2,6 +2,7 @@ package com.hookah.platform.backend.telegram.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.InvalidInputException
+import com.hookah.platform.backend.miniapp.venue.seating.lockSeatingVenue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -497,6 +498,38 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
                     val previousAutoCommit = connection.autoCommit
                     connection.autoCommit = false
                     try {
+                        // QR activation and checkout use the same venue lock. The retired session IDs
+                        // remain a durable boundary even after deleting the order and its replay keys.
+                        lockSeatingVenue(connection, venueId)
+                        executeUpdate(
+                            connection,
+                            "UPDATE table_sessions SET status='ENDED', ended_at=CURRENT_TIMESTAMP " +
+                                "WHERE venue_id=? AND status='ACTIVE' AND ended_at IS NULL",
+                            venueId,
+                        )
+                        executeUpdate(
+                            connection,
+                            "UPDATE table_seatings SET released_at=CURRENT_TIMESTAMP, revision=revision+1 " +
+                                "WHERE venue_id=? AND released_at IS NULL",
+                            venueId,
+                        )
+                        executeUpdate(
+                            connection,
+                            "DELETE FROM tab_invite WHERE tab_id IN " +
+                                "(SELECT id FROM tab WHERE venue_id=? AND status='ACTIVE')",
+                            venueId,
+                        )
+                        executeUpdate(
+                            connection,
+                            "UPDATE tab SET status='CLOSED' WHERE venue_id=? AND status='ACTIVE'",
+                            venueId,
+                        )
+                        executeUpdate(
+                            connection,
+                            "DELETE FROM bot_prepared_checkouts WHERE table_session_id IN " +
+                                "(SELECT id FROM table_sessions WHERE venue_id=?)",
+                            venueId,
+                        )
                         val itemsCount =
                             count(
                                 connection,
@@ -524,8 +557,8 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
                         val staffCallsCount =
                             count(connection, "SELECT COUNT(*) FROM staff_calls WHERE venue_id = ?", venueId)
 
-                        executeDelete(connection, "DELETE FROM staff_calls WHERE venue_id = ?", venueId)
-                        executeDelete(connection, "DELETE FROM orders WHERE venue_id = ?", venueId)
+                        executeUpdate(connection, "DELETE FROM staff_calls WHERE venue_id = ?", venueId)
+                        executeUpdate(connection, "DELETE FROM orders WHERE venue_id = ?", venueId)
 
                         connection.commit()
                         VenueOperationalResetResult(
@@ -534,7 +567,7 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
                             itemsDeleted = itemsCount,
                             staffCallsDeleted = staffCallsCount,
                         )
-                    } catch (e: SQLException) {
+                    } catch (e: Exception) {
                         connection.rollback()
                         throw e
                     } finally {
@@ -611,7 +644,7 @@ class VenueSettingsRepository(private val dataSource: DataSource?) {
             statement.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
         }
 
-    private fun executeDelete(
+    private fun executeUpdate(
         connection: Connection,
         sql: String,
         venueId: Long,

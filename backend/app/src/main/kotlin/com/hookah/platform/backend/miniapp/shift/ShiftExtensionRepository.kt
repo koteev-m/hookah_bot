@@ -4,6 +4,10 @@ import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.ShiftExtensionTermsChangedException
+import com.hookah.platform.backend.api.VisitGenerationChangedException
+import com.hookah.platform.backend.api.VisitVersionRequiredException
+import com.hookah.platform.backend.miniapp.venue.seating.lockSeatingVenue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.Connection
@@ -40,7 +44,14 @@ data class ShiftExtensionSettings(
     val priceMinor: Long?,
     val currency: String,
     val maxExtensionsPerSession: Int?,
-)
+    val updatedAt: Instant = Instant.EPOCH,
+) {
+    fun terms(): ShiftExtensionTerms? =
+        priceMinor?.takeIf { enabled }?.let {
+            val revision = updatedAt.epochSecond * 1_000_000 + updatedAt.nano / 1_000
+            ShiftExtensionTerms(durationMinutes, it, currency, revision.toString())
+        }
+}
 
 data class ShiftExtensionRequestRecord(
     val id: Long,
@@ -75,6 +86,8 @@ data class CreateShiftExtensionRequestCommand(
     val currentOrderableUntil: Instant,
     val idempotencyKey: String?,
     val comment: String?,
+    val visitGeneration: Long = 0,
+    val confirmedTerms: ShiftExtensionTerms? = null,
 )
 
 data class UpdateShiftExtensionSettingsCommand(
@@ -92,9 +105,102 @@ data class ShiftExtensionDecisionResult(
     val applied: Boolean,
 )
 
+internal data class GuestExtensionWindow(val orderId: Long, val paidUntil: Instant?)
+
 class ShiftExtensionRepository(
     private val dataSource: DataSource?,
 ) {
+    internal suspend fun guestExtensionWindow(
+        venueId: Long,
+        tableId: Long,
+        sessionId: Long,
+        tabId: Long,
+        userId: Long,
+    ): GuestExtensionWindow {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    // One statement observes either side of a committed close/release.
+                    connection.prepareStatement(
+                        """
+                        SELECT CASE WHEN EXISTS (
+                            SELECT 1 FROM table_seatings seat
+                            WHERE seat.table_session_id = ts.id AND seat.venue_id = ts.venue_id AND seat.released_at IS NULL
+                        ) THEN NULL ELSE ts.expires_at END AS paid_until,
+                        EXISTS (
+                            SELECT 1 FROM tab t JOIN tab_member tm ON tm.tab_id = t.id
+                            WHERE t.id = ? AND t.table_session_id = ts.id AND t.venue_id = ts.venue_id
+                              AND t.status = 'ACTIVE' AND tm.user_id = ?
+                        ) AS is_member,
+                        (SELECT MAX(o.id) FROM orders o
+                         WHERE o.table_session_id = ts.id AND o.venue_id = ts.venue_id AND o.table_id = ts.table_id
+                           AND o.status = 'ACTIVE' AND EXISTS (
+                               SELECT 1 FROM order_batches b WHERE b.order_id = o.id AND b.tab_id = ?
+                           )) AS order_id
+                        FROM table_sessions ts
+                        WHERE ts.id = ? AND ts.venue_id = ? AND ts.table_id = ?
+                          AND ts.status = 'ACTIVE' AND ts.ended_at IS NULL AND ts.expires_at > CURRENT_TIMESTAMP
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setLong(1, tabId)
+                        statement.setLong(2, userId)
+                        statement.setLong(3, tabId)
+                        statement.setLong(4, sessionId)
+                        statement.setLong(5, venueId)
+                        statement.setLong(6, tableId)
+                        statement.executeQuery().use { rows ->
+                            if (!rows.next()) throw NotFoundException("Active table session not found")
+                            if (!rows.getBoolean("is_member")) throw ForbiddenException("Tab access denied")
+                            val orderId = rows.getLong("order_id")
+                            if (rows.wasNull()) throw NotFoundException("Active order not found")
+                            GuestExtensionWindow(orderId, rows.getTimestamp("paid_until")?.toInstant())
+                        }
+                    }
+                }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun hasStaffManagedSeating(
+        venueId: Long,
+        sessionId: Long,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { hasStaffManagedSeating(it, venueId, sessionId) }
+            } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    private fun hasStaffManagedSeating(
+        connection: Connection,
+        venueId: Long,
+        sessionId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            "SELECT 1 FROM table_seatings WHERE venue_id=? AND table_session_id=? AND released_at IS NULL",
+        ).use {
+            it.setLong(1, venueId)
+            it.setLong(2, sessionId)
+            it.executeQuery().use { rows -> rows.next() }
+        }
+
+    private fun requirePaidWindow(
+        connection: Connection,
+        venueId: Long,
+        sessionId: Long,
+    ) {
+        if (hasStaffManagedSeating(connection, venueId, sessionId)) {
+            throw InvalidInputException("Время этой посадки меняет персонал в зале. Платное продление недоступно.")
+        }
+    }
+
     suspend fun findActiveSettings(venueId: Long): ShiftExtensionSettings? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -201,27 +307,102 @@ class ShiftExtensionRepository(
         }
     }
 
+    internal fun findExactReplay(
+        connection: Connection,
+        command: CreateShiftExtensionRequestCommand,
+    ): ShiftExtensionRequestRecord? {
+        val key = requireShiftExtensionKey(command.idempotencyKey)
+        val comment = normalizeComment(command.comment)
+        val registeredRequestId =
+            connection.prepareStatement(
+                """
+                SELECT request_id, visit_generation, request_comment, terms_revision
+                FROM shift_extension_request_keys
+                WHERE venue_id = ? AND table_session_id = ? AND requested_by_user_id = ? AND idempotency_key = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, command.venueId)
+                statement.setLong(2, command.tableSessionId)
+                statement.setLong(3, command.requestedByUserId)
+                statement.setString(4, key)
+                statement.executeQuery().use { rows ->
+                    if (!rows.next()) return@use null
+                    if (rows.getLong("visit_generation") != command.visitGeneration ||
+                        rows.getString("request_comment") != comment
+                    ) {
+                        throw VisitGenerationChangedException()
+                    }
+                    rows.getString("terms_revision")?.let { revision ->
+                        val terms = command.confirmedTerms ?: throw VisitVersionRequiredException()
+                        if (terms.revision != revision) throw VisitGenerationChangedException()
+                    }
+                    rows.getLong("request_id")
+                }
+            }
+        val result =
+            if (registeredRequestId != null) {
+                loadRequest(connection, command.venueId, registeredRequestId) ?: throw VisitGenerationChangedException()
+            } else {
+                findExistingByIdempotency(
+                    connection,
+                    command.venueId,
+                    command.tableSessionId,
+                    command.requestedByUserId,
+                    key,
+                )
+                    ?.also { if (it.comment != comment) throw VisitGenerationChangedException() }
+            }
+        return result?.also {
+            if (it.orderId != command.orderId || it.tabId != command.tabId ||
+                it.tableId != command.tableId || it.tableSessionId != command.tableSessionId
+            ) {
+                throw VisitGenerationChangedException()
+            }
+            val terms = command.confirmedTerms
+            if (terms != null && !it.matchesTerms(terms)) throw VisitGenerationChangedException()
+        }
+    }
+
+    private fun registerRequestKey(
+        connection: Connection,
+        command: CreateShiftExtensionRequestCommand,
+        key: String,
+        comment: String?,
+        requestId: Long,
+    ) {
+        connection.prepareStatement(
+            """
+            INSERT INTO shift_extension_request_keys
+                (venue_id, table_session_id, requested_by_user_id, idempotency_key, visit_generation, request_id, request_comment, terms_revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, command.venueId)
+            statement.setLong(2, command.tableSessionId)
+            statement.setLong(3, command.requestedByUserId)
+            statement.setString(4, key)
+            statement.setLong(5, command.visitGeneration)
+            statement.setLong(6, requestId)
+            statement.setNullableString(7, comment)
+            statement.setLong(8, requireNotNull(command.confirmedTerms).revision.toLong())
+            statement.executeUpdate()
+        }
+    }
+
     fun createPendingRequest(
         connection: Connection,
         command: CreateShiftExtensionRequestCommand,
         now: Instant = Instant.now(),
     ): ShiftExtensionRequestRecord {
+        lockSeatingVenue(connection, command.venueId)
         ensureRequestingActorIsTabMember(connection, command)
+        val normalizedIdempotencyKey = requireShiftExtensionKey(command.idempotencyKey)
+        findExactReplay(connection, command)?.let { return it }
         val normalizedComment = normalizeComment(command.comment)
-        val normalizedIdempotencyKey = normalizeIdempotencyKey(command.idempotencyKey)
-        val existingByIdempotency =
-            normalizedIdempotencyKey?.let { idempotencyKey ->
-                findExistingByIdempotency(
-                    connection = connection,
-                    venueId = command.venueId,
-                    tableSessionId = command.tableSessionId,
-                    requestedByUserId = command.requestedByUserId,
-                    idempotencyKey = idempotencyKey,
-                )
-            }
-        if (existingByIdempotency != null) {
-            return existingByIdempotency
-        }
+        requirePaidWindow(connection, command.venueId, command.tableSessionId)
+        val confirmed = command.confirmedTerms ?: throw VisitVersionRequiredException()
+        val settings = loadSettings(connection, command.venueId, forUpdate = true)
+        if (settings?.terms() != confirmed) throw ShiftExtensionTermsChangedException()
 
         val existingPending =
             findPendingForUpdate(
@@ -231,15 +412,12 @@ class ShiftExtensionRepository(
                 tabId = command.tabId,
             )
         if (existingPending != null) {
+            if (existingPending.orderId != command.orderId) throw VisitGenerationChangedException()
+            if (!existingPending.matchesTerms(confirmed)) throw VisitGenerationChangedException()
+            registerRequestKey(connection, command, normalizedIdempotencyKey, normalizedComment, existingPending.id)
             return existingPending
         }
 
-        val settings =
-            loadActiveSettings(connection, command.venueId)
-                ?: throw InvalidInputException("Shift extension is not configured")
-        val priceMinor =
-            settings.priceMinor
-                ?: throw InvalidInputException("Shift extension price is not configured")
         ensureActiveContext(
             connection = connection,
             venueId = command.venueId,
@@ -261,13 +439,14 @@ class ShiftExtensionRepository(
                 connection = connection,
                 command = command,
                 settings = settings,
-                priceMinor = priceMinor,
+                priceMinor = confirmed.priceMinor,
                 currentOrderableUntil = command.currentOrderableUntil,
                 requestedUntil = requestedUntil,
                 idempotencyKey = normalizedIdempotencyKey,
                 comment = normalizedComment,
                 now = now,
             )
+        registerRequestKey(connection, command, normalizedIdempotencyKey, normalizedComment, requestId)
         return loadRequest(connection, command.venueId, requestId) ?: throw DatabaseUnavailableException()
     }
 
@@ -343,12 +522,12 @@ class ShiftExtensionRepository(
         actorUserId: Long,
     ): ShiftExtensionDecisionResult {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        val now = Instant.now()
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
                     connection.autoCommit = false
                     try {
+                        lockSeatingVenue(connection, venueId)
                         val decision =
                             loadRequestForDecision(connection, venueId, requestId)
                                 ?: throw NotFoundException()
@@ -369,15 +548,22 @@ class ShiftExtensionRepository(
                                 "Заказ уже завершён. Продление не добавлено. Обновите список запросов.",
                             )
                         }
-                        ensureActiveContext(
-                            connection = connection,
-                            venueId = venueId,
-                            tableSessionId = request.tableSessionId,
-                            tableId = request.tableId,
-                            tabId = request.tabId,
-                            orderId = request.orderId,
-                            now = now,
-                        )
+                        requirePaidWindow(connection, venueId, request.tableSessionId)
+                        val settings =
+                            loadSettings(connection, venueId, forUpdate = true)
+                                ?: throw NotFoundException("Extension settings not found")
+                        ensureExtensionLimit(connection, settings, request.tableSessionId)
+                        val now = Instant.now()
+                        val previousDeadline =
+                            ensureActiveContext(
+                                connection = connection,
+                                venueId = venueId,
+                                tableSessionId = request.tableSessionId,
+                                tableId = request.tableId,
+                                tabId = request.tabId,
+                                orderId = request.orderId,
+                                now = now,
+                            )
                         val chargeInserted =
                             insertServiceChargeIfMissing(
                                 connection = connection,
@@ -385,7 +571,9 @@ class ShiftExtensionRepository(
                                 actorUserId = actorUserId,
                                 now = now,
                             )
-                        extendSession(connection, request, now)
+                        if (!chargeInserted) throw InvalidInputException("Начисление для этой заявки уже существует.")
+                        val newDeadline = previousDeadline.plus(Duration.ofMinutes(request.durationMinutes.toLong()))
+                        extendSession(connection, request, newDeadline, now)
                         decideRequest(
                             connection = connection,
                             venueId = venueId,
@@ -393,6 +581,8 @@ class ShiftExtensionRepository(
                             status = ShiftExtensionRequestStatus.APPROVED,
                             actorUserId = actorUserId,
                             reasonText = null,
+                            serviceStart = previousDeadline,
+                            serviceEnd = newDeadline,
                             now = now,
                         )
                         touchOrder(connection, request.orderId, now)
@@ -480,69 +670,35 @@ class ShiftExtensionRepository(
     private fun loadActiveSettings(
         connection: Connection,
         venueId: Long,
-    ): ShiftExtensionSettings? =
-        connection.prepareStatement(
-            """
-            SELECT venue_id, enabled, duration_minutes, price_minor, currency, max_extensions_per_session
-            FROM shift_extension_settings
-            WHERE venue_id = ?
-              AND enabled = TRUE
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, venueId)
-            statement.executeQuery().use { rs ->
-                if (rs.next()) {
-                    ShiftExtensionSettings(
-                        venueId = rs.getLong("venue_id"),
-                        enabled = rs.getBoolean("enabled"),
-                        durationMinutes = rs.getInt("duration_minutes"),
-                        priceMinor =
-                            rs.getLong("price_minor").let { value ->
-                                if (rs.wasNull()) null else value
-                            },
-                        currency = rs.getString("currency"),
-                        maxExtensionsPerSession =
-                            rs.getInt("max_extensions_per_session").let { value ->
-                                if (rs.wasNull()) null else value
-                            },
-                    )
-                } else {
-                    null
-                }
-            }
-        }
+    ): ShiftExtensionSettings? = loadSettings(connection, venueId)?.takeIf { it.enabled }
 
     private fun loadSettings(
         connection: Connection,
         venueId: Long,
+        forUpdate: Boolean = false,
     ): ShiftExtensionSettings? =
         connection.prepareStatement(
             """
-            SELECT venue_id, enabled, duration_minutes, price_minor, currency, max_extensions_per_session
+            SELECT venue_id, enabled, duration_minutes, price_minor, currency, max_extensions_per_session, updated_at
             FROM shift_extension_settings
             WHERE venue_id = ?
-            """.trimIndent(),
+            """.trimIndent() + if (forUpdate) " FOR UPDATE" else "",
         ).use { statement ->
             statement.setLong(1, venueId)
             statement.executeQuery().use { rs ->
-                if (rs.next()) {
-                    ShiftExtensionSettings(
-                        venueId = rs.getLong("venue_id"),
-                        enabled = rs.getBoolean("enabled"),
-                        durationMinutes = rs.getInt("duration_minutes"),
-                        priceMinor =
-                            rs.getLong("price_minor").let { value ->
-                                if (rs.wasNull()) null else value
-                            },
-                        currency = rs.getString("currency"),
-                        maxExtensionsPerSession =
-                            rs.getInt("max_extensions_per_session").let { value ->
-                                if (rs.wasNull()) null else value
-                            },
-                    )
-                } else {
-                    null
-                }
+                if (!rs.next()) return@use null
+                ShiftExtensionSettings(
+                    venueId = rs.getLong("venue_id"),
+                    enabled = rs.getBoolean("enabled"),
+                    durationMinutes = rs.getInt("duration_minutes"),
+                    priceMinor = rs.getLong("price_minor").let { if (rs.wasNull()) null else it },
+                    currency = rs.getString("currency"),
+                    maxExtensionsPerSession =
+                        rs.getInt(
+                            "max_extensions_per_session",
+                        ).let { if (rs.wasNull()) null else it },
+                    updatedAt = rs.getTimestamp("updated_at").toInstant(),
+                )
             }
         }
 
@@ -558,7 +714,7 @@ class ShiftExtensionRepository(
                 price_minor = ?,
                 currency = ?,
                 max_extensions_per_session = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = GREATEST(CURRENT_TIMESTAMP, updated_at + INTERVAL '0.000001' SECOND)
             WHERE venue_id = ?
             """.trimIndent(),
         ).use { statement ->
@@ -815,51 +971,47 @@ class ShiftExtensionRepository(
         tabId: Long,
         orderId: Long,
         now: Instant,
-    ) {
+    ): Instant {
         ensureVenuePublished(connection, venueId)
-        val active =
-            connection.prepareStatement(
-                """
-                SELECT 1
-                FROM orders o
-                JOIN table_sessions ts ON ts.id = o.table_session_id
-                JOIN tab t ON t.id = ?
-                WHERE o.id = ?
-                  AND o.venue_id = ?
-                  AND o.table_id = ?
-                  AND o.table_session_id = ?
-                  AND o.status = 'ACTIVE'
-                  AND ts.venue_id = ?
-                  AND ts.table_id = ?
-                  AND ts.status = 'ACTIVE'
-                  AND ts.ended_at IS NULL
-                  AND ts.expires_at > ?
-                  AND t.venue_id = ?
-                  AND t.table_session_id = ?
-                  AND t.status = 'ACTIVE'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM order_batches ob
-                      WHERE ob.order_id = o.id
-                        AND ob.tab_id = t.id
-                  )
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setLong(1, tabId)
-                statement.setLong(2, orderId)
-                statement.setLong(3, venueId)
-                statement.setLong(4, tableId)
-                statement.setLong(5, tableSessionId)
-                statement.setLong(6, venueId)
-                statement.setLong(7, tableId)
-                statement.setTimestamp(8, Timestamp.from(now))
-                statement.setLong(9, venueId)
-                statement.setLong(10, tableSessionId)
-                statement.executeQuery().use { rs -> rs.next() }
-            }
-        if (!active) {
-            throw NotFoundException("Active table order context not found")
-        }
+        return connection.prepareStatement(
+            """
+            SELECT ts.expires_at
+            FROM orders o
+            JOIN table_sessions ts ON ts.id = o.table_session_id
+            JOIN tab t ON t.id = ?
+            WHERE o.id = ?
+              AND o.venue_id = ?
+              AND o.table_id = ?
+              AND o.table_session_id = ?
+              AND o.status = 'ACTIVE'
+              AND ts.venue_id = ?
+              AND ts.table_id = ?
+              AND ts.status = 'ACTIVE'
+              AND ts.ended_at IS NULL
+              AND ts.expires_at > ?
+              AND t.venue_id = ?
+              AND t.table_session_id = ?
+              AND t.status = 'ACTIVE'
+              AND EXISTS (
+                  SELECT 1
+                  FROM order_batches ob
+                  WHERE ob.order_id = o.id
+                    AND ob.tab_id = t.id
+              )
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, tabId)
+            statement.setLong(2, orderId)
+            statement.setLong(3, venueId)
+            statement.setLong(4, tableId)
+            statement.setLong(5, tableSessionId)
+            statement.setLong(6, venueId)
+            statement.setLong(7, tableId)
+            statement.setTimestamp(8, Timestamp.from(now))
+            statement.setLong(9, venueId)
+            statement.setLong(10, tableSessionId)
+            statement.executeQuery().use { rs -> if (rs.next()) rs.getTimestamp(1).toInstant() else null }
+        } ?: throw NotFoundException("Active table order context not found")
     }
 
     private fun ensureVenuePublished(
@@ -902,7 +1054,7 @@ class ShiftExtensionRepository(
                 statement.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
             }
         if (approvedCount >= max) {
-            throw InvalidInputException("Shift extension limit reached")
+            throw InvalidInputException("Достигнут лимит продлений для этого посещения стола.")
         }
     }
 
@@ -968,6 +1120,7 @@ class ShiftExtensionRepository(
     private fun extendSession(
         connection: Connection,
         request: ShiftExtensionRequestRecord,
+        newDeadline: Instant,
         now: Instant,
     ) {
         val updated =
@@ -975,7 +1128,7 @@ class ShiftExtensionRepository(
                 """
                 UPDATE table_sessions
                 SET last_activity_at = ?,
-                    expires_at = CASE WHEN expires_at > ? THEN expires_at ELSE ? END
+                    expires_at = ?
                 WHERE id = ?
                   AND venue_id = ?
                   AND status = 'ACTIVE'
@@ -984,11 +1137,10 @@ class ShiftExtensionRepository(
                 """.trimIndent(),
             ).use { statement ->
                 statement.setTimestamp(1, Timestamp.from(now))
-                statement.setTimestamp(2, Timestamp.from(request.requestedUntil))
-                statement.setTimestamp(3, Timestamp.from(request.requestedUntil))
-                statement.setLong(4, request.tableSessionId)
-                statement.setLong(5, request.venueId)
-                statement.setTimestamp(6, Timestamp.from(now))
+                statement.setTimestamp(2, Timestamp.from(newDeadline))
+                statement.setLong(3, request.tableSessionId)
+                statement.setLong(4, request.venueId)
+                statement.setTimestamp(5, Timestamp.from(now))
                 statement.executeUpdate()
             }
         if (updated <= 0) {
@@ -1003,6 +1155,8 @@ class ShiftExtensionRepository(
         status: ShiftExtensionRequestStatus,
         actorUserId: Long,
         reasonText: String?,
+        serviceStart: Instant? = null,
+        serviceEnd: Instant? = null,
         now: Instant,
     ) {
         connection.prepareStatement(
@@ -1012,7 +1166,9 @@ class ShiftExtensionRepository(
                 decided_by_user_id = ?,
                 decided_at = ?,
                 reject_reason = ?,
-                updated_at = ?
+                updated_at = ?,
+                current_orderable_until = COALESCE(?, current_orderable_until),
+                requested_until = COALESCE(?, requested_until)
             WHERE id = ?
               AND venue_id = ?
             """.trimIndent(),
@@ -1022,8 +1178,10 @@ class ShiftExtensionRepository(
             statement.setTimestamp(3, Timestamp.from(now))
             statement.setNullableString(4, reasonText)
             statement.setTimestamp(5, Timestamp.from(now))
-            statement.setLong(6, requestId)
-            statement.setLong(7, venueId)
+            statement.setTimestamp(6, serviceStart?.let(Timestamp::from))
+            statement.setTimestamp(7, serviceEnd?.let(Timestamp::from))
+            statement.setLong(8, requestId)
+            statement.setLong(9, venueId)
             statement.executeUpdate()
         }
     }
@@ -1125,11 +1283,10 @@ private fun normalizeComment(raw: String?): String? {
     return normalized
 }
 
-private fun normalizeIdempotencyKey(raw: String?): String? {
+internal fun requireShiftExtensionKey(raw: String?): String {
     val normalized = raw?.trim().orEmpty()
-    if (normalized.isBlank()) {
-        return null
-    }
+    if (normalized.isBlank()) throw VisitVersionRequiredException()
+    if (normalized.any { it.isISOControl() }) throw InvalidInputException("Invalid idempotencyKey")
     if (normalized.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
         throw InvalidInputException("idempotencyKey length must be <= $MAX_IDEMPOTENCY_KEY_LENGTH")
     }
@@ -1152,3 +1309,6 @@ private fun serviceChargeLabel(durationMinutes: Int): String =
     } else {
         "Продление работы на $durationMinutes мин."
     }
+
+private fun ShiftExtensionRequestRecord.matchesTerms(terms: ShiftExtensionTerms): Boolean =
+    durationMinutes == terms.durationMinutes && priceMinor == terms.priceMinor && currency == terms.currency

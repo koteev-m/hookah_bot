@@ -211,6 +211,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "batch-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -263,8 +264,8 @@ class GuestOrderRoutesTest {
                     ApiErrorCodes.ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH,
                 )
             assertEquals(
-                "Этот ключ отправки уже использован для другого состава заказа. " +
-                    "Обновите корзину и отправьте заказ ещё раз.",
+                "Этот ключ отправки уже связан с другим составом. " +
+                    "Проверьте активный заказ или повторите исходную отправку.",
                 mismatchError.error.message,
             )
             assertEquals(mismatchSnapshot, persistenceSnapshot(jdbcUrl))
@@ -348,6 +349,7 @@ class GuestOrderRoutesTest {
             val idempotencyKey = "legacy-lost-option-replay-key"
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = tableToken,
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -393,7 +395,7 @@ class GuestOrderRoutesTest {
                 )
             assertEquals(
                 "Не удалось безопасно повторить старую отправку. " +
-                    "Проверьте активный заказ и отправьте корзину заново только при необходимости.",
+                    "Проверьте активный заказ. Исходная отправка сохранена.",
                 replayError.error.message,
             )
             assertEquals(beforeReplay, persistenceSnapshot(jdbcUrl))
@@ -443,6 +445,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config, ownerUserId)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = tableToken,
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -506,8 +509,8 @@ class GuestOrderRoutesTest {
                     ApiErrorCodes.ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH,
                 )
             assertEquals(
-                "Этот ключ отправки уже использован для другого состава заказа. " +
-                    "Обновите корзину и отправьте заказ ещё раз.",
+                "Этот ключ отправки уже связан с другим составом. " +
+                    "Проверьте активный заказ или повторите исходную отправку.",
                 mismatchError.error.message,
             )
             assertEquals(beforeConflict, persistenceSnapshot(jdbcUrl))
@@ -559,6 +562,7 @@ class GuestOrderRoutesTest {
             val idempotencyKey = "platform-legacy-unverifiable-key"
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = tableToken,
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -618,7 +622,7 @@ class GuestOrderRoutesTest {
                 )
             assertEquals(
                 "Не удалось безопасно повторить старую отправку. " +
-                    "Проверьте активный заказ и отправьте корзину заново только при необходимости.",
+                    "Проверьте активный заказ. Исходная отправка сохранена.",
                 replayError.error.message,
             )
             assertEquals(beforeReplay, persistenceSnapshot(jdbcUrl))
@@ -654,6 +658,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "session-scope-token",
                                 tableSessionId = firstSessionId,
                                 tabId = firstTabId,
@@ -682,6 +687,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "session-scope-token",
                                 tableSessionId = secondSessionId,
                                 tabId = secondTabId,
@@ -759,6 +765,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "active-cross-session-token",
                                 tableSessionId = firstSessionId,
                                 tabId = firstTabId,
@@ -806,6 +813,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val firstRequest =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "batch-two-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -869,6 +877,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val firstRequest =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "staff-chat-live-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -974,6 +983,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "bill-request-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -989,11 +999,46 @@ class GuestOrderRoutesTest {
 
             val billRequest =
                 GuestBillRequestRequest(
+                    expectedVisitGeneration = "0",
+                    expectedOrderId = addPayload.orderId,
                     tableToken = "bill-request-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
                     paymentMethod = "CARD",
                 )
+            // A direct Bot reorder displayed for an earlier order must also fail at the SQL writer.
+            val beforeReorder = persistenceSnapshot(jdbcUrl)
+            val repository = OrdersRepository(h2DataSource(jdbcUrl))
+            val stale =
+                runCatching {
+                    repository.createGuestOrderBatch(
+                        tableId = tableId,
+                        venueId = venueId,
+                        tableSessionId = tableSessionId,
+                        userId = TELEGRAM_USER_ID,
+                        idempotencyKey = "old-bot-reorder",
+                        tabId = personalTabId,
+                        comment = null,
+                        items = listOf(OrderBatchItemInput(itemId = itemId, qty = 1)),
+                        expectedOrderId = addPayload.orderId + 1,
+                    )
+                }.exceptionOrNull()
+            assertTrue(stale is com.hookah.platform.backend.api.VisitGenerationChangedException)
+            assertEquals(beforeReorder, persistenceSnapshot(jdbcUrl))
+            val beforeWrongOrder = persistenceSnapshot(jdbcUrl)
+            val wrongOrder =
+                client.post("/api/guest/order/bill-request") {
+                    contentType(ContentType.Application.Json)
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                    setBody(
+                        json.encodeToString(
+                            GuestBillRequestRequest.serializer(),
+                            billRequest.copy(expectedOrderId = addPayload.orderId + 1),
+                        ),
+                    )
+                }
+            assertEquals(HttpStatusCode.Conflict, wrongOrder.status)
+            assertEquals(beforeWrongOrder, persistenceSnapshot(jdbcUrl))
             val firstResponse =
                 client.post("/api/guest/order/bill-request") {
                     contentType(ContentType.Application.Json)
@@ -1086,9 +1131,11 @@ class GuestOrderRoutesTest {
                     setBody(
                         """
                         {
+                          "expectedVisitGeneration": "0",
                           "tableToken": "bill-invalid-payment-token",
                           "tableSessionId": $tableSessionId,
                           "tabId": $personalTabId,
+                          "expectedOrderId": 1,
                           "paymentMethod": "ONLINE"
                         }
                         """.trimIndent(),
@@ -1127,6 +1174,8 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             GuestBillRequestRequest.serializer(),
                             GuestBillRequestRequest(
+                                expectedVisitGeneration = "0",
+                                expectedOrderId = 1L,
                                 tableToken = "bill-foreign-tab-token",
                                 tableSessionId = tableSessionId,
                                 tabId = foreignTabId,
@@ -1188,6 +1237,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "selected-option-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -1303,6 +1353,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "selected-option-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -1372,6 +1423,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "current-option-price-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -1403,6 +1455,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "current-option-price-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -1440,6 +1493,7 @@ class GuestOrderRoutesTest {
                     setBody(
                         """
                         {
+                          "expectedVisitGeneration": "0",
                           "tableToken": "current-option-price-token",
                           "tableSessionId": $tableSessionId,
                           "tabId": $personalTabId,
@@ -1543,6 +1597,7 @@ class GuestOrderRoutesTest {
                 postAddBatchRequest(
                     request =
                         AddBatchRequest(
+                            expectedVisitGeneration = "0",
                             tableToken = "option-reject-token",
                             tableSessionId = tableSessionId,
                             tabId = personalTabId,
@@ -1562,6 +1617,7 @@ class GuestOrderRoutesTest {
                 postAddBatchRequest(
                     request =
                         AddBatchRequest(
+                            expectedVisitGeneration = "0",
                             tableToken = "option-reject-token",
                             tableSessionId = tableSessionId,
                             tabId = personalTabId,
@@ -1581,6 +1637,7 @@ class GuestOrderRoutesTest {
                 postAddBatchRequest(
                     request =
                         AddBatchRequest(
+                            expectedVisitGeneration = "0",
                             tableToken = "option-reject-token",
                             tableSessionId = tableSessionId,
                             tabId = personalTabId,
@@ -1610,6 +1667,7 @@ class GuestOrderRoutesTest {
                 postAddBatchRequest(
                     request =
                         AddBatchRequest(
+                            expectedVisitGeneration = "0",
                             tableToken = "option-reject-token",
                             tableSessionId = tableSessionId,
                             tabId = personalTabId,
@@ -1658,6 +1716,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 CartPreviewRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "stale-availability-preview-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -1745,6 +1804,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "cart-menu-issues-preview-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -1917,6 +1977,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "cart-menu-issues-submit-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -1974,8 +2035,14 @@ class GuestOrderRoutesTest {
                 )
             staleSubmissions.forEach { (idempotencyKey, item, issue) ->
                 val before = persistenceSnapshot(jdbcUrl)
-                assertCartMenuSelectionIssues(submit(idempotencyKey, item), listOf(issue))
-                assertEquals(before, persistenceSnapshot(jdbcUrl))
+                assertCartMenuSelectionIssues(submit(idempotencyKey, item), listOf(issue), operationClosed = true)
+                val after = persistenceSnapshot(jdbcUrl)
+                assertEquals(before - "guest_batch_idempotency", after - "guest_batch_idempotency")
+                val existingReceipts = before.getValue("guest_batch_idempotency").toSet()
+                val receipt = after.getValue("guest_batch_idempotency") - existingReceipts
+                assertEquals(existingReceipts.size + 1, after.getValue("guest_batch_idempotency").size)
+                assertTrue(receipt.single().contains("idempotency_key=$idempotencyKey"))
+                assertTrue(receipt.single().contains("batch_id=<NULL>"))
             }
 
             val correctedResponse =
@@ -1985,6 +2052,7 @@ class GuestOrderRoutesTest {
                     setBody(
                         """
                         {
+                          "expectedVisitGeneration": "0",
                           "tableToken": "cart-menu-issues-submit-token",
                           "tableSessionId": $tableSessionId,
                           "tabId": $personalTabId,
@@ -2016,7 +2084,9 @@ class GuestOrderRoutesTest {
             assertEquals(1, countRows(jdbcUrl, "order_batches"))
             assertEquals(1, countRows(jdbcUrl, "order_batch_items"))
             assertEquals(1, countRows(jdbcUrl, "order_batch_item_options"))
-            assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
+            val receipts = persistenceSnapshot(jdbcUrl).getValue("guest_batch_idempotency")
+            assertEquals(staleSubmissions.size + 1, receipts.size)
+            assertEquals(staleSubmissions.size, receipts.count { it.contains("batch_id=<NULL>") })
         }
 
     @Test
@@ -2075,6 +2145,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = tableToken,
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -2093,6 +2164,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = tableToken,
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -2152,8 +2224,14 @@ class GuestOrderRoutesTest {
                 assertCartMenuSelectionIssues(preview(item), listOf(issue))
                 assertEquals(beforePreview, persistenceSnapshot(jdbcUrl))
                 val before = persistenceSnapshot(jdbcUrl)
-                assertCartMenuSelectionIssues(submit(idempotencyKey, item), listOf(issue))
-                assertEquals(before, persistenceSnapshot(jdbcUrl))
+                assertCartMenuSelectionIssues(submit(idempotencyKey, item), listOf(issue), operationClosed = true)
+                val after = persistenceSnapshot(jdbcUrl)
+                assertEquals(before - "guest_batch_idempotency", after - "guest_batch_idempotency")
+                val existingReceipts = before.getValue("guest_batch_idempotency").toSet()
+                val receipt = after.getValue("guest_batch_idempotency") - existingReceipts
+                assertEquals(existingReceipts.size + 1, after.getValue("guest_batch_idempotency").size)
+                assertTrue(receipt.single().contains("idempotency_key=$idempotencyKey"))
+                assertTrue(receipt.single().contains("batch_id=<NULL>"))
             }
         }
 
@@ -2175,6 +2253,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(settings)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "shared-only",
                     tableSessionId = session,
                     tabId = shared,
@@ -2270,6 +2349,7 @@ class GuestOrderRoutesTest {
                             json.encodeToString(
                                 AddBatchRequest.serializer(),
                                 AddBatchRequest(
+                                    expectedVisitGeneration = "0",
                                     tableToken = tableToken,
                                     tableSessionId = tableSessionId,
                                     tabId = sharedTabId,
@@ -2318,6 +2398,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "option-preview-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -2402,6 +2483,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "staff-chat-outbox-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -2464,6 +2546,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "staff-chat-replay-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -2530,6 +2613,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "summary-personal-token",
                                 tableSessionId = tableSessionId,
                                 tabId = guestATabId,
@@ -2548,6 +2632,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "summary-personal-token",
                                 tableSessionId = tableSessionId,
                                 tabId = guestBTabId,
@@ -2601,6 +2686,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "summary-shared-token",
                                 tableSessionId = tableSessionId,
                                 tabId = sharedTabId,
@@ -2648,6 +2734,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "source-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -2696,6 +2783,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "promo-ledger-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -2783,6 +2871,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "cart-preview-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -2816,6 +2905,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "cart-preview-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -2924,6 +3014,9 @@ class GuestOrderRoutesTest {
                         venueId = venueId,
                         userId = TELEGRAM_USER_ID,
                         items = repositoryItems,
+                        tableSessionId = tableSessionId,
+                        tabId = personalTabId,
+                        expectedVisitGeneration = 0,
                         venueZoneId = ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
                     ),
                 )
@@ -2935,6 +3028,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "promotion-parity-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -3005,6 +3099,7 @@ class GuestOrderRoutesTest {
                 )
             val miniSubmitRequest =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "promotion-parity-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -3140,6 +3235,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "promo-option-snapshot-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -3165,6 +3261,7 @@ class GuestOrderRoutesTest {
 
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "promo-option-snapshot-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -3301,6 +3398,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "promo-mixed-replay-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -3483,6 +3581,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "promo-stale-price-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -3500,6 +3599,7 @@ class GuestOrderRoutesTest {
 
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "promo-stale-price-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -3665,6 +3765,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "promo-stale-availability-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -3687,6 +3788,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "promo-stale-availability-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -3762,6 +3864,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "promo-multi-line-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -3786,6 +3889,7 @@ class GuestOrderRoutesTest {
 
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "promo-multi-line-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -3877,6 +3981,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "promo-filtered-replay-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -3892,6 +3997,7 @@ class GuestOrderRoutesTest {
 
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "promo-filtered-replay-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -3969,6 +4075,7 @@ class GuestOrderRoutesTest {
             val requestItems = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1))
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "gift-ledger-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -4034,6 +4141,7 @@ class GuestOrderRoutesTest {
                                 otherTab,
                                 "other-tab-no-gift",
                                 listOf(AddBatchItemDto(itemId = teaItemId, qty = 1)),
+                                expectedVisitGeneration = "0",
                             ),
                         ),
                     )
@@ -4217,6 +4325,7 @@ class GuestOrderRoutesTest {
                             json.encodeToString(
                                 CartPreviewRequest.serializer(),
                                 CartPreviewRequest(
+                                    expectedVisitGeneration = "0",
                                     tableToken = "gift-trigger-required-option-token",
                                     tableSessionId = tableSessionId,
                                     tabId = tabId,
@@ -4254,6 +4363,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "gift-trigger-required-option-token",
                                 tableSessionId = tableSessionId,
                                 tabId = tabId,
@@ -4271,6 +4381,7 @@ class GuestOrderRoutesTest {
                     removedOptionResponse.bodyAsText(),
                 )
             assertFalse(removedOption.submitted)
+            assertTrue(removedOption.operationClosed)
             assertEquals("NO_GIFT", removedOption.pricing.giftOffer.status)
             assertTrue(removedOption.pricing.giftDecisionStale)
             assertEquals(
@@ -4287,6 +4398,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "gift-trigger-required-option-token",
                                 tableSessionId = tableSessionId,
                                 tabId = tabId,
@@ -4298,14 +4410,15 @@ class GuestOrderRoutesTest {
                     )
                 }
             assertEquals(HttpStatusCode.BadRequest, staleOptionResponse.status)
-            assertApiErrorEnvelope(staleOptionResponse, ApiErrorCodes.INVALID_INPUT)
+            val staleError = assertApiErrorEnvelope(staleOptionResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals("true", staleError.error.details?.jsonObject?.get("operationClosed")?.jsonPrimitive?.content)
             assertEquals(0, countRows(jdbcUrl, "orders"))
             assertEquals(0, countRows(jdbcUrl, "order_batches"))
             assertEquals(0, countRows(jdbcUrl, "order_batch_items"))
             assertEquals(0, countRows(jdbcUrl, "order_promotion_applications"))
             assertEquals(0, countRows(jdbcUrl, "order_batch_item_promotion_adjustments"))
             assertEquals(0, countRows(jdbcUrl, "order_promotion_reward_items"))
-            assertEquals(0, countRows(jdbcUrl, "guest_batch_idempotency"))
+            assertEquals(2, countRows(jdbcUrl, "guest_batch_idempotency"))
         }
 
     @Test
@@ -4343,6 +4456,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val previewRequest =
                 CartPreviewRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "fixed-gift-decision-token",
                     tableSessionId = tableSessionId,
                     tabId = tabId,
@@ -4377,6 +4491,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "fixed-gift-decision-token",
                                 tableSessionId = tableSessionId,
                                 tabId = tabId,
@@ -4394,10 +4509,11 @@ class GuestOrderRoutesTest {
                     unresolvedSubmit.bodyAsText(),
                 )
             assertFalse(recalculation.submitted)
+            assertTrue(recalculation.operationClosed)
             assertEquals("FIXED_GIFT_AVAILABLE", recalculation.pricing.giftOffer.status)
             assertEquals(0, countRows(jdbcUrl, "orders"))
             assertEquals(0, countRows(jdbcUrl, "order_batches"))
-            assertEquals(0, countRows(jdbcUrl, "guest_batch_idempotency"))
+            assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
 
             val decision = giftRule.acceptFixedDecision(assertNotNull(offered.decisionScopeToken))
             val acceptedPreview = preview(previewRequest.copy(giftDecision = decision)).preview
@@ -4410,10 +4526,11 @@ class GuestOrderRoutesTest {
 
             val acceptedRequest =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "fixed-gift-decision-token",
                     tableSessionId = tableSessionId,
                     tabId = tabId,
-                    idempotencyKey = "fixed-gift-decision",
+                    idempotencyKey = "fixed-gift-decision-confirmed",
                     items = previewRequest.items,
                     previewFingerprint = acceptedPreview.pricingFingerprint,
                     giftDecision = decision,
@@ -4479,7 +4596,7 @@ class GuestOrderRoutesTest {
             assertEquals(1, countPromotionApplications(jdbcUrl))
             assertEquals(1, countPromotionAdjustments(jdbcUrl))
             assertEquals(1, countRows(jdbcUrl, "order_promotion_reward_items"))
-            assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
+            assertEquals(2, countRows(jdbcUrl, "guest_batch_idempotency"))
 
             editGiftRuleAndMenuAfterApplication(
                 jdbcUrl = jdbcUrl,
@@ -4512,12 +4629,13 @@ class GuestOrderRoutesTest {
                     staleAfterPauseResponse.bodyAsText(),
                 )
             assertFalse(staleAfterPause.submitted)
+            assertTrue(staleAfterPause.operationClosed)
             assertEquals("NO_GIFT", staleAfterPause.pricing.giftOffer.status)
             assertEquals(1, countRows(jdbcUrl, "order_batches"))
             assertEquals(2, countBatchItems(jdbcUrl, submitted.batchId))
             assertEquals(1, countPromotionApplications(jdbcUrl))
             assertEquals(1, countRows(jdbcUrl, "order_promotion_reward_items"))
-            assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
+            assertEquals(3, countRows(jdbcUrl, "guest_batch_idempotency"))
         }
 
     @Test
@@ -4605,6 +4723,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "gift-cross-surface-token",
                                 tableSessionId = tableSessionId,
                                 tabId = tabId,
@@ -4640,6 +4759,7 @@ class GuestOrderRoutesTest {
                     token = miniScopeToken,
                     expectedScope =
                         GiftDecisionCartScope(
+                            expectedVisitGeneration = 0,
                             userId = TELEGRAM_USER_ID,
                             venueId = venueId,
                             tableSessionId = tableSessionId,
@@ -4673,6 +4793,7 @@ class GuestOrderRoutesTest {
                     token = botCommand.decisionScopeToken,
                     expectedScope =
                         GiftDecisionCartScope(
+                            expectedVisitGeneration = 0,
                             userId = TELEGRAM_USER_ID,
                             venueId = venueId,
                             tableSessionId = tableSessionId,
@@ -4729,6 +4850,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             CartPreviewRequest.serializer(),
                             CartPreviewRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "gift-cross-surface-token",
                                 tableSessionId = tableSessionId,
                                 tabId = tabId,
@@ -4886,6 +5008,7 @@ class GuestOrderRoutesTest {
             val requestItems = listOf(AddBatchItemDto(itemId = lemonadeItemId, qty = 1))
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "stale-gift-trigger-token",
                     tableSessionId = tableSessionId,
                     tabId = tabId,
@@ -4916,6 +5039,7 @@ class GuestOrderRoutesTest {
                     response.bodyAsText(),
                 )
             assertFalse(recalculation.submitted)
+            assertTrue(recalculation.operationClosed)
             assertEquals("NO_GIFT", recalculation.pricing.giftOffer.status)
             assertTrue(recalculation.pricing.giftDecisionStale)
             assertEquals(
@@ -4927,7 +5051,7 @@ class GuestOrderRoutesTest {
             assertEquals(0, countRows(jdbcUrl, "order_batches"))
             assertEquals(0, countRows(jdbcUrl, "order_batch_items"))
             assertEquals(0, countRows(jdbcUrl, "order_promotion_applications"))
-            assertEquals(0, countRows(jdbcUrl, "guest_batch_idempotency"))
+            assertEquals(1, countRows(jdbcUrl, "guest_batch_idempotency"))
         }
 
     @Test
@@ -4956,6 +5080,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "loyalty-redemption-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -5040,6 +5165,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "loyalty-non-eligible-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -5089,6 +5215,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "loyalty-wins-percent-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -5157,6 +5284,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "loyalty-cheapest-percent-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -5232,6 +5360,7 @@ class GuestOrderRoutesTest {
             val giftItems = listOf(AddBatchItemDto(itemId = hookahItemId, qty = 1))
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "stackability-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -5276,6 +5405,7 @@ class GuestOrderRoutesTest {
             setGiftRulesStackableOnly(jdbcUrl)
             val giftOnlyStackableRequest =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "stackability-token-gift-only",
                     tableSessionId = giftOnlyStackableSessionId,
                     tabId = giftOnlyStackableTabId,
@@ -5319,6 +5449,7 @@ class GuestOrderRoutesTest {
             setAllPromotionRulesStackable(jdbcUrl)
             val stackableRequest =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "stackability-token-2",
                     tableSessionId = stackableSessionId,
                     tabId = stackableTabId,
@@ -5385,6 +5516,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "promo-paused-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -5439,6 +5571,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "promo-parent-archived-token",
                                 tableSessionId = tableSessionId,
                                 tabId = personalTabId,
@@ -5479,6 +5612,7 @@ class GuestOrderRoutesTest {
             val requestBody =
                 """
                 {
+                  "expectedVisitGeneration": "0",
                   "tableToken": "missing-comment-token",
                   "tableSessionId": $tableSessionId,
                   "tabId": $personalTabId,
@@ -5524,6 +5658,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "paused-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -5565,6 +5700,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "foreign-tab-token",
                     tableSessionId = tableSessionId,
                     tabId = foreignTabId,
@@ -5646,6 +5782,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = "active-shared-token",
                                 tableSessionId = tableSessionId,
                                 tabId = sharedTabId,
@@ -5712,6 +5849,7 @@ class GuestOrderRoutesTest {
                 val tabId = seedPersonalTab(jdbcUrl, venueId, tableSessionId, TELEGRAM_USER_ID)
                 val request =
                     AddBatchRequest(
+                        expectedVisitGeneration = "0",
                         tableToken = tableToken,
                         tableSessionId = tableSessionId,
                         tabId = tabId,
@@ -5795,7 +5933,14 @@ class GuestOrderRoutesTest {
                         setBody(
                             json.encodeToString(
                                 GuestBillRequestRequest.serializer(),
-                                GuestBillRequestRequest(tableToken, requestedSessionId, requestedTabId, "CASH"),
+                                GuestBillRequestRequest(
+                                    tableToken,
+                                    requestedSessionId,
+                                    requestedTabId,
+                                    "CASH",
+                                    "0",
+                                    1L,
+                                ),
                             ),
                         )
                     }
@@ -5831,7 +5976,10 @@ class GuestOrderRoutesTest {
                 client.post("/api/guest/table/session/end") {
                     contentType(ContentType.Application.Json)
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
-                    setBody("""{"tableToken":"$tableToken","tableSessionId":$tableSessionId}""")
+                    setBody(
+                        """{"expectedVisitGeneration":"0","tableToken":"$tableToken",
+                            "tableSessionId":$tableSessionId}""",
+                    )
                 }
             assertEquals(HttpStatusCode.OK, exit.status)
             assertEquals("true", json.parseToJsonElement(exit.bodyAsText()).jsonObject.getValue("ended").toString())
@@ -5844,6 +5992,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = tableToken,
                                 tableSessionId = tableSessionId,
                                 tabId = sharedTabId,
@@ -5879,6 +6028,8 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             GuestBillRequestRequest.serializer(),
                             GuestBillRequestRequest(
+                                expectedVisitGeneration = "0",
+                                expectedOrderId = batch.orderId,
                                 tableToken = tableToken,
                                 tableSessionId = tableSessionId,
                                 tabId = sharedTabId,
@@ -5896,6 +6047,7 @@ class GuestOrderRoutesTest {
                         json.encodeToString(
                             AddBatchRequest.serializer(),
                             AddBatchRequest(
+                                expectedVisitGeneration = "0",
                                 tableToken = tableToken,
                                 tableSessionId = tableSessionId,
                                 tabId = sharedTabId,
@@ -5981,6 +6133,7 @@ class GuestOrderRoutesTest {
                             if (index == 1) add(AddBatchItemDto(itemId = rewardItem, qty = 1))
                         },
                         comment = "Comment $user",
+                        expectedVisitGeneration = "0",
                     )
                 }
             val batches =
@@ -6083,6 +6236,7 @@ class GuestOrderRoutesTest {
                     tabId,
                     "summary-author",
                     listOf(AddBatchItemDto(itemId = itemId, qty = 1)),
+                    expectedVisitGeneration = "0",
                 )
             val submitted =
                 client.post("/api/guest/order/add-batch") {
@@ -6128,7 +6282,7 @@ class GuestOrderRoutesTest {
                         setBody(
                             json.encodeToString(
                                 GuestBillRequestRequest.serializer(),
-                                GuestBillRequestRequest(tableToken, sessionId, tabId, "CASH"),
+                                GuestBillRequestRequest(tableToken, sessionId, tabId, "CASH", "0", 1L),
                             ),
                         )
                     }
@@ -6139,7 +6293,13 @@ class GuestOrderRoutesTest {
                         headers { append(HttpHeaders.Authorization, "Bearer $token") }
                         setBody(json.encodeToString(AddBatchRequest.serializer(), request))
                     }
-                assertEquals(expected, replay.status, deny)
+                if (expected == HttpStatusCode.Forbidden) {
+                    assertEquals(HttpStatusCode.OK, replay.status, replay.bodyAsText())
+                    val originalBatchId = json.parseToJsonElement(submitted.bodyAsText()).jsonObject["batchId"]
+                    assertEquals(originalBatchId, json.parseToJsonElement(replay.bodyAsText()).jsonObject["batchId"])
+                } else {
+                    assertEquals(expected, replay.status, deny)
+                }
                 assertEquals(before, persistenceSnapshot(jdbcUrl))
                 DriverManager.getConnection(jdbcUrl, "sa", "").use { it.createStatement().executeUpdate(restore) }
                 assertEquals(1, repository.listActiveOrderSummariesForUser(guestA).size, restore)
@@ -6169,6 +6329,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "blocked-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -6213,6 +6374,7 @@ class GuestOrderRoutesTest {
             val guestToken = issueToken(config, TELEGRAM_USER_ID)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "paid-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -6323,6 +6485,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "rate-limit-token",
                     tableSessionId = tableSessionId,
                     tabId = personalTabId,
@@ -6491,6 +6654,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "expired-session-token",
                     tableSessionId = expiredSessionId,
                     tabId = 1,
@@ -6536,6 +6700,7 @@ class GuestOrderRoutesTest {
             val token = issueToken(config)
             val request =
                 AddBatchRequest(
+                    expectedVisitGeneration = "0",
                     tableToken = "bad token",
                     tableSessionId = 1,
                     tabId = 1,
@@ -7705,12 +7870,15 @@ class GuestOrderRoutesTest {
     private suspend fun assertCartMenuSelectionIssues(
         response: HttpResponse,
         expected: List<ExpectedCartMenuIssue>,
+        operationClosed: Boolean = false,
     ) {
         assertEquals(HttpStatusCode.Conflict, response.status)
         val root = json.parseToJsonElement(response.bodyAsText()).jsonObject
         val error = assertNotNull(root["error"]?.jsonObject)
         assertEquals(ApiErrorCodes.CART_MENU_SELECTION_UNAVAILABLE, error["code"]?.jsonPrimitive?.content)
-        val issues = assertNotNull(error["details"]?.jsonObject?.get("issues")?.jsonArray)
+        val details = assertNotNull(error["details"]?.jsonObject)
+        assertEquals(if (operationClosed) "true" else null, details["operationClosed"]?.jsonPrimitive?.content)
+        val issues = assertNotNull(details["issues"]?.jsonArray)
         val actual =
             issues.map { issueElement ->
                 val issue = issueElement.jsonObject
@@ -8043,6 +8211,7 @@ class GuestOrderRoutesTest {
             .issue(
                 scope =
                     GiftDecisionCartScope(
+                        expectedVisitGeneration = 0,
                         userId = userId,
                         venueId = venueId,
                         tableSessionId = tableSessionId,

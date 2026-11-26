@@ -227,14 +227,21 @@ def history_for(rows):
     return [{k: r[k] for k in ('version', 'script', 'checksum')} for r in rows]
 
 
+# These PostgreSQL versions require fencing all older writers before migration.
+OFFLINE_CUTOVER_VERSIONS = frozenset({144, 145, 146, 147})
+
+
 def compatibility(old, new, review=None):
     require(len(new) >= len(old) and new[:len(old)] == old, 'MIGRATIONS_NOT_APPEND_ONLY')
     if new != old:
+        require(not any(row['version'] in OFFLINE_CUTOVER_VERSIONS for row in new[len(old):]),
+                'PARTICIPATION_OFFLINE_CUTOVER_REQUIRED')
         require(review is not None and review.get('from_manifest') == digest(old)
                 and review.get('to_manifest') == digest(new)
                 and review.get('backward_compatible') is True
                 and isinstance(review.get('reason'), str) and len(review['reason'].strip()) >= 20,
                 'EXACT_COMPATIBILITY_REVIEW_REQUIRED')
+
 
 
 @contextlib.contextmanager

@@ -7,17 +7,23 @@ import { guestEndTableSession, guestGetActiveOrder, guestGetStaffCallStatus, gue
 import { isDebugEnabled } from '../shared/debug'
 import {
   cancelPendingTableRefresh,
+  canRetryTableLoad,
   clearCurrentTableContext,
   formatTableStatus,
   getTableContext,
   initTableContext,
+  isTemporaryError,
   pendingSdkRejoin,
+  prepareVisitExit,
+  startTableSelection,
   rememberSdkRejoin,
   sdkTokenDigest,
   refresh as refreshTableContext,
+  retryTableLoad,
   subscribe as subscribeTable
 } from '../shared/state/tableContext'
-import { getCartSnapshot, setCartTableToken, subscribeCart } from '../shared/state/cartStore'
+import { finishExit } from '../shared/state/visitSelection'
+import { getCartSnapshot, resolveCartConflict, retryCartStorage, setCartTableToken, subscribeCart } from '../shared/state/cartStore'
 import { parsePositiveInt } from '../shared/parse'
 import { bindTelegramBackButton } from '../shared/telegramBackButton'
 import { applicationHash, guestApplicationUrl, createGuestNavigation, guestRouteHash } from '../shared/guestNavigation'
@@ -469,22 +475,33 @@ function mountGuestScreens(options: GuestAppOptions) {
   visitReturn.hidden = true
   refs.statusCard.after(visitReturn)
   const resumeLaunch = el('button', { className: 'button-secondary', text: 'Подключиться по QR из Telegram' })
-  refs.statusCard.appendChild(resumeLaunch)
+  const retryRestore = el('button', { className: 'button-secondary', text: 'Повторить загрузку стола' })
+  retryRestore.addEventListener('click', retryTableLoad)
+  const draftMessage = el('p')
+  draftMessage.setAttribute('role', 'status')
+  const retryDraft = el('button', { className: 'button-secondary', text: 'Повторить загрузку корзины' })
+  const keepSaved = el('button', { className: 'button-secondary', text: 'Принять сохранённую корзину' })
+  const keepMine = el('button', { className: 'button-secondary', text: 'Применить мои правки' })
+  keepSaved.addEventListener('click', () => resolveCartConflict(false))
+  keepMine.addEventListener('click', () => resolveCartConflict(true))
+  retryDraft.addEventListener('click', retryCartStorage)
+  refs.statusCard.append(resumeLaunch, retryRestore, draftMessage, retryDraft, keepSaved, keepMine)
   let sdkQrAttempted = false
   let sdkQrRetry = false
+  let sdkRetryIntentId: string | undefined
   const launchToken = getTelegramContext().tableToken
+  let sdkRetryToken = launchToken
   try {
     const attempt = pendingSdkRejoin()
-    if (attempt?.requiresScan && launchToken) {
+    if (attempt && launchToken) {
       sdkQrAttempted = true
       void sdkTokenDigest(launchToken).then(digest => {
-        if (mounted && digest !== attempt.tokenDigest) {
-          sdkQrAttempted = false
-          renderShellActions()
-        }
+        if (!mounted) return
+        sdkQrAttempted = digest === attempt.tokenDigest
+        sdkQrRetry = sdkQrAttempted && !attempt.requiresScan && !!attempt.intentId
+        sdkRetryIntentId = sdkQrRetry ? attempt.intentId : undefined
+        renderShellActions()
       }).catch(() => { /* A new scan is required. */ })
-    } else {
-      sdkQrRetry = attempt !== null
     }
   } catch { sdkQrAttempted = true }
   let staffCallActive = false
@@ -500,7 +517,15 @@ function mountGuestScreens(options: GuestAppOptions) {
     resumeLaunch.disabled = resolvingQr || visitExitPending
     resumeLaunch.hidden = (sdkQrAttempted && !sdkQrRetry) || (!sdkQrRetry && tableSnapshot.status !== 'rescan') || !launch.tableTokenAutoResolve ||
       launch.tableTokenFromUrl || !launch.tableToken || guestRouteHash() === applicationHash
-    refs.statusCard.hidden = !showVisit && !refs.statusDetails.textContent && resumeLaunch.hidden
+    retryRestore.hidden = !canRetryTableLoad(tableSnapshot)
+    const storage = getCartSnapshot().draftStorage
+    keepSaved.hidden = storage !== 'conflict' && storage !== 'capacity'
+    keepMine.hidden = storage !== 'conflict'
+    draftMessage.hidden = storage === 'ready' || storage === 'saving'
+    retryDraft.hidden = draftMessage.hidden || !keepSaved.hidden
+    retryDraft.textContent = storage === 'unsaved' ? 'Повторить сохранение корзины' : 'Повторить загрузку корзины'
+    draftMessage.textContent = storage === 'capacity' ? 'Эти правки уже нельзя применить вместе. Примите сохранённую корзину, проверьте позиции и внесите нужные изменения.' : storage === 'conflict' ? 'Та же позиция или комментарий изменены в другом окне. Выберите, какие правки сохранить.' : storage === 'unsaved' ? 'Изменения корзины пока не сохранены. Редактирование приостановлено. Оставьте окно открытым и повторите сохранение.' : 'Не удалось прочитать корзину. Повторите загрузку перед изменением заказа.'
+    refs.statusCard.hidden = draftMessage.hidden && !showVisit && !refs.statusDetails.textContent && resumeLaunch.hidden && retryRestore.hidden
     refs.statusTitle.textContent = showVisit ? presentation.title : ''
     refs.statusCard.dataset.activeVisit = String(showVisit && tableSnapshot.tableSessionActive)
     refs.visitState.hidden = !showVisit
@@ -518,7 +543,7 @@ function mountGuestScreens(options: GuestAppOptions) {
       (action) => handleGuestAction(action)
     )
   }
-  setCartTableToken(resolveTableMode(tableSnapshot) === 'active-table' ? tableSnapshot.tableToken : null, tableSnapshot.tableSessionId)
+  setCartTableToken(resolveTableMode(tableSnapshot) === 'active-table' ? tableSnapshot.tableToken : null, tableSnapshot.tableSessionId, tableSnapshot.visitGeneration)
   let rerenderForTableChange: (() => void) | null = null
   let exitCheckAbort: AbortController | null = null
 
@@ -609,10 +634,10 @@ function mountGuestScreens(options: GuestAppOptions) {
     const nextCanOpenOrder = canOpenActiveOrder(snapshot)
     tableSnapshot = snapshot
     const nextMode = resolveTableMode(snapshot)
-    setCartTableToken(nextMode === 'active-table' ? snapshot.tableToken : null, snapshot.tableSessionId)
+    setCartTableToken(nextMode === 'active-table' ? snapshot.tableToken : null, snapshot.tableSessionId, snapshot.visitGeneration)
     const presentation = formatTableStatus(snapshot)
     if (!resolvingQr) {
-      const showTableMessage = snapshot.status === 'rescan' || nextMode === 'ended-table' || snapshot.status === 'resolving' || presentation.severity === 'error'
+      const showTableMessage = snapshot.status === 'rescan' || nextMode === 'ended-table' || snapshot.status === 'resolving' || snapshot.status === 'error' || presentation.severity === 'error'
       refs.statusDetails.textContent = showTableMessage
         ? [presentation.title, presentation.details].filter(Boolean).join(' ')
         : ''
@@ -747,6 +772,9 @@ function mountGuestScreens(options: GuestAppOptions) {
   disposables.push(() => cancelQrScan?.())
   const connectToQr = async (token: string, sdkLaunch = false) => {
     if (resolvingQr || visitExitPending) return
+    const actor = getTelegramContext().telegramUserId
+    const retry = sdkLaunch && sdkQrRetry && token === sdkRetryToken
+    const selection = startTableSelection(retry ? sdkRetryIntentId ?? '' : undefined)
     resolvingQr = true
     if (sdkLaunch) {
       sdkQrAttempted = true
@@ -755,23 +783,34 @@ function mountGuestScreens(options: GuestAppOptions) {
     }
     try {
       const tokenDigest = sdkLaunch ? await sdkTokenDigest(token) : ''
+      if (!mounted || visitExitPending || actor !== getTelegramContext().telegramUserId) return
       const pending = sdkLaunch ? pendingSdkRejoin() : null
+      if (sdkLaunch) {
+        sdkRetryToken = token
+        sdkRetryIntentId = selection.intent.id
+      }
       const snapshot = await refreshTableContext({
-        scannedToken: token,
-        retrySessionId: pending?.tokenDigest === tokenDigest ? pending.sessionId : undefined,
+        scannedToken: token, selection, retryableScan: sdkLaunch,
+        retrySessionId: pending?.tokenDigest === tokenDigest ? pending.sessionId ?? undefined : undefined,
         confirmRejoin: table => {
           const confirmed = window.confirm(`Визит завершён. Снова подключиться к столу №${table.tableNumber} в заведении «${table.venueName}»?`)
-          if (sdkLaunch && confirmed) rememberSdkRejoin({ sessionId: table.tableSessionId, tokenDigest })
+          if (sdkLaunch && confirmed) rememberSdkRejoin({ sessionId: table.tableSessionId, tokenDigest, intentId: selection.intent.id })
           return confirmed
         }
       })
-      if (!mounted || !snapshot) return
+      if (!mounted || !snapshot || actor !== getTelegramContext().telegramUserId) return
       if (!snapshot.orderAllowed) {
         if (snapshot.status === 'rescan' && pending?.tokenDigest === tokenDigest) {
           rememberSdkRejoin({ ...pending, requiresScan: true })
         }
         if (sdkLaunch) sdkQrRetry = snapshot.status === 'error' &&
-          (snapshot.error?.status === 0 || (snapshot.error?.status ?? 0) >= 500)
+          !!snapshot.error && isTemporaryError(snapshot.error)
+        if (sdkLaunch && sdkQrRetry) {
+          const attempt = pendingSdkRejoin()
+          if (attempt?.intentId !== selection.intent.id || attempt.tokenDigest !== tokenDigest) {
+            rememberSdkRejoin({ tokenDigest, sessionId: null, intentId: selection.intent.id })
+          }
+        }
         const failure = formatTableStatus(snapshot)
         const message = [failure.title, failure.details].filter(Boolean).join(' ')
         refs.statusDetails.textContent = message
@@ -850,8 +889,8 @@ function mountGuestScreens(options: GuestAppOptions) {
       webApp?.showAlert?.('Не удалось открыть QR-сканер.')
     }
   }
-  const leaveVisit = () => {
-    clearCurrentTableContext()
+  const leaveVisit = async (endedVisit?: { tableToken: string; tableSessionId: number }, exit?: ReturnType<typeof prepareVisitExit>) => {
+    if (!await clearCurrentTableContext(endedVisit, exit) || !mounted) return
     setCartTableToken(null, null)
     staffCallActive = false
     selectedVenue = null
@@ -872,23 +911,35 @@ function mountGuestScreens(options: GuestAppOptions) {
       leaveVisit()
       return
     }
+    if (snapshot.visitGeneration === undefined) {
+      refs.statusDetails.textContent = 'Обновите стол перед завершением визита.'
+      return
+    }
     if (!window.confirm(`Завершить визит: ${snapshot.venueName ?? 'заведение'}, стол №${snapshot.tableNumber ?? '—'}? Вы выйдете из текущей сессии стола и корзины. Для нового заказа понадобится снова отсканировать QR.`)) return
+    const visit = { tableToken: snapshot.tableToken, tableSessionId: snapshot.tableSessionId, visitGeneration: snapshot.visitGeneration }
+    const actor = getTelegramContext().telegramUserId
+    const exit = prepareVisitExit(visit)
     visitExitPending = true
     cancelQrScan?.()
     cancelPendingTableRefresh()
     refs.statusDetails.textContent = 'Завершаем визит…'
     renderShellActions()
-    void guestEndTableSession(
-      backendUrl,
-      {
-        tableToken: snapshot.tableToken,
-        tableSessionId: snapshot.tableSessionId
-      },
-      { isDebug, getAccessToken, clearSession }
-    )
+    // Capture the admission before the server can issue a rejoin challenge for this exit.
+    void exit.registered.then(() => {
+      if (!mounted || getTelegramContext().telegramUserId !== actor) return null
+      return guestEndTableSession(backendUrl, { ...visit, expectedVisitGeneration: visit.visitGeneration }, { isDebug, getAccessToken, clearSession })
+    })
       .then((result) => {
-        if (!mounted || tableSnapshot.tableToken !== snapshot.tableToken ||
-          tableSnapshot.tableSessionId !== snapshot.tableSessionId) return
+        if (!result) return
+        const sameScreen = mounted && getTelegramContext().telegramUserId === actor &&
+          tableSnapshot.tableToken === visit.tableToken && tableSnapshot.tableSessionId === visit.tableSessionId &&
+          tableSnapshot.visitGeneration === visit.visitGeneration
+        if (!sameScreen) {
+          if (result.ok && result.data.ended && result.data.tableSessionId === visit.tableSessionId) {
+            return finishExit(exit, visit)
+          }
+          return
+        }
         if (!result.ok) {
           if (result.error.status === 403 || result.error.status === 404) {
             const message = 'Сервер не подтвердил выход. Проверьте номер стола и заведение в меню бота. Завершайте визит только если они совпадают с нужным столом.'
@@ -901,7 +952,7 @@ function mountGuestScreens(options: GuestAppOptions) {
           showTelegramAlert(message)
           return
         }
-        if (!result.data.ended) {
+        if (!result.data.ended || result.data.tableSessionId !== visit.tableSessionId) {
           const message = result.data.message || 'Сейчас визит нельзя завершить.'
           refs.statusDetails.textContent = message
           showTelegramAlert(message)
@@ -910,14 +961,18 @@ function mountGuestScreens(options: GuestAppOptions) {
         const message = result.data.message || 'Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.'
         refs.statusDetails.textContent = message
         showTelegramAlert(message)
-        leaveVisit()
+        return leaveVisit(visit, exit)
       })
       .catch(() => {
         const message = 'Не удалось завершить визит. Попробуйте позже.'
         refs.statusDetails.textContent = message
         showTelegramAlert(message)
       })
-      .finally(() => { visitExitPending = false; renderShellActions() })
+      .finally(() => {
+        void finishExit(exit)
+        visitExitPending = false
+        renderShellActions()
+      })
   }
   handleGuestAction = (action) => {
     switch (action) {
@@ -1092,7 +1147,7 @@ function mountGuestScreens(options: GuestAppOptions) {
   rerenderForTableChange = render
 
   function onNavigationChange() {
-    if (resolveTableMode(tableSnapshot) !== 'ended-table' && tableSnapshot.status !== 'rescan') refs.statusDetails.textContent = ''
+    if (resolveTableMode(tableSnapshot) !== 'ended-table' && tableSnapshot.status !== 'rescan' && tableSnapshot.status !== 'error') refs.statusDetails.textContent = ''
     render()
     notifyRouteChange()
   }
@@ -1102,6 +1157,7 @@ function mountGuestScreens(options: GuestAppOptions) {
 
   return () => {
     mounted = false
+    if (resolvingQr) cancelPendingTableRefresh()
     navigation.dispose()
     exitCheckAbort?.abort()
     currentDispose?.()

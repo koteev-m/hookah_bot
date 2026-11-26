@@ -54,6 +54,12 @@ class NotFoundException(
         details = details,
     )
 
+class VisitGenerationChangedException : ApiException(
+    code = "VISIT_GENERATION_CHANGED",
+    httpStatus = HttpStatusCode.Conflict,
+    message = "Посещение изменилось. Обновите стол перед завершением визита.",
+)
+
 class TableRejoinStaleException : ApiException(
     code = "TABLE_REJOIN_STALE",
     httpStatus = HttpStatusCode.Conflict,
@@ -213,8 +219,8 @@ class OrderIdempotencyPayloadMismatchException :
         code = ApiErrorCodes.ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH,
         httpStatus = HttpStatusCode.Conflict,
         message =
-            "Этот ключ отправки уже использован для другого состава заказа. " +
-                "Обновите корзину и отправьте заказ ещё раз.",
+            "Этот ключ отправки уже связан с другим составом. " +
+                "Проверьте активный заказ или повторите исходную отправку.",
     )
 
 class BookingMessageIdempotencyPayloadMismatchException :
@@ -230,7 +236,7 @@ class OrderIdempotencyReplayUnverifiableException :
         httpStatus = HttpStatusCode.Conflict,
         message =
             "Не удалось безопасно повторить старую отправку. " +
-                "Проверьте активный заказ и отправьте корзину заново только при необходимости.",
+                "Проверьте активный заказ. Исходная отправка сохранена.",
     )
 
 private fun cartMenuSelectionUnavailableDetails(issues: List<CartMenuSelectionIssue>): JsonObject =
@@ -389,4 +395,57 @@ class BillingOperationKeyRequiredException : ApiException(
     code = "BILLING_OPERATION_KEY_REQUIRED",
     httpStatus = HttpStatusCode(428, "Precondition Required"),
     message = "Обновите Mini App и повторите начисление. Требуется Idempotency-Key.",
+)
+
+class VisitVersionRequiredException : ApiException(
+    code = "VISIT_VERSION_REQUIRED",
+    httpStatus = HttpStatusCode(428, "Precondition Required"),
+    message = "Обновите Mini App и снова откройте стол перед продолжением.",
+)
+
+class OrderBatchTabAccessDeniedException : ApiException(
+    code = "ORDER_BATCH_TAB_ACCESS_DENIED",
+    message = "Доступ к счёту изменился. Выберите другой доступный счёт.",
+    httpStatus = HttpStatusCode.Forbidden,
+)
+
+/** Only emitted after a matching refusal was committed or read from the order ledger. */
+class FinalOrderBatchRejection(
+    val rejection: OrderBatchRejection,
+) : ApiException(
+        code = rejection.code,
+        httpStatus = HttpStatusCode.fromValue(rejection.status),
+        message = rejection.message,
+        details =
+            buildJsonObject {
+                rejection.details?.forEach { (key, value) -> put(key, value) }
+                put("operationClosed", true)
+            },
+    )
+
+@kotlinx.serialization.Serializable
+data class OrderBatchRejection(
+    val code: String,
+    val status: Int,
+    val message: String,
+    val details: JsonObject? = null,
+) {
+    constructor(error: ApiException) : this(error.code, error.httpStatus.value, error.message, error.details)
+
+    companion object {
+        const val GIFT_DECISION_REQUIRED = "ORDER_BATCH_GIFT_DECISION_REQUIRED"
+    }
+}
+
+internal inline fun <T> captureFinalOrderBatchOutcome(write: () -> T): Result<T> =
+    try {
+        Result.success(write())
+    } catch (rejected: FinalOrderBatchRejection) {
+        Result.failure(rejected)
+    }
+
+class ShiftExtensionTermsChangedException : ApiException(
+    code = "SHIFT_EXTENSION_TERMS_CHANGED",
+    httpStatus = HttpStatusCode.Conflict,
+    message = "Условия продления изменились. Проверьте их и подтвердите заново.",
 )

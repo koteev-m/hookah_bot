@@ -3,6 +3,14 @@ package com.hookah.platform.backend.miniapp.shift
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class ShiftExtensionTerms(
+    val durationMinutes: Int,
+    val priceMinor: Long,
+    val currency: String,
+    val revision: String,
+)
+
+@Serializable
 data class GuestShiftExtensionOptionsResponse(
     val available: Boolean,
     val unavailableReason: String? = null,
@@ -15,15 +23,19 @@ data class GuestShiftExtensionOptionsResponse(
     val currentOrderableUntil: String? = null,
     val proposedOrderableUntil: String? = null,
     val pendingRequest: ShiftExtensionRequestDto? = null,
+    val confirmedTerms: ShiftExtensionTerms? = null,
 )
 
 @Serializable
 data class GuestShiftExtensionRequest(
     val tableToken: String,
-    val tableSessionId: Long,
+    val tableSessionId: Long = 0,
     val tabId: Long,
     val idempotencyKey: String? = null,
     val comment: String? = null,
+    val expectedVisitGeneration: String? = null,
+    val expectedOrderId: Long? = null,
+    val confirmedTerms: ShiftExtensionTerms? = null,
 )
 
 @Serializable

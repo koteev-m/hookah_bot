@@ -726,6 +726,39 @@ class TelegramOutboxWorkerTest {
         }
 
     @Test
+    fun `review08 a queued teardown keyboard is discarded after rejoin`() =
+        runBlocking {
+            val database = PostgresTestEnv.createDatabase()
+            PostgresTestEnv.createDataSource(database).use { dataSource ->
+                val repository = TelegramOutboxRepository(dataSource, trafficPolicy)
+                val json = Json { ignoreUnknownKeys = true }
+                val enqueuer = TelegramOutboxEnqueuer(repository, json, trafficPolicy)
+                val client = mockk<TelegramApiClient>(relaxed = true)
+                var rebound = false
+                val worker =
+                    TelegramOutboxWorker(
+                        repository,
+                        { client },
+                        json,
+                        TelegramRateLimiter { },
+                        TelegramOutboxConfig(batchSize = 1, maxConcurrency = 1),
+                        CoroutineScope(Dispatchers.IO),
+                        hasGuestBinding = { rebound },
+                    )
+                enqueuer.enqueueGuestTeardownMenu(123L, "Визит завершён", TelegramKeyboards.tableContextBotFlow())
+                rebound = true
+                worker.processOnce()
+                coVerify(exactly = 0) { client.dispatchOutbox(any(), any(), any()) }
+                rebound = false
+                enqueuer.enqueueGuestTeardownMenu(123L, "Визит завершён", TelegramKeyboards.tableContextBotFlow())
+                coEvery { client.dispatchOutbox(123L, "sendMessage", any()) } returns
+                    TelegramCallResult.Success(JsonNull)
+                worker.processOnce()
+                coVerify(exactly = 1) { client.dispatchOutbox(123L, "sendMessage", any()) }
+            }
+        }
+
+    @Test
     fun `dedupe key prevents duplicate enqueue`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()

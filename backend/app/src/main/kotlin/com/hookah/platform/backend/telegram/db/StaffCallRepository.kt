@@ -374,23 +374,31 @@ class StaffCallRepository(
         return withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    connection.prepareStatement(
-                        """
-                        SELECT COUNT(*) AS count
-                        FROM staff_calls
-                        WHERE venue_id = ?
-                          AND order_id = ?
-                          AND status IN ('NEW', 'ACK')
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setLong(1, venueId)
-                        statement.setLong(2, orderId)
-                        statement.executeQuery().use { rs -> if (rs.next()) rs.getInt("count") else 0 }
-                    }
+                    countActiveOrderActivity(connection, venueId, orderId)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
+        }
+    }
+
+    internal fun countActiveOrderActivity(
+        connection: java.sql.Connection,
+        venueId: Long,
+        orderId: Long,
+    ): Int {
+        return connection.prepareStatement(
+            """
+            SELECT COUNT(*) AS count
+            FROM staff_calls
+            WHERE venue_id = ?
+              AND order_id = ?
+              AND status IN ('NEW', 'ACK')
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setLong(1, venueId)
+            statement.setLong(2, orderId)
+            statement.executeQuery().use { rs -> if (rs.next()) rs.getInt("count") else 0 }
         }
     }
 
@@ -741,6 +749,7 @@ class StaffCallRepository(
                 WHERE venue_id = ?
                   AND table_session_id = ?
                   AND tab_id = ?
+                  AND order_id = ?
                   AND reason = 'BILL'
                   AND status IN ('NEW', 'ACK')
                 ORDER BY created_at DESC, id DESC
@@ -750,6 +759,7 @@ class StaffCallRepository(
                 statement.setLong(1, venueId)
                 statement.setLong(2, tableSessionId)
                 statement.setLong(3, tabId)
+                statement.setLong(4, orderId)
                 statement.executeQuery().use { rs ->
                     if (rs.next()) {
                         CreatedGuestBillRequest(

@@ -196,6 +196,22 @@ class ShiftExtensionRoutesTest {
             assertEquals(fixture.orderId, notification.orderId)
             assertEquals(15000, notification.bill.finalPayableTotalMinor)
             assertEquals("Продление работы на 1 час", notification.bill.serviceCharges.single().label)
+            val retryResponse =
+                createGuestExtensionRequest(
+                    token = guestToken,
+                    fixture = fixture,
+                    idempotencyKey = "approve-extension",
+                )
+            assertEquals(HttpStatusCode.OK, retryResponse.status, retryResponse.bodyAsText())
+            val retry =
+                json.decodeFromString(
+                    ShiftExtensionRequestResponse.serializer(),
+                    retryResponse.bodyAsText(),
+                ).request
+            assertEquals(request.id, retry.id)
+            assertEquals("approved", retry.status)
+            assertEquals(1, countRows(jdbcUrl, "shift_extension_requests"))
+            assertEquals(1, countRows(jdbcUrl, "order_service_charges"))
         }
 
     @Test
@@ -439,8 +455,8 @@ class ShiftExtensionRoutesTest {
                     fixture = fixture,
                     idempotencyKey = "disabled-extension",
                 )
-            assertEquals(HttpStatusCode.BadRequest, disabledCreateResponse.status)
-            assertApiErrorEnvelope(disabledCreateResponse, ApiErrorCodes.INVALID_INPUT)
+            assertEquals(428, disabledCreateResponse.status.value)
+            assertApiErrorEnvelope(disabledCreateResponse, "VISIT_VERSION_REQUIRED")
 
             val updateResponse =
                 updateVenueShiftExtensionSettings(
@@ -555,21 +571,37 @@ class ShiftExtensionRoutesTest {
         token: String,
         fixture: ShiftExtensionFixture,
         idempotencyKey: String,
-    ) = client.post("/api/guest/table/extension-requests") {
-        contentType(ContentType.Application.Json)
-        headers { append(HttpHeaders.Authorization, "Bearer $token") }
-        setBody(
-            json.encodeToString(
-                GuestShiftExtensionRequest.serializer(),
-                GuestShiftExtensionRequest(
-                    tableToken = fixture.tableToken,
-                    tableSessionId = fixture.tableSessionId,
-                    tabId = fixture.tabId,
-                    idempotencyKey = idempotencyKey,
-                    comment = "Хотим продлить",
+    ): io.ktor.client.statement.HttpResponse {
+        val quoteResponse =
+            client.get(
+                "/api/guest/table/extension-options?tableToken=${fixture.tableToken}" +
+                    "&tableSessionId=${fixture.tableSessionId}&tabId=${fixture.tabId}",
+            ) { headers { append(HttpHeaders.Authorization, "Bearer $token") } }
+        val terms =
+            if (quoteResponse.status == HttpStatusCode.OK) {
+                json.decodeFromString<GuestShiftExtensionOptionsResponse>(quoteResponse.bodyAsText()).confirmedTerms
+            } else {
+                null
+            }
+        return client.post("/api/guest/table/extension-requests") {
+            contentType(ContentType.Application.Json)
+            headers { append(HttpHeaders.Authorization, "Bearer $token") }
+            setBody(
+                json.encodeToString(
+                    GuestShiftExtensionRequest.serializer(),
+                    GuestShiftExtensionRequest(
+                        expectedVisitGeneration = "0",
+                        expectedOrderId = fixture.orderId,
+                        tableToken = fixture.tableToken,
+                        tableSessionId = fixture.tableSessionId,
+                        tabId = fixture.tabId,
+                        idempotencyKey = idempotencyKey,
+                        comment = "Хотим продлить",
+                        confirmedTerms = terms,
+                    ),
                 ),
-            ),
-        )
+            )
+        }
     }
 
     private suspend fun io.ktor.server.testing.ApplicationTestBuilder.updateVenueShiftExtensionSettings(

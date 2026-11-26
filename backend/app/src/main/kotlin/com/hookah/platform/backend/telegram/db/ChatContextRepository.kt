@@ -170,13 +170,17 @@ class ChatContextRepository(private val dataSource: DataSource?) {
     ): StoredChatContext? =
         connection.prepareStatement(
             """
-            SELECT chat_id, user_id, venue_id, table_id, table_token, updated_at, table_session_id
-            FROM telegram_chat_context
+            SELECT c.*, COALESCE(g.consumed_exit_event_id, 0) AS generation
+            FROM telegram_chat_context c LEFT JOIN guest_visit_generations g
+              ON g.user_id = c.user_id AND g.table_session_id = c.table_session_id
             WHERE chat_id = ?
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, chatId)
-            statement.executeQuery().use { rs -> if (rs.next()) rs.toStoredChatContext() else null }
+            statement.executeQuery().use {
+                    rs ->
+                if (rs.next()) rs.toStoredChatContext()?.copy(visitGeneration = rs.getLong("generation")) else null
+            }
         }
 
     fun getForUpdate(
@@ -411,4 +415,5 @@ data class StoredChatContext(
     val tableId: Long? = null,
     val updatedAt: Instant? = null,
     val tableSessionId: Long? = null,
+    val visitGeneration: Long = 0,
 )

@@ -7,11 +7,18 @@ import com.hookah.platform.backend.ai.AiAssistantService
 import com.hookah.platform.backend.analytics.AnalyticsChannel
 import com.hookah.platform.backend.api.ApiException
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.FinalOrderBatchRejection
 import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.MenuItemDeleteBlockedByFixedRewardException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.api.OrderIdempotencyPayloadMismatchException
+import com.hookah.platform.backend.api.ServiceSuspendedException
+import com.hookah.platform.backend.api.ShiftExtensionTermsChangedException
+import com.hookah.platform.backend.api.SubscriptionBlockedException
+import com.hookah.platform.backend.api.VisitGenerationChangedException
+import com.hookah.platform.backend.api.VisitVersionRequiredException
+import com.hookah.platform.backend.api.captureFinalOrderBatchOutcome
 import com.hookah.platform.backend.booking.formatBookingDisplayLabel
 import com.hookah.platform.backend.location.VenueLocationDisplay
 import com.hookah.platform.backend.location.buildYandexVenueRouteUrl
@@ -41,6 +48,7 @@ import com.hookah.platform.backend.miniapp.guest.db.MenuItemModel
 import com.hookah.platform.backend.miniapp.guest.db.MiniAppFallbackVisit
 import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestContextValidationResult
 import com.hookah.platform.backend.miniapp.guest.db.PlatformGuestTableMutationResult
+import com.hookah.platform.backend.miniapp.guest.db.TableSessionContext
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionEndBlockedReason
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRecord
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
@@ -53,13 +61,16 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueFilter
 import com.hookah.platform.backend.miniapp.guest.db.VisitFeedbackVenueSummary
 import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.guest.db.attendanceScheduleVersionEpochSeconds
+import com.hookah.platform.backend.miniapp.guest.mutateParticipation
 import com.hookah.platform.backend.miniapp.guest.requireConfirmedPlatformGuestMutation
 import com.hookah.platform.backend.miniapp.security.MiniAppAbuseProtection
 import com.hookah.platform.backend.miniapp.security.MiniAppRateLimitDecision
 import com.hookah.platform.backend.miniapp.shift.CreateShiftExtensionRequestCommand
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRepository
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestRecord
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionRequestStatus
 import com.hookah.platform.backend.miniapp.shift.ShiftExtensionSettings
+import com.hookah.platform.backend.miniapp.shift.ShiftExtensionTerms
 import com.hookah.platform.backend.miniapp.subscription.SubscriptionStatus
 import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
@@ -146,6 +157,10 @@ import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.support.SupportTicketCreateInput
 import com.hookah.platform.backend.telegram.ai.AiTelegramHandler
 import com.hookah.platform.backend.telegram.db.ActiveOrderDetails
+import com.hookah.platform.backend.telegram.db.BotCheckoutScope
+import com.hookah.platform.backend.telegram.db.BotDraftCartItem
+import com.hookah.platform.backend.telegram.db.BotPreparedCheckout
+import com.hookah.platform.backend.telegram.db.BotPreparedCheckoutRepository
 import com.hookah.platform.backend.telegram.db.CatalogVenueShort
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.CreatedOrderBatch
@@ -234,7 +249,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.io.ByteArrayOutputStream
@@ -355,6 +369,8 @@ class TelegramBotRouter internal constructor(
         ),
     private val botGiftCallbackTagFactory: () -> String = ::newBotGiftCallbackTag,
     private val guestTableContextLifecycleRepository: GuestTableContextLifecycleRepository? = null,
+    private val botPreparedCheckouts: BotPreparedCheckoutRepository? = null,
+    private val checkoutNotifications: GuestCheckoutNotifications? = null,
     private val platformGuestQrPendingTtl: Duration = Duration.ofMinutes(5),
     private val platformGuestQrNowProvider: () -> Instant = Instant::now,
     private val platformGuestQrCallbackTagFactory: () -> String = ::newPlatformGuestQrCallbackTag,
@@ -411,7 +427,6 @@ class TelegramBotRouter internal constructor(
     private val botGiftDecisions = ConcurrentHashMap<BotDraftCartKey, GiftDecisionCommand>()
     private val botGiftCallbackBindings = ConcurrentHashMap<BotDraftCartKey, BotGiftCallbackBinding>()
     private val replacementBeforeAcceptBatches = ConcurrentHashMap.newKeySet<ReplacementBeforeAcceptBatchKey>()
-    private val botJoinSharedAwaitingChats = ConcurrentHashMap.newKeySet<Long>()
     private val promotionRuleScheduleDrafts = ConcurrentHashMap<PromotionRuleScheduleKey, PromotionRuleScheduleDraft>()
     private val promotionRuleItemTargetDrafts = ConcurrentHashMap<PromotionRuleItemTargetKey, MutableSet<Long>>()
     private val giftPromotionDrafts = ConcurrentHashMap<GiftPromotionDraftKey, GiftPromotionDraft>()
@@ -426,6 +441,10 @@ class TelegramBotRouter internal constructor(
     private val venueBookingCancelReasonDrafts = ConcurrentHashMap<Long, VenueBookingCancelReasonDraft>()
     private val botVenuePreviewContexts = ConcurrentHashMap<Long, BotVenuePreviewContext>()
     private val botDraftCartOrderSeq = AtomicLong(0L)
+    private val botDraftCartRevision = AtomicLong(0L)
+    private val reservedBotCheckoutRevisions = ConcurrentHashMap<BotDraftCartKey, Long>()
+    private val botDraftCartRevisions = ConcurrentHashMap<BotDraftCartKey, Long>()
+    private val guestButtonInstance = UUID.randomUUID().toString()
     private val promotionTitleMaxLength = 80
     private val promotionDescriptionMaxLength = 1_000
     private val promotionTermsMaxLength = 1_000
@@ -532,7 +551,7 @@ class TelegramBotRouter internal constructor(
     }
 
     private fun botGiftCallbackCartItems(key: BotDraftCartKey): List<BotGiftCallbackCartItem> =
-        getBotDraftCartItems(key.chatId, key.tableToken)
+        getBotDraftCartItems(key)
             .map { item ->
                 BotGiftCallbackCartItem(
                     menuItemId = item.itemId,
@@ -575,7 +594,7 @@ class TelegramBotRouter internal constructor(
             cartItems = cartItems,
             comment =
                 buildBotDraftCartSubmitComment(
-                    getBotDraftCartItems(key.chatId, key.tableToken),
+                    getBotDraftCartItems(key),
                     botDraftCartComments[key],
                 ),
             cartFingerprint = preview.cartFingerprint,
@@ -633,7 +652,7 @@ class TelegramBotRouter internal constructor(
         val currentItems = botGiftCallbackCartItems(key)
         val currentComment =
             buildBotDraftCartSubmitComment(
-                getBotDraftCartItems(key.chatId, key.tableToken),
+                getBotDraftCartItems(key),
                 botDraftCartComments[key],
             )
         return currentItems == binding.identity.cartItems &&
@@ -688,12 +707,26 @@ class TelegramBotRouter internal constructor(
     private data class BotDraftCartKey(
         val chatId: Long,
         val tableToken: String,
+        val userId: Long,
+        val sessionId: Long?,
+        val generation: Long,
     )
 
-    private data class BotDraftCartScope(
-        val tableSessionId: Long,
-        val tabId: Long,
-    )
+    private fun ResolvedChatContext.participationTag() =
+        "${tableSessionId?.toString(
+            36,
+        )}.${visitGeneration.toString(36)}"
+
+    private fun ResolvedChatContext.cartKey(chatId: Long) =
+        BotDraftCartKey(chatId, table.tableToken, userId, tableSessionId, visitGeneration)
+
+    private data class BotDraftCartScope(val tableSessionId: Long, val tabId: Long)
+
+    private fun BotDraftCartKey.checkoutScope() = sessionId?.let { BotCheckoutScope(chatId, userId, it, generation) }
+
+    private fun reviseBotDraft(key: BotDraftCartKey) {
+        botDraftCartRevisions[key] = botDraftCartRevision.incrementAndGet()
+    }
 
     private data class BotGiftCallbackCartItem(
         val menuItemId: Long,
@@ -738,19 +771,6 @@ class TelegramBotRouter internal constructor(
     private data class StaffChatLinkCommands(
         val linkCommand: String,
         val testCommand: String,
-    )
-
-    private data class BotDraftCartItem(
-        val lineId: Long,
-        val itemId: Long,
-        val name: String,
-        val optionId: Long?,
-        val optionName: String?,
-        val preferenceNote: String?,
-        val priceMinor: Long,
-        val currency: String,
-        val qty: Int,
-        val orderSeq: Long,
     )
 
     private data class BotBookingDraft(
@@ -1193,7 +1213,21 @@ class TelegramBotRouter internal constructor(
                 text == "🛎️ Вызов персонала" ||
                 text == "🛎 Вызвать персонал" ->
                 showStaffCallReasons(chatId)
-            text == "🚪 Завершить визит" -> handleEndTableVisitRequest(chatId, from?.id)
+            text == "🚪 Завершить визит" -> {
+                val bound = chatContextRepository.get(chatId)
+                if (bound == null || bound.userId != from?.id) {
+                    askScanQr(chatId)
+                    return
+                }
+                val key =
+                    BotDraftCartKey(chatId, bound.tableToken, bound.userId, bound.tableSessionId, bound.visitGeneration)
+                offerVisitAction(
+                    chatId,
+                    "Завершить текущий визит? Корзина этого участия будет очищена.",
+                    "Завершить визит",
+                    visitButton("guest_end_visit", key, bindingUpdatedAt = bound.updatedAt),
+                )
+            }
             text == "🚪 Сменить стол" || text == "🔁 Сменить стол" -> handleChangeTableRequest(chatId)
             text == "🏠 В каталог" -> showMainMenu(chatId, from)
             state.state == DialogStateType.VENUE_CONNECT_WAIT_NAME && !text.isNullOrBlank() ->
@@ -1330,7 +1364,7 @@ class TelegramBotRouter internal constructor(
                 proceedBotMenuCartComment(chatId, from?.id ?: return, text)
             state.state == DialogStateType.QUICK_ORDER_WAIT_TEXT && !text.isNullOrBlank() ->
                 proceedQuickOrderText(chatId, text)
-            (state.state == DialogStateType.BOT_JOIN_SHARED_WAIT_CODE || botJoinSharedAwaitingChats.contains(chatId)) &&
+            state.state == DialogStateType.BOT_JOIN_SHARED_WAIT_CODE &&
                 !text.isNullOrBlank() ->
                 proceedBotJoinSharedCode(chatId, text)
             botBookingCommentDrafts.containsKey(chatId) && !text.isNullOrBlank() ->
@@ -1348,118 +1382,109 @@ class TelegramBotRouter internal constructor(
         webAppData: WebAppData,
     ) {
         val data = webAppData.data
-        when (data) {
-            "start_quick_order" -> startQuickOrder(chatId)
-            "call_staff" -> showStaffCallReasons(chatId)
-            "open_active_order" -> showActiveOrder(chatId)
-            else -> handleJsonWebAppData(chatId, from, data)
-        }
-    }
+        val obj = runCatching { json.decodeFromString<JsonElement>(data) as? JsonObject }.getOrNull()
 
-    private suspend fun handleJsonWebAppData(
-        chatId: Long,
-        from: User?,
-        data: String,
-    ) {
-        val parsed = runCatching { json.decodeFromString<JsonElement>(data) }.getOrNull()
-        val obj = parsed as? JsonObject ?: return
-        val cmd = obj["cmd"]?.jsonPrimitive?.content
-        val token = obj["table_token"]?.jsonPrimitive?.content
-        val fallbackId = (obj["table_session_id"] as? JsonPrimitive)?.content?.toLongOrNull()?.takeIf { it > 0 }
-        if ("table_session_id" in obj && fallbackId == null) {
-            askScanQr(chatId)
+        fun field(name: String) = (obj?.get(name) as? JsonPrimitive)?.content
+        val command = field("cmd") ?: data
+        if (command !in setOf("start_quick_order", "call_staff", "open_active_order")) return
+
+        val session = field("table_session_id")?.toLongOrNull()?.takeIf { it > 0 }
+        val generation = field("visit_generation")?.toLongOrNull()?.takeIf { it >= 0 }
+        val token = field("table_token")
+        val tab = field("tab_id")?.toLongOrNull()?.takeIf { it > 0 }
+        if (session == null || generation == null || token.isNullOrBlank() ||
+            (command != "call_staff" && tab == null)
+        ) {
+            enqueueMessage(chatId, "Обновите Mini App или выберите действие заново в меню стола.")
             return
         }
-        if (!token.isNullOrBlank()) {
-            val actorUserId = from?.id
-            if (isPlatformOwner(actorUserId)) {
-                val validation =
-                    guestTableContextLifecycleRepository?.validatePlatformBotContext(
-                        actorUserId = actorUserId ?: return,
-                        chatId = chatId,
-                    ) ?: PlatformGuestContextValidationResult.DatabaseUnavailable
-                when (validation) {
-                    is PlatformGuestContextValidationResult.Active ->
-                        if (validation.identity.tableToken != token ||
-                            (fallbackId != null && validation.tableSession.id != fallbackId)
-                        ) {
-                            enqueueMessage(
-                                chatId,
-                                "Откройте QR-код ещё раз и подтвердите вход в Telegram.",
-                            )
-                            return
-                        }
-                    PlatformGuestContextValidationResult.Inactive -> {
-                        enqueueMessage(
-                            chatId,
-                            "Откройте QR-код ещё раз и подтвердите вход в Telegram.",
-                        )
-                        return
-                    }
-                    PlatformGuestContextValidationResult.DatabaseUnavailable -> {
-                        enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                        return
-                    }
+        val prior = loadContext(chatId)
+        val actor = from?.id
+        if (command == "start_quick_order" && prior == LoadContextResult.Missing &&
+            actor != null && !isPlatformOwner(actor)
+        ) {
+            val table =
+                try {
+                    tableTokenRepository.resolve(token)
+                } catch (_: DatabaseUnavailableException) {
+                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                    return
                 }
-            } else {
-                when (
-                    applyTableToken(
+            if (table != null) {
+                val accepted =
+                    guestTableContextLifecycleRepository?.activate(
+                        actorUserId = actor,
                         chatId = chatId,
-                        from = from,
-                        token = token,
-                        fallback = MiniAppFallbackVisit(fallbackId),
+                        tableToken = token,
+                        expectedVenueId = table.venueId,
+                        expectedTableId = table.tableId,
+                        ttl = tableSessionTtl,
+                        ordinaryBot = true,
+                        fallback = MiniAppFallbackVisit(session, generation, checkNotNull(tab)),
                     )
-                ) {
-                    ApplyTableTokenResult.EntryMessageSent -> return
-                    ApplyTableTokenResult.Applied -> Unit
-                    ApplyTableTokenResult.Exited -> {
-                        enqueueMessage(
-                            chatId,
-                            "Не удалось подтвердить этот визит. " +
-                                "Проверьте стол в меню бота или отсканируйте QR нужного стола.",
-                        )
+                when (accepted) {
+                    is GuestTableActivationResult.Applied -> {
+                        enqueueMessage(chatId, "Опишите, что хотите заказать.")
                         return
                     }
-                    ApplyTableTokenResult.Invalid -> {
-                        sendFallback(chatId, from, "QR недействителен или база недоступна. Используйте меню ниже.")
-                        return
-                    }
-                    ApplyTableTokenResult.TableUnavailable -> {
-                        enqueueMessage(chatId, "Этот стол временно недоступен. Обратитесь к персоналу.")
-                        return
-                    }
-                    ApplyTableTokenResult.Blocked -> {
-                        enqueueMessage(chatId, subscriptionBlockedMessage)
-                        return
-                    }
-                    ApplyTableTokenResult.VenueUnavailableForGuest -> {
-                        enqueueMessage(chatId, "Заведение пока не доступно для гостей.")
-                        return
-                    }
-                    ApplyTableTokenResult.DatabaseUnavailable -> {
+                    null, GuestTableActivationResult.DatabaseUnavailable -> {
                         enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                         return
                     }
+                    is GuestTableActivationResult.Denied -> Unit
                 }
             }
         }
-        when (cmd) {
-            "call_staff" -> {
-                val reasonRaw = obj["reason"]?.jsonPrimitive?.content
-                val reason = reasonRaw?.let { parseStaffCallReason(it) } ?: StaffCallReason.OTHER
-                val comment = obj["comment"]?.jsonPrimitive?.content
-                createStaffCall(chatId, reason, comment)
+        val context = (prior as? LoadContextResult.Loaded)?.context
+        if (context == null || context.userId != from?.id || context.table.tableToken != token ||
+            context.tableSessionId != session || context.visitGeneration != generation
+        ) {
+            enqueueMessage(chatId, "Посещение изменилось. Откройте актуальное меню стола или отсканируйте QR.")
+            return
+        }
+        kotlinx.coroutines.withContext(ButtonVisit(context.cartKey(chatId), tab, null)) {
+            when (command) {
+                "start_quick_order" -> startQuickOrder(chatId, tab)
+                "open_active_order" -> {
+                    val target = checkNotNull(tab)
+                    val order =
+                        try {
+                            mutateBotVisit(chatId, context, touchOnSuccess = false) { connection, visit ->
+                                if (!guestTabsRepository.isTabMember(
+                                        connection,
+                                        target,
+                                        visit.venueId,
+                                        visit.id,
+                                        context.userId,
+                                        forUpdate = true,
+                                    )
+                                ) {
+                                    throw ForbiddenException()
+                                }
+                                ordersRepository.findActiveOrderDetailsForTab(connection, visit.id, target)
+                            }
+                        } catch (e: com.hookah.platform.backend.api.ApiException) {
+                            enqueueMessage(chatId, e.message ?: "Откройте актуальное меню стола.")
+                            return@withContext
+                        }
+                    sendActiveOrder(chatId, context, order)
+                }
+                else -> {
+                    val reason = field("reason")?.let(::parseStaffCallReason)
+                    val comment = field("comment")
+                    when {
+                        reason == StaffCallReason.BILL ->
+                            enqueueMessage(chatId, "Выберите конкретный заказ и способ оплаты в меню стола.")
+                        reason == null || reason == StaffCallReason.OTHER && comment.isNullOrBlank() ->
+                            enqueueMessage(
+                                chatId,
+                                "Чем помочь?",
+                                bindButtons(TelegramKeyboards.inlineStaffCallReasons(), context.cartKey(chatId)),
+                            )
+                        else -> createStaffCall(chatId, reason, comment)
+                    }
+                }
             }
-            "start_quick_order" -> startQuickOrder(chatId)
-            "open_active_order" -> showActiveOrder(chatId)
-            null ->
-                if (logger.isDebugEnabled) {
-                    logger.debug("web_app_data missing cmd")
-                }
-            else ->
-                if (logger.isDebugEnabled) {
-                    logger.debug("Unsupported web_app_data cmd")
-                }
         }
     }
 
@@ -1469,6 +1494,10 @@ class TelegramBotRouter internal constructor(
         if (chat != null && data?.startsWith(guestQrRejoinPrefix) == true) {
             safeUpsertUser(callbackQuery.from)
             confirmGuestQrRejoin(chat.id, callbackQuery, data.removePrefix(guestQrRejoinPrefix))
+            return
+        }
+        if (chat != null && data != null && dispatchVisitButton(chat.id, callbackQuery, data)) {
+            enqueueCallbackAnswer(chat.id, callbackQuery.id)
             return
         }
         val venueId =
@@ -1488,6 +1517,292 @@ class TelegramBotRouter internal constructor(
         } finally {
             productCallbackVenueIds.remove(callbackQuery.id, venueId)
         }
+    }
+
+    // Bind the action to its original actor and visit, including across nested suspend calls.
+    private class ButtonVisit(
+        val cart: BotDraftCartKey,
+        val tabId: Long?,
+        val orderId: Long?,
+        val action: String? = null,
+        val wire: String? = null,
+    ) :
+        kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+        companion object Key : kotlin.coroutines.CoroutineContext.Key<ButtonVisit>
+    }
+
+    private suspend fun offerVisitAction(
+        chatId: Long,
+        prompt: String,
+        label: String,
+        wire: String,
+    ) {
+        enqueueMessage(
+            chatId,
+            prompt,
+            InlineKeyboardMarkup(listOf(listOf(InlineKeyboardButton(label, callbackData = wire)))),
+        )
+    }
+
+    private fun visitButton(
+        raw: String,
+        key: BotDraftCartKey,
+        tab: Long? = null,
+        order: Long? = null,
+        bindingUpdatedAt: Instant? = null,
+    ): String {
+        val action = GuestVisitButton.encode(raw) ?: return raw
+        val buttonScope =
+            if (raw.startsWith(
+                    "guest_shift_extension_request:",
+                )
+            ) {
+                "shift-extension-v1"
+            } else {
+                guestButtonInstance
+            }
+        val target = mutableListOf<Any?>(buttonScope, key.chatId, key.userId, key.tableToken)
+        target.addAll(listOf(key.sessionId, key.generation, tab, order, action))
+        if (key.sessionId == null) target.add(bindingUpdatedAt)
+        if (raw.substringBefore(':') in
+            setOf(
+                "bot_menu_cart_checkout", "bot_menu_cart_clear", "bot_menu_cart_remove",
+                "bot_menu_cart_dec", "bot_menu_cart_inc",
+            )
+        ) {
+            target.addAll(
+                listOf(
+                    botDraftCartRevisions[key],
+                    botDraftCartScopes[key]?.tabId,
+                    botSelectedTabIds[key],
+                    botDraftCartComments[key],
+                    botGiftDecisions[key],
+                ),
+            )
+            getBotDraftCartItems(key).forEach { line ->
+                target.addAll(listOf(line.orderSeq, line.itemId, line.optionId, line.qty, line.preferenceNote))
+            }
+        }
+        val fields = target.joinToString("") { value -> value?.toString()?.let { "${it.length}:$it" } ?: "-" }
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(fields.toByteArray())
+        return "gv|" + Base64.getUrlEncoder().withoutPadding().encodeToString(digest.copyOf(12)) + "|" + action
+    }
+
+    private fun bindButtons(
+        markup: ReplyMarkup,
+        key: BotDraftCartKey,
+        tab: Long? = null,
+        order: Long? = null,
+    ): ReplyMarkup {
+        if (markup !is InlineKeyboardMarkup) return markup
+        return InlineKeyboardMarkup(
+            markup.inlineKeyboard.map { row ->
+                row.map { button ->
+                    button.callbackData?.let { button.copy(callbackData = visitButton(it, key, tab, order)) } ?: button
+                }
+            },
+        )
+    }
+
+    private suspend fun dispatchVisitButton(
+        chatId: Long,
+        query: CallbackQuery,
+        wire: String,
+    ): Boolean {
+        val encoded = wire.startsWith("gv|")
+        val raw = if (encoded) GuestVisitButton.decode(wire.substringAfterLast('|')) else wire
+        val label = raw?.let(GuestVisitButton::label)
+        if (label == null) return encoded
+        if (raw == "guest_end_visit") {
+            val bound = chatContextRepository.get(chatId)
+            if (bound?.userId != query.from.id) {
+                askScanQr(chatId)
+                return true
+            }
+            val key =
+                BotDraftCartKey(chatId, bound.tableToken, bound.userId, bound.tableSessionId, bound.visitGeneration)
+            val current = visitButton(raw, key, bindingUpdatedAt = bound.updatedAt)
+            if (wire != current) {
+                offerVisitAction(
+                    chatId,
+                    "Завершить текущий визит? Корзина этого участия будет очищена.",
+                    label,
+                    current,
+                )
+            } else {
+                try {
+                    handleEndTableVisitRequest(key, bound.updatedAt.takeIf { key.sessionId == null })
+                } catch (_: VisitGenerationChangedException) {
+                    enqueueMessage(chatId, "Визит изменился. Откройте актуальное меню стола.")
+                }
+            }
+            return true
+        }
+        val context = (loadContext(chatId) as? LoadContextResult.Loaded)?.context
+        if (context == null || context.userId != query.from.id || context.tableSessionId == null) {
+            enqueueMessage(chatId, "Откройте актуальное меню стола или отсканируйте QR ещё раз.")
+            return true
+        }
+        if (isPlatformOwner(context.userId)) {
+            val verified = guestTableContextLifecycleRepository?.validatePlatformBotContext(context.userId, chatId)
+            if (verified !is PlatformGuestContextValidationResult.Active ||
+                verified.tableSession.id != context.tableSessionId ||
+                verified.visitGeneration != context.visitGeneration
+            ) {
+                enqueueMessage(
+                    chatId,
+                    if (verified == PlatformGuestContextValidationResult.DatabaseUnavailable) {
+                        "База недоступна, попробуйте позже."
+                    } else {
+                        "Откройте QR-код ещё раз и подтвердите вход в Telegram."
+                    },
+                )
+                return true
+            }
+        }
+        if (raw.startsWith("guest_join_code:") && (!encoded || raw.split(':').size != 4)) {
+            enqueueMessage(chatId, "Введите код приглашения заново в меню общего счёта.")
+            return true
+        }
+        val key = context.cartKey(chatId)
+        var tab: Long? = null
+        var order: Long? = null
+        val reorder = raw.startsWith("guest_reorder:")
+        val extension = raw.substringBefore(':') == "guest_shift_extension_request"
+        if (raw.startsWith("staff_call_bill_payment:") || extension || reorder) {
+            val tabs =
+                guestTabsRepository.listTabsForUser(
+                    context.table.venueId,
+                    context.tableSessionId,
+                    context.userId,
+                )
+            if (extension && raw.contains(':')) {
+                val confirmedTarget =
+                    if (encoded) {
+                        tabs.firstNotNullOfOrNull { candidate ->
+                            val candidateOrder =
+                                ordersRepository
+                                    .findActiveOrderSummaryForTab(context.tableSessionId, candidate.id)?.id
+                            if (candidateOrder != null && wire == visitButton(raw, key, candidate.id, candidateOrder)) {
+                                candidate.id to candidateOrder
+                            } else {
+                                null
+                            }
+                        }
+                    } else {
+                        null
+                    }
+                if (confirmedTarget == null) {
+                    showGuestShiftExtension(chatId, query.message?.messageId)
+                    return true
+                }
+                tab = confirmedTarget.first
+                order = confirmedTarget.second
+            } else {
+                tab = tabs.find { it.id == botSelectedTabIds[key] }?.id ?: tabs.singleOrNull()?.id
+                order = tab?.let { ordersRepository.findActiveOrderSummaryForTab(context.tableSessionId, it)?.id }
+                if (tab == null || order == null) {
+                    enqueueMessage(chatId, "Выберите счёт с действующим заказом и повторите действие.")
+                    return true
+                }
+            }
+        }
+        if (raw.startsWith("bot_menu_cart_retry:")) {
+            val operation =
+                try {
+                    key.checkoutScope()?.let { botPreparedCheckouts?.find(it) }
+                } catch (_: DatabaseUnavailableException) {
+                    enqueueMessage(chatId, "Не удалось проверить исходную отправку. Повторите позже.")
+                    return true
+                }
+            if (operation == null || raw.substringAfter(':') != operation.id || wire != visitButton(raw, key)) {
+                enqueueMessage(chatId, "Откройте актуальную корзину и проверьте результат отправки.")
+            } else {
+                try {
+                    sendPreparedBotCheckout(chatId, context, operation)
+                } catch (e: com.hookah.platform.backend.api.ApiException) {
+                    enqueueMessage(chatId, e.message ?: "Проверьте исходную отправку в актуальной корзине.")
+                } catch (_: GiftDecisionRequiredException) {
+                    enqueueMessage(chatId, "Условия акции изменились. Сначала проверьте, был ли оформлен заказ.")
+                }
+            }
+            return true
+        }
+        val current = visitButton(raw, key, tab, order)
+        if (GuestVisitButton.encode(raw) == null) {
+            enqueueMessage(chatId, "Откройте актуальное меню и выберите действие ещё раз.")
+            return true
+        }
+        if ((!encoded || wire != current) && raw != "guest_shift_extension_request") {
+            if (raw.startsWith("guest_join_code:")) {
+                enqueueMessage(chatId, "Подтверждение устарело. Введите код заново в меню общего счёта.")
+                return true
+            }
+            val item = if (reorder) raw.split(':').getOrNull(2)?.toLongOrNull(36) else null
+            val detail = order?.let { " Заказ №$it, счёт №$tab." }.orEmpty() + item?.let { " Позиция №$it." }.orEmpty()
+            enqueueMessage(
+                chatId,
+                "Проверьте действие для стола №${context.table.tableNumber}.$detail",
+                InlineKeyboardMarkup(listOf(listOf(InlineKeyboardButton(label, callbackData = current)))),
+            )
+            return true
+        }
+        try {
+            kotlinx.coroutines.withContext(ButtonVisit(key, tab, order, raw, wire)) {
+                when {
+                    raw == "bot_menu_cart_checkout" ->
+                        checkoutBotMenuCart(
+                            chatId,
+                            context.userId,
+                            wire,
+                        )
+                    raw.startsWith(
+                        "guest_join_code:",
+                    ) -> joinConfirmedSharedCode(chatId, context, raw)
+                    raw.startsWith("guest_cart_note:") || raw.startsWith("guest_staff_note:") -> {
+                        val dialog = dialogStateRepository.get(chatId)
+                        val body = dialog.payload["text"]
+                        if (dialog.payload["participation"] == context.participationTag() &&
+                            dialog.payload["confirmation"] == raw && body != null
+                        ) {
+                            if (raw.startsWith("guest_cart_note:")) {
+                                applyBotCartComment(chatId, context, body)
+                            } else {
+                                createStaffCall(chatId, StaffCallReason.OTHER, body)
+                            }
+                        } else {
+                            enqueueMessage(chatId, "Подтверждение устарело. Откройте текущее меню.")
+                        }
+                    }
+                    raw == "relocation_call_staff" -> createRelocationStaffCall(chatId)
+                    else -> {
+                        val messageId = query.message?.messageId
+                        if (!handleGuestCartCallback(
+                                chatId,
+                                query,
+                                raw,
+                                messageId,
+                            )
+                        ) {
+                            handleStaffCallCallback(chatId, raw, messageId)
+                        }
+                    }
+                }
+            }
+        } catch (_: ServiceSuspendedException) {
+            enqueueMessage(chatId, "Обслуживание приостановлено. Повторите после возобновления работы заведения.")
+        } catch (_: SubscriptionBlockedException) {
+            enqueueMessage(chatId, subscriptionBlockedMessage)
+        } catch (_: VisitGenerationChangedException) {
+            enqueueMessage(chatId, "Посещение или заказ изменился. Откройте актуальное меню.")
+        } catch (_: ForbiddenException) {
+            enqueueMessage(chatId, "Действие недоступно. Откройте актуальное меню.")
+        } catch (_: NotFoundException) {
+            enqueueMessage(chatId, "Стол или счёт больше недоступен. Откройте актуальное меню.")
+        } catch (_: DatabaseUnavailableException) {
+            enqueueMessage(chatId, "Не удалось проверить результат. Откройте меню и проверьте состояние действия.")
+        }
+        return true
     }
 
     private suspend fun handleCallbackWithAuthority(callbackQuery: CallbackQuery) {
@@ -2347,59 +2662,8 @@ class TelegramBotRouter internal constructor(
             data?.startsWith("bot_menu_category:") == true -> {
                 showBotMenuCategoryItems(chatId, data, sourceMessageId = sourceMessageId)
             }
-            data?.startsWith("bot_menu_item_option_add_to_cart:") == true ->
-                addBotMenuItemOptionToCart(chatId, callbackQuery.from.id, data, sourceMessageId)
-            data?.startsWith("bot_menu_item_add:") == true ->
-                showBotMenuItemDetails(
-                    chatId,
-                    callbackQuery.from.id,
-                    data,
-                    sourceMessageId,
-                )
-            data?.startsWith("bot_menu_item_add_to_cart:") == true ->
-                showBotMenuItemDetails(
-                    chatId,
-                    callbackQuery.from.id,
-                    data,
-                    sourceMessageId,
-                )
-            data?.startsWith("bot_menu_item_reorder:") == true ->
-                reorderBotMenuItem(chatId, callbackQuery.from.id, data, callbackQuery.id)
-            data == "bot_menu_item_cart" -> showBotMenuCart(chatId, sourceMessageId)
-            data?.startsWith("bot_menu_cart_inc:") == true ->
-                changeBotMenuCartItemQty(
-                    chatId,
-                    callbackQuery.from.id,
-                    data,
-                    delta = 1,
-                    sourceMessageId = sourceMessageId,
-                )
-            data?.startsWith("bot_menu_cart_dec:") == true ->
-                changeBotMenuCartItemQty(
-                    chatId,
-                    callbackQuery.from.id,
-                    data,
-                    delta = -1,
-                    sourceMessageId = sourceMessageId,
-                )
-            data?.startsWith("bot_menu_cart_remove:") == true ->
-                removeBotMenuCartItem(chatId, callbackQuery.from.id, data, sourceMessageId = sourceMessageId)
-            data == "bot_menu_cart_back_menu" -> showBotMenu(chatId, sourceMessageId = sourceMessageId)
-            data == "bot_menu_cart_comment" -> promptBotMenuCartComment(chatId)
-            data?.isBotGiftCallback() == true -> handleBotGiftCallback(chatId, callbackQuery.from.id, data)
-            data == "bot_menu_cart_clear" -> clearBotMenuCart(chatId, callbackQuery.from.id, sourceMessageId)
-            data == "bot_menu_cart_checkout" -> checkoutBotMenuCart(chatId, callbackQuery.from.id, callbackQuery.id)
-            data == "bot_tabs_create_shared" -> createBotSharedTab(chatId)
-            data == "bot_tabs_join_prompt" -> promptBotJoinShared(chatId)
+            handleGuestCartCallback(chatId, callbackQuery, data, sourceMessageId) -> Unit
             data == "bot_menu_item_staff" -> showStaffCallReasons(chatId)
-            data?.startsWith("staff_call_bill_payment:") == true -> handleStaffCallBillPaymentCallback(chatId, data)
-            data?.startsWith("bot_menu_item:") == true ->
-                showBotMenuItemDetails(
-                    chatId,
-                    callbackQuery.from.id,
-                    data,
-                    sourceMessageId,
-                )
             data?.substringBefore(':') in setOf("quick_order_confirm", "quick_order_edit", "quick_order_cancel") ->
                 handleQuickOrderCallback(chatId, data!!)
             data == null -> Unit
@@ -2419,18 +2683,41 @@ class TelegramBotRouter internal constructor(
             showGuestShiftExtension(chatId = chatId, sourceMessageId = sourceMessageId)
             return
         }
-        if (data == "guest_shift_extension_request") {
+        if (data.substringBefore(':') == "guest_shift_extension_request") {
             createGuestShiftExtensionRequest(chatId = chatId, sourceMessageId = sourceMessageId)
             return
         }
         if (!data.startsWith("staff_call_reason:")) return
         val reason = parseStaffCallReason(data.removePrefix("staff_call_reason:"))
         if (reason == StaffCallReason.BILL) {
-            enqueueMessage(chatId, "Как оплатите счёт?", TelegramKeyboards.inlineStaffCallBillPaymentMethods())
+            val context = resolveGuestContext(chatId) ?: return
+            val tab = resolveCurrentBotTab(chatId, context) ?: return
+            val order = ordersRepository.findActiveOrderSummaryForTab(tab.tableSessionId, tab.id)
+            if (order == null) {
+                enqueueMessage(chatId, "Выберите счёт с действующим заказом и повторите действие.")
+                return
+            }
+            enqueueMessage(
+                chatId,
+                "Как оплатите счёт?",
+                bindButtons(
+                    TelegramKeyboards.inlineStaffCallBillPaymentMethods(),
+                    context.cartKey(chatId),
+                    tab.id,
+                    order.id,
+                ),
+            )
             return
         }
         if (reason == StaffCallReason.OTHER) {
-            dialogStateRepository.set(chatId, DialogState(DialogStateType.STAFF_CALL_WAIT_COMMENT))
+            val promptContext = resolveGuestContext(chatId) ?: return
+            dialogStateRepository.set(
+                chatId,
+                DialogState(
+                    DialogStateType.STAFF_CALL_WAIT_COMMENT,
+                    mapOf("participation" to promptContext.participationTag()),
+                ),
+            )
             enqueueMessage(chatId, "Опишите, что нужно сделать.")
         } else {
             createStaffCall(chatId, reason, null)
@@ -2744,9 +3031,13 @@ class TelegramBotRouter internal constructor(
         when (activationResult) {
             is GuestTableActivationResult.Applied -> {
                 applyGuestActivationInMemory(
-                    chatId = chatId,
-                    tableToken = activationResult.context.tableToken,
-                    tableSessionId = activationResult.tableSession.id,
+                    BotDraftCartKey(
+                        chatId,
+                        activationResult.context.tableToken,
+                        actorUserId,
+                        activationResult.tableSession.id,
+                        activationResult.visitGeneration,
+                    ),
                 )
                 enqueueCallbackAnswer(chatId, callbackQueryId, "Гостевой режим включён.")
                 enqueueMessage(
@@ -4602,7 +4893,7 @@ class TelegramBotRouter internal constructor(
                 val added =
                     addItemToBotDraftCart(
                         chatId = chatId,
-                        tableToken = context.table.tableToken,
+                        key = context.cartKey(chatId),
                         tableSessionId = currentTab.tableSessionId,
                         tabId = currentTab.id,
                         item =
@@ -21175,6 +21466,9 @@ class TelegramBotRouter internal constructor(
                 • дозаказы
                 • позиции заказа
                 • вызовы персонала
+                • подготовленные отправки из корзин бота
+
+                Текущие посещения завершатся. Для нового посещения гостям понадобится отсканировать QR.
 
                 Не удаляются: заведение, столы, QR, меню, сотрудники, роли и настройки.
                 """.trimIndent()
@@ -21203,6 +21497,8 @@ class TelegramBotRouter internal constructor(
             Вы уверены?
 
             Это удалит/очистит тестовые заказы, дозаказы, позиции заказа, вызовы персонала и временные операционные данные для этого заведения.
+
+            Текущие посещения завершатся, подготовленные отправки бота будут удалены. Для нового заказа понадобится повторный вход по QR.
 
             Заведение, столы, QR, меню, сотрудники, роли и настройки не удаляются.
             """.trimIndent(),
@@ -22472,7 +22768,12 @@ class TelegramBotRouter internal constructor(
                 enqueueCallbackAnswer(chatId, callbackQueryId, text = "Запрос не найден", showAlert = true)
                 return
             } catch (e: InvalidInputException) {
-                enqueueCallbackAnswer(chatId, callbackQueryId, text = "Уже обработано")
+                enqueueCallbackAnswer(
+                    chatId,
+                    callbackQueryId,
+                    text = e.message ?: "Продление недоступно",
+                    showAlert = true,
+                )
                 return
             }
         refreshStaffChatShiftExtensionMessage(
@@ -23868,7 +24169,7 @@ class TelegramBotRouter internal constructor(
             VenueGuestAccessResult.Forbidden -> {
                 teardownGuestContextAfterAvailabilityLoss(
                     chatId = chatId,
-                    actorUserId = context.userId,
+                    context = context,
                     message = "Заведение пока не доступно для гостей. Гостевой режим завершён.",
                 )
                 return null
@@ -28042,7 +28343,7 @@ class TelegramBotRouter internal constructor(
         ) {
             return ApplyTableTokenResult.Invalid
         }
-        val activeSession =
+        val activation =
             try {
                 val event =
                     confirmation?.exitEventId
@@ -28113,7 +28414,7 @@ class TelegramBotRouter internal constructor(
                         fallback = fallback,
                     )
                 when (result) {
-                    is GuestTableActivationResult.Applied -> result.tableSession
+                    is GuestTableActivationResult.Applied -> result
                     is GuestTableActivationResult.Denied -> return ApplyTableTokenResult.Exited
                     else -> return ApplyTableTokenResult.DatabaseUnavailable
                 }
@@ -28122,7 +28423,10 @@ class TelegramBotRouter internal constructor(
             } catch (e: DatabaseUnavailableException) {
                 return ApplyTableTokenResult.DatabaseUnavailable
             }
-        applyGuestActivationInMemory(chatId, context.tableToken, activeSession.id)
+        val activeSession = activation.tableSession
+        applyGuestActivationInMemory(
+            BotDraftCartKey(chatId, context.tableToken, userId, activeSession.id, activation.visitGeneration),
+        )
         if (explicitBotStart) {
             enqueueMessage(
                 chatId,
@@ -28144,18 +28448,9 @@ class TelegramBotRouter internal constructor(
         return ApplyTableTokenResult.Applied
     }
 
-    private fun applyGuestActivationInMemory(
-        chatId: Long,
-        tableToken: String,
-        tableSessionId: Long,
-    ) {
-        val key = BotDraftCartKey(chatId = chatId, tableToken = tableToken)
-        clearBotDraftStateForChatExceptTableToken(chatId, tableToken)
-        val previousSessionId = botDraftCartSessionIds[key]
-        if (previousSessionId != null && previousSessionId != tableSessionId) {
-            clearBotDraftCart(chatId, tableToken)
-        }
-        botDraftCartSessionIds[key] = tableSessionId
+    private fun applyGuestActivationInMemory(key: BotDraftCartKey) {
+        val chatId = key.chatId
+        clearBotDraftStateForChatExcept(key)
         botBookingCommentDrafts.remove(chatId)
         botBookingPendingConfirmations.remove(chatId)
         botBookingEditContexts.remove(chatId)
@@ -28201,10 +28496,14 @@ class TelegramBotRouter internal constructor(
     private suspend fun tableContextBotKeyboard(context: TableContext): ReplyKeyboardMarkup =
         TelegramKeyboards.tableContextBotFlow(context)
 
-    private suspend fun shouldShowGuestBotShiftExtensionMenuEntry(venueId: Long): Boolean =
+    private suspend fun shouldShowGuestBotShiftExtensionMenuEntry(
+        venueId: Long,
+        sessionId: Long?,
+    ): Boolean =
         try {
             val settings = shiftExtensionRepository.getSettings(venueId)
-            settings.enabled && settings.priceMinor != null
+            settings.enabled && settings.priceMinor != null && sessionId != null &&
+                !shiftExtensionRepository.hasStaffManagedSeating(venueId, sessionId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: DatabaseUnavailableException) {
@@ -28217,8 +28516,25 @@ class TelegramBotRouter internal constructor(
     ) {
         val context = resolveGuestBotShiftExtensionContext(chatId) ?: return
         val text = buildGuestShiftExtensionText(context)
-        val canRequest = context.canSubmitRequest
-        val replyMarkup = TelegramKeyboards.inlineGuestShiftExtensionActions(canRequest)
+        val terms = context.settings.terms()?.takeIf { context.canSubmitRequest }
+        val confirmation =
+            terms?.let {
+                val confirmationId = kotlin.random.Random.nextLong(1, 1L shl 46)
+                val action =
+                    "guest_shift_extension_request:${it.durationMinutes}:${it.priceMinor}:" +
+                        "${it.currency}:${it.revision}:$confirmationId"
+                InlineKeyboardButton(
+                    text = "Продлить на ${formatShiftExtensionDuration(it.durationMinutes)}",
+                    callbackData = action,
+                )
+            }
+        val replyMarkup =
+            bindButtons(
+                TelegramKeyboards.inlineGuestShiftExtensionActions(confirmation),
+                context.resolved.cartKey(chatId),
+                context.tab.id,
+                context.order?.id,
+            )
         if (sourceMessageId != null) {
             enqueueEditMessage(chatId, sourceMessageId, text, replyMarkup)
         } else {
@@ -28230,116 +28546,146 @@ class TelegramBotRouter internal constructor(
         chatId: Long,
         sourceMessageId: Long?,
     ) {
-        val context = resolveGuestBotShiftExtensionContext(chatId)
-        if (context == null) {
+        if (sourceMessageId == null || sourceMessageId <= 0) {
+            showGuestShiftExtension(chatId)
             return
         }
-        if (!context.canSubmitRequest) {
-            val text = buildGuestShiftExtensionText(context)
-            if (sourceMessageId != null) {
-                enqueueEditMessage(
-                    chatId = chatId,
-                    messageId = sourceMessageId,
-                    text = text,
-                    replyMarkup = TelegramKeyboards.inlineGuestShiftExtensionActions(false),
-                )
-            } else {
-                enqueueMessage(chatId, text, TelegramKeyboards.inlineGuestShiftExtensionActions(false))
-            }
-            return
-        }
+        val target = kotlin.coroutines.coroutineContext[ButtonVisit] ?: return
+        val context = resolveGuestBotShiftExtensionContext(chatId, target.tabId) ?: return
         val activeOrder = context.order ?: return
-        val record =
+        if (target.tabId != context.tab.id || target.orderId != activeOrder.id) {
+            enqueueMessage(chatId, "Заказ изменился. Откройте продление заново.")
+            return
+        }
+        val (record, replayed) =
             try {
-                val idempotencyKey =
-                    sourceMessageId?.let { messageId ->
-                        "guest-bot-shift-extension:$chatId:$messageId"
-                    }
-                if (isPlatformOwner(context.resolved.userId)) {
-                    when (
-                        val attempt =
-                            runConfirmedPlatformGuestBotMutation(
-                                chatId = chatId,
-                                context = context.resolved,
-                                expectedTableSessionId = context.tableSession.id,
-                            ) { connection, confirmed ->
-                                shiftExtensionRepository.createPendingRequest(
-                                    connection = connection,
-                                    command =
-                                        CreateShiftExtensionRequestCommand(
-                                            venueId = confirmed.context.venueId,
-                                            tableSessionId = confirmed.tableSession.id,
-                                            tableId = confirmed.context.tableId,
-                                            tabId = context.tab.id,
-                                            orderId = activeOrder.id,
-                                            requestedByUserId = context.resolved.userId,
-                                            currentOrderableUntil = confirmed.tableSession.expiresAt,
-                                            idempotencyKey = idempotencyKey,
-                                            comment = null,
-                                        ),
-                                )
-                            }
+                mutateBotVisit(chatId, context.resolved, touchOnSuccess = false) { connection, session ->
+                    if (!guestTabsRepository.isTabMember(
+                            connection,
+                            context.tab.id,
+                            session.venueId,
+                            session.id,
+                            context.resolved.userId,
+                            forUpdate = true,
+                        )
                     ) {
-                        is PlatformGuestBotMutationAttempt.Applied -> attempt.value
-                        PlatformGuestBotMutationAttempt.Stopped -> return
+                        throw ForbiddenException()
                     }
-                } else {
-                    shiftExtensionRepository.createPendingRequest(
+                    val order =
+                        ordersRepository.findActiveOrderDetailsForTab(
+                            connection,
+                            session.id,
+                            context.tab.id,
+                            forUpdate = true,
+                        )
+                    if (order?.orderId != activeOrder.id) throw VisitGenerationChangedException()
+                    val terms = parseBotShiftExtensionTerms(target.action)
+                    val confirmation = target.action?.substringAfterLast(':')?.toLongOrNull()
+                    val legacyKey = "guest-bot-shift-extension:$chatId:$sourceMessageId"
+                    val command =
                         CreateShiftExtensionRequestCommand(
-                            venueId = context.resolved.table.venueId,
-                            tableSessionId = context.tableSession.id,
-                            tableId = context.resolved.table.tableId,
+                            venueId = session.venueId,
+                            tableSessionId = session.id,
+                            tableId = session.tableId,
                             tabId = context.tab.id,
-                            orderId = activeOrder.id,
+                            orderId = order.orderId,
                             requestedByUserId = context.resolved.userId,
-                            currentOrderableUntil = context.tableSession.expiresAt,
-                            idempotencyKey = idempotencyKey,
+                            currentOrderableUntil = session.expiresAt,
+                            idempotencyKey = if (terms != null) "$legacyKey:$confirmation" else legacyKey,
                             comment = null,
-                        ),
-                    )
+                            visitGeneration = context.resolved.visitGeneration,
+                            confirmedTerms = terms,
+                        )
+                    val replay = shiftExtensionRepository.findExactReplay(connection, command)
+                    if (replay != null) {
+                        replay to true
+                    } else {
+                        if (command.confirmedTerms == null) throw VisitVersionRequiredException()
+                        val touched =
+                            tableSessionRepository.touchActiveSession(
+                                connection, session.id, session.venueId, session.tableId,
+                                tableSessionTtl, Instant.now(),
+                            ) ?: throw NotFoundException()
+                        shiftExtensionRepository.createPendingRequest(
+                            connection,
+                            command.copy(currentOrderableUntil = touched.expiresAt),
+                        ) to false
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: DatabaseUnavailableException) {
+            } catch (_: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
-            } catch (e: ForbiddenException) {
+            } catch (_: ForbiddenException) {
                 enqueueMessage(chatId, "Продление сейчас недоступно. Выберите доступный счёт и попробуйте снова.")
                 return
-            } catch (e: InvalidInputException) {
-                showGuestShiftExtension(chatId, sourceMessageId)
+            } catch (_: ShiftExtensionTermsChangedException) {
+                enqueueMessage(chatId, "Условия продления изменились. Проверьте их и подтвердите заново.")
+                showGuestShiftExtension(chatId)
                 return
-            } catch (e: NotFoundException) {
+            } catch (_: VisitVersionRequiredException) {
+                showGuestShiftExtension(chatId)
+                return
+            } catch (_: InvalidInputException) {
+                showGuestShiftExtension(chatId)
+                return
+            } catch (_: NotFoundException) {
                 enqueueMessage(chatId, "Активный заказ не найден.")
                 return
             }
-        notifyStaffChatAboutShiftExtensionRequest(
-            venueId = context.resolved.table.venueId,
-            orderId = record.orderId,
+        if (!replayed) notifyStaffChatAboutShiftExtensionRequest(record.venueId, record.orderId)
+        val status =
+            when (record.status) {
+                ShiftExtensionRequestStatus.PENDING -> "Ожидает подтверждения"
+                ShiftExtensionRequestStatus.APPROVED -> "Продление подтверждено. Сумма добавлена в счёт."
+                ShiftExtensionRequestStatus.REJECTED -> "Запрос на продление отклонён. Счёт не изменён."
+                ShiftExtensionRequestStatus.CANCELLED -> "Запрос на продление отменён. Счёт не изменён."
+            }
+        enqueueEditMessage(
+            chatId,
+            sourceMessageId,
+            "Продление работы заведения\n\n$status",
+            TelegramKeyboards.inlineGuestShiftExtensionActions(),
         )
-        val pendingText = guestShiftExtensionPendingText()
-        if (sourceMessageId != null) {
-            enqueueEditMessage(
-                chatId = chatId,
-                messageId = sourceMessageId,
-                text = pendingText,
-                replyMarkup = TelegramKeyboards.inlineGuestShiftExtensionActions(false),
-            )
-        } else {
-            enqueueMessage(chatId, pendingText, TelegramKeyboards.inlineGuestShiftExtensionActions(false))
-        }
     }
 
-    private suspend fun resolveGuestBotShiftExtensionContext(chatId: Long): GuestBotShiftExtensionContext? {
+    private fun parseBotShiftExtensionTerms(action: String?): ShiftExtensionTerms? {
+        val parts = action?.split(':') ?: return null
+        if (parts.size != 6 || (parts[5].toLongOrNull() ?: 0) <= 0) return null
+        return ShiftExtensionTerms(
+            durationMinutes = parts[1].toIntOrNull() ?: return null,
+            priceMinor = parts[2].toLongOrNull() ?: return null,
+            currency = parts[3],
+            revision = parts[4],
+        )
+    }
+
+    private suspend fun resolveGuestBotShiftExtensionContext(
+        chatId: Long,
+        expectedTab: Long? = null,
+    ): GuestBotShiftExtensionContext? {
         val resolved = resolveGuestContext(chatId) ?: return null
         val tableSession =
             resolveCurrentTableSession(chatId, resolved) ?: run {
                 enqueueMessage(chatId, "Сессия стола истекла. Отсканируйте QR ещё раз.")
                 return null
             }
-        val tab = resolveCurrentBotTab(chatId, resolved) ?: return null
+        val tab =
+            if (expectedTab == null) {
+                resolveCurrentBotTab(chatId, resolved, touchOnSuccess = false) ?: return null
+            } else {
+                guestTabsRepository.listTabsForUser(resolved.table.venueId, tableSession.id, resolved.userId)
+                    .firstOrNull { it.id == expectedTab && it.status == "ACTIVE" } ?: return null
+            }
         val settings =
             try {
+                if (expectedTab == null &&
+                    shiftExtensionRepository.hasStaffManagedSeating(resolved.table.venueId, tableSession.id)
+                ) {
+                    enqueueMessage(chatId, "Время этой посадки меняет персонал в зале. Обратитесь к сотруднику.")
+                    return null
+                }
                 shiftExtensionRepository.getSettings(resolved.table.venueId)
             } catch (e: CancellationException) {
                 throw e
@@ -28396,6 +28742,7 @@ class TelegramBotRouter internal constructor(
                 "Продление работы заведения\n\n" +
                     "Продление на ${formatShiftExtensionDuration(context.settings.durationMinutes)} — " +
                     "${formatCompactMoney(context.settings.priceMinor, context.settings.currency)}. " +
+                    "Заказ №${context.order.displayNumber ?: context.order.id}, счёт №${context.tab.id}. " +
                     "Персонал подтвердит возможность продления."
         }
 
@@ -28472,7 +28819,8 @@ class TelegramBotRouter internal constructor(
             menu.categories
                 .filter { category -> category.items.isNotEmpty() }
                 .map { category -> category.id to category.name }
-        val includeShiftExtension = shouldShowGuestBotShiftExtensionMenuEntry(context.table.venueId)
+        val includeShiftExtension =
+            shouldShowGuestBotShiftExtensionMenuEntry(context.table.venueId, context.tableSessionId)
         if (categories.isEmpty() && !includeShiftExtension) {
             enqueueMessage(chatId, "В ${context.table.venueName} пока нет категорий меню.")
             return
@@ -28483,7 +28831,7 @@ class TelegramBotRouter internal constructor(
                 .sortedWith(compareBy({ it.second.featuredOrder }, { it.second.id })).take(6)
         upsertBotMenuMessage(
             chatId,
-            tableToken = context.table.tableToken,
+            key = context.cartKey(chatId),
             (
                 if (reorderMode) {
                     "Выберите позицию в меню, затем откройте корзину и нажмите «Оформить заказ»."
@@ -28534,7 +28882,7 @@ class TelegramBotRouter internal constructor(
             VenueGuestAccessResult.Forbidden -> {
                 teardownGuestContextAfterAvailabilityLoss(
                     chatId = chatId,
-                    actorUserId = context.userId,
+                    context = context,
                     message = "Заведение пока не доступно для гостей. Гостевой режим завершён.",
                 )
                 return
@@ -28755,7 +29103,7 @@ class TelegramBotRouter internal constructor(
         val pageItems = category.items.subList(fromIndex, toIndex)
         upsertBotMenuMessage(
             chatId,
-            tableToken = context.table.tableToken,
+            key = context.cartKey(chatId),
             buildString {
                 append(category.name)
                 append("\n")
@@ -28833,7 +29181,7 @@ class TelegramBotRouter internal constructor(
         if (availableOptions.isNotEmpty()) {
             upsertBotMenuMessage(
                 chatId,
-                tableToken = context.table.tableToken,
+                key = context.cartKey(chatId),
                 buildString {
                     append(item.name)
                     append(menuDescriptionLine(item.description, 1000))
@@ -28857,7 +29205,7 @@ class TelegramBotRouter internal constructor(
         if (
             !addItemToBotDraftCart(
                 chatId = chatId,
-                tableToken = context.table.tableToken,
+                key = context.cartKey(chatId),
                 tableSessionId = currentTab.tableSessionId,
                 tabId = currentTab.id,
                 item = item,
@@ -28868,7 +29216,7 @@ class TelegramBotRouter internal constructor(
         }
         upsertBotMenuMessage(
             chatId,
-            tableToken = context.table.tableToken,
+            key = context.cartKey(chatId),
             buildString {
                 append(item.name)
                 append(menuDescriptionLine(item.description, 1000))
@@ -28943,7 +29291,7 @@ class TelegramBotRouter internal constructor(
         if (
             !addItemToBotDraftCart(
                 chatId = chatId,
-                tableToken = context.table.tableToken,
+                key = context.cartKey(chatId),
                 tableSessionId = currentTab.tableSessionId,
                 tabId = currentTab.id,
                 item = item,
@@ -28958,7 +29306,7 @@ class TelegramBotRouter internal constructor(
         val finalPriceMinor = item.priceMinor + selectedOption.priceDeltaMinor
         upsertBotMenuMessage(
             chatId,
-            tableToken = context.table.tableToken,
+            key = context.cartKey(chatId),
             buildString {
                 append(item.name)
                 append("\n")
@@ -28991,9 +29339,14 @@ class TelegramBotRouter internal constructor(
         data: String,
         callbackId: String,
     ) {
-        val (categoryId, itemId) = parseBotMenuItemData(data) ?: return
+        val target = kotlin.coroutines.coroutineContext[ButtonVisit] ?: return
+        val expectedOrder = target.orderId ?: return
+        val parts = data.split(':')
+        val categoryId = parts.getOrNull(1)?.toLongOrNull(36) ?: return
+        val itemId = parts.getOrNull(2)?.toLongOrNull(36) ?: return
         val context = resolveGuestContext(chatId, actorUserId) ?: return
-        val currentTab = resolveCurrentBotTab(chatId, context, cartActivity = true) ?: return
+        val currentTab = resolveCurrentBotTab(chatId, context) ?: return
+        if (currentTab.id != target.tabId) throw VisitGenerationChangedException()
         val menu =
             try {
                 guestMenuRepository.getMenu(context.table.venueId)
@@ -29016,32 +29369,7 @@ class TelegramBotRouter internal constructor(
                 tableSessionId = currentTab.tableSessionId,
                 tabId = currentTab.id,
             )
-        if (activeOrder == null) {
-            if (
-                !addItemToBotDraftCart(
-                    chatId = chatId,
-                    tableToken = context.table.tableToken,
-                    tableSessionId = currentTab.tableSessionId,
-                    tabId = currentTab.id,
-                    item = item,
-                )
-            ) {
-                warnBotDraftCartScopeMismatch(chatId)
-                return
-            }
-            enqueueMessage(
-                chatId,
-                buildString {
-                    append(item.name)
-                    append("\n")
-                    append("Цена: ${formatPrice(item.priceMinor, item.currency)}")
-                    append("\n\n")
-                    append("Активного заказа нет. Позиция добавлена в корзину.")
-                },
-                TelegramKeyboards.inlineBotMenuPostAddActions(category.id),
-            )
-            return
-        }
+        if (activeOrder?.id != expectedOrder) throw VisitGenerationChangedException()
         val reorderItems =
             listOf(
                 OrderBatchItemInput(
@@ -29055,6 +29383,9 @@ class TelegramBotRouter internal constructor(
                     venueId = context.table.venueId,
                     userId = context.userId,
                     items = reorderItems,
+                    tableSessionId = currentTab.tableSessionId,
+                    tabId = currentTab.id,
+                    expectedVisitGeneration = context.visitGeneration,
                     venueZoneId = resolvePromotionVenueZoneId(context.table.venueId),
                     giftDecision = null,
                 )
@@ -29074,7 +29405,7 @@ class TelegramBotRouter internal constructor(
             if (
                 !addItemToBotDraftCart(
                     chatId = chatId,
-                    tableToken = context.table.tableToken,
+                    key = context.cartKey(chatId),
                     tableSessionId = currentTab.tableSessionId,
                     tabId = currentTab.id,
                     item = item,
@@ -29099,6 +29430,7 @@ class TelegramBotRouter internal constructor(
                 tableSessionId = currentTab.tableSessionId,
                 tabId = currentTab.id,
                 items = reorderItems,
+                expectedOrderId = expectedOrder,
                 giftFallbackItem = item,
             ) ?: return
         enqueueMessage(
@@ -29127,11 +29459,27 @@ class TelegramBotRouter internal constructor(
         sourceMessageId: Long? = null,
     ) {
         val context = resolveGuestContext(chatId) ?: return
+        val key = context.cartKey(chatId)
+        val pending =
+            try {
+                key.checkoutScope()?.let { botPreparedCheckouts?.find(it) }
+            } catch (_: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "Не удалось проверить предыдущую отправку корзины. Повторите позже.")
+                return
+            }
+        if (pending != null) {
+            reserveBotCheckoutDraft(key, pending)
+            offerVisitAction(
+                chatId,
+                "Отправка в счёт №${pending.tabId} ожидает проверки. Повтор сохранит исходный состав.",
+                "Повторить исходную отправку",
+                visitButton("bot_menu_cart_retry:${pending.id}", key),
+            )
+        }
         val currentTab = resolveCurrentBotTab(chatId, context) ?: return
         val showSplitBillActions = currentTab.type == "PERSONAL"
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
         clearBotTransientScreens(chatId, key)
-        val items = getBotDraftCartItems(chatId, context.table.tableToken)
+        val items = getBotDraftCartItems(context.cartKey(chatId))
         val guestComment = botDraftCartComments[key]?.trim()?.takeIf { it.isNotBlank() }
         if (items.isNotEmpty() && isBotDraftCartScopeMismatch(key, currentTab)) {
             clearBotGiftState(key)
@@ -29140,6 +29488,7 @@ class TelegramBotRouter internal constructor(
                 key,
                 "Корзина собрана для другого счёта. Очистите её и соберите заново для текущего счёта.",
                 TelegramKeyboards.inlineBotMenuCartSummaryActions(
+                    participation = context.participationTag(),
                     showSplitBillActions = false,
                     hasComment = guestComment != null,
                 ),
@@ -29152,6 +29501,7 @@ class TelegramBotRouter internal constructor(
                 key,
                 "Корзина пуста.",
                 TelegramKeyboards.inlineBotMenuCartSummaryActions(
+                    participation = context.participationTag(),
                     showSplitBillActions = showSplitBillActions,
                     hasComment = guestComment != null,
                 ),
@@ -29167,6 +29517,7 @@ class TelegramBotRouter internal constructor(
                     key,
                     "Не удалось пересчитать корзину по актуальным ценам. Попробуйте ещё раз.",
                     TelegramKeyboards.inlineBotMenuCartSummaryActions(
+                        participation = context.participationTag(),
                         showSplitBillActions = showSplitBillActions,
                         hasComment = guestComment != null,
                     ),
@@ -29178,6 +29529,7 @@ class TelegramBotRouter internal constructor(
                     key,
                     "Состав или условия корзины изменились. Проверьте доступность позиций и вариантов.",
                     TelegramKeyboards.inlineBotMenuCartSummaryActions(
+                        participation = context.participationTag(),
                         showSplitBillActions = showSplitBillActions,
                         hasComment = guestComment != null,
                     ),
@@ -29290,6 +29642,7 @@ class TelegramBotRouter internal constructor(
                 append("\nКомментарий: ${guestComment ?: "—"}")
             },
             TelegramKeyboards.inlineBotMenuCartSummaryActions(
+                participation = context.participationTag(),
                 showSplitBillActions = showSplitBillActions,
                 hasComment = guestComment != null,
                 showAcceptFixedGift = fixedGiftCanBeAccepted,
@@ -29410,6 +29763,7 @@ class TelegramBotRouter internal constructor(
                 items = orderItems,
                 venueZoneId = resolvePromotionVenueZoneId(venueId),
                 tableSessionId = cartScope.tableSessionId,
+                expectedVisitGeneration = key.generation,
                 tabId = cartScope.tabId,
                 comment = submitComment,
                 giftDecisionCommand = botGiftDecisions[key].takeIf { includeGiftDecision },
@@ -29422,6 +29776,7 @@ class TelegramBotRouter internal constructor(
                     items = orderItems,
                     venueZoneId = resolvePromotionVenueZoneId(venueId),
                     tableSessionId = cartScope.tableSessionId,
+                    expectedVisitGeneration = key.generation,
                     tabId = cartScope.tabId,
                     comment = submitComment,
                     giftDecisionCommand = null,
@@ -29446,6 +29801,9 @@ class TelegramBotRouter internal constructor(
                 key = key,
                 includeGiftDecision = includeGiftDecision,
             )
+        } catch (e: VisitGenerationChangedException) {
+            enqueueMessage(chatId, "Посещение изменилось. Откройте корзину текущего посещения.")
+            null
         } catch (e: DatabaseUnavailableException) {
             enqueueMessage(chatId, "Не удалось пересчитать корзину по актуальным ценам. Попробуйте ещё раз.")
             null
@@ -29644,7 +30002,7 @@ class TelegramBotRouter internal constructor(
             }
         val context = resolveGuestContext(chatId, actorUserId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context) ?: return
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val key = context.cartKey(chatId)
         val binding = botGiftCallbackBindings[key]
         val bindingMatchesCurrentCart =
             binding?.let { botGiftCallbackMatchesCurrentCart(key, currentTab, it) } == true
@@ -29685,8 +30043,8 @@ class TelegramBotRouter internal constructor(
     ) {
         val context = resolveGuestContext(chatId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context) ?: return
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
-        val items = getBotDraftCartItems(chatId, context.table.tableToken)
+        val key = context.cartKey(chatId)
+        val items = getBotDraftCartItems(context.cartKey(chatId))
         if (items.isEmpty()) {
             showBotMenuCart(chatId)
             return
@@ -29762,8 +30120,8 @@ class TelegramBotRouter internal constructor(
     ) {
         val context = resolveGuestContext(chatId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context, cartActivity = true) ?: return
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
-        val items = getBotDraftCartItems(chatId, context.table.tableToken)
+        val key = context.cartKey(chatId)
+        val items = getBotDraftCartItems(context.cartKey(chatId))
         if (items.isEmpty()) {
             showBotMenuCart(chatId)
             return
@@ -29827,8 +30185,8 @@ class TelegramBotRouter internal constructor(
     ) {
         val context = resolveGuestContext(chatId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context, cartActivity = true) ?: return
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
-        val items = getBotDraftCartItems(chatId, context.table.tableToken)
+        val key = context.cartKey(chatId)
+        val items = getBotDraftCartItems(context.cartKey(chatId))
         if (items.isEmpty()) {
             showBotMenuCart(chatId)
             return
@@ -29880,8 +30238,8 @@ class TelegramBotRouter internal constructor(
     ) {
         val context = resolveGuestContext(chatId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context, cartActivity = true) ?: return
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
-        val items = getBotDraftCartItems(chatId, context.table.tableToken)
+        val key = context.cartKey(chatId)
+        val items = getBotDraftCartItems(context.cartKey(chatId))
         if (items.isEmpty()) {
             showBotMenuCart(chatId)
             return
@@ -29940,8 +30298,8 @@ class TelegramBotRouter internal constructor(
     ) {
         val context = resolveGuestContext(chatId) ?: return
         val currentTab = resolveCurrentBotTab(chatId, context, cartActivity = true) ?: return
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
-        val items = getBotDraftCartItems(chatId, context.table.tableToken)
+        val key = context.cartKey(chatId)
+        val items = getBotDraftCartItems(context.cartKey(chatId))
         if (items.isEmpty()) {
             showBotMenuCart(chatId)
             return
@@ -30002,7 +30360,11 @@ class TelegramBotRouter internal constructor(
     ) {
         val context = resolveGuestContext(chatId, actorUserId) ?: return
         resolveCurrentTableSession(chatId, context, cartActivity = true) ?: return
-        clearBotDraftCart(chatId, context.table.tableToken)
+        if (!matchesBotDraftButton(context.cartKey(chatId))) {
+            showBotMenuCart(chatId)
+            return
+        }
+        clearBotDraftCart(context.cartKey(chatId))
         showBotMenuCart(chatId)
     }
 
@@ -30015,13 +30377,17 @@ class TelegramBotRouter internal constructor(
     ) {
         val itemId = parseBotMenuCartItemId(data) ?: return
         val context = resolveGuestContext(chatId, actorUserId) ?: return
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val key = context.cartKey(chatId)
         val cart =
             botDraftCarts[key] ?: run {
                 showBotMenuCart(chatId)
                 return
             }
         resolveCurrentTableSession(chatId, context, cartActivity = true) ?: return
+        if (!matchesBotDraftButton(key)) {
+            showBotMenuCart(chatId)
+            return
+        }
         cart.compute(itemId) { _, existing ->
             val current = existing ?: return@compute null
             val nextQty = current.qty + delta
@@ -30030,6 +30396,7 @@ class TelegramBotRouter internal constructor(
         if (cart.isEmpty()) {
             botDraftCarts.remove(key)
         }
+        reviseBotDraft(key)
         clearBotGiftState(key)
         showBotMenuCart(chatId)
     }
@@ -30042,37 +30409,69 @@ class TelegramBotRouter internal constructor(
     ) {
         val itemId = parseBotMenuCartItemId(data) ?: return
         val context = resolveGuestContext(chatId, actorUserId) ?: return
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val key = context.cartKey(chatId)
         val cart =
             botDraftCarts[key] ?: run {
                 showBotMenuCart(chatId)
                 return
             }
         resolveCurrentTableSession(chatId, context, cartActivity = true) ?: return
+        if (!matchesBotDraftButton(key)) {
+            showBotMenuCart(chatId)
+            return
+        }
         cart.remove(itemId)
         if (cart.isEmpty()) {
             botDraftCarts.remove(key)
         }
+        reviseBotDraft(key)
         clearBotGiftState(key)
         showBotMenuCart(chatId)
+    }
+
+    private suspend fun matchesBotDraftButton(key: BotDraftCartKey): Boolean {
+        val button = kotlin.coroutines.coroutineContext[ButtonVisit] ?: return false
+        val action = button.action ?: return false
+        return button.cart == key && visitButton(action, key) == button.wire
     }
 
     private suspend fun checkoutBotMenuCart(
         chatId: Long,
         actorUserId: Long,
-        callbackId: String,
+        wire: String,
     ) {
         val context = resolveGuestContext(chatId, actorUserId) ?: return
-        val currentTab = resolveCurrentBotTab(chatId, context, cartActivity = true) ?: return
-        val draftItems = getBotDraftCartItems(chatId, context.table.tableToken)
-        if (draftItems.isEmpty()) {
+        val repository = botPreparedCheckouts ?: throw DatabaseUnavailableException()
+        val participation = context.participationTag()
+        val key = context.cartKey(chatId)
+        if (visitButton("bot_menu_cart_checkout", key) != wire) {
+            enqueueMessage(chatId, "Эта корзина относится к прежнему посещению. Откройте текущую корзину.")
+            return
+        }
+        val address = key.checkoutScope() ?: return
+        if (repository.find(address) != null) {
             showBotMenuCart(chatId)
             return
         }
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
-        if (isBotDraftCartScopeMismatch(key, currentTab)) {
+        val draftItems = getBotDraftCartItems(context.cartKey(chatId))
+        if (draftItems.isEmpty()) {
+            enqueueMessage(
+                chatId,
+                "Корзина пуста.",
+                TelegramKeyboards.inlineBotMenuCartSummaryActions(participation = participation),
+            )
+            return
+        }
+        val scope = botDraftCartScopes[key] ?: return
+        if (botSelectedTabIds[key]?.let { it != scope.tabId } == true) {
             clearBotGiftState(key)
             warnBotDraftCartScopeMismatch(chatId)
+            return
+        }
+        val member =
+            guestTabsRepository.isTabMember(scope.tabId, context.table.venueId, scope.tableSessionId, context.userId)
+        if (!member) {
+            enqueueMessage(chatId, "Доступ к счёту изменился. Обновите корзину и попробуйте снова.")
             return
         }
         val promotionPreview =
@@ -30141,56 +30540,208 @@ class TelegramBotRouter internal constructor(
                     null
                 }
             }
+        if (visitButton("bot_menu_cart_checkout", key) != wire) {
+            showBotMenuCart(chatId)
+            return
+        }
         val cartComment = botDraftCartComments[key]
-        val createdBatch =
-            createGuestBatchFromBotItems(
-                chatId = chatId,
-                context = context,
-                idempotencyKey = "bot-cart-checkout:$callbackId",
-                tableSessionId = currentTab.tableSessionId,
-                tabId = currentTab.id,
+        val revision = botDraftCartRevisions[key]
+        val candidate =
+            BotPreparedCheckout(
+                id = UUID.randomUUID().toString(),
+                sourceProcess = guestButtonInstance,
+                sourceRevision = revision,
+                draft = draftItems,
+                draftComment = cartComment,
+                tabId = scope.tabId,
                 comment = buildBotDraftCartSubmitComment(draftItems, cartComment),
                 items =
-                    draftItems.map { item ->
+                    draftItems.map {
                         OrderBatchItemInput(
-                            itemId = item.itemId,
-                            qty = item.qty,
-                            selectedOptionId = item.optionId,
-                            preferenceNote = item.preferenceNote,
+                            cartLineRef = it.lineId.toString(),
+                            itemId = it.itemId,
+                            qty = it.qty,
+                            selectedOptionId = it.optionId,
+                            preferenceNote = it.preferenceNote,
                         )
                     },
-                giftDecisionCommand = giftDecision,
-                expectedPreviewFingerprint = promotionPreview.pricingFingerprint,
+                gift = giftDecision,
+                previewFingerprint = promotionPreview.pricingFingerprint,
             )
-                ?: return
-        clearBotCartScreenMessages(chatId, key)
-        clearBotDraftCart(chatId, context.table.tableToken)
+        repository.pruneRetired()
+        val committed =
+            mutateBotVisit(chatId, context, touchOnSuccess = false) { connection, _ ->
+                if (visitButton("bot_menu_cart_checkout", key) != wire) throw VisitGenerationChangedException()
+                repository.prepare(connection, address, candidate)
+            }
+        if (committed.id != candidate.id) {
+            showBotMenuCart(chatId)
+            return
+        }
+        reserveBotCheckoutDraft(key, committed)
+        sendPreparedBotCheckout(chatId, context, committed)
+    }
+
+    private fun reserveBotCheckoutDraft(
+        key: BotDraftCartKey,
+        checkout: BotPreparedCheckout,
+    ) {
+        if (checkout.sourceProcess != guestButtonInstance) return
+        val revision = checkout.sourceRevision ?: return
+        var reserve = false
+        reservedBotCheckoutRevisions.compute(key) { _, previous ->
+            if (previous != null && previous >= revision) {
+                previous
+            } else {
+                reserve = true
+                revision
+            }
+        }
+        if (!reserve) return
+        if (botDraftCartRevisions[key] == checkout.sourceRevision) {
+            val selected = botSelectedTabIds[key]
+            clearBotDraftCart(key)
+            selected?.let { botSelectedTabIds.putIfAbsent(key, it) }
+            return
+        }
+        botDraftCarts[key]?.let { draft ->
+            checkout.draft.forEach { line ->
+                draft.computeIfPresent(line.lineId) { _, current ->
+                    (current.qty - line.qty).takeIf { it > 0 }?.let { current.copy(qty = it) }
+                }
+            }
+        }
+        checkout.draftComment?.let { botDraftCartComments.remove(key, it) }
+        reviseBotDraft(key)
+    }
+
+    private suspend fun sendPreparedBotCheckout(
+        chatId: Long,
+        context: ResolvedChatContext,
+        prepared: BotPreparedCheckout,
+    ) {
+        val repository = botPreparedCheckouts ?: throw DatabaseUnavailableException()
+        val key = context.cartKey(chatId)
+        val address = key.checkoutScope() ?: return
+        reserveBotCheckoutDraft(key, prepared)
+        val restored =
+            try {
+                mutateBotVisit(chatId, context, touchOnSuccess = false) { connection, session ->
+                    captureFinalOrderBatchOutcome {
+                        ordersRepository.createGuestOrderBatch(
+                            connection = connection,
+                            tableId = context.table.tableId,
+                            venueId = context.table.venueId,
+                            tableSessionId = session.id,
+                            userId = context.userId,
+                            tabId = prepared.tabId,
+                            idempotencyKey = prepared.idempotencyKey,
+                            comment = prepared.comment,
+                            items = prepared.items,
+                            analyticsChannel = AnalyticsChannel.TELEGRAM,
+                            giftDecisionCommand = prepared.gift,
+                            expectedPreviewFingerprint = prepared.previewFingerprint,
+                            expectedVisitGeneration = address.generation,
+                            expectedTableToken = context.table.tableToken,
+                            authorizeNewBatch = {
+                                guestTabsRepository.isTabMember(
+                                    connection, prepared.tabId, session.venueId, session.id, context.userId,
+                                    forUpdate = true,
+                                )
+                            },
+                            beforeAuthoritativeWrites = {
+                                tableSessionRepository.touchActiveSession(
+                                    connection, session.id, session.venueId, session.tableId,
+                                    tableSessionTtl, Instant.now(),
+                                ) ?: throw NotFoundException()
+                            },
+                            venueZoneIdProvider = { zoneConnection ->
+                                venueSettingsRepository.resolvePromotionZoneId(
+                                    zoneConnection, context.table.venueId,
+                                    ZoneId.of(VenueSettingsRepository.DEFAULT_AUTO_TIMEZONE),
+                                )
+                            },
+                        )?.also { batch ->
+                            checkoutNotifications?.completeBot(
+                                connection, address, prepared.id, session.venueId, batch.orderId,
+                                batch.batchId, batch.displayNumber, batch.recalculated,
+                                replay = batch.idempotencyReplay,
+                            )
+                        } ?: throw NotFoundException()
+                    }
+                }
+            } catch (_: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "Не удалось подтвердить отправку. Повторите исходную отправку в корзине.")
+                return
+            }
+        if (restored.isFailure) {
+            val rejected = restored.exceptionOrNull() as FinalOrderBatchRejection
+            // Keep the original durable until there is a current, accessible draft to restore to.
+            val tab = resolveCurrentBotTab(chatId, context) ?: return
+            if (botDraftCartScopes[key]?.tabId?.let { it != tab.id } == true) return
+            val menuItems =
+                guestMenuRepository.getMenu(context.table.venueId)
+                    ?.categories.orEmpty().flatMap { it.items }.associateBy { it.id }
+            val (available, unavailable) =
+                prepared.draft.partition { line ->
+                    val item = menuItems[line.itemId]
+                    item?.isAvailable == true && (
+                        line.optionId == null ||
+                            item.options.any { it.id == line.optionId && it.isAvailable }
+                    )
+                }
+            if (repository.remove(address, prepared) == 1) {
+                val draft = botDraftCarts.computeIfAbsent(key) { ConcurrentHashMap() }
+                available.forEach { line ->
+                    val lineId = botDraftCartOrderSeq.incrementAndGet()
+                    draft[lineId] = line.copy(lineId = lineId, orderSeq = lineId)
+                }
+                botDraftCartScopes[key] = BotDraftCartScope(address.sessionId, tab.id)
+                botDraftCartSessionIds[key] = address.sessionId
+                prepared.draftComment?.let { botDraftCartComments.putIfAbsent(key, it) }
+                reviseBotDraft(key)
+                val unavailableCopy =
+                    if (unavailable.isEmpty()) {
+                        ""
+                    } else {
+                        "\nНедоступны: " + unavailable.joinToString { it.name } +
+                            ". Выберите замену в актуальном меню."
+                    }
+                enqueueMessage(
+                    chatId,
+                    "Заказ не оформлен. ${rejected.message} Доступные позиции возвращены в корзину.$unavailableCopy",
+                )
+            }
+            showBotMenuCart(chatId)
+            return
+        }
+        val batch = restored.getOrThrow()
+        if (checkoutNotifications != null) return
+        // A committed batch remains recoverable until its staff notice is durably queued.
+        val notification = notifyStaffChatAboutOrderBatch(context, batch, prepared.comment, prepared.items)
+        if (notification == StaffChatNotificationResult.FAILED_ENQUEUE) {
+            enqueueMessage(chatId, "Заказ оформлен. Откройте корзину, чтобы повторить уведомление персонала.")
+            return
+        }
+        if (repository.remove(address, prepared) != 1) return
+        val display = formatTelegramOrderDisplayLabel(batch.orderId, batch.displayNumber, batch.displayDate)
+        val recalculated = if (batch.recalculated) "Условия акции изменились. Итог корзины пересчитан.\n\n" else ""
         enqueueMessage(
             chatId,
-            buildString {
-                if (createdBatch.recalculated) {
-                    append("Условия акции изменились. Итог корзины пересчитан.\n\n")
-                }
-                append("✅ Заказ отправлен.\n")
-                append(
-                    formatTelegramOrderDisplayLabel(
-                        createdBatch.orderId,
-                        createdBatch.displayNumber,
-                        createdBatch.displayDate,
-                    ),
-                )
-                append(".\nЧто дальше?")
-            },
+            "$recalculated✅ Заказ отправлен.\n$display.\nЧто дальше?",
             TelegramKeyboards.inlineBotReorderAction(),
         )
     }
 
     private suspend fun promptBotMenuCartComment(chatId: Long) {
         val context = resolveGuestContext(chatId) ?: return
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val key = context.cartKey(chatId)
         dialogStateRepository.set(
             chatId,
-            DialogState(DialogStateType.BOT_MENU_CART_WAIT_COMMENT),
+            DialogState(
+                DialogStateType.BOT_MENU_CART_WAIT_COMMENT,
+                mapOf("participation" to context.participationTag()),
+            ),
         )
         val existing = botDraftCartComments[key]?.trim()?.takeIf { it.isNotBlank() }
         enqueueMessage(
@@ -30215,10 +30766,58 @@ class TelegramBotRouter internal constructor(
                 dialogStateRepository.clear(chatId)
                 return
             }
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        if (dialogStateRepository.get(chatId).payload["participation"] != context.participationTag()) {
+            enqueueMessage(chatId, "Визит изменился. Откройте текущую корзину и повторите ввод комментария.")
+            return
+        }
         val trimmed = rawText.trim()
+        if (trimmed.isEmpty() || trimmed.length > 500) {
+            enqueueMessage(chatId, "Введите от 1 до 500 символов или отправьте «—».")
+            return
+        }
+        confirmGuestText(
+            chatId,
+            context,
+            DialogStateType.BOT_MENU_CART_WAIT_COMMENT,
+            "guest_cart_note",
+            "Применить комментарий",
+            trimmed,
+        )
+    }
+
+    private suspend fun confirmGuestText(
+        chatId: Long,
+        context: ResolvedChatContext,
+        state: DialogStateType,
+        action: String,
+        label: String,
+        text: String,
+    ) {
+        val raw = "$action:${java.util.concurrent.ThreadLocalRandom.current().nextLong(Long.MAX_VALUE)}"
+        dialogStateRepository.set(
+            chatId,
+            DialogState(
+                state,
+                mapOf("participation" to context.participationTag(), "confirmation" to raw, "text" to text),
+            ),
+        )
+        offerVisitAction(
+            chatId,
+            "$label для стола №${context.table.tableNumber}?\n$text",
+            label,
+            visitButton(raw, context.cartKey(chatId)),
+        )
+    }
+
+    private suspend fun applyBotCartComment(
+        chatId: Long,
+        context: ResolvedChatContext,
+        trimmed: String,
+    ) {
+        val key = context.cartKey(chatId)
         if (trimmed == "-" || trimmed == "—") {
             botDraftCartComments.remove(key)
+            reviseBotDraft(key)
             clearBotGiftState(key)
             dialogStateRepository.clear(chatId)
             enqueueMessage(chatId, "✅ Комментарий удалён.")
@@ -30235,6 +30834,7 @@ class TelegramBotRouter internal constructor(
         }
         resolveCurrentTableSession(chatId, context, cartActivity = true) ?: return
         botDraftCartComments[key] = trimmed
+        reviseBotDraft(key)
         clearBotGiftState(key)
         dialogStateRepository.clear(chatId)
         enqueueMessage(chatId, "✅ Комментарий сохранён.")
@@ -30242,9 +30842,14 @@ class TelegramBotRouter internal constructor(
     }
 
     private suspend fun promptBotJoinShared(chatId: Long) {
-        resolveGuestContext(chatId) ?: return
-        dialogStateRepository.set(chatId, DialogState(DialogStateType.BOT_JOIN_SHARED_WAIT_CODE))
-        botJoinSharedAwaitingChats.add(chatId)
+        val context = resolveGuestContext(chatId) ?: return
+        dialogStateRepository.set(
+            chatId,
+            DialogState(
+                DialogStateType.BOT_JOIN_SHARED_WAIT_CODE,
+                mapOf("participation" to context.participationTag()),
+            ),
+        )
         enqueueMessage(chatId, "Введите 4-значный код общего счёта.")
     }
 
@@ -30253,36 +30858,51 @@ class TelegramBotRouter internal constructor(
         rawCode: String,
     ) {
         val context = resolveGuestContext(chatId) ?: return
+        if (dialogStateRepository.get(chatId).payload["participation"] != context.participationTag()) {
+            enqueueMessage(chatId, "Откройте текущую корзину и снова выберите вход в общий счёт.")
+            return
+        }
         val code = rawCode.trim()
         if (!code.matches(Regex("^\\d{4}$"))) {
             enqueueMessage(chatId, "Нужен 4-значный код. Попробуйте ещё раз.")
             return
         }
+        val target =
+            mutateBotVisit(chatId, context, touchOnSuccess = false) { connection, session ->
+                guestTabsRepository.findInviteForUpdate(connection, session.venueId, session.id, code)
+            }
+        if (target == null) {
+            enqueueMessage(chatId, "Код недействителен или истёк. Попробуйте ещё раз.")
+            return
+        }
+        offerVisitAction(
+            chatId,
+            "Вступить в общий счёт №${target.second.id} за столом №${context.table.tableNumber}?",
+            "Вступить в счёт",
+            visitButton("guest_join_code:$code:${target.first}:${target.second.id}", context.cartKey(chatId)),
+        )
+    }
+
+    private suspend fun joinConfirmedSharedCode(
+        chatId: Long,
+        context: ResolvedChatContext,
+        action: String,
+    ) {
+        val target = action.split(':')
+        val code = target.getOrNull(1) ?: return
+        val inviteId = target.getOrNull(2)?.toLongOrNull() ?: return
+        val tabId = target.getOrNull(3)?.toLongOrNull() ?: return
         val joinedTab =
             try {
-                if (isPlatformOwner(context.userId)) {
-                    when (
-                        val attempt =
-                            runConfirmedPlatformGuestBotMutation(chatId, context) { connection, confirmed ->
-                                guestTabsRepository.joinByInvite(
-                                    connection = connection,
-                                    venueId = confirmed.context.venueId,
-                                    tableSessionId = confirmed.tableSession.id,
-                                    userId = context.userId,
-                                    token = code,
-                                )
-                            }
-                    ) {
-                        is PlatformGuestBotMutationAttempt.Applied -> attempt.value
-                        PlatformGuestBotMutationAttempt.Stopped -> return
-                    }
-                } else {
-                    val tableSession = resolveCurrentTableSession(chatId, context) ?: return
+                mutateBotVisit(chatId, context) { connection, session ->
                     guestTabsRepository.joinByInvite(
-                        venueId = context.table.venueId,
-                        tableSessionId = tableSession.id,
-                        userId = context.userId,
-                        token = code,
+                        connection,
+                        session.venueId,
+                        session.id,
+                        context.userId,
+                        code,
+                        inviteId,
+                        tabId,
                     )
                 }
             } catch (e: CancellationException) {
@@ -30295,10 +30915,10 @@ class TelegramBotRouter internal constructor(
             enqueueMessage(chatId, "Код недействителен или истёк. Попробуйте ещё раз.")
             return
         }
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val key = context.cartKey(chatId)
         clearBotDraftCartIfScopedToDifferentTab(
             chatId = chatId,
-            tableToken = context.table.tableToken,
+            key = context.cartKey(chatId),
             targetScope =
                 BotDraftCartScope(
                     tableSessionId = joinedTab.tableSessionId,
@@ -30306,7 +30926,6 @@ class TelegramBotRouter internal constructor(
                 ),
         )
         botSelectedTabIds[key] = joinedTab.id
-        botJoinSharedAwaitingChats.remove(chatId)
         dialogStateRepository.clear(chatId)
         enqueueMessage(
             chatId,
@@ -30318,28 +30937,8 @@ class TelegramBotRouter internal constructor(
         val context = resolveGuestContext(chatId) ?: return
         val sharedTab =
             try {
-                if (isPlatformOwner(context.userId)) {
-                    when (
-                        val attempt =
-                            runConfirmedPlatformGuestBotMutation(chatId, context) { connection, confirmed ->
-                                guestTabsRepository.createSharedTab(
-                                    connection = connection,
-                                    venueId = confirmed.context.venueId,
-                                    tableSessionId = confirmed.tableSession.id,
-                                    ownerUserId = context.userId,
-                                )
-                            }
-                    ) {
-                        is PlatformGuestBotMutationAttempt.Applied -> attempt.value
-                        PlatformGuestBotMutationAttempt.Stopped -> return
-                    }
-                } else {
-                    val tableSession = resolveCurrentTableSession(chatId, context) ?: return
-                    guestTabsRepository.createSharedTab(
-                        venueId = context.table.venueId,
-                        tableSessionId = tableSession.id,
-                        ownerUserId = context.userId,
-                    )
+                mutateBotVisit(chatId, context) { connection, session ->
+                    guestTabsRepository.createSharedTab(connection, session.venueId, session.id, context.userId)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -30347,10 +30946,10 @@ class TelegramBotRouter internal constructor(
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return
             }
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val key = context.cartKey(chatId)
         clearBotDraftCartIfScopedToDifferentTab(
             chatId = chatId,
-            tableToken = context.table.tableToken,
+            key = context.cartKey(chatId),
             targetScope =
                 BotDraftCartScope(
                     tableSessionId = sharedTab.tableSessionId,
@@ -30375,81 +30974,30 @@ class TelegramBotRouter internal constructor(
         tableSessionId: Long,
         tabId: Long,
     ): String? {
-        if (isPlatformOwner(context.userId)) {
-            return when (
-                val attempt =
-                    runConfirmedPlatformGuestBotMutation(
-                        chatId = chatId,
-                        context = context,
-                        expectedTableSessionId = tableSessionId,
-                    ) { connection, confirmed ->
-                        guestTabsRepository.deleteExpiredInvites(connection)
-                        val expiresAt = Instant.now().plus(inviteCodeTtl)
-                        repeat(inviteCodeMaxAttempts) {
-                            val code =
-                                inviteCodeRandom
-                                    .nextInt(inviteCodeRangeExclusive)
-                                    .toString()
-                                    .padStart(inviteCodeLength, '0')
-                            when (
-                                guestTabsRepository.createInvite(
-                                    connection = connection,
-                                    tabId = tabId,
-                                    venueId = confirmed.context.venueId,
-                                    tableSessionId = confirmed.tableSession.id,
-                                    createdBy = context.userId,
-                                    token = code,
-                                    expiresAt = expiresAt,
-                                )
-                            ) {
-                                CreateInviteResult.CREATED ->
-                                    return@runConfirmedPlatformGuestBotMutation code
-                                CreateInviteResult.TOKEN_CONFLICT -> Unit
-                                CreateInviteResult.FORBIDDEN ->
-                                    return@runConfirmedPlatformGuestBotMutation null
-                            }
-                        }
-                        null
-                    }
-            ) {
-                is PlatformGuestBotMutationAttempt.Applied -> attempt.value
-                PlatformGuestBotMutationAttempt.Stopped -> null
-            }
-        }
-        try {
-            guestTabsRepository.deleteExpiredInvites()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: DatabaseUnavailableException) {
-            enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-            return null
-        }
-        val expiresAt = Instant.now().plus(inviteCodeTtl)
-        repeat(inviteCodeMaxAttempts) {
-            val code = inviteCodeRandom.nextInt(inviteCodeRangeExclusive).toString().padStart(inviteCodeLength, '0')
-            val createResult =
-                try {
+        return mutateBotVisit(chatId, context) { connection, session ->
+            if (session.id != tableSessionId) throw VisitGenerationChangedException()
+            guestTabsRepository.deleteExpiredInvites(connection)
+            val expiresAt = Instant.now().plus(inviteCodeTtl)
+            repeat(inviteCodeMaxAttempts) {
+                val code = inviteCodeRandom.nextInt(inviteCodeRangeExclusive).toString().padStart(inviteCodeLength, '0')
+                when (
                     guestTabsRepository.createInvite(
-                        tabId = tabId,
-                        venueId = context.table.venueId,
-                        tableSessionId = tableSessionId,
-                        createdBy = context.userId,
-                        token = code,
-                        expiresAt = expiresAt,
+                        connection,
+                        tabId,
+                        session.venueId,
+                        session.id,
+                        context.userId,
+                        code,
+                        expiresAt,
                     )
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: DatabaseUnavailableException) {
-                    enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                    return null
+                ) {
+                    CreateInviteResult.CREATED -> return@mutateBotVisit code
+                    CreateInviteResult.TOKEN_CONFLICT -> Unit
+                    CreateInviteResult.FORBIDDEN -> return@mutateBotVisit null
                 }
-            when (createResult) {
-                CreateInviteResult.CREATED -> return code
-                CreateInviteResult.TOKEN_CONFLICT -> Unit
-                CreateInviteResult.FORBIDDEN -> return null
             }
+            null
         }
-        return null
     }
 
     private suspend fun confirmedBotVisit(
@@ -30483,7 +31031,10 @@ class TelegramBotRouter internal constructor(
                     ) ?: PlatformGuestContextValidationResult.DatabaseUnavailable
             ) {
                 is PlatformGuestContextValidationResult.Active -> {
-                    if (expectedTableSessionId != null && validation.tableSession.id != expectedTableSessionId) {
+                    if (context.tableSessionId != validation.tableSession.id ||
+                        validation.visitGeneration != context.visitGeneration ||
+                        expectedTableSessionId != null && validation.tableSession.id != expectedTableSessionId
+                    ) {
                         enqueueMessage(chatId, "Выбор способа заказа устарел. Отсканируйте QR на столе ещё раз.")
                         null
                     } else {
@@ -30508,6 +31059,7 @@ class TelegramBotRouter internal constructor(
                     context.table,
                     context.tableSessionId,
                     tableSessionTtl,
+                    expectedGeneration = context.visitGeneration,
                 )
             return confirmedBotVisit(chatId, result)?.tableSession
         }
@@ -30536,16 +31088,31 @@ class TelegramBotRouter internal constructor(
         }
     }
 
+    private fun botStaffHandoff(context: ResolvedChatContext): ((Connection, Long, Long) -> Unit)? =
+        checkoutNotifications?.let { notices ->
+            { connection, orderId, batchId ->
+                notices.stageStaff(
+                    connection,
+                    context.table.venueId,
+                    orderId,
+                    batchId,
+                    liveCard = false,
+                    guestUserId = context.userId,
+                )
+            }
+        }
+
     private suspend fun createGuestBatchFromBotItems(
         chatId: Long,
         context: ResolvedChatContext,
         idempotencyKey: String,
-        tableSessionId: Long? = null,
-        tabId: Long? = null,
+        tableSessionId: Long,
+        tabId: Long,
         comment: String? = null,
         items: List<OrderBatchItemInput>,
         giftDecisionCommand: GiftDecisionCommand? = null,
         expectedPreviewFingerprint: String? = null,
+        expectedOrderId: Long? = null,
         giftFallbackItem: com.hookah.platform.backend.miniapp.guest.db.MenuItemModel? = null,
     ): com.hookah.platform.backend.telegram.db.CreatedOrderBatch? {
         if (isPlatformOwner(context.userId)) {
@@ -30559,70 +31126,40 @@ class TelegramBotRouter internal constructor(
                 items = items,
                 giftDecisionCommand = giftDecisionCommand,
                 expectedPreviewFingerprint = expectedPreviewFingerprint,
+                expectedOrderId = expectedOrderId,
                 giftFallbackItem = giftFallbackItem,
             )
         }
         val tableSession = resolveCurrentTableSession(chatId, context) ?: return null
-        if (tableSessionId != null && tableSessionId != tableSession.id) {
+        if (tableSessionId != tableSession.id) {
             enqueueMessage(chatId, "Сессия стола изменилась. Отсканируйте QR ещё раз.")
             return null
         }
-        val checkedRequestedTabId =
-            if (tabId != null) {
-                val isMember =
-                    try {
-                        guestTabsRepository.isTabMember(
-                            tabId = tabId,
-                            venueId = context.table.venueId,
-                            tableSessionId = tableSession.id,
-                            userId = context.userId,
-                        )
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: DatabaseUnavailableException) {
-                        enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                        return null
-                    }
-                if (!isMember) {
-                    enqueueMessage(
-                        chatId,
-                        "Доступ к счёту изменился. Обновите корзину и попробуйте снова.",
-                    )
-                    return null
-                }
-                tabId
-            } else {
-                null
+        val member =
+            try {
+                guestTabsRepository.isTabMember(tabId, context.table.venueId, tableSessionId, context.userId)
+            } catch (_: DatabaseUnavailableException) {
+                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
+                return null
             }
-        val effectiveTabId =
-            if (checkedRequestedTabId != null) {
-                checkedRequestedTabId
-            } else {
-                val personalTab =
-                    try {
-                        guestTabsRepository.ensurePersonalTab(
-                            venueId = context.table.venueId,
-                            tableSessionId = tableSession.id,
-                            userId = context.userId,
-                        )
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: DatabaseUnavailableException) {
-                        enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                        return null
-                    }
-                personalTab.id
-            }
+        if (!member) {
+            enqueueMessage(chatId, "Доступ к счёту изменился. Обновите корзину и попробуйте снова.")
+            return null
+        }
         return try {
             val createdBatch =
                 ordersRepository.createGuestOrderBatch(
+                    stageNewBatch = botStaffHandoff(context),
+                    expectedTableToken = context.table.tableToken,
+                    expectedVisitGeneration = context.visitGeneration,
+                    expectedOrderId = expectedOrderId,
                     analyticsChannel = AnalyticsChannel.TELEGRAM,
                     tableId = context.table.tableId,
                     venueId = context.table.venueId,
                     tableSessionId = tableSession.id,
                     userId = context.userId,
                     idempotencyKey = idempotencyKey,
-                    tabId = effectiveTabId,
+                    tabId = tabId,
                     comment = comment,
                     items = items,
                     venueZoneId = resolvePromotionVenueZoneId(context.table.venueId),
@@ -30633,24 +31170,29 @@ class TelegramBotRouter internal constructor(
                 enqueueMessage(chatId, "Не удалось оформить заказ, попробуйте ещё раз.")
                 null
             } else {
-                notifyStaffChatAboutOrderBatch(
-                    context = context,
-                    createdBatch = createdBatch,
-                    comment = comment,
-                    items = items,
-                )
+                if (checkoutNotifications == null && !createdBatch.idempotencyReplay) {
+                    notifyStaffChatAboutOrderBatch(
+                        context = context,
+                        createdBatch = createdBatch,
+                        comment = comment,
+                        items = items,
+                    )
+                }
                 createdBatch
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: VisitGenerationChangedException) {
+            enqueueMessage(chatId, "Визит изменился. Заново откройте корзину.")
+            null
         } catch (e: GiftDecisionRequiredException) {
             if (
                 giftFallbackItem != null &&
                 addItemToBotDraftCart(
                     chatId = chatId,
-                    tableToken = context.table.tableToken,
+                    key = context.cartKey(chatId),
                     tableSessionId = tableSession.id,
-                    tabId = effectiveTabId,
+                    tabId = tabId,
                     item = giftFallbackItem,
                 )
             ) {
@@ -30663,10 +31205,7 @@ class TelegramBotRouter internal constructor(
                 return null
             }
             clearBotGiftState(
-                BotDraftCartKey(
-                    chatId = chatId,
-                    tableToken = context.table.tableToken,
-                ),
+                context.cartKey(chatId),
             )
             enqueueMessage(
                 chatId,
@@ -30676,10 +31215,7 @@ class TelegramBotRouter internal constructor(
             null
         } catch (e: InvalidInputException) {
             clearBotGiftState(
-                BotDraftCartKey(
-                    chatId = chatId,
-                    tableToken = context.table.tableToken,
-                ),
+                context.cartKey(chatId),
             )
             enqueueMessage(
                 chatId,
@@ -30697,12 +31233,13 @@ class TelegramBotRouter internal constructor(
         chatId: Long,
         context: ResolvedChatContext,
         idempotencyKey: String,
-        tableSessionId: Long?,
-        tabId: Long?,
+        tableSessionId: Long,
+        tabId: Long,
         comment: String?,
         items: List<OrderBatchItemInput>,
         giftDecisionCommand: GiftDecisionCommand?,
         expectedPreviewFingerprint: String?,
+        expectedOrderId: Long?,
         giftFallbackItem: MenuItemModel?,
     ): CreatedOrderBatch? {
         return try {
@@ -30713,29 +31250,21 @@ class TelegramBotRouter internal constructor(
                     context = context,
                     expectedTableSessionId = tableSessionId,
                 ) { connection, confirmed ->
-                    val effectiveTabId =
-                        if (tabId != null) {
-                            if (
-                                !guestTabsRepository.isTabMember(
-                                    connection = connection,
-                                    tabId = tabId,
-                                    venueId = confirmed.context.venueId,
-                                    tableSessionId = confirmed.tableSession.id,
-                                    userId = context.userId,
-                                )
-                            ) {
-                                return@runConfirmedPlatformGuestBotMutation null
-                            }
-                            tabId
-                        } else {
-                            guestTabsRepository.ensurePersonalTab(
-                                connection = connection,
-                                venueId = confirmed.context.venueId,
-                                tableSessionId = confirmed.tableSession.id,
-                                userId = context.userId,
-                            ).id
-                        }
+                    if (!guestTabsRepository.isTabMember(
+                            connection,
+                            tabId,
+                            confirmed.context.venueId,
+                            tableSessionId,
+                            context.userId,
+                        )
+                    ) {
+                        return@runConfirmedPlatformGuestBotMutation null
+                    }
                     ordersRepository.createGuestOrderBatch(
+                        stageNewBatch = botStaffHandoff(context),
+                        expectedTableToken = context.table.tableToken,
+                        expectedVisitGeneration = context.visitGeneration,
+                        expectedOrderId = expectedOrderId,
                         analyticsChannel = AnalyticsChannel.TELEGRAM,
                         connection = connection,
                         tableId = confirmed.context.tableId,
@@ -30743,7 +31272,7 @@ class TelegramBotRouter internal constructor(
                         tableSessionId = confirmed.tableSession.id,
                         userId = context.userId,
                         idempotencyKey = idempotencyKey,
-                        tabId = effectiveTabId,
+                        tabId = tabId,
                         comment = comment,
                         items = items,
                         venueZoneId = venueZoneId,
@@ -30760,23 +31289,26 @@ class TelegramBotRouter internal constructor(
                 enqueueMessage(chatId, "Не удалось оформить заказ, попробуйте ещё раз.")
                 return null
             }
-            notifyStaffChatAboutOrderBatch(
-                context = context,
-                createdBatch = createdBatch,
-                comment = comment,
-                items = items,
-            )
+            if (checkoutNotifications == null && !createdBatch.idempotencyReplay) {
+                notifyStaffChatAboutOrderBatch(
+                    context = context,
+                    createdBatch = createdBatch,
+                    comment = comment,
+                    items = items,
+                )
+            }
             createdBatch
         } catch (e: CancellationException) {
             throw e
+        } catch (e: VisitGenerationChangedException) {
+            enqueueMessage(chatId, "Визит изменился. Заново откройте корзину.")
+            null
         } catch (e: GiftDecisionRequiredException) {
             if (
                 giftFallbackItem != null &&
-                tableSessionId != null &&
-                tabId != null &&
                 addItemToBotDraftCart(
                     chatId = chatId,
-                    tableToken = context.table.tableToken,
+                    key = context.cartKey(chatId),
                     tableSessionId = tableSessionId,
                     tabId = tabId,
                     item = giftFallbackItem,
@@ -30790,12 +31322,12 @@ class TelegramBotRouter internal constructor(
                 showBotMenuCart(chatId)
                 return null
             }
-            clearBotGiftState(BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken))
+            clearBotGiftState(context.cartKey(chatId))
             enqueueMessage(chatId, "Корзина изменилась. Проверьте подарок ещё раз.")
             showBotMenuCart(chatId)
             null
         } catch (e: InvalidInputException) {
-            clearBotGiftState(BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken))
+            clearBotGiftState(context.cartKey(chatId))
             enqueueMessage(
                 chatId,
                 "Позиция, выбранный вариант или подарок сейчас недоступны. " +
@@ -30813,8 +31345,8 @@ class TelegramBotRouter internal constructor(
         createdBatch: CreatedOrderBatch,
         comment: String?,
         items: List<OrderBatchItemInput>,
-    ) {
-        val notifier = staffChatNotifier ?: return
+    ): StaffChatNotificationResult {
+        val notifier = staffChatNotifier ?: return StaffChatNotificationResult.SKIPPED_DISABLED
         val summary = staffChatCreatedBatchItemsSummary(createdBatch, items, context.table.venueId)
         val totalCurrency = createdBatch.pricing?.currency
         val totalPayableMinor = createdBatch.pricing?.finalPayableTotalMinor
@@ -30824,7 +31356,7 @@ class TelegramBotRouter internal constructor(
                 orderId = createdBatch.orderId,
                 batchId = createdBatch.batchId,
             )
-        notifier.notifyNewBatchNow(
+        return notifier.notifyNewBatchNow(
             NewBatchNotification(
                 venueId = context.table.venueId,
                 orderId = createdBatch.orderId,
@@ -30886,62 +31418,135 @@ class TelegramBotRouter internal constructor(
             false
         }
 
+    private suspend fun handleGuestCartCallback(
+        chatId: Long,
+        callbackQuery: CallbackQuery,
+        data: String?,
+        sourceMessageId: Long?,
+    ): Boolean {
+        when {
+            data == "bot_tabs_create_shared" -> createBotSharedTab(chatId)
+            data == "bot_tabs_join_prompt" -> promptBotJoinShared(chatId)
+            data?.startsWith("staff_call_bill_payment:") == true -> handleStaffCallBillPaymentCallback(chatId, data)
+            data?.startsWith("bot_menu_item:") == true ->
+                showBotMenuItemDetails(
+                    chatId,
+                    callbackQuery.from.id,
+                    data,
+                    sourceMessageId,
+                )
+            data?.startsWith("bot_menu_item_option_add_to_cart:") == true ->
+                addBotMenuItemOptionToCart(chatId, callbackQuery.from.id, data, sourceMessageId)
+            data?.startsWith("bot_menu_item_add:") == true ->
+                showBotMenuItemDetails(
+                    chatId,
+                    callbackQuery.from.id,
+                    data,
+                    sourceMessageId,
+                )
+            data?.startsWith("bot_menu_item_add_to_cart:") == true ->
+                showBotMenuItemDetails(
+                    chatId,
+                    callbackQuery.from.id,
+                    data,
+                    sourceMessageId,
+                )
+            data?.startsWith("guest_reorder:") == true ->
+                reorderBotMenuItem(chatId, callbackQuery.from.id, data, callbackQuery.id)
+            data?.startsWith("bot_menu_item_reorder:") == true ->
+                showBotMenuCart(chatId)
+            data == "bot_menu_item_cart" -> showBotMenuCart(chatId, sourceMessageId)
+            data?.startsWith("bot_menu_cart_inc:") == true ->
+                changeBotMenuCartItemQty(
+                    chatId,
+                    callbackQuery.from.id,
+                    data,
+                    delta = 1,
+                    sourceMessageId = sourceMessageId,
+                )
+            data?.startsWith("bot_menu_cart_dec:") == true ->
+                changeBotMenuCartItemQty(
+                    chatId,
+                    callbackQuery.from.id,
+                    data,
+                    delta = -1,
+                    sourceMessageId = sourceMessageId,
+                )
+            data?.startsWith("bot_menu_cart_remove:") == true ->
+                removeBotMenuCartItem(chatId, callbackQuery.from.id, data, sourceMessageId = sourceMessageId)
+            data == "bot_menu_cart_back_menu" -> showBotMenu(chatId, sourceMessageId = sourceMessageId)
+            data == "bot_menu_cart_comment" -> promptBotMenuCartComment(chatId)
+            data?.isBotGiftCallback() == true -> handleBotGiftCallback(chatId, callbackQuery.from.id, data)
+            data == "bot_menu_cart_clear" -> clearBotMenuCart(chatId, callbackQuery.from.id, sourceMessageId)
+            data?.startsWith("guest_tab:") == true -> selectGuestTab(chatId, callbackQuery.from.id, data)
+            else -> return false
+        }
+        return true
+    }
+
+    private suspend fun selectGuestTab(
+        chatId: Long,
+        actorUserId: Long,
+        data: String,
+    ) {
+        val context = resolveGuestContext(chatId, actorUserId) ?: return
+        val ids = data.split(':').drop(1).map { it.toLongOrNull() }
+        val sessionId = context.tableSessionId
+        val tabId = ids.getOrNull(2)
+        if (ids.size == 3 && sessionId != null && ids[0] == sessionId &&
+            ids[1] == context.visitGeneration && tabId != null &&
+            guestTabsRepository.isTabMember(tabId, context.table.venueId, sessionId, context.userId)
+        ) {
+            botSelectedTabIds[context.cartKey(chatId)] = tabId
+            showBotMenuCart(chatId)
+        } else {
+            enqueueMessage(chatId, "Выбор счёта устарел. Откройте текущую корзину.")
+        }
+    }
+
     private suspend fun resolveCurrentBotTab(
         chatId: Long,
         context: ResolvedChatContext,
         cartActivity: Boolean = false,
+        touchOnSuccess: Boolean = true,
     ): com.hookah.platform.backend.miniapp.guest.db.GuestTabModel? {
         val resolution =
             try {
-                if (isPlatformOwner(context.userId)) {
-                    when (
-                        val attempt =
-                            runConfirmedPlatformGuestBotMutation(chatId, context) { connection, confirmed ->
-                                val personalTab =
-                                    guestTabsRepository.ensurePersonalTab(
-                                        connection = connection,
-                                        venueId = confirmed.context.venueId,
-                                        tableSessionId = confirmed.tableSession.id,
-                                        userId = context.userId,
-                                    )
-                                BotTabResolution(
-                                    tableSession = confirmed.tableSession,
-                                    personalTab = personalTab,
-                                    userTabs =
-                                        guestTabsRepository.listTabsForUser(
-                                            connection = connection,
-                                            venueId = confirmed.context.venueId,
-                                            tableSessionId = confirmed.tableSession.id,
-                                            userId = context.userId,
-                                        ),
-                                )
-                            }
-                    ) {
-                        is PlatformGuestBotMutationAttempt.Applied -> attempt.value
-                        PlatformGuestBotMutationAttempt.Stopped -> return null
+                mutateBotVisit(chatId, context, touchOnSuccess = touchOnSuccess) { connection, session ->
+                    if (cartActivity && !isPlatformOwner(context.userId)) {
+                        tableSessionRepository.touchActiveSession(
+                            connection,
+                            session.id,
+                            session.venueId,
+                            session.tableId,
+                            tableSessionTtl,
+                            Instant.now(),
+                        )
+                            ?: throw NotFoundException()
                     }
-                } else {
-                    val tableSession =
-                        resolveCurrentTableSession(chatId, context, cartActivity = cartActivity) ?: return null
-                    val personalTab =
-                        guestTabsRepository.ensurePersonalTab(
-                            venueId = context.table.venueId,
-                            tableSessionId = tableSession.id,
-                            userId = context.userId,
+                    val personal =
+                        guestTabsRepository.ordinaryPersonalTab(
+                            connection,
+                            TableSessionContext(session.id, session.venueId, session.tableId),
+                            context.userId,
                         )
                     BotTabResolution(
-                        tableSession = tableSession,
-                        personalTab = personalTab,
-                        userTabs =
-                            guestTabsRepository.listTabsForUser(
-                                venueId = context.table.venueId,
-                                tableSessionId = tableSession.id,
-                                userId = context.userId,
-                            ),
+                        session,
+                        personal,
+                        guestTabsRepository.listTabsForUser(connection, session.venueId, session.id, context.userId),
                     )
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (_: ForbiddenException) {
+                enqueueMessage(chatId, "Откройте QR-код ещё раз и подтвердите вход в Telegram.")
+                return null
+            } catch (_: VisitGenerationChangedException) {
+                enqueueMessage(chatId, "Визит изменился. Откройте актуальное меню.")
+                return null
+            } catch (_: NotFoundException) {
+                askScanQr(chatId)
+                return null
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "База недоступна, попробуйте позже.")
                 return null
@@ -30949,7 +31554,7 @@ class TelegramBotRouter internal constructor(
         val tableSession = resolution.tableSession
         val personalTab = resolution.personalTab
         val userTabs = resolution.userTabs
-        val key = BotDraftCartKey(chatId = chatId, tableToken = context.table.tableToken)
+        val key = context.cartKey(chatId)
         val selectedTabId = botSelectedTabIds[key]
         if (selectedTabId != null) {
             val selectedTab =
@@ -30966,28 +31571,18 @@ class TelegramBotRouter internal constructor(
                 tab.status == "ACTIVE" && tab.type == "SHARED"
             }
         if (activeSharedTabs.isNotEmpty()) {
-            var sharedWithActiveOrder: com.hookah.platform.backend.miniapp.guest.db.GuestTabModel? = null
-            try {
-                for (sharedTab in activeSharedTabs) {
-                    val activeOrder =
-                        ordersRepository.findActiveOrderSummaryForTab(
-                            tableSessionId = tableSession.id,
-                            tabId = sharedTab.id,
-                        )
-                    if (activeOrder != null) {
-                        sharedWithActiveOrder = sharedTab
-                        break
-                    }
+            val choices =
+                (listOf(personalTab) + activeSharedTabs).map { tab ->
+                    val name = if (tab.id == personalTab.id) "Личный счёт" else "Общий счёт №${tab.id}"
+                    listOf(
+                        InlineKeyboardButton(
+                            name,
+                            callbackData = "guest_tab:${tableSession.id}:${context.visitGeneration}:${tab.id}",
+                        ),
+                    )
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                enqueueMessage(chatId, "База недоступна, попробуйте позже.")
-                return null
-            }
-            val restoredTab = sharedWithActiveOrder ?: activeSharedTabs.first()
-            botSelectedTabIds[key] = restoredTab.id
-            return restoredTab
+            enqueueMessage(chatId, "Выберите счёт для этого посещения.", InlineKeyboardMarkup(choices))
+            return null
         }
         return personalTab
     }
@@ -30999,13 +31594,14 @@ class TelegramBotRouter internal constructor(
         replyMarkup: ReplyMarkup,
         sourceMessageId: Long?,
     ) {
+        val boundMarkup = bindButtons(replyMarkup, key)
         if (sourceMessageId != null) {
             val outcome =
                 outboxEnqueuer.enqueueEditMessageText(
                     chatId = chatId,
                     messageId = sourceMessageId,
                     text = text,
-                    replyMarkup = replyMarkup,
+                    replyMarkup = boundMarkup,
                 )
             if (outcome == TelegramOutboxEnqueueOutcome.ENQUEUED) {
                 botCartMessageIds[key] = sourceMessageId
@@ -31015,28 +31611,28 @@ class TelegramBotRouter internal constructor(
         // Without callback source message id we can't reliably edit in place:
         // stale mapping may point to an outdated/deleted message.
         botCartMessageIds.remove(key)
-        enqueueMessage(chatId, text, replyMarkup)
+        enqueueMessage(chatId, text, boundMarkup)
     }
 
     private suspend fun upsertBotMenuMessage(
         chatId: Long,
-        tableToken: String,
+        key: BotDraftCartKey,
         text: String,
         replyMarkup: ReplyMarkup,
         sourceMessageId: Long? = null,
     ) {
+        val boundMarkup = bindButtons(replyMarkup, key)
         val safeText = menuPlainText(text, 3900)
-        val key = BotDraftCartKey(chatId = chatId, tableToken = tableToken)
         clearBotTransientScreens(chatId, key)
         val messageId =
-            runCatching { apiClient.sendMessage(chatId, safeText, replyMarkup)?.messageId }
+            runCatching { apiClient.sendMessage(chatId, safeText, boundMarkup)?.messageId }
                 .onFailure { logBestEffort("telegram direct menu send", it) }
                 .getOrNull()
         if (messageId != null) {
             botMenuMessageIds[key] = messageId
             return
         }
-        enqueueMessage(chatId, safeText, replyMarkup)
+        enqueueMessage(chatId, safeText, boundMarkup)
     }
 
     private suspend fun clearBotTransientScreens(
@@ -31188,7 +31784,7 @@ class TelegramBotRouter internal constructor(
 
     private fun addItemToBotDraftCart(
         chatId: Long,
-        tableToken: String,
+        key: BotDraftCartKey,
         tableSessionId: Long,
         tabId: Long,
         item: com.hookah.platform.backend.miniapp.guest.db.MenuItemModel,
@@ -31197,7 +31793,6 @@ class TelegramBotRouter internal constructor(
         optionPriceDeltaMinor: Long = 0L,
         preferenceNote: String? = null,
     ): Boolean {
-        val key = BotDraftCartKey(chatId = chatId, tableToken = tableToken)
         val targetScope = BotDraftCartScope(tableSessionId = tableSessionId, tabId = tabId)
         val existingScope = botDraftCartScopes[key]
         if (existingScope != null && existingScope != targetScope) {
@@ -31205,9 +31800,10 @@ class TelegramBotRouter internal constructor(
             return false
         }
         val cart = botDraftCarts.computeIfAbsent(key) { ConcurrentHashMap() }
-        botDraftCartScopes[key] = targetScope
+        botDraftCartScopes.putIfAbsent(key, targetScope)
         botDraftCartSessionIds[key] = tableSessionId
         clearBotGiftState(key)
+        reviseBotDraft(key)
         val existingEntry =
             cart.entries.firstOrNull { (_, existing) ->
                 existing.itemId == item.id &&
@@ -31259,14 +31855,13 @@ class TelegramBotRouter internal constructor(
 
     private suspend fun clearBotDraftCartIfScopedToDifferentTab(
         chatId: Long,
-        tableToken: String,
+        key: BotDraftCartKey,
         targetScope: BotDraftCartScope,
     ) {
-        val key = BotDraftCartKey(chatId = chatId, tableToken = tableToken)
         val existingScope = botDraftCartScopes[key] ?: return
         val hasItems = botDraftCarts[key]?.isNotEmpty() == true
         if (hasItems && existingScope != targetScope) {
-            clearBotDraftCart(chatId, tableToken)
+            clearBotDraftCart(key)
             enqueueMessage(
                 chatId,
                 "Корзина была собрана для другого счёта, поэтому я очистил её. Соберите заказ " +
@@ -31310,11 +31905,7 @@ class TelegramBotRouter internal constructor(
         }
     }
 
-    private fun getBotDraftCartItems(
-        chatId: Long,
-        tableToken: String,
-    ): List<BotDraftCartItem> {
-        val key = BotDraftCartKey(chatId = chatId, tableToken = tableToken)
+    private fun getBotDraftCartItems(key: BotDraftCartKey): List<BotDraftCartItem> {
         return botDraftCarts[key]
             ?.values
             ?.sortedWith(
@@ -31324,11 +31915,8 @@ class TelegramBotRouter internal constructor(
             .orEmpty()
     }
 
-    private fun clearBotDraftCart(
-        chatId: Long,
-        tableToken: String,
-    ) {
-        val key = BotDraftCartKey(chatId = chatId, tableToken = tableToken)
+    private fun clearBotDraftCart(key: BotDraftCartKey) {
+        botDraftCartRevisions.remove(key)
         botDraftCarts.remove(key)
         botDraftCartComments.remove(key)
         botMenuMessageIds.remove(key)
@@ -31340,55 +31928,34 @@ class TelegramBotRouter internal constructor(
         clearBotGiftState(key)
     }
 
-    private fun clearAllBotDraftCartsForChat(chatId: Long) {
-        botDraftCarts.keys.removeIf { it.chatId == chatId }
-        botDraftCartComments.keys.removeIf { it.chatId == chatId }
-        botMenuMessageIds.keys.removeIf { it.chatId == chatId }
-        botCartMessageIds.keys.removeIf { it.chatId == chatId }
-        botCartScreenMessageIds.keys.removeIf { it.chatId == chatId }
-        botBookingScreenMessageIds.keys.removeIf { it.chatId == chatId }
-        botBookingEditContexts.remove(chatId)
-        botSelectedTabIds.keys.removeIf { it.chatId == chatId }
-        botDraftCartSessionIds.keys.removeIf { it.chatId == chatId }
-        botDraftCartScopes.keys.removeIf { it.chatId == chatId }
-        botGiftDecisions.keys.removeIf { it.chatId == chatId }
-        botGiftCallbackBindings.keys.removeIf { it.chatId == chatId }
-        botJoinSharedAwaitingChats.remove(chatId)
-    }
-
-    internal fun clearGuestLocalStateAfterTeardown(
-        chatId: Long,
-        actorUserId: Long?,
-    ) {
-        clearAllBotDraftCartsForChat(chatId)
-        botBookingCommentDrafts.remove(chatId)
-        botBookingPendingConfirmations.remove(chatId)
-        botBookingEditContexts.remove(chatId)
-        actorUserId?.let { userId ->
-            platformGuestQrPendingStore.clear(
-                PlatformGuestQrPendingKey(actorUserId = userId, chatId = chatId),
+    private fun clearGuestLocalStateAfterTeardown(ended: GuestTableTeardownResult.Cleared) {
+        val generation = ended.visitGeneration ?: return
+        val identity = ended.identity
+        val key =
+            BotDraftCartKey(
+                identity.chatId,
+                identity.tableToken,
+                identity.actorUserId,
+                ended.tableSessionId,
+                generation,
             )
-        }
+        reservedBotCheckoutRevisions.remove(key)
+        clearBotDraftCart(key)
     }
 
-    internal suspend fun completePlatformGuestTeardownFromMiniApp(
-        chatId: Long,
-        actorUserId: Long,
-    ) {
-        clearGuestLocalStateAfterTeardown(chatId, actorUserId)
+    internal suspend fun completePlatformGuestTeardownFromMiniApp(ended: GuestTableTeardownResult.Cleared) {
+        clearGuestLocalStateAfterTeardown(ended)
         showPostGuestTeardownMenu(
-            chatId = chatId,
-            userId = actorUserId,
+            chatId = ended.identity.chatId,
+            userId = ended.identity.actorUserId,
             message = "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
         )
     }
 
-    private fun clearBotDraftStateForChatExceptTableToken(
-        chatId: Long,
-        tableToken: String,
-    ) {
+    private fun clearBotDraftStateForChatExcept(current: BotDraftCartKey) {
         val keysToClear =
             buildSet {
+                addAll(reservedBotCheckoutRevisions.keys)
                 addAll(botDraftCarts.keys)
                 addAll(botDraftCartComments.keys)
                 addAll(botMenuMessageIds.keys)
@@ -31401,10 +31968,12 @@ class TelegramBotRouter internal constructor(
                 addAll(botGiftCallbackBindings.keys)
             }
                 .filter { key ->
-                    key.chatId == chatId && key.tableToken != tableToken
+                    key.chatId == current.chatId && (key.sessionId ?: 0) <= (current.sessionId ?: 0) &&
+                        key != current && (key.sessionId != current.sessionId || key.generation <= current.generation)
                 }
         keysToClear.forEach { key ->
-            clearBotDraftCart(key.chatId, key.tableToken)
+            reservedBotCheckoutRevisions.remove(key)
+            clearBotDraftCart(key)
         }
     }
 
@@ -31424,15 +31993,16 @@ class TelegramBotRouter internal constructor(
         text: String,
         replyMarkup: ReplyMarkup,
     ) {
+        val boundMarkup = bindButtons(replyMarkup, key)
         val messageId =
-            runCatching { apiClient.sendMessage(chatId, text, replyMarkup)?.messageId }
+            runCatching { apiClient.sendMessage(chatId, text, boundMarkup)?.messageId }
                 .onFailure { logBestEffort("telegram direct cart send", it) }
                 .getOrNull()
         if (messageId != null) {
             botCartScreenMessageIds.compute(key) { _, existing -> (existing ?: emptyList()) + messageId }
             return
         }
-        enqueueMessage(chatId, text, replyMarkup)
+        enqueueMessage(chatId, text, boundMarkup)
     }
 
     private suspend fun deleteMessageBestEffort(
@@ -34476,6 +35046,14 @@ class TelegramBotRouter internal constructor(
                 tableSessionId = currentTab.tableSessionId,
                 tabId = currentTab.id,
             )
+        sendActiveOrder(chatId, context, activeOrder)
+    }
+
+    private suspend fun sendActiveOrder(
+        chatId: Long,
+        context: ResolvedChatContext,
+        activeOrder: ActiveOrderDetails?,
+    ) {
         if (activeOrder != null) {
             val missingItemNames =
                 activeOrder.batches
@@ -34504,20 +35082,45 @@ class TelegramBotRouter internal constructor(
         }
     }
 
-    private suspend fun startQuickOrder(chatId: Long) {
+    private suspend fun startQuickOrder(
+        chatId: Long,
+        expectedTab: Long? = null,
+    ) {
         val context = resolveGuestContext(chatId) ?: return
-        val tab = resolveCurrentBotTab(chatId, context) ?: return
-        dialogStateRepository.set(
-            chatId,
-            DialogState(
-                DialogStateType.QUICK_ORDER_WAIT_TEXT,
-                mapOf(
-                    "tableToken" to context.table.tableToken,
-                    "tableSessionId" to tab.tableSessionId.toString(),
-                    "tabId" to tab.id.toString(),
-                ),
-            ),
-        )
+        if (expectedTab == null) {
+            val tab = resolveCurrentBotTab(chatId, context) ?: return
+            dialogStateRepository.set(
+                chatId,
+                quickOrderDialog(context.table.tableToken, tab.tableSessionId, tab.id, context.visitGeneration),
+            )
+        } else {
+            try {
+                mutateBotVisit(chatId, context, touchOnSuccess = false) { connection, session ->
+                    if (!guestTabsRepository.isTabMember(
+                            connection,
+                            expectedTab,
+                            session.venueId,
+                            session.id,
+                            context.userId,
+                            forUpdate = true,
+                        )
+                    ) {
+                        throw ForbiddenException()
+                    }
+                    dialogStateRepository.set(
+                        connection,
+                        chatId,
+                        quickOrderDialog(context.table.tableToken, session.id, expectedTab, context.visitGeneration),
+                    )
+                }
+            } catch (_: ForbiddenException) {
+                enqueueMessage(chatId, "Счёт изменился. Выберите доступный счёт в меню стола.")
+                return
+            } catch (_: VisitGenerationChangedException) {
+                enqueueMessage(chatId, "Посещение изменилось. Откройте актуальное меню стола.")
+                return
+            }
+        }
         enqueueMessage(chatId, "Опишите, что хотите заказать.")
     }
 
@@ -34600,8 +35203,12 @@ class TelegramBotRouter internal constructor(
         val text = state.payload["text"]
         val requestId = state.payload["requestId"]
         val tableSessionId = state.payload["tableSessionId"]?.toLongOrNull()
+        val generation = state.payload["visitGeneration"]?.toLongOrNull()
         val tabId = state.payload["tabId"]?.toLongOrNull()
-        if (text.isNullOrBlank() || requestId == null || tableSessionId == null || tabId == null) {
+        if (
+            text.isNullOrBlank() || requestId == null || tableSessionId == null ||
+            tabId == null || generation == null
+        ) {
             enqueueMessage(chatId, "Контекст заказа устарел. Откройте QR-код ещё раз и начните быстрый заказ заново.")
             return
         }
@@ -34624,6 +35231,8 @@ class TelegramBotRouter internal constructor(
                                 onDenied = { dialogStateRepository.transitionQuickOrderRequest(chatId, requestId) },
                             ) { connection, confirmed ->
                                 ordersRepository.createGuestOrderBatch(
+                                    stageNewBatch = botStaffHandoff(context),
+                                    expectedVisitGeneration = generation,
                                     analyticsChannel = AnalyticsChannel.TELEGRAM,
                                     connection = connection,
                                     tableId = confirmed.context.tableId,
@@ -34646,6 +35255,8 @@ class TelegramBotRouter internal constructor(
                     }
                 } else {
                     ordersRepository.createGuestOrderBatch(
+                        stageNewBatch = botStaffHandoff(context),
+                        expectedVisitGeneration = generation,
                         analyticsChannel = AnalyticsChannel.TELEGRAM,
                         tableId = context.table.tableId,
                         venueId = context.table.venueId,
@@ -34663,8 +35274,17 @@ class TelegramBotRouter internal constructor(
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (_: ServiceSuspendedException) {
+                enqueueMessage(chatId, "Обслуживание приостановлено. Повторите после возобновления работы заведения.")
+                return
+            } catch (_: SubscriptionBlockedException) {
+                enqueueMessage(chatId, subscriptionBlockedMessage)
+                return
             } catch (e: DatabaseUnavailableException) {
                 enqueueMessage(chatId, "Не удалось проверить результат. Повторите подтверждение этого запроса.")
+                return
+            } catch (e: VisitGenerationChangedException) {
+                enqueueMessage(chatId, "Визит изменился. Заново соберите быстрый заказ.")
                 return
             } catch (e: OrderIdempotencyPayloadMismatchException) {
                 dialogStateRepository.transitionQuickOrderRequest(chatId, requestId, allowCommitted = true)
@@ -34678,7 +35298,7 @@ class TelegramBotRouter internal constructor(
         }
         dialogStateRepository.transitionQuickOrderRequest(chatId, requestId, allowCommitted = true)
         enqueueMessage(chatId, "Запрос отправлен, ожидайте подтверждения.")
-        if (mutation.idempotencyReplay) return
+        if (checkoutNotifications != null || mutation.idempotencyReplay) return
         val notifier = staffChatNotifier
         if (notifier != null) {
             notifier.notifyNewBatchNow(
@@ -34707,14 +35327,30 @@ class TelegramBotRouter internal constructor(
     private suspend fun showStaffCallReasons(chatId: Long) {
         val context = resolveGuestContext(chatId) ?: return
         dialogStateRepository.clear(chatId)
-        enqueueMessage(chatId, "Чем помочь?", TelegramKeyboards.inlineStaffCallReasons())
+        enqueueMessage(
+            chatId,
+            "Чем помочь?",
+            bindButtons(TelegramKeyboards.inlineStaffCallReasons(), context.cartKey(chatId)),
+        )
     }
 
     private suspend fun proceedStaffCallComment(
         chatId: Long,
         comment: String,
     ) {
-        createStaffCall(chatId, StaffCallReason.OTHER, comment)
+        val context = resolveGuestContext(chatId) ?: return
+        if (dialogStateRepository.get(chatId).payload["participation"] != context.participationTag()) {
+            enqueueMessage(chatId, "Откройте вызов персонала заново для текущего посещения.")
+            return
+        }
+        confirmGuestText(
+            chatId,
+            context,
+            DialogStateType.STAFF_CALL_WAIT_COMMENT,
+            "guest_staff_note",
+            "Вызвать персонал с комментарием",
+            comment,
+        )
     }
 
     private suspend fun handleChangeTableRequest(chatId: Long) {
@@ -34727,19 +35363,29 @@ class TelegramBotRouter internal constructor(
     }
 
     private suspend fun handleEndTableVisitRequest(
-        chatId: Long,
-        actorUserId: Long?,
+        key: BotDraftCartKey,
+        bindingUpdatedAt: Instant?,
     ) {
-        val userId = actorUserId ?: return
+        val userId = key.userId
+        val chatId = key.chatId
+        val pendingKey = PlatformGuestQrPendingKey(userId, chatId)
+        val pendingQr = platformGuestQrPendingStore.reference(pendingKey)
+        val booking = botBookingPendingConfirmations[chatId]?.takeIf { it.userId == userId }
         val result =
             guestTableContextLifecycleRepository?.teardownByChat(
-                actorUserId = userId,
-                chatId = chatId,
-                ordinaryBotVisit = !isPlatformOwner(userId),
+                userId, chatId, ordinaryBotVisit = !isPlatformOwner(userId), expectedToken = key.tableToken,
+                expectedSessionId = key.sessionId, expectedGeneration = key.generation,
+                expectedUnboundUpdatedAt = bindingUpdatedAt,
             ) ?: GuestTableTeardownResult.DatabaseUnavailable
         when (result) {
             is GuestTableTeardownResult.Cleared -> {
-                clearGuestLocalStateAfterTeardown(chatId, userId)
+                pendingQr?.let { platformGuestQrPendingStore.consume(pendingKey, it, platformGuestQrNowProvider()) }
+                if (booking != null) {
+                    botBookingPendingConfirmations.computeIfPresent(chatId) { _, current ->
+                        current.takeUnless { it === booking }
+                    }
+                }
+                clearGuestLocalStateAfterTeardown(result)
                 showPostGuestTeardownMenu(
                     chatId = chatId,
                     userId = userId,
@@ -34758,7 +35404,6 @@ class TelegramBotRouter internal constructor(
                     TelegramKeyboards.tableContextBotFlow(),
                 )
             GuestTableTeardownResult.Missing -> {
-                clearGuestLocalStateAfterTeardown(chatId, userId)
                 showPostGuestTeardownMenu(
                     chatId = chatId,
                     userId = userId,
@@ -34849,7 +35494,14 @@ class TelegramBotRouter internal constructor(
     ) {
         val context = resolveGuestContext(chatId) ?: return
         if (reason == StaffCallReason.OTHER && comment.isNullOrBlank()) {
-            dialogStateRepository.set(chatId, DialogState(DialogStateType.STAFF_CALL_WAIT_COMMENT))
+            val promptContext = resolveGuestContext(chatId) ?: return
+            dialogStateRepository.set(
+                chatId,
+                DialogState(
+                    DialogStateType.STAFF_CALL_WAIT_COMMENT,
+                    mapOf("participation" to promptContext.participationTag()),
+                ),
+            )
             enqueueMessage(chatId, "Опишите, что нужно сделать.")
             return
         }
@@ -34898,6 +35550,42 @@ class TelegramBotRouter internal constructor(
         )
     }
 
+    private suspend fun <T> mutateBotVisit(
+        chatId: Long,
+        context: ResolvedChatContext,
+        touchOnSuccess: Boolean = true,
+        mutation: (Connection, TableSessionRecord) -> T,
+    ): T {
+        val session =
+            TableSessionContext(
+                context.tableSessionId ?: throw ForbiddenException(),
+                context.table.venueId,
+                context.table.tableId,
+            )
+        return guestTabsRepository.mutateParticipation(
+            context.userId,
+            session,
+            context.visitGeneration,
+            config.platformOwnerId,
+            guestTableContextLifecycleRepository,
+            tableSessionTtl,
+            context.table.tableToken,
+            chatId,
+            touchOnSuccess = touchOnSuccess,
+        ) { connection ->
+            val locked =
+                tableSessionRepository.findSessionForTable(
+                    connection,
+                    session.id,
+                    session.venueId,
+                    session.tableId,
+                    forUpdate = true,
+                )
+                    ?: throw NotFoundException()
+            mutation(connection, locked)
+        }
+    }
+
     private suspend fun createTableScopedBotStaffCall(
         chatId: Long,
         context: ResolvedChatContext,
@@ -34906,36 +35594,51 @@ class TelegramBotRouter internal constructor(
         comment: String?,
         orderId: Long? = null,
     ): PlatformGuestBotMutationAttempt<Long?> {
-        if (isPlatformOwner(context.userId)) {
-            return runConfirmedPlatformGuestBotMutation(
-                chatId = chatId,
-                context = context,
-                expectedTableSessionId = tableSessionId,
-            ) { connection, confirmed ->
-                staffCallRepository.createGuestStaffCall(
-                    connection = connection,
-                    venueId = confirmed.context.venueId,
-                    tableId = confirmed.context.tableId,
-                    tableSessionId = confirmed.tableSession.id,
-                    createdByUserId = context.userId,
-                    reason = reason,
-                    comment = comment,
-                    orderId = orderId,
-                ).id
-            }
-        }
+        if (context.tableSessionId != tableSessionId) return PlatformGuestBotMutationAttempt.Stopped
+        val target = kotlin.coroutines.coroutineContext[ButtonVisit]
         return try {
-            PlatformGuestBotMutationAttempt.Applied(
-                staffCallRepository.createStaffCall(
-                    venueId = context.table.venueId,
-                    tableId = context.table.tableId,
-                    createdByUserId = context.userId,
-                    reason = reason,
-                    comment = comment,
-                    tableSessionId = tableSessionId,
-                    orderId = orderId,
-                ),
-            )
+            val id =
+                mutateBotVisit(chatId, context) { connection, session ->
+                    if (reason == StaffCallReason.BILL) {
+                        val tab = target?.tabId ?: throw VisitGenerationChangedException()
+                        if (!guestTabsRepository.isTabMember(
+                                connection,
+                                tab,
+                                session.venueId,
+                                session.id,
+                                context.userId,
+                            )
+                        ) {
+                            throw ForbiddenException()
+                        }
+                        val order =
+                            ordersRepository.findActiveOrderDetailsForTab(connection, session.id, tab, forUpdate = true)
+                                ?: throw VisitGenerationChangedException()
+                        if (order.orderId != target.orderId) throw VisitGenerationChangedException()
+                        staffCallRepository.createGuestBillRequest(
+                            connection,
+                            session.venueId,
+                            session.tableId,
+                            session.id,
+                            tab,
+                            order.orderId,
+                            context.userId,
+                            if (comment?.contains("Картой") == true) BillPaymentMethod.CARD else BillPaymentMethod.CASH,
+                        ).id
+                    } else {
+                        staffCallRepository.createGuestStaffCall(
+                            connection,
+                            session.venueId,
+                            session.tableId,
+                            session.id,
+                            context.userId,
+                            reason,
+                            comment,
+                            orderId,
+                        ).id
+                    }
+                }
+            PlatformGuestBotMutationAttempt.Applied(id)
         } catch (_: NotFoundException) {
             enqueueMessage(
                 chatId,
@@ -35068,23 +35771,29 @@ class TelegramBotRouter internal constructor(
 
     private suspend fun teardownGuestContextAfterAvailabilityLoss(
         chatId: Long,
-        actorUserId: Long,
+        context: ResolvedChatContext,
         message: String,
     ) {
-        platformGuestQrPendingStore.clear(
-            PlatformGuestQrPendingKey(actorUserId = actorUserId, chatId = chatId),
-        )
+        if (platformVenueRepository.getVenueDetail(context.table.venueId)?.status == VenueStatus.PAUSED) {
+            enqueueMessage(
+                chatId,
+                "Обслуживание временно приостановлено. Вернитесь после возобновления работы заведения.",
+            )
+            return
+        }
+        val actorUserId = context.userId
         val result =
-            guestTableContextLifecycleRepository?.teardownByChat(
-                actorUserId = actorUserId,
-                chatId = chatId,
+            guestTableContextLifecycleRepository?.teardownByActorAndToken(
+                actorUserId = actorUserId, tableToken = context.table.tableToken,
+                expectedTableSessionId = context.tableSessionId ?: return,
+                expectedVisitGeneration = context.visitGeneration,
                 ordinaryBotVisit = !isPlatformOwner(actorUserId),
             ) ?: GuestTableTeardownResult.DatabaseUnavailable
         when (result) {
             is GuestTableTeardownResult.Cleared,
             GuestTableTeardownResult.Missing,
             -> {
-                clearGuestLocalStateAfterTeardown(chatId, actorUserId)
+                if (result is GuestTableTeardownResult.Cleared) clearGuestLocalStateAfterTeardown(result)
                 showPostGuestTeardownMenu(chatId, actorUserId, message)
             }
             is GuestTableTeardownResult.Blocked ->
@@ -35105,10 +35814,20 @@ class TelegramBotRouter internal constructor(
         userId: Long?,
         message: String,
     ) {
+        suspend fun send(markup: ReplyMarkup) {
+            val bound =
+                try {
+                    chatContextRepository.get(chatId)
+                } catch (_: DatabaseUnavailableException) {
+                    return
+                }
+            if (bound == null) {
+                runCatching { outboxEnqueuer.enqueueGuestTeardownMenu(chatId, message, markup) }
+                    .onFailure { logBestEffort("guest teardown menu enqueue", it) }
+            }
+        }
         if (isPlatformOwner(userId)) {
-            enqueueMessage(
-                chatId,
-                message,
+            send(
                 TelegramKeyboards.ownerMainMenu(
                     showMiniAppEntry = isMiniAppEntryAvailable(),
                     platformPanelUrl = platformMiniAppUrl(),
@@ -35125,14 +35844,12 @@ class TelegramBotRouter internal constructor(
                         VenueBotRole.MANAGER -> venueManagerMenu(access.venueId)
                         VenueBotRole.STAFF -> venueStaffMenu(access.venueId)
                     }
-                enqueueMessage(chatId, message, menu)
+                send(menu)
                 return
             }
         }
         val hasVenueRole = userId?.let { venueAccessRepository.hasVenueRole(it) } ?: false
-        enqueueMessage(
-            chatId,
-            message,
+        send(
             TelegramKeyboards.mainMenu(
                 hasVenueRole = hasVenueRole,
                 isPlatformOwner = false,
@@ -35255,9 +35972,17 @@ class TelegramBotRouter internal constructor(
                 tableToken = context.table.tableToken,
                 expectedVenueId = context.table.venueId,
                 expectedTableId = context.table.tableId,
-                expectedSessionId = expectedTableSessionId,
+                expectedSessionId = expectedTableSessionId ?: context.tableSessionId,
                 ttl = tableSessionTtl,
-                mutation = mutation,
+                mutation = { connection, confirmed ->
+                    tableSessionRepository.checkVisitGeneration(
+                        connection,
+                        context.userId,
+                        confirmed.tableSession.id,
+                        context.visitGeneration,
+                    )
+                    mutation(connection, confirmed)
+                },
             ) ?: PlatformGuestTableMutationResult.DatabaseUnavailable
         return when (result) {
             is PlatformGuestTableMutationResult.Applied -> PlatformGuestBotMutationAttempt.Applied(result.value)
@@ -35298,7 +36023,9 @@ class TelegramBotRouter internal constructor(
         ) {
             return LoadContextResult.Missing
         }
-        return LoadContextResult.Loaded(ResolvedChatContext(resolved, saved.userId, saved.tableSessionId))
+        return LoadContextResult.Loaded(
+            ResolvedChatContext(resolved, saved.userId, saved.tableSessionId, saved.visitGeneration),
+        )
     }
 
     private suspend fun resolveGuestContext(
@@ -35319,6 +36046,11 @@ class TelegramBotRouter internal constructor(
                     return null
                 }
             }
+        val origin = kotlin.coroutines.coroutineContext[ButtonVisit]
+        if (origin != null && origin.cart != context.cartKey(chatId)) {
+            enqueueMessage(chatId, "Посещение изменилось. Откройте актуальное меню.")
+            return null
+        }
         if (actorUserId != null && context.userId != actorUserId) {
             askScanQr(chatId)
             return null
@@ -35328,7 +36060,7 @@ class TelegramBotRouter internal constructor(
             VenueGuestAccessResult.Forbidden -> {
                 teardownGuestContextAfterAvailabilityLoss(
                     chatId = chatId,
-                    actorUserId = context.userId,
+                    context = context,
                     message = "Заведение пока не доступно для гостей. Гостевой режим завершён.",
                 )
                 return null

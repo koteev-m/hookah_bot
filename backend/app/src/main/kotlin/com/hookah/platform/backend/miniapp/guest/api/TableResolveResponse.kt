@@ -2,6 +2,7 @@ package com.hookah.platform.backend.miniapp.guest.api
 
 import kotlinx.serialization.Serializable
 
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
 data class TableResolveResponse(
     val venueId: Long,
@@ -17,6 +18,8 @@ data class TableResolveResponse(
     val available: Boolean,
     val unavailableReason: String?,
     val exitEventId: String? = null,
+    val visitGeneration: String? = null,
+    @kotlinx.serialization.EncodeDefault val visitProtocol: Int = 1,
 )
 
 @Serializable
@@ -30,6 +33,7 @@ data class TableRejoinRequest(
 data class TableSessionEndRequest(
     val tableToken: String,
     val tableSessionId: Long,
+    val expectedVisitGeneration: String? = null,
 )
 
 @Serializable
@@ -40,9 +44,12 @@ data class TableSessionEndResponse(
     val message: String?,
 )
 
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
 data class TableRestoreResponse(
     val context: RestoredTableContextResponse?,
+    val unavailableReason: String? = null,
+    @kotlinx.serialization.EncodeDefault val visitProtocol: Int = 1,
 )
 
 @Serializable
@@ -61,4 +68,5 @@ data class RestoredTableContextResponse(
     val subscriptionStatus: String,
     val available: Boolean,
     val unavailableReason: String?,
+    val visitGeneration: String? = null,
 )

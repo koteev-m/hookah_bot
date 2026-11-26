@@ -577,7 +577,8 @@ class GuestTableResolveRoutesTest {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                     contentType(ContentType.Application.Json)
                     setBody(
-                        """{"tableToken":"$tokenValue","tableSessionId":$tableSessionId,"reason":"COME"}""",
+                        """{"tableToken":"$tokenValue","expectedVisitGeneration":"0",
+                            "tableSessionId":$tableSessionId,"reason":"COME"}""",
                     )
                 }
 
@@ -643,7 +644,7 @@ class GuestTableResolveRoutesTest {
 
             assertEquals(HttpStatusCode.OK, response.status)
             val after = fetchTableSessionTiming(jdbcUrl, tableSessionId) ?: error("Expected session")
-            assertTrue(after.lastActivityAt > before.lastActivityAt)
+            assertEquals(before, after)
             assertEquals(1, countTableSessions(jdbcUrl))
             assertEquals(0, countPersonalTabs(jdbcUrl, PLATFORM_OWNER_USER_ID, tableSessionId))
             assertEquals(0, countUserTableSessionExits(jdbcUrl, PLATFORM_OWNER_USER_ID, tableSessionId))
@@ -712,8 +713,8 @@ class GuestTableResolveRoutesTest {
             application {
                 moduleWithOverrides(
                     ModuleOverrides(
-                        afterPlatformGuestTeardown = { chatId, actorUserId ->
-                            teardownCallbackIdentity = chatId to actorUserId
+                        afterPlatformGuestTeardown = { ended ->
+                            teardownCallbackIdentity = ended.identity.chatId to ended.identity.actorUserId
                         },
                     ),
                 )
@@ -755,7 +756,10 @@ class GuestTableResolveRoutesTest {
                 client.post("/api/guest/table/session/end") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                     contentType(ContentType.Application.Json)
-                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                    setBody(
+                        """{"expectedVisitGeneration":"0","tableToken":"$tokenValue",
+                            "tableSessionId":$tableSessionId}""",
+                    )
                 }
 
             assertEquals(HttpStatusCode.OK, response.status)
@@ -818,7 +822,7 @@ class GuestTableResolveRoutesTest {
         }
 
     @Test
-    fun `platform owner restore with matching confirmed context returns and touches same session`() =
+    fun `platform owner restore with matching confirmed context returns the session without touching it`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-table-platform-restore-confirmed")
             val config = buildConfig(jdbcUrl, platformOwnerUserId = PLATFORM_OWNER_USER_ID)
@@ -878,7 +882,7 @@ class GuestTableResolveRoutesTest {
             assertEquals(tokenValue, context.tableToken)
             assertEquals(tableSessionId, context.tableSessionId)
             val after = fetchTableSessionTiming(jdbcUrl, tableSessionId) ?: error("Expected session timing")
-            assertTrue(after.lastActivityAt > before.lastActivityAt)
+            assertEquals(before, after)
             assertEquals(1, countTableSessions(jdbcUrl))
             assertEquals(1, countPersonalTabs(jdbcUrl, PLATFORM_OWNER_USER_ID, tableSessionId))
         }
@@ -914,6 +918,59 @@ class GuestTableResolveRoutesTest {
         }
 
     @Test
+    fun `platform owner resumes only a confirmed bot visit before and after opening a bill`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-table-platform-cold-start")
+            val config = buildConfig(jdbcUrl, platformOwnerUserId = PLATFORM_OWNER_USER_ID)
+            environment { this.config = config }
+            application { module() }
+            client.get("/health")
+            createTelegramChatContextFixture(jdbcUrl)
+            val venue = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venue, "ACTIVE")
+            val table = seedTable(jdbcUrl, venue, 4)
+            val qr = "platform-cold-qr"
+            seedTableToken(jdbcUrl, table, qr)
+            seedUser(jdbcUrl, PLATFORM_OWNER_USER_ID)
+            val session =
+                seedTableSession(jdbcUrl, venue, table, "ACTIVE", Instant.now().plusSeconds(3600), endedAt = null)
+            val token = issueToken(config, PLATFORM_OWNER_USER_ID)
+
+            suspend fun restore() =
+                client.get("/api/guest/table/restore") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $token") }
+                }.let {
+                    assertEquals(HttpStatusCode.OK, it.status)
+                    json.decodeFromString(TableRestoreResponse.serializer(), it.bodyAsText()).context
+                }
+            val before = fetchTableSessionTiming(jdbcUrl, session)
+            assertNull(restore())
+            seedChatContext(
+                jdbcUrl = jdbcUrl,
+                chatId = PLATFORM_OWNER_CHAT_ID,
+                userId = PLATFORM_OWNER_USER_ID,
+                venueId = venue,
+                tableId = table,
+                tableToken = qr,
+                updatedAt = Instant.now(),
+                tableSessionId = session,
+            )
+            val beforeBill = restore()
+            assertEquals(session, beforeBill?.tableSessionId)
+            assertNull(beforeBill?.tabId)
+            assertEquals(0, countPersonalTabs(jdbcUrl, PLATFORM_OWNER_USER_ID, session))
+            val tab = seedTab(jdbcUrl, venue, session, PLATFORM_OWNER_USER_ID)
+            seedOrder(jdbcUrl, venue, table, session, tab, "CLOSED", authorUserId = PLATFORM_OWNER_USER_ID)
+            assertEquals(tab, restore()?.tabId)
+            assertEquals(before, fetchTableSessionTiming(jdbcUrl, session))
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { it.executeUpdate("DELETE FROM telegram_chat_context") }
+            }
+            assertNull(restore())
+            assertEquals(1, countTableSessions(jdbcUrl))
+        }
+
+    @Test
     fun `restore returns latest active table context for authenticated tab member`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-table-restore-active")
@@ -923,6 +980,7 @@ class GuestTableResolveRoutesTest {
             application { module() }
 
             client.get("/health")
+            createTelegramChatContextFixture(jdbcUrl)
 
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
@@ -972,6 +1030,7 @@ class GuestTableResolveRoutesTest {
             application { module() }
 
             client.get("/health")
+            createTelegramChatContextFixture(jdbcUrl)
 
             val ownerUserId = TELEGRAM_USER_ID
             val anotherUserId = 789L
@@ -1005,7 +1064,7 @@ class GuestTableResolveRoutesTest {
         }
 
     @Test
-    fun `restore skips session with only closed bill`() =
+    fun `restore keeps a current session after its last order closed without touching it`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-table-restore-closed")
             val config = buildConfig(jdbcUrl)
@@ -1014,6 +1073,7 @@ class GuestTableResolveRoutesTest {
             application { module() }
 
             client.get("/health")
+            createTelegramChatContextFixture(jdbcUrl)
 
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
             seedSubscription(jdbcUrl, venueId, "ACTIVE")
@@ -1033,6 +1093,7 @@ class GuestTableResolveRoutesTest {
             seedOrder(jdbcUrl, venueId, tableId, tableSessionId, tabId, "CLOSED")
             val token = issueToken(config)
 
+            val before = fetchTableSessionTiming(jdbcUrl, tableSessionId)
             val response =
                 client.get("/api/guest/table/restore") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
@@ -1040,11 +1101,13 @@ class GuestTableResolveRoutesTest {
 
             assertEquals(HttpStatusCode.OK, response.status)
             val payload = json.decodeFromString(TableRestoreResponse.serializer(), response.bodyAsText())
-            assertNull(payload.context)
+            assertEquals(tableSessionId, payload.context?.tableSessionId)
+            assertEquals(tabId, payload.context?.tabId)
+            assertEquals(before, fetchTableSessionTiming(jdbcUrl, tableSessionId))
         }
 
     @Test
-    fun `restore picks latest active context deterministically`() =
+    fun `restore leaves conflicting memberships unresolved despite different order and table activity`() =
         testApplication {
             val jdbcUrl = buildJdbcUrl("guest-table-restore-latest")
             val config = buildConfig(jdbcUrl)
@@ -1053,6 +1116,7 @@ class GuestTableResolveRoutesTest {
             application { module() }
 
             client.get("/health")
+            createTelegramChatContextFixture(jdbcUrl)
 
             seedUser(jdbcUrl, TELEGRAM_USER_ID)
             val firstVenueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
@@ -1113,11 +1177,7 @@ class GuestTableResolveRoutesTest {
 
             assertEquals(HttpStatusCode.OK, response.status)
             val payload = json.decodeFromString(TableRestoreResponse.serializer(), response.bodyAsText())
-            val context = payload.context ?: error("Expected restored table context")
-            assertEquals("restore-second-token", context.tableToken)
-            assertEquals(secondTabId, context.tabId)
-            assertEquals(secondSessionId, context.tableSessionId)
-            assertEquals("22", context.tableNumber)
+            assertNull(payload.context)
         }
 
     @Test
@@ -1130,6 +1190,7 @@ class GuestTableResolveRoutesTest {
             application { module() }
 
             client.get("/health")
+            createTelegramChatContextFixture(jdbcUrl)
 
             val guestA = TELEGRAM_USER_ID
             val guestB = 789L
@@ -1158,7 +1219,10 @@ class GuestTableResolveRoutesTest {
                 client.post("/api/guest/table/session/end") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
                     contentType(ContentType.Application.Json)
-                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                    setBody(
+                        """{"expectedVisitGeneration":"0","tableToken":"$tokenValue",
+                            "tableSessionId":$tableSessionId}""",
+                    )
                 }
 
             assertEquals(HttpStatusCode.OK, endResponse.status)
@@ -1257,7 +1321,10 @@ class GuestTableResolveRoutesTest {
                 client.post("/api/guest/table/session/end") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
                     contentType(ContentType.Application.Json)
-                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                    setBody(
+                        """{"expectedVisitGeneration":"0","tableToken":"$tokenValue",
+                            "tableSessionId":$tableSessionId}""",
+                    )
                 }
 
             assertEquals(HttpStatusCode.NotFound, endResponse.status)
@@ -1299,7 +1366,10 @@ class GuestTableResolveRoutesTest {
                 client.post("/api/guest/table/session/end") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                     contentType(ContentType.Application.Json)
-                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                    setBody(
+                        """{"expectedVisitGeneration":"0","tableToken":"$tokenValue",
+                            "tableSessionId":$tableSessionId}""",
+                    )
                 }
 
             assertEquals(HttpStatusCode.OK, endResponse.status)
@@ -1347,7 +1417,10 @@ class GuestTableResolveRoutesTest {
                 client.post("/api/guest/table/session/end") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
                     contentType(ContentType.Application.Json)
-                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                    setBody(
+                        """{"expectedVisitGeneration":"0","tableToken":"$tokenValue",
+                            "tableSessionId":$tableSessionId}""",
+                    )
                 }
 
             assertEquals(HttpStatusCode.OK, endResponse.status)
@@ -1391,7 +1464,10 @@ class GuestTableResolveRoutesTest {
                 client.post("/api/guest/table/session/end") {
                     headers { append(HttpHeaders.Authorization, "Bearer $token") }
                     contentType(ContentType.Application.Json)
-                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                    setBody(
+                        """{"expectedVisitGeneration":"0","tableToken":"$tokenValue",
+                            "tableSessionId":$tableSessionId}""",
+                    )
                 }
 
             assertEquals(HttpStatusCode.OK, endResponse.status)
@@ -1440,7 +1516,10 @@ class GuestTableResolveRoutesTest {
                 client.post("/api/guest/table/session/end") {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
                     contentType(ContentType.Application.Json)
-                    setBody("""{"tableToken":"$tokenValue","tableSessionId":$tableSessionId}""")
+                    setBody(
+                        """{"expectedVisitGeneration":"0","tableToken":"$tokenValue",
+                            "tableSessionId":$tableSessionId}""",
+                    )
                 }
 
             assertEquals(HttpStatusCode.OK, endResponse.status)

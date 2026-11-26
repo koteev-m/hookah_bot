@@ -53,26 +53,34 @@ class DialogStateRepository(
         withContext(Dispatchers.IO) {
             try {
                 ds.connection.use { connection ->
-                    val sql =
-                        """
-                        INSERT INTO telegram_dialog_state (chat_id, state, payload, updated_at)
-                        VALUES (?, ?, ?::jsonb, now())
-                        ON CONFLICT (chat_id) DO UPDATE SET
-                            state = EXCLUDED.state,
-                            payload = EXCLUDED.payload,
-                            updated_at = now()
-                        """.trimIndent()
-                    connection.prepareStatement(sql).use { statement ->
-                        statement.setLong(1, chatId)
-                        statement.setString(2, state.state.name)
-                        val payloadJson = json.encodeToJsonElement(MapSerializer, state.payload).toString()
-                        statement.setString(3, payloadJson)
-                        statement.executeUpdate()
-                    }
+                    set(connection, chatId, state)
                 }
             } catch (e: SQLException) {
                 throw DatabaseUnavailableException()
             }
+        }
+    }
+
+    fun set(
+        connection: Connection,
+        chatId: Long,
+        state: DialogState,
+    ) {
+        val sql =
+            """
+            INSERT INTO telegram_dialog_state (chat_id, state, payload, updated_at)
+            VALUES (?, ?, ?::jsonb, now())
+            ON CONFLICT (chat_id) DO UPDATE SET
+                state = EXCLUDED.state,
+                payload = EXCLUDED.payload,
+                updated_at = now()
+            """.trimIndent()
+        connection.prepareStatement(sql).use { statement ->
+            statement.setLong(1, chatId)
+            statement.setString(2, state.state.name)
+            val payloadJson = json.encodeToJsonElement(MapSerializer, state.payload).toString()
+            statement.setString(3, payloadJson)
+            statement.executeUpdate()
         }
     }
 

@@ -1914,19 +1914,10 @@ object TelegramKeyboards {
         return ReplyKeyboardMarkup(keyboard = keyboard)
     }
 
-    fun inlineGuestShiftExtensionActions(canRequest: Boolean): InlineKeyboardMarkup {
+    fun inlineGuestShiftExtensionActions(confirmation: InlineKeyboardButton? = null): InlineKeyboardMarkup {
         val keyboard =
             buildList {
-                if (canRequest) {
-                    add(
-                        listOf(
-                            InlineKeyboardButton(
-                                text = "Продлить на 1 час",
-                                callbackData = "guest_shift_extension_request",
-                            ),
-                        ),
-                    )
-                }
+                if (confirmation != null) add(listOf(confirmation))
                 add(
                     listOf(
                         InlineKeyboardButton(
@@ -6726,6 +6717,7 @@ object TelegramKeyboards {
         categoryId: Long,
         itemId: Long,
         hasActiveOrder: Boolean,
+        participation: String? = null,
         favoriteActionText: String? = null,
         favoriteActionCallbackData: String? = null,
     ): InlineKeyboardMarkup =
@@ -6738,7 +6730,9 @@ object TelegramKeyboards {
                                 text = if (hasActiveOrder) "➕ Дозаказать" else "➕ Добавить в корзину",
                                 callbackData =
                                     if (hasActiveOrder) {
-                                        "bot_menu_item_reorder:$categoryId:$itemId"
+                                        participation?.let {
+                                            "guest_reorder:${categoryId.toString(36)}:${itemId.toString(36)}:$it"
+                                        } ?: "bot_menu_item_cart"
                                     } else {
                                         "bot_menu_item_add_to_cart:$categoryId:$itemId"
                                     },
@@ -6962,6 +6956,7 @@ object TelegramKeyboards {
     fun inlineBotMenuCartSummaryActions(
         showSplitBillActions: Boolean = false,
         hasComment: Boolean = false,
+        participation: String? = null,
         showAcceptFixedGift: Boolean = false,
         showGiftChoice: Boolean = false,
         giftChoiceSelected: Boolean = false,
@@ -7013,7 +7008,8 @@ object TelegramKeyboards {
                         listOf(
                             InlineKeyboardButton(
                                 text = "✅ Оформить заказ",
-                                callbackData = "bot_menu_cart_checkout",
+                                callbackData =
+                                    participation?.let { "bot_menu_cart_checkout:$it" } ?: "bot_menu_item_cart",
                             ),
                         ),
                     )

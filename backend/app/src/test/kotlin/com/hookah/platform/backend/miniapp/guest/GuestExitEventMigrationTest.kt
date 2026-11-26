@@ -169,11 +169,27 @@ class GuestExitEventMigrationTest {
             connection.autoCommit = false
             repo.recordUserExit(connection, 501, 301, at)
             val current = checkNotNull(repo.findExitEventId(connection, 501, 301))
-            assertTrue(current > events.values.max())
-            assertFalse(repo.consumeExitEvent(connection, 501, 301, events.getValue(501)))
+            assertEquals(events.getValue(501), current)
+            assertFalse(repo.consumeExitEvent(connection, 501, 301, events.getValue(502)))
             assertEquals(current, repo.findExitEventId(connection, 501, 301))
             assertEquals(events.getValue(502), repo.findExitEventId(connection, 502, 301))
             connection.commit()
+            connection.autoCommit = true
+
+            // Upgrade an existing physical session with two independent, outstanding exit events.
+            migrate(previous + 3)
+            assertEquals(1, migrate(previous + 4).migrationsExecuted)
+            assertEquals(0, migrate(previous + 4).migrationsExecuted)
+            assertEquals(0L, repo.visitGeneration(connection, 501, 301))
+            assertEquals(0L, repo.visitGeneration(connection, 502, 301))
+            assertEquals(current, repo.findExitEventId(connection, 501, 301))
+            assertEquals(events.getValue(502), repo.findExitEventId(connection, 502, 301))
+            connection.autoCommit = false
+            assertTrue(repo.consumeExitEvent(connection, 501, 301, current))
+            connection.commit()
+            assertEquals(current, repo.visitGeneration(connection, 501, 301))
+            assertEquals(0L, repo.visitGeneration(connection, 502, 301))
+            assertEquals(events.getValue(502), repo.findExitEventId(connection, 502, 301))
         }
     }
 }

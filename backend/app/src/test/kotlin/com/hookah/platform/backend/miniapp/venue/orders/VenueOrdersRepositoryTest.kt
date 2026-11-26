@@ -7,10 +7,21 @@ import com.hookah.platform.backend.miniapp.guest.db.VisitRepository
 import com.hookah.platform.backend.miniapp.venue.VenueRole
 import com.hookah.platform.backend.miniapp.venue.accounting.AccountingCommand
 import com.hookah.platform.backend.miniapp.venue.accounting.AccountingRepository
+import com.hookah.platform.backend.telegram.GuestCheckoutNotifications
+import com.hookah.platform.backend.telegram.GuestCheckoutStaffNotice
+import com.hookah.platform.backend.telegram.StaffChatNotifier
+import com.hookah.platform.backend.telegram.TelegramOutboxEnqueuer
+import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import com.hookah.platform.backend.telegram.db.LoyaltyProgramStatus
 import com.hookah.platform.backend.telegram.db.LoyaltyRepository
 import com.hookah.platform.backend.telegram.db.OrdersRepository
+import com.hookah.platform.backend.telegram.db.StaffChatNotificationRepository
+import com.hookah.platform.backend.telegram.db.TelegramOutboxRepository
+import com.hookah.platform.backend.telegram.db.VenueRepository
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.flywaydb.core.Flyway
 import org.h2.jdbcx.JdbcDataSource
 import java.lang.reflect.InvocationTargetException
@@ -34,6 +45,182 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class VenueOrdersRepositoryTest {
+    @Test
+    fun `review11 staff receipt uses original price currency discount and total after menu changes`() =
+        runBlocking {
+            val jdbcUrl = migratedJdbcUrl("checkout-notification-pricing")
+            val fixture = seedActiveOrder(jdbcUrl)
+            val ds = dataSource(jdbcUrl)
+            val notices = checkoutNotifications(ds)
+            for (discounted in listOf(false, true)) {
+                val batch = seedBatch(jdbcUrl, fixture.orderId, "NEW", Instant.now())
+                val line = seedBatchItem(jdbcUrl, fixture.venueId, batch, "Кальян", priceMinor = 200_000)
+                if (discounted) {
+                    seedPromotionAdjustment(
+                        jdbcUrl,
+                        fixture,
+                        batch,
+                        line,
+                        "Счастливые часы",
+                        "HAPPY_HOURS_PERCENT",
+                        100_000,
+                        50,
+                    )
+                }
+                ds.connection.use { c ->
+                    c.createStatement().use {
+                        it.executeUpdate("UPDATE venues SET staff_chat_id=-601 WHERE id=${fixture.venueId}")
+                        it.executeUpdate(
+                            "UPDATE order_batch_items SET item_name_snapshot='Кальян'," +
+                                "currency_snapshot='RUB' WHERE id=$line",
+                        )
+                    }
+                    notices.stageStaff(c, fixture.venueId, fixture.orderId, batch, false)
+                }
+                updateMenuItemPriceForBatchItem(jdbcUrl, line, 400_000)
+                updateMenuItemCurrencyForBatchItem(jdbcUrl, line, "USD")
+                assertTrue(
+                    notices.publishStaff(
+                        -601,
+                        GuestCheckoutStaffNotice(fixture.venueId, fixture.orderId, batch, false),
+                    ),
+                )
+                ds.connection.use { c ->
+                    c.createStatement().use {
+                        it.executeQuery(
+                            "SELECT payload_json FROM telegram_outbox WHERE method='sendMessage' " +
+                                "ORDER BY id DESC LIMIT 1",
+                        ).use {
+                                rows ->
+                            assertTrue(rows.next())
+                            val text =
+                                Json.parseToJsonElement(
+                                    rows.getString(1),
+                                ).jsonObject.getValue("text").jsonPrimitive.content
+                            assertTrue(text.contains("2 000 ₽"), text)
+                            assertFalse(text.contains("USD"), text)
+                            assertTrue(
+                                text.contains(if (discounted) "Итого к оплате: 1 000 ₽" else "Итого к оплате: 2 000 ₽"),
+                                text,
+                            )
+                            assertEquals(discounted, text.contains("Счастливые часы"))
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun kotlinx.coroutines.CoroutineScope.checkoutNotifications(ds: DataSource): GuestCheckoutNotifications {
+        val policy = TelegramTrafficPolicy.unrestricted()
+        val outbox = TelegramOutboxRepository(ds, policy)
+        return GuestCheckoutNotifications(
+            outbox,
+            TelegramOutboxEnqueuer(outbox, Json, policy),
+            VenueOrdersRepository(ds),
+            StaffChatNotifier(
+                VenueRepository(ds),
+                StaffChatNotificationRepository(ds, policy),
+                isTelegramActive = { true },
+                trafficPolicy = policy,
+                scope = this,
+            ),
+            null,
+            Json,
+            true,
+        )
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = [false, true])
+    fun `checkout outbox preserves replacement and genuine add-on across delayed publication`(live: Boolean) =
+        runBlocking {
+            val url = migratedJdbcUrl("checkout-kind-$live")
+            val fixture = seedActiveOrder(url)
+            val ds = dataSource(url)
+            val notices = checkoutNotifications(ds)
+            val order = fixture.orderId
+            val venue = fixture.venueId
+            val start = Instant.now().minusSeconds(60)
+            val first = seedBatch(url, order, "NEW", start, authorUserId = null)
+            seedGuestBatchIdempotency(url, fixture, first)
+            val line = seedBatchItem(url, venue, first, "Чай")
+            ds.connection.use { c ->
+                c.createStatement().use { sql ->
+                    sql.executeUpdate("UPDATE venues SET staff_chat_id=-601 WHERE id=$venue")
+                    if (live) {
+                        sql.executeUpdate(
+                            "INSERT INTO telegram_staff_chat_order_messages(order_id,venue_id,chat_id,message_id) " +
+                                "VALUES($order,$venue,-601,99)",
+                        )
+                    }
+                    notices.stageStaff(c, venue, order, first, live)
+                    c.prepareStatement(
+                        "UPDATE order_batch_items SET item_status='CANCELED',canceled_at=? WHERE id=?",
+                    ).use {
+                        // PostgreSQL transaction start can precede the cancellation seen at checkout.
+                        it.setTimestamp(1, Timestamp.from(start.plusSeconds(5)))
+                        it.setLong(2, line)
+                        it.executeUpdate()
+                    }
+                    val replacement = seedBatch(url, order, "NEW", start.plusSeconds(2))
+                    notices.stageStaff(c, venue, order, replacement, live)
+                    val secondLine = seedBatchItem(url, venue, replacement, "Кофе")
+                    sql.executeUpdate("UPDATE order_batch_items SET item_status='CANCELED' WHERE id=$secondLine")
+                    val secondReplacement = seedBatch(url, order, "NEW", start.plusSeconds(3))
+                    notices.stageStaff(c, venue, order, secondReplacement, live)
+                    val addOn = seedBatch(url, order, "NEW", start.plusSeconds(4))
+                    notices.stageStaff(c, venue, order, addOn, live)
+                    sql.executeUpdate("UPDATE order_batches SET status='ACCEPTED' WHERE id=$first")
+
+                    for (id in listOf(first, replacement, secondReplacement, addOn)) {
+                        val payload =
+                            sql.executeQuery(
+                                "SELECT payload_json FROM telegram_outbox WHERE dedupe_key='guest-checkout-staff:$id'",
+                            ).use {
+                                assertTrue(it.next())
+                                Json.decodeFromString<GuestCheckoutStaffNotice>(it.getString(1))
+                            }
+                        repeat(2) { assertTrue(notices.publishStaff(-601, payload)) }
+                    }
+
+                    fun texts(method: String) =
+                        sql.executeQuery(
+                            "SELECT payload_json FROM telegram_outbox " +
+                                "WHERE method='$method' AND chat_id=-601 ORDER BY id",
+                        ).use {
+                                rows ->
+                            buildList {
+                                while (rows.next()) add(
+                                    Json.parseToJsonElement(
+                                        rows.getString(1),
+                                    ).jsonObject.getValue("text").jsonPrimitive.content,
+                                )
+                            }
+                        }
+                    val sent = texts("sendMessage")
+                    if (live) {
+                        assertEquals(4, texts("editMessageText").size)
+                        assertEquals(2, sent.size, sent.toString())
+                        assertTrue(sent.first().contains("Первый заказ"))
+                        assertTrue(sent.last().contains("Дозаказ · новые позиции"))
+                        sql.executeQuery(
+                            "SELECT count(*) FROM telegram_outbox WHERE dedupe_key='staff-order-radar:$replacement'",
+                        ).use {
+                            assertTrue(it.next())
+                            assertEquals(0, it.getInt(1))
+                        }
+                    } else {
+                        assertEquals(4, sent.size, sent.toString())
+                        assertTrue(sent[0].contains("Новый заказ"), sent[0])
+                        assertTrue(sent[1].contains("обновлён"), sent[1])
+                        assertFalse(sent[1].contains("Дозаказ к заказу"), sent[1])
+                        assertTrue(sent[2].contains("обновлён"), sent[2])
+                        assertTrue(sent[3].contains("Дозаказ к заказу"), sent[3])
+                    }
+                }
+            }
+        }
+
     @Test
     fun `updateBatchStatus changes only selected batch`() =
         runBlocking {

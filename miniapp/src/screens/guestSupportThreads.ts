@@ -435,6 +435,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       message: text,
       venueId,
       tableToken: tableSnapshot.status === 'resolved' && tableSnapshot.tableSessionActive ? tableSnapshot.tableToken : null,
+      expectedVisitGeneration: tableSnapshot.tableSessionActive ? tableSnapshot.visitGeneration : undefined,
       tableSessionId:
         tableSnapshot.status === 'resolved' && tableSnapshot.tableSessionActive ? tableSnapshot.tableSessionId : null
     }
@@ -748,6 +749,12 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
     textarea.hidden = resolved || closed
     submitButton.hidden = resolved || closed
 
+    const visit = tableSnapshot.tableSessionId && tableSnapshot.visitGeneration !== undefined &&
+      ((thread.tableSessionId && thread.tableSessionId === tableSnapshot.tableSessionId) ||
+        (!thread.tableSessionId && thread.tableId && thread.tableId === tableSnapshot.tableId))
+      ? { expectedTableSessionId: tableSnapshot.tableSessionId, expectedVisitGeneration: tableSnapshot.visitGeneration }
+      : undefined
+
     const applyStatusChange = async (action: 'resolve' | 'reopen', button: HTMLButtonElement) => {
       if (showBookingSendBusy() || lifecyclePending) return
       if (action === 'resolve' && !window.confirm('Завершить переписку? Она переместится в «Завершённые».')) return
@@ -755,8 +762,8 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       button.disabled = submitButton.disabled = true
       const result =
         action === 'resolve'
-          ? await guestResolveSupportThread(backendUrl, thread.threadId, deps)
-          : await guestReopenSupportThread(backendUrl, thread.threadId, deps)
+          ? await guestResolveSupportThread(backendUrl, thread.threadId, deps, undefined, visit)
+          : await guestReopenSupportThread(backendUrl, thread.threadId, deps, undefined, visit)
       if (detailDisposed) return
       lifecyclePending = false
       button.disabled = submitButton.disabled = false
@@ -803,6 +810,7 @@ export function renderGuestSupportThreadsScreen(options: GuestSupportThreadsOpti
       }
       conversationState.drafts.set(thread.threadId, draft)
       const payload = {
+        ...visit,
         message: text,
         clientMessageId: messageAttempt.clientMessageIdFor(text, {
           venueId: thread.venueId ?? null,

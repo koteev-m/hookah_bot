@@ -11,10 +11,13 @@ import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type {
   ActiveOrderDto,
   GuestShiftExtensionOptionsResponse,
-  ShiftExtensionRequestDto
+  GuestShiftExtensionRequest,
+  ShiftExtensionRequestDto,
+  ShiftExtensionTerms
 } from '../shared/api/guestDtos'
 import { chooseGuestTab, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
 import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
+import { transactRecord } from '../shared/state/visitStorage'
 import { getTelegramContext } from '../shared/telegram'
 import { append, el } from '../shared/ui/dom'
 import { formatPrice } from '../shared/ui/price'
@@ -52,17 +55,20 @@ type ExtensionRefs = {
 }
 
 type ExtensionScope = {
+  userId: number
+  expectedVisitGeneration: string
   tableToken: string
   tableSessionId: number
   tabId: number
 }
 
-type LastExtensionRequest = {
-  requestId: number
-  tableSessionId: number
-  tabId: number
-  requestedUntil: string
-  status: 'pending' | 'confirmed' | 'missing'
+type LastExtensionRequest = { requestId: number; requestedUntil: string }
+type ExtensionRecord = { prepared?: GuestShiftExtensionRequest; last?: LastExtensionRequest }
+
+function extensionRecord<T>(scope: ExtensionScope, orderId: number, change: (record: ExtensionRecord) => T) {
+  const key = `${LAST_REQUEST_STORAGE_KEY}:user:${scope.userId}:session:${scope.tableSessionId}:` +
+    `generation:${scope.expectedVisitGeneration}:tab:${scope.tabId}:order:${orderId}`
+  return transactRecord<ExtensionRecord, T>(key, () => ({}), change)
 }
 
 function buildApiDeps(isDebug: boolean) {
@@ -76,77 +82,10 @@ function normalizePositiveId(value: number | null | undefined): number | null {
   return value
 }
 
-function resolveStorageKey(tableSessionId: number, tabId: number): string {
-  const userId = getTelegramContext().telegramUserId
-  const userPart = userId ? `user:${userId}` : 'user:unknown'
-  return `${LAST_REQUEST_STORAGE_KEY}:${userPart}:session:${tableSessionId}:tab:${tabId}`
-}
-
-function readLastRequest(tableSessionId: number, tabId: number): LastExtensionRequest | null {
-  if (typeof window === 'undefined') {
-    return null
-  }
-  try {
-    const raw = window.sessionStorage.getItem(resolveStorageKey(tableSessionId, tabId))
-    if (!raw) {
-      return null
-    }
-    const parsed = JSON.parse(raw) as Partial<LastExtensionRequest>
-    const requestId = normalizePositiveId(parsed.requestId)
-    const storedSessionId = normalizePositiveId(parsed.tableSessionId)
-    const storedTabId = normalizePositiveId(parsed.tabId)
-    if (!requestId || storedSessionId !== tableSessionId || storedTabId !== tabId || !parsed.requestedUntil) {
-      return null
-    }
-    return {
-      requestId,
-      tableSessionId,
-      tabId,
-      requestedUntil: parsed.requestedUntil,
-      status: parsed.status === 'confirmed' || parsed.status === 'missing' ? parsed.status : 'pending'
-    }
-  } catch {
-    return null
-  }
-}
-
-function rememberLastRequest(scope: ExtensionScope, request: ShiftExtensionRequestDto, status: LastExtensionRequest['status']) {
-  if (typeof window === 'undefined') {
-    return
-  }
-  try {
-    const value: LastExtensionRequest = {
-      requestId: request.id,
-      tableSessionId: scope.tableSessionId,
-      tabId: scope.tabId,
-      requestedUntil: request.requestedUntil,
-      status
-    }
-    window.sessionStorage.setItem(resolveStorageKey(scope.tableSessionId, scope.tabId), JSON.stringify(value))
-  } catch {
-    // Extension state is recoverable from the backend; storage only improves refresh copy.
-  }
-}
-
-function updateLastRequest(scope: ExtensionScope, request: LastExtensionRequest, status: LastExtensionRequest['status']) {
-  if (typeof window === 'undefined') {
-    return
-  }
-  try {
-    window.sessionStorage.setItem(
-      resolveStorageKey(scope.tableSessionId, scope.tabId),
-      JSON.stringify({ ...request, status })
-    )
-  } catch {
-    // ignore session storage errors
-  }
-}
-
 function formatDuration(minutes: number | null | undefined): string {
-  if (minutes === 60 || minutes == null) {
-    return '1 час'
-  }
-  return `${minutes} минут`
+  if (minutes === 60) return '1 час'
+  if (minutes === 120 || minutes === 180 || minutes === 240) return `${minutes / 60} часа`
+  return `${minutes ?? '—'} мин`
 }
 
 function extractTimeLabel(value: string | null | undefined): string | null {
@@ -186,7 +125,7 @@ function buildDom(root: HTMLDivElement, mode: GuestShiftExtensionRenderMode): Ex
   const meta = el('p', { className: 'venue-order-sub', text: '' })
   const message = el('p', { className: 'shift-extension-message', text: '' })
   message.hidden = true
-  const button = el('button', { className: 'button-secondary', text: 'Продлить на 1 час' }) as HTMLButtonElement
+  const button = el('button', { className: 'button-secondary', text: 'Продлить' }) as HTMLButtonElement
   append(card, title, body, meta, message, button)
   root.replaceChildren(card)
   return { title, body, meta, message, button }
@@ -207,7 +146,12 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
   let isSubmitting = false
   let currentScope: ExtensionScope | null = null
   let currentOption: GuestShiftExtensionOptionsResponse | null = null
-  let currentPendingRequest: ShiftExtensionRequestDto | null = null
+  let displayedAction: {
+    scope: ExtensionScope
+    orderId: number
+    terms?: ShiftExtensionTerms
+    retryKey?: string | null
+  } | null = null
   let loadSeq = 0
   let availabilityKey = ''
 
@@ -228,12 +172,12 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
 
   const clearCard = () => {
     refs = null
+    displayedAction = null
     root.replaceChildren()
   }
 
   const hideCard = (unavailableReason: string | null = null) => {
     clearCard()
-    currentPendingRequest = null
     emitAvailability({ visible: false, enabled: false, pending: false, unavailableReason })
   }
 
@@ -253,23 +197,28 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
   }
 
   const resolveBaseScope = () => {
+    const userId = getTelegramContext().telegramUserId
     if (
-      !venueId ||
+      !userId || !venueId ||
       tableSnapshot.status !== 'resolved' ||
       tableSnapshot.venueId !== venueId ||
       !tableSnapshot.tableToken ||
       !tableSnapshot.tableSessionId ||
+      tableSnapshot.visitGeneration === undefined ||
       !tableSnapshot.orderAllowed
     ) {
       return null
     }
     return {
+      userId,
       tableToken: tableSnapshot.tableToken,
+      expectedVisitGeneration: tableSnapshot.visitGeneration,
       tableSessionId: tableSnapshot.tableSessionId
     }
   }
 
   const renderLoading = () => {
+    displayedAction = null
     const currentRefs = ensureRefs()
     currentRefs.body.textContent = 'Проверяем возможность продления…'
     currentRefs.meta.textContent = ''
@@ -278,19 +227,33 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
     currentRefs.message.hidden = true
   }
 
+  const displayQuoteAction = (currentRefs: ExtensionRefs, option: GuestShiftExtensionOptionsResponse | null) => {
+    const terms = option?.confirmedTerms
+    displayedAction = currentScope && option?.available && option.orderId && terms
+      ? { scope: currentScope, orderId: option.orderId, terms }
+      : null
+    const label = terms ? `Продлить на ${formatDuration(terms.durationMinutes)}` : 'Продлить'
+    currentRefs.button.textContent = isSubmitting ? 'Отправляем…' : label
+    currentRefs.button.disabled = isSubmitting || displayedAction === null
+    return displayedAction !== null && !isSubmitting
+  }
+
   const renderAvailable = (option: GuestShiftExtensionOptionsResponse) => {
     const currentRefs = ensureRefs()
-    const copy = optionCopy(option)
+    const copy = optionCopy(option.confirmedTerms ? { available: true, ...option.confirmedTerms } : option)
     currentRefs.body.textContent = copy
     const proposedTime = extractTimeLabel(option.proposedOrderableUntil)
     currentRefs.meta.textContent = proposedTime ? `После подтверждения можно заказывать до ${proposedTime}.` : ''
-    currentRefs.button.textContent = isSubmitting ? 'Отправляем…' : 'Продлить на 1 час'
-    currentRefs.button.disabled = isSubmitting
-    currentPendingRequest = null
+    const terms = option.confirmedTerms
+    if (option.orderId && option.tabId) {
+      currentRefs.meta.textContent += ` Заказ №${option.orderId}, счёт №${option.tabId}.`
+    }
+    const enabled = displayQuoteAction(currentRefs, option)
+    if (!terms) currentRefs.meta.textContent = 'Обновите Mini App после обновления сервера.'
     setMessage('', 'info')
     emitAvailability({
       visible: true,
-      enabled: !isSubmitting,
+      enabled,
       pending: false,
       copy,
       unavailableReason: null
@@ -298,6 +261,7 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
   }
 
   const renderPending = (request: ShiftExtensionRequestDto) => {
+    displayedAction = null
     const currentRefs = ensureRefs()
     const copy = optionCopy({
       available: true,
@@ -310,7 +274,6 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
     currentRefs.meta.textContent = requestedUntil ? `Запрошено до ${requestedUntil}.` : ''
     currentRefs.button.textContent = 'Ожидает подтверждения'
     currentRefs.button.disabled = true
-    currentPendingRequest = request
     setMessage('Ожидает подтверждения', 'info')
     emitAvailability({
       visible: true,
@@ -321,20 +284,23 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
     })
   }
 
-  const renderConfirmed = (request: LastExtensionRequest) => {
+  const renderConfirmed = () => {
     const currentRefs = ensureRefs()
-    const timeLabel = extractTimeLabel(request.requestedUntil)
+    const timeLabel = extractTimeLabel(currentOption?.currentOrderableUntil)
     currentRefs.body.textContent = timeLabel
       ? `Продление подтверждено до ${timeLabel}. Сумма добавлена в счёт.`
       : 'Продление подтверждено. Сумма добавлена в счёт.'
     currentRefs.meta.textContent = ''
-    currentRefs.button.textContent = 'Продлить на 1 час'
-    currentRefs.button.disabled = isSubmitting || !currentOption?.available
-    currentPendingRequest = null
+    const terms = currentOption?.confirmedTerms
+    if (terms && currentOption?.available) {
+      currentRefs.meta.textContent = optionCopy({ available: true, ...terms }) +
+        ` Заказ №${currentOption.orderId}, счёт №${currentOption.tabId}.`
+    }
+    const enabled = displayQuoteAction(currentRefs, currentOption)
     setMessage('', 'success')
     emitAvailability({
       visible: true,
-      enabled: Boolean(currentOption?.available) && !isSubmitting,
+      enabled,
       pending: false,
       copy: currentRefs.body.textContent ?? undefined,
       unavailableReason: null
@@ -345,53 +311,57 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
     const currentRefs = ensureRefs()
     currentRefs.body.textContent = 'Запрос на продление отклонён или больше не активен. Счёт не изменён.'
     currentRefs.meta.textContent = ''
-    currentRefs.button.textContent = 'Продлить на 1 час'
-    currentRefs.button.disabled = isSubmitting || !currentOption?.available
-    currentPendingRequest = null
+    const terms = currentOption?.confirmedTerms
+    if (terms && currentOption?.available) {
+      currentRefs.meta.textContent = optionCopy({ available: true, ...terms }) +
+        ` Заказ №${currentOption.orderId}, счёт №${currentOption.tabId}.`
+    }
+    const enabled = displayQuoteAction(currentRefs, currentOption)
     setMessage('', 'info')
     emitAvailability({
       visible: true,
-      enabled: Boolean(currentOption?.available) && !isSubmitting,
+      enabled,
       pending: false,
       unavailableText: currentRefs.body.textContent ?? undefined,
       unavailableReason: null
     })
   }
 
-  const evaluateLastRequest = async (scope: ExtensionScope, option: GuestShiftExtensionOptionsResponse) => {
-    const lastRequest = readLastRequest(scope.tableSessionId, scope.tabId)
-    if (!lastRequest || option.pendingRequest) {
-      return false
-    }
-    const activeOrder = await guestGetActiveOrder(
-      backendUrl,
-      scope.tableToken,
-      scope.tableSessionId,
-      scope.tabId,
-      deps
-    )
-    if (disposed) {
-      return true
-    }
-    if (activeOrder.ok && activeOrder.data.order && hasConfirmedCharge(activeOrder.data.order, lastRequest.requestId)) {
-      updateLastRequest(scope, lastRequest, 'confirmed')
-      renderConfirmed({ ...lastRequest, status: 'confirmed' })
-      return true
-    }
-    if (!activeOrder.ok && activeOrder.error.code === REQUEST_ABORTED_CODE) {
-      return true
-    }
-    if (lastRequest.status === 'pending') {
-      updateLastRequest(scope, lastRequest, 'missing')
-      renderMissingAfterPending()
-      return true
-    }
-    if (lastRequest.status === 'confirmed') {
-      renderConfirmed(lastRequest)
-      return true
-    }
-    if (lastRequest.status === 'missing') {
-      renderMissingAfterPending()
+  let prepared: GuestShiftExtensionRequest | undefined
+
+  const isCurrent = (scope: ExtensionScope, orderId: number) => {
+    const base = resolveBaseScope()
+    return !disposed && base?.userId === scope.userId && base.tableSessionId === scope.tableSessionId &&
+      base.tableToken === scope.tableToken && base.expectedVisitGeneration === scope.expectedVisitGeneration &&
+      currentScope?.tabId === scope.tabId && currentOption?.orderId === orderId
+  }
+
+  const renderRetry = () => {
+    const currentRefs = ensureRefs()
+    currentRefs.body.textContent = 'Результат запроса на продление пока не подтверждён.'
+    const orderId = currentOption?.orderId
+    displayedAction = prepared && currentScope && orderId
+      ? { scope: currentScope, orderId, retryKey: prepared.idempotencyKey ?? null }
+      : null
+    currentRefs.meta.textContent = prepared?.confirmedTerms
+      ? optionCopy({ available: true, ...prepared.confirmedTerms })
+      : ''
+    currentRefs.button.textContent = isSubmitting ? 'Проверяем…' : 'Повторить исходный запрос'
+    currentRefs.button.disabled = isSubmitting || displayedAction === null
+    emitAvailability({
+      visible: true,
+      enabled: !currentRefs.button.disabled,
+      pending: false,
+      copy: currentRefs.body.textContent
+    })
+  }
+
+  const evaluateLastRequest = async (scope: ExtensionScope, orderId: number, last: LastExtensionRequest) => {
+    const activeOrder = await guestGetActiveOrder(backendUrl, scope.tableToken, scope.tableSessionId, scope.tabId, deps)
+    if (!isCurrent(scope, orderId)) return true
+    if (activeOrder.ok && activeOrder.data.order?.orderId === orderId) {
+      if (hasConfirmedCharge(activeOrder.data.order, last.requestId)) renderConfirmed()
+      else renderMissingAfterPending()
       return true
     }
     return false
@@ -435,7 +405,7 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
       emitAvailability({ visible: false, enabled: false, pending: false, unavailableReason: null })
       currentScope = null
       currentOption = null
-      currentPendingRequest = null
+      prepared = undefined
       return
     }
     if (isLoading) {
@@ -482,15 +452,31 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
       return
     }
     currentOption = optionResult.data
-    const pending = optionResult.data.pendingRequest ?? null
-    if (pending) {
-      rememberLastRequest(scope, pending, 'pending')
-      renderPending(pending)
+    const orderId = optionResult.data.orderId
+    const option = optionResult.data
+    prepared = undefined
+    if (option.unavailableReason === 'STAFF_MANAGED_SEATING') {
+      hideCard(option.unavailableReason)
       return
     }
-    const renderedFromLastRequest = await evaluateLastRequest(scope, optionResult.data)
-    if (renderedFromLastRequest) {
-      return
+    if (orderId) {
+      const pending = option.pendingRequest?.orderId === orderId ? option.pendingRequest : null
+      const saved = await extensionRecord(scope, orderId, record => {
+        if (pending) record.last = { requestId: pending.id, requestedUntil: pending.requestedUntil }
+        return record
+      }).catch(() => null)
+      if (!isCurrent(scope, orderId) || loadSeq !== seq || controller.signal.aborted) return
+      if (saved?.prepared) {
+        prepared = saved.prepared
+        renderRetry()
+        return
+      }
+      if (pending) {
+        renderPending(pending)
+        return
+      }
+      if (saved?.last && await evaluateLastRequest(scope, orderId, saved.last)) return
+      if (!isCurrent(scope, orderId) || loadSeq !== seq) return
     }
     if (!optionResult.data.available || optionResult.data.priceMinor == null) {
       hideCard(optionResult.data.unavailableReason ?? null)
@@ -500,55 +486,111 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
   }
 
   const submitRequest = async () => {
-    if (isSubmitting || currentPendingRequest) {
-      return
-    }
-    const scope = currentScope
-    const option = currentOption
-    if (!scope || !option?.available || option.priceMinor == null) {
-      setMessage('Продление сейчас недоступно.', 'error')
-      return
-    }
+    const selection = displayedAction
+    if (isSubmitting || !selection) return
+    const { scope, orderId, terms, retryKey } = selection
+    if (!isCurrent(scope, orderId)) return
     isSubmitting = true
-    renderAvailable(option)
+    const currentRefs = ensureRefs()
+    currentRefs.button.disabled = true
+    currentRefs.button.textContent = retryKey === undefined ? 'Отправляем…' : 'Проверяем…'
     actionAbort?.abort()
     const controller = new AbortController()
     actionAbort = controller
-    const idempotencyKey = buildIdempotencyKey(scope)
-    const result = await guestCreateShiftExtensionRequest(
-      backendUrl,
-      {
-        tableToken: scope.tableToken,
-        tableSessionId: scope.tableSessionId,
-        tabId: scope.tabId,
-        idempotencyKey,
-        comment: null
-      },
-      deps,
-      controller.signal
-    )
-    if (disposed || controller.signal.aborted) {
+    let request: GuestShiftExtensionRequest | undefined
+    try {
+      request = await extensionRecord(scope, orderId, record => {
+        const existing = record.prepared
+        if (retryKey !== undefined) return (existing?.idempotencyKey ?? null) === retryKey ? existing : undefined
+        if (!terms) return undefined
+        if (existing) {
+          const saved = existing.confirmedTerms
+          return saved?.revision === terms.revision && saved.durationMinutes === terms.durationMinutes &&
+            saved.priceMinor === terms.priceMinor && saved.currency === terms.currency ? existing : undefined
+        }
+        return record.prepared = {
+          tableToken: scope.tableToken,
+          tableSessionId: scope.tableSessionId,
+          tabId: scope.tabId,
+          expectedVisitGeneration: scope.expectedVisitGeneration,
+          expectedOrderId: orderId,
+          confirmedTerms: terms,
+          idempotencyKey: buildIdempotencyKey(scope),
+          comment: null
+        }
+      })
+    } catch {
+      isSubmitting = false
+      if (isCurrent(scope, orderId)) {
+        currentRefs.button.disabled = false
+        currentRefs.button.textContent = retryKey === undefined
+          ? `Продлить на ${formatDuration(terms?.durationMinutes)}`
+          : 'Повторить исходный запрос'
+        setMessage('Не удалось сохранить запрос на этом устройстве. Повторите загрузку.', 'error')
+      }
       return
     }
-    actionAbort = null
-    isSubmitting = false
+    if (!request || !isCurrent(scope, orderId) || controller.signal.aborted) {
+      isSubmitting = false
+      if (!request && isCurrent(scope, orderId)) await load()
+      return
+    }
+    prepared = request
+    const result = await guestCreateShiftExtensionRequest(backendUrl, request, deps, controller.signal)
+    if (actionAbort === controller) {
+      actionAbort = null
+      isSubmitting = false
+    }
     if (!result.ok) {
-      if (result.error.code === REQUEST_ABORTED_CODE) {
+      if (!isCurrent(scope, orderId) || controller.signal.aborted) return
+      if (isKnownAuthError(result.error)) clearSession()
+      const code = normalizeErrorCode(result.error)
+      if (code === ApiErrorCodes.SHIFT_EXTENSION_TERMS_CHANGED ||
+          (!request.confirmedTerms && code === ApiErrorCodes.VISIT_VERSION_REQUIRED)) {
+        try {
+          await extensionRecord(scope, orderId, record => {
+            if (record.prepared?.idempotencyKey === request.idempotencyKey) delete record.prepared
+          })
+        } catch {
+          renderRetry()
+          setMessage('Не удалось сохранить результат. Повторите исходный запрос.', 'error')
+          return
+        }
+        if (!isCurrent(scope, orderId)) return
+        prepared = undefined
+        await load()
+        if (isCurrent(scope, orderId)) setMessage('Условия изменились. Проверьте их и подтвердите заново.', 'error')
         return
       }
-      if (isKnownAuthError(result.error)) {
-        clearSession()
-      }
-      if (option) {
-        renderAvailable(option)
-      }
-      setMessage(result.error.message || 'Не удалось отправить запрос на продление.', 'error')
+      renderRetry()
+      setMessage(result.error.message || 'Не удалось подтвердить результат. Повторите исходный запрос.', 'error')
       return
     }
-    rememberLastRequest(scope, result.data.request, 'pending')
-    renderPending(result.data.request)
-    showToast('Запрос на продление отправлен')
-    window.dispatchEvent(new CustomEvent('hookah:shift-extension-requested', { detail: { requestId: result.data.request.id } }))
+    const response = result.data.request
+    if (response.orderId !== orderId || response.tableSessionId !== scope.tableSessionId ||
+        response.tabId !== scope.tabId) {
+      if (isCurrent(scope, orderId)) renderRetry()
+      return
+    }
+    try {
+      await extensionRecord(scope, orderId, record => {
+        if (record.prepared?.idempotencyKey !== request.idempotencyKey) return
+        delete record.prepared
+        record.last = { requestId: response.id, requestedUntil: response.requestedUntil }
+      })
+    } catch {
+      if (isCurrent(scope, orderId)) renderRetry()
+      return
+    }
+    if (!isCurrent(scope, orderId) || controller.signal.aborted) return
+    prepared = undefined
+    if (response.status === 'pending') {
+      renderPending(response)
+      showToast('Запрос на продление отправлен')
+      window.dispatchEvent(new CustomEvent('hookah:shift-extension-requested', { detail: { requestId: response.id } }))
+    } else {
+      await load()
+    }
   }
 
   const restartPolling = () => {

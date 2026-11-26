@@ -90,6 +90,7 @@ data class AddBatchRequest(
     val comment: String? = null,
     val previewFingerprint: String? = null,
     val giftDecision: GiftDecisionDto? = null,
+    val expectedVisitGeneration: String? = null,
 )
 
 @Serializable
@@ -115,14 +116,17 @@ data class AddBatchRecalculationResponse(
     val submitted: Boolean,
     val pricing: CartPreviewDto,
     val recalculated: Boolean = true,
+    val operationClosed: Boolean = false,
 )
 
 @Serializable
 data class GuestBillRequestRequest(
     val tableToken: String,
-    val tableSessionId: Long,
+    val tableSessionId: Long = 0,
     val tabId: Long,
     val paymentMethod: String,
+    val expectedVisitGeneration: String? = null,
+    val expectedOrderId: Long? = null,
 )
 
 @Serializable
@@ -145,6 +149,7 @@ data class CartPreviewRequest(
     val items: List<AddBatchItemDto>,
     val comment: String? = null,
     val giftDecision: GiftDecisionDto? = null,
+    val expectedVisitGeneration: String? = null,
 )
 
 @Serializable

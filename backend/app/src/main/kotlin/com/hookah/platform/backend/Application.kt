@@ -143,6 +143,7 @@ import com.hookah.platform.backend.support.SupportThreadRepository
 import com.hookah.platform.backend.support.guestSupportRoutes
 import com.hookah.platform.backend.support.venueSupportRoutes
 import com.hookah.platform.backend.telegram.BookingMessageStaffChatNotifier
+import com.hookah.platform.backend.telegram.GuestCheckoutNotifications
 import com.hookah.platform.backend.telegram.InMemoryTelegramRateLimiter
 import com.hookah.platform.backend.telegram.StaffBillUpdateNotifier
 import com.hookah.platform.backend.telegram.StaffChatNotifier
@@ -161,6 +162,7 @@ import com.hookah.platform.backend.telegram.TelegramRecipientLockRegistry
 import com.hookah.platform.backend.telegram.TelegramTrafficPolicy
 import com.hookah.platform.backend.telegram.TelegramUpdate
 import com.hookah.platform.backend.telegram.buildWebAppUrl
+import com.hookah.platform.backend.telegram.db.BotPreparedCheckoutRepository
 import com.hookah.platform.backend.telegram.db.ChatContextRepository
 import com.hookah.platform.backend.telegram.db.DialogStateRepository
 import com.hookah.platform.backend.telegram.db.GuestOrderWriteCheckpoint
@@ -322,6 +324,7 @@ internal data class ModuleOverrides(
     val tableTokenResolver: (suspend (String) -> TableContext?)? = null,
     val telegramFileDownloader: (suspend (String) -> TelegramDownloadedFile?)? = null,
     val staffChatNotifier: StaffChatNotifier? = null,
+    val enableCheckoutOutboxInTests: Boolean = false,
     val staffBillUpdateNotifier: StaffBillUpdateNotifier? = null,
     val venueLocationProvider: VenueLocationProvider? = null,
     val staffScheduleClock: Clock? = null,
@@ -329,7 +332,9 @@ internal data class ModuleOverrides(
     val staffPhotoStorage: StaffPhotoStorage? = null,
     val venueInfoMediaStorage: VenueInfoMediaStorage? = null,
     val venueInfoPdfValidator: ((ByteArray) -> Unit)? = null,
-    val afterPlatformGuestTeardown: (suspend (chatId: Long, actorUserId: Long) -> Unit)? = null,
+    val afterPlatformGuestTeardown: (
+        suspend (com.hookah.platform.backend.miniapp.guest.db.GuestTableTeardownResult.Cleared) -> Unit
+    )? = null,
     val guestOrderContextCheckpoint: (GuestOrderContextCheckpoint) -> Unit = {},
     val guestOrderWriteCheckpoint: (GuestOrderWriteCheckpoint) -> Unit = {},
     val telegramHttpClientFactory: ((Json) -> HttpClient)? = null,
@@ -882,6 +887,21 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             staffCallRepository = staffCallRepository,
         )
     val guestStaffChatNotifier = overrides.staffChatNotifier ?: staffChatNotifier
+    val botPreparedCheckouts = dataSource?.let(::BotPreparedCheckoutRepository)
+    val checkoutNotifications =
+        GuestCheckoutNotifications(
+            telegramOutboxRepository,
+            telegramOutboxEnqueuer,
+            venueOrdersRepository,
+            staffChatNotifier,
+            botPreparedCheckouts,
+            telegramJson,
+            enabled =
+                (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) ||
+                    (appEnv == "test" && overrides.enableCheckoutOutboxInTests),
+            users = userRepository,
+            recoverLegacy = stagingMaintenancePolicy.allowsAutonomousWrites,
+        )
     if (telegramConfig.enabled && !telegramConfig.token.isNullOrBlank()) {
         telegramScope =
             CoroutineScope(
@@ -920,6 +940,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 tableTokenRepository = tableTokenRepository,
                 chatContextRepository = chatContextRepository,
                 dialogStateRepository = dialogStateRepository,
+                botPreparedCheckouts = botPreparedCheckouts,
+                checkoutNotifications = checkoutNotifications,
                 ordersRepository = ordersRepository,
                 staffCallRepository = staffCallRepository,
                 staffChatLinkCodeRepository = staffChatLinkCodeRepository,
@@ -1034,6 +1056,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 TelegramOutboxWorker(
                     repository = telegramOutboxRepository,
                     apiClientProvider = { telegramApiClient },
+                    hasGuestBinding = { chatContextRepository.get(it) != null },
+                    checkoutNotifications = checkoutNotifications,
                     canDispatch = { productionGate?.telegramDispatchAllowed() != false },
                     json = telegramJson,
                     rateLimiter = outboxRateLimiter,
@@ -1492,8 +1516,8 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         platformOwnerUserId = platformConfig.ownerUserId,
                         guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
                         afterPlatformGuestTeardown =
-                            overrides.afterPlatformGuestTeardown ?: { chatId, actorUserId ->
-                                telegramRouter?.completePlatformGuestTeardownFromMiniApp(chatId, actorUserId)
+                            overrides.afterPlatformGuestTeardown ?: { ended ->
+                                telegramRouter?.completePlatformGuestTeardownFromMiniApp(ended)
                                 Unit
                             },
                     )
@@ -1525,6 +1549,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                         guestTableContextLifecycleRepository = guestTableContextLifecycleRepository,
                         guestOrderTransactionCoordinator = guestOrderTransactionCoordinator,
                         guestOrderContextCheckpoint = overrides.guestOrderContextCheckpoint,
+                        checkoutNotifications = checkoutNotifications.takeIf { overrides.staffChatNotifier == null },
                     )
                     guestSeatingRoutes(
                         seatingRepository,

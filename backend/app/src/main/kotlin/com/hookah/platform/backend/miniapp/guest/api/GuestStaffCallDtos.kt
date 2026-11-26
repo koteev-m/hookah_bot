@@ -5,9 +5,12 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class StaffCallRequest(
     val tableToken: String,
-    val tableSessionId: Long,
+    val tableSessionId: Long = 0,
     val reason: String,
     val comment: String? = null,
+    val expectedVisitGeneration: String? = null,
+    val tabId: Long? = null,
+    val expectedOrderId: Long? = null,
 )
 
 @Serializable

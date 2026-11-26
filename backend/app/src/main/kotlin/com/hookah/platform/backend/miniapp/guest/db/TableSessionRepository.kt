@@ -4,6 +4,7 @@ import com.hookah.platform.backend.analytics.AnalyticsEventRecord
 import com.hookah.platform.backend.analytics.AnalyticsEventRepository
 import com.hookah.platform.backend.analytics.analyticsCorrelationPayload
 import com.hookah.platform.backend.api.DatabaseUnavailableException
+import com.hookah.platform.backend.api.VisitGenerationChangedException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.Connection
@@ -293,6 +294,15 @@ class TableSessionRepository(
         }
     }
 
+    suspend fun findActiveSessionForTable(
+        tableSessionId: Long,
+        venueId: Long,
+        tableId: Long,
+    ): TableSessionRecord? =
+        findSessionForTable(tableSessionId, venueId, tableId)?.takeIf {
+            it.status == TableSessionStatus.ACTIVE && it.endedAt == null && it.expiresAt > Instant.now()
+        }
+
     suspend fun findSessionForTable(
         tableSessionId: Long,
         venueId: Long,
@@ -341,6 +351,7 @@ class TableSessionRepository(
         tableId: Long,
         tableSessionId: Long,
         now: Instant = Instant.now(),
+        expectedVisitGeneration: Long? = null,
     ): EndUserTableSessionResult? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -364,6 +375,11 @@ class TableSessionRepository(
                         if (!activeUserContext) {
                             connection.rollback()
                             return@use null
+                        }
+                        checkVisitGeneration(connection, userId, tableSessionId, expectedVisitGeneration)
+                        if (hasUserExit(connection, userId, tableSessionId)) {
+                            connection.commit()
+                            return@use EndUserTableSessionResult(true, tableSessionId, null)
                         }
                         val blockedReason =
                             when {
@@ -398,6 +414,9 @@ class TableSessionRepository(
                             tableSessionId = tableSessionId,
                             blockedReason = null,
                         )
+                    } catch (e: VisitGenerationChangedException) {
+                        connection.rollback()
+                        throw e
                     } catch (e: SQLException) {
                         connection.rollback()
                         throw e
@@ -406,6 +425,39 @@ class TableSessionRepository(
                     }
                 }
             } catch (e: SQLException) {
+                throw DatabaseUnavailableException()
+            }
+        }
+    }
+
+    suspend fun hasCommittedExit(
+        userId: Long,
+        token: String,
+        sessionId: Long,
+        generation: Long,
+    ): Boolean {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        return withContext(Dispatchers.IO) {
+            try {
+                ds.connection.use { connection ->
+                    connection.prepareStatement(
+                        """
+                        SELECT 1 FROM guest_table_session_exits e
+                        JOIN table_sessions s ON s.id = e.table_session_id
+                        JOIN table_tokens t ON t.table_id = s.table_id AND t.token = ?
+                        LEFT JOIN guest_visit_generations g
+                          ON g.user_id = e.user_id AND g.table_session_id = e.table_session_id
+                        WHERE e.user_id = ? AND s.id = ? AND COALESCE(g.consumed_exit_event_id, 0) = ?
+                        """.trimIndent(),
+                    ).use {
+                        it.setString(1, token)
+                        it.setLong(2, userId)
+                        it.setLong(3, sessionId)
+                        it.setLong(4, generation)
+                        it.executeQuery().use { rows -> rows.next() }
+                    }
+                }
+            } catch (_: SQLException) {
                 throw DatabaseUnavailableException()
             }
         }
@@ -599,17 +651,8 @@ class TableSessionRepository(
         tableSessionId: Long,
         now: Instant,
     ) {
-        connection.prepareStatement(
-            """
-            DELETE FROM guest_table_session_exits
-            WHERE user_id = ?
-              AND table_session_id = ?
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setLong(1, userId)
-            statement.setLong(2, tableSessionId)
-            statement.executeUpdate()
-        }
+        // Callers serialize exit and rejoin on the same physical session row.
+        if (hasUserExit(connection, userId, tableSessionId)) return
         connection.prepareStatement(
             """
             INSERT INTO guest_table_session_exits (user_id, table_session_id, exited_at)
@@ -636,20 +679,67 @@ class TableSessionRepository(
             statement.executeQuery().use { rows -> if (rows.next()) rows.getLong(1) else null }
         }
 
+    fun checkVisitGeneration(
+        connection: Connection,
+        userId: Long,
+        sessionId: Long,
+        expected: Long?,
+    ) {
+        if (expected != null && visitGeneration(connection, userId, sessionId) != expected) {
+            throw VisitGenerationChangedException()
+        }
+    }
+
+    fun visitGeneration(
+        connection: Connection,
+        userId: Long,
+        tableSessionId: Long,
+    ): Long =
+        connection.prepareStatement(
+            "SELECT consumed_exit_event_id FROM guest_visit_generations WHERE user_id = ? AND table_session_id = ?",
+        ).use { statement ->
+            statement.setLong(1, userId)
+            statement.setLong(2, tableSessionId)
+            statement.executeQuery().use { rows -> if (rows.next()) rows.getLong(1) else 0L }
+        }
+
     fun consumeExitEvent(
         connection: Connection,
         userId: Long,
         tableSessionId: Long,
         exitEventId: Long,
-    ): Boolean =
+    ): Boolean {
+        val consumed =
+            connection.prepareStatement(
+                "DELETE FROM guest_table_session_exits WHERE user_id = ? AND table_session_id = ? " +
+                    "AND exit_event_id = ?",
+            ).use { statement ->
+                statement.setLong(1, userId)
+                statement.setLong(2, tableSessionId)
+                statement.setLong(3, exitEventId)
+                statement.executeUpdate() == 1
+            }
+
+        if (!consumed) return false
+        // Both callers hold the physical session lock. A rollback restores both the
+        // exit challenge and the previous generation, including on the first rejoin.
         connection.prepareStatement(
-            "DELETE FROM guest_table_session_exits WHERE user_id = ? AND table_session_id = ? AND exit_event_id = ?",
-        ).use { statement ->
-            statement.setLong(1, userId)
-            statement.setLong(2, tableSessionId)
-            statement.setLong(3, exitEventId)
-            statement.executeUpdate() == 1
+            "DELETE FROM guest_visit_generations WHERE user_id = ? AND table_session_id = ?",
+        ).use {
+            it.setLong(1, userId)
+            it.setLong(2, tableSessionId)
+            it.executeUpdate()
         }
+        connection.prepareStatement(
+            "INSERT INTO guest_visit_generations (user_id, table_session_id, consumed_exit_event_id) VALUES (?, ?, ?)",
+        ).use {
+            it.setLong(1, userId)
+            it.setLong(2, tableSessionId)
+            it.setLong(3, exitEventId)
+            it.executeUpdate()
+        }
+        return true
+    }
 
     suspend fun hasUserExit(
         userId: Long,
@@ -691,6 +781,7 @@ class TableSessionRepository(
         venueId: Long,
         tableSessionId: Long,
         forUpdate: Boolean = false,
+        tabId: Long? = null,
     ): Boolean =
         connection.prepareStatement(
             """
@@ -701,6 +792,7 @@ class TableSessionRepository(
               AND t.table_session_id = ?
               AND t.status = 'ACTIVE'
               AND tm.user_id = ?
+              ${if (tabId != null) "AND t.id = ?" else ""}
             LIMIT 1
             ${if (forUpdate) "FOR UPDATE" else ""}
             """.trimIndent(),
@@ -708,6 +800,7 @@ class TableSessionRepository(
             statement.setLong(1, venueId)
             statement.setLong(2, tableSessionId)
             statement.setLong(3, userId)
+            tabId?.let { statement.setLong(4, it) }
             statement.executeQuery().use { rs -> rs.next() }
         }
 

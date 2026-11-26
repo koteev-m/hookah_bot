@@ -2,6 +2,12 @@ package com.hookah.platform.backend.miniapp.guest.db
 
 import com.hookah.platform.backend.api.DatabaseUnavailableException
 import com.hookah.platform.backend.api.ForbiddenException
+import com.hookah.platform.backend.api.NotFoundException
+import com.hookah.platform.backend.api.SubscriptionBlockedException
+import com.hookah.platform.backend.miniapp.subscription.db.SubscriptionRepository
+import com.hookah.platform.backend.miniapp.venue.VenueStatus
+import com.hookah.platform.backend.miniapp.venue.seating.rows
+import com.hookah.platform.backend.telegram.db.TableTokenRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.sql.Connection
@@ -34,6 +40,7 @@ data class RestorableTableContext(
     val tableId: Long,
     val tableSessionId: Long,
     val tableSessionStatus: String,
+    val visitGeneration: Long = 0,
     val tableNumber: Int,
 )
 
@@ -44,6 +51,26 @@ enum class CreateInviteResult {
 }
 
 class GuestTabsRepository(private val dataSource: DataSource?) {
+    private val sessions = TableSessionRepository(dataSource)
+    private val tokens = TableTokenRepository(dataSource)
+    private val subscriptions = SubscriptionRepository(dataSource)
+
+    internal fun checkGeneration(
+        connection: Connection,
+        userId: Long,
+        sessionId: Long,
+        generation: Long,
+    ) = sessions.checkVisitGeneration(connection, userId, sessionId, generation)
+
+    internal fun touchParticipation(
+        connection: Connection,
+        session: TableSessionContext,
+        ttl: java.time.Duration,
+    ) {
+        sessions.touchActiveSession(connection, session.id, session.venueId, session.tableId, ttl, Instant.now())
+            ?: throw NotFoundException()
+    }
+
     suspend fun findActiveTableSession(tableSessionId: Long): TableSessionContext? {
         val ds = dataSource ?: throw DatabaseUnavailableException()
         return withContext(Dispatchers.IO) {
@@ -133,6 +160,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                             ts.table_id,
                             ts.id AS table_session_id,
                             ts.status AS table_session_status,
+                            COALESCE(g.consumed_exit_event_id, 0) AS generation,
                             vt.table_number
                         FROM tab t
                         JOIN tab_member tm ON tm.tab_id = t.id
@@ -140,6 +168,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                         JOIN venue_tables vt ON vt.id = ts.table_id
                         JOIN venues v ON v.id = ts.venue_id
                         JOIN table_tokens tt ON tt.table_id = vt.id
+                        LEFT JOIN guest_visit_generations g ON g.user_id = tm.user_id AND g.table_session_id = ts.id
                         WHERE tm.user_id = ?
                           AND t.status = 'ACTIVE'
                           AND ts.status = 'ACTIVE'
@@ -202,6 +231,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                                             tableSessionId = rs.getLong("table_session_id"),
                                             tableSessionStatus = rs.getString("table_session_status"),
                                             tableNumber = rs.getInt("table_number"),
+                                            visitGeneration = rs.getLong("generation"),
                                         ),
                                     )
                                 }
@@ -284,32 +314,94 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         lifecycle: GuestTableContextLifecycleRepository,
     ): GuestTabModel =
         withActiveOrdinarySession(session, userId, lifecycle) { connection ->
-            val memberships = listTabsForUser(connection, session.venueId, session.id, userId)
-            val existing = findPersonalTabForUpdate(connection, session.venueId, session.id, userId)
-            if (existing != null && memberships.none { it.id == existing.id }) throw ForbiddenException()
-            existing ?: ensurePersonalTab(connection, session.venueId, session.id, userId)
+            ordinaryPersonalTab(connection, session, userId)
         }
 
-    private suspend fun <T> withActiveOrdinarySession(
+    internal fun ordinaryPersonalTab(
+        connection: Connection,
+        session: TableSessionContext,
+        userId: Long,
+    ): GuestTabModel {
+        val memberships = listTabsForUser(connection, session.venueId, session.id, userId)
+        val existing = findPersonalTabForUpdate(connection, session.venueId, session.id, userId)
+        if (existing != null && memberships.none { it.id == existing.id }) throw ForbiddenException()
+        return existing ?: ensurePersonalTab(connection, session.venueId, session.id, userId)
+    }
+
+    internal suspend fun <T> withActiveOrdinarySession(
         session: TableSessionContext,
         userId: Long,
         authorizePersonal: GuestTableContextLifecycleRepository? = null,
+        generation: Long? = null,
+        tableToken: String? = null,
+        botChatId: Long? = null,
         operation: (Connection) -> T,
     ): T {
         val ds = dataSource ?: throw DatabaseUnavailableException()
-        val sessions = TableSessionRepository(ds)
         return withContext(Dispatchers.IO) {
             ds.connection.use { connection ->
                 connection.autoCommit = false
                 try {
                     val bot =
-                        if (authorizePersonal != null &&
+                        if (botChatId != null) {
+                            val bound =
+                                authorizePersonal?.lockBotVisitForPersonalTab(
+                                    connection,
+                                    userId,
+                                    session,
+                                    botChatId,
+                                )
+                            if (bound != true) {
+                                throw ForbiddenException()
+                            }
+                            true
+                        } else if (authorizePersonal != null &&
                             !sessions.hasActiveUserTabMembership(connection, userId, session.venueId, session.id)
                         ) {
                             authorizePersonal.lockBotVisitForPersonalTab(connection, userId, session)
                         } else {
                             false
                         }
+                    if (generation != null) {
+                        val venue =
+                            connection.rows(
+                                "SELECT status FROM venues WHERE id = ? FOR UPDATE",
+                                session.venueId,
+                            ) {
+                                it.getString(1)
+                            }.singleOrNull()
+                        if (venue != "PUBLISHED") throw NotFoundException()
+                        if (tableToken != null) {
+                            val state =
+                                tokens.resolveForUpdate(
+                                    connection,
+                                    tableToken,
+                                    session.venueId,
+                                    session.tableId,
+                                )
+                            if (state == null || !state.tableActive || !state.tokenActive ||
+                                state.venueStatus != VenueStatus.PUBLISHED
+                            ) {
+                                throw NotFoundException()
+                            }
+                        } else if (connection.rows(
+                                "SELECT id FROM venue_tables WHERE id = ?" +
+                                    " AND venue_id = ? AND is_active = TRUE FOR UPDATE",
+                                session.tableId,
+                                session.venueId,
+                            ) { it.getLong(1) }.isEmpty()
+                        ) {
+                            throw NotFoundException()
+                        }
+                        if (subscriptions.getSubscriptionStatus(
+                                connection,
+                                session.venueId,
+                                forUpdate = true,
+                            ).isBlockedForGuest()
+                        ) {
+                            throw SubscriptionBlockedException()
+                        }
+                    }
                     val physical =
                         sessions.findSessionForTable(
                             connection,
@@ -325,13 +417,14 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
                     ) {
                         throw ForbiddenException("Визит завершён. Отсканируйте QR стола заново.")
                     }
-                    if (authorizePersonal != null && !bot &&
+                    if ((generation != null || authorizePersonal != null) && !bot &&
                         !sessions.hasActiveUserTabMembership(
                             connection, userId, session.venueId, session.id, forUpdate = true,
                         )
                     ) {
                         throw ForbiddenException()
                     }
+                    sessions.checkVisitGeneration(connection, userId, session.id, generation)
                     val result = operation(connection)
                     connection.commit()
                     result
@@ -578,8 +671,15 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         tableSessionId: Long,
         userId: Long,
         token: String,
+        expectedInviteId: Long? = null,
+        expectedTabId: Long? = null,
     ): GuestTabModel? {
-        val tab = findInviteTabForUpdate(connection, venueId, tableSessionId, token) ?: return null
+        val (inviteId, tab) = findInviteForUpdate(connection, venueId, tableSessionId, token) ?: return null
+        if ((expectedInviteId != null && expectedInviteId != inviteId) ||
+            (expectedTabId != null && expectedTabId != tab.id)
+        ) {
+            return null
+        }
         ensureUserExists(connection, userId)
         ensureMember(connection, tab.id, userId, "MEMBER")
         closeEmptyOwnedSharedTabsAfterJoin(
@@ -610,12 +710,28 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         }
     }
 
+    fun isScopedSharedTab(
+        connection: Connection,
+        tabId: Long,
+        venueId: Long,
+        sessionId: Long,
+    ): Boolean =
+        connection.prepareStatement(
+            "SELECT 1 FROM tab WHERE id = ? AND venue_id = ? AND table_session_id = ? AND type = 'SHARED'",
+        ).use {
+            it.setLong(1, tabId)
+            it.setLong(2, venueId)
+            it.setLong(3, sessionId)
+            it.executeQuery().use { rows -> rows.next() }
+        }
+
     fun isTabMember(
         connection: Connection,
         tabId: Long,
         venueId: Long,
         tableSessionId: Long,
         userId: Long,
+        forUpdate: Boolean = false,
     ): Boolean =
         connection.prepareStatement(
             """
@@ -627,6 +743,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
               AND t.table_session_id = ?
               AND t.status = 'ACTIVE'
               AND tm.user_id = ?
+              ${if (forUpdate) "FOR UPDATE" else ""}
             """.trimIndent(),
         ).use { statement ->
             statement.setLong(1, tabId)
@@ -727,15 +844,15 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
         }
     }
 
-    private fun findInviteTabForUpdate(
+    fun findInviteForUpdate(
         connection: Connection,
         venueId: Long,
         tableSessionId: Long,
         token: String,
-    ): GuestTabModel? {
+    ): Pair<Long, GuestTabModel>? {
         return connection.prepareStatement(
             """
-            SELECT t.id, t.venue_id, t.table_session_id, t.type, t.owner_user_id, t.status
+            SELECT ti.id AS invite_id, t.id, t.venue_id, t.table_session_id, t.type, t.owner_user_id, t.status
             FROM tab_invite ti
             JOIN tab t ON t.id = ti.tab_id
             WHERE ti.token = ?
@@ -750,7 +867,7 @@ class GuestTabsRepository(private val dataSource: DataSource?) {
             statement.setString(1, token)
             statement.setLong(2, venueId)
             statement.setLong(3, tableSessionId)
-            statement.executeQuery().use { rs -> if (rs.next()) mapTab(rs) else null }
+            statement.executeQuery().use { rs -> if (rs.next()) rs.getLong("invite_id") to mapTab(rs) else null }
         }
     }
 

@@ -2526,3 +2526,34 @@ Before acceptance: exact release CI, separately authorized staging migration/dep
 Telegram/iPhone smoke after venue publication. Exercise two same-name venues/addresses, old aliases,
 unlisted, unavailable lifecycle/subscription, App re-entry, A visit while browsing B, old printed QR,
 invites and `/start` `/menu` `/support`. No publication or staging acceptance follows from local tests.
+
+### Guest participation release compatibility
+
+PostgreSQL V144 through V147 require an offline cutover. HT70 checks every newly
+appended migration version before considering ordinary compatibility evidence.
+Its rollback continues to require identical manifests.
+
+V145 stores prepared Bot submissions and allows the existing order ledger to record
+a closed operation without a batch. V146 records each accepted extension key against
+its request. It preserves existing requests, charges and original keys. Keys that older
+writers accepted without recording cannot be reconstructed from the database.
+V147 adds nullable quote revision to the extension key registry. Old rows retain NULL.
+Fence writers that can register new keys without the revision. Verify both an existing key
+and a fresh confirmation before restoring guest writes.
+
+Fence old HTTP writers, Bot workers and outbox workers before migration. Start the
+compatible backend and workers together. Verify the new Mini App bundle after a
+full reopen before enabling ordering. On a failed release after accepting writes, a
+forward fix preserves post-cutover financial and notification data. Database recovery
+requires a separately approved recovery point and reconciliation of later activity.
+
+Follow the exact-manifest maintenance procedure in [HT70 offline cutovers](STAGING_ORDINARY_RELEASE.md#guest-participation-offline-cutovers).
+
+Mini App, prepared Bot checkout, quick text orders and direct Bot reorders stage staff handoffs using the
+`guestCheckoutStaff` method in the existing Telegram outbox. Use a worker that
+recognizes this method before allowing writes from those checkout paths. For a
+mixed-version transition, drain and fence older outbox workers before starting
+the new writers. An application rollback to a worker that cannot process
+`guestCheckoutStaff` requires draining those internal handoffs first. Keep the
+previous offline schema restrictions in force. Local queuing, worker completion
+and Telegram delivery are separate checks.

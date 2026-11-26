@@ -292,7 +292,7 @@ class GuestOrderIdempotencyFingerprintTest {
         assertNull(fixture.idempotencyRecord(key).requestFingerprint)
         assertEquals(committedCounts, fixture.businessCounts())
 
-        val replay = fixture.submit(key, items, comment = "legacy comment")
+        val replay = fixture.submit(key, items, comment = "legacy comment", expectedVisitGeneration = null)
 
         assertTrue(replay.idempotencyReplay)
         assertEquals(created.batchId, replay.batchId)
@@ -585,6 +585,7 @@ class GuestOrderIdempotencyFingerprintTest {
             scope: Scope = primaryScope,
             userId: Long = ACTOR_ONE,
             expectedPreviewFingerprint: String? = null,
+            expectedVisitGeneration: Long? = 0,
             selectedGiftChoices: Map<Long, Long> = emptyMap(),
             venueZoneIdProvider: ((Connection) -> ZoneId)? = null,
         ): CreatedOrderBatch =
@@ -601,6 +602,7 @@ class GuestOrderIdempotencyFingerprintTest {
                         comment = comment,
                         items = items,
                         expectedPreviewFingerprint = expectedPreviewFingerprint,
+                        expectedVisitGeneration = expectedVisitGeneration,
                         selectedGiftChoices = selectedGiftChoices,
                         venueZoneIdProvider = venueZoneIdProvider,
                     ),

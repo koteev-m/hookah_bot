@@ -4,6 +4,7 @@ import com.hookah.platform.backend.api.ForbiddenException
 import com.hookah.platform.backend.api.InvalidInputException
 import com.hookah.platform.backend.api.NotFoundException
 import com.hookah.platform.backend.api.TooManyRequestsException
+import com.hookah.platform.backend.api.VisitGenerationChangedException
 import com.hookah.platform.backend.booking.formatBookingDisplayLabel
 import com.hookah.platform.backend.booking.resolveBookingDisplayZoneId
 import com.hookah.platform.backend.miniapp.guest.GuestRateLimitConfig
@@ -17,6 +18,7 @@ import com.hookah.platform.backend.miniapp.guest.db.GuestBookingRepository
 import com.hookah.platform.backend.miniapp.guest.db.GuestTableContextLifecycleRepository
 import com.hookah.platform.backend.miniapp.guest.db.TableSessionRepository
 import com.hookah.platform.backend.miniapp.guest.requireConfirmedPlatformGuestMutation
+import com.hookah.platform.backend.miniapp.guest.requiredVisitGeneration
 import com.hookah.platform.backend.miniapp.guest.validateTableToken
 import com.hookah.platform.backend.miniapp.venue.AuditLogRepository
 import com.hookah.platform.backend.miniapp.venue.VenuePermission
@@ -46,6 +48,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.sql.Connection
+import java.time.Instant
 import java.util.UUID
 
 @Serializable
@@ -133,6 +136,8 @@ data class SupportThreadDetailResponse(
 data class SupportMessageCreateRequest(
     val message: String? = null,
     val clientMessageId: String? = null,
+    val expectedVisitGeneration: String? = null,
+    val expectedTableSessionId: Long? = null,
 )
 
 @Serializable
@@ -147,6 +152,7 @@ data class SupportThreadCreateRequest(
     val bookingId: Long? = null,
     val appVersion: String? = null,
     val correlationId: String? = null,
+    val expectedVisitGeneration: String? = null,
 )
 
 @Serializable
@@ -318,6 +324,7 @@ fun Route.guestSupportRoutes(
                         platformOwnerUserId = platformOwnerUserId,
                         lifecycleRepository = guestTableContextLifecycleRepository,
                         supportThreadRepository = supportThreadRepository,
+                        tableSessionRepository = tableSessionRepository,
                         tableSessionConfig = tableSessionConfig,
                         request = request,
                         category = category,
@@ -352,6 +359,7 @@ fun Route.guestSupportRoutes(
                             platformOwnerUserId = platformOwnerUserId,
                             lifecycleRepository = guestTableContextLifecycleRepository,
                             supportThreadRepository = supportThreadRepository,
+                            tableSessionRepository = tableSessionRepository,
                             tableSessionConfig = tableSessionConfig,
                             request = request,
                             category = category,
@@ -422,9 +430,12 @@ fun Route.guestSupportRoutes(
                     platformOwnerUserId = platformOwnerUserId,
                     lifecycleRepository = guestTableContextLifecycleRepository,
                     tableSessionConfig = tableSessionConfig,
+                    tableSessionRepository = tableSessionRepository,
                     supportThreadRepository = supportThreadRepository,
                     auditLogRepository = auditLogRepository,
                     detail = detail,
+                    expectedVisitGeneration = call.request.queryParameters["expectedVisitGeneration"],
+                    expectedTableSessionId = call.request.queryParameters["expectedTableSessionId"]?.toLongOrNull(),
                     newStatus = SupportThreadStatus.RESOLVED,
                 )
             call.respond(updated.toResponse(unreadCountOverride = 0))
@@ -440,9 +451,12 @@ fun Route.guestSupportRoutes(
                     platformOwnerUserId = platformOwnerUserId,
                     lifecycleRepository = guestTableContextLifecycleRepository,
                     tableSessionConfig = tableSessionConfig,
+                    tableSessionRepository = tableSessionRepository,
                     supportThreadRepository = supportThreadRepository,
                     auditLogRepository = auditLogRepository,
                     detail = detail,
+                    expectedVisitGeneration = call.request.queryParameters["expectedVisitGeneration"],
+                    expectedTableSessionId = call.request.queryParameters["expectedTableSessionId"]?.toLongOrNull(),
                     newStatus = SupportThreadStatus.IN_PROGRESS,
                 )
             call.respond(updated.toResponse(unreadCountOverride = 0))
@@ -460,6 +474,7 @@ fun Route.guestSupportRoutes(
                     platformOwnerUserId = platformOwnerUserId,
                     lifecycleRepository = guestTableContextLifecycleRepository,
                     tableSessionConfig = tableSessionConfig,
+                    tableSessionRepository = tableSessionRepository,
                     supportThreadRepository = supportThreadRepository,
                     outboxEnqueuer = outboxEnqueuer,
                     bookingMessageStaffChatNotifier = bookingMessageStaffChatNotifier,
@@ -469,6 +484,8 @@ fun Route.guestSupportRoutes(
                     detail = detail,
                     messageText = messageText,
                     clientMessageId = request.clientMessageId,
+                    expectedVisitGeneration = request.expectedVisitGeneration,
+                    expectedTableSessionId = request.expectedTableSessionId,
                 )
             call.respond(
                 SupportMessageCreateResponse(
@@ -954,6 +971,7 @@ private suspend fun createConfirmedPlatformGuestTicket(
     platformOwnerUserId: Long?,
     lifecycleRepository: GuestTableContextLifecycleRepository?,
     supportThreadRepository: SupportThreadRepository,
+    tableSessionRepository: TableSessionRepository,
     tableSessionConfig: TableSessionConfig,
     request: SupportThreadCreateRequest,
     category: SupportThreadCategory,
@@ -965,17 +983,26 @@ private suspend fun createConfirmedPlatformGuestTicket(
     expectedTableSessionId: Long?,
     guestRateLimitConfig: GuestRateLimitConfig?,
     rateLimiter: RateLimiter?,
-): SupportThreadDetailRecord =
-    requireConfirmedPlatformGuestMutation(
+): SupportThreadDetailRecord {
+    val sessionId = request.tableSessionId ?: 0L
+    val generation = requiredVisitGeneration(sessionId, request.expectedVisitGeneration)
+    return requireConfirmedPlatformGuestMutation(
         userId = userId,
         platformOwnerUserId = platformOwnerUserId,
         lifecycleRepository = lifecycleRepository,
         tableToken = tableToken,
         expectedVenueId = expectedVenueId,
         expectedTableId = expectedTableId,
-        expectedTableSessionId = expectedTableSessionId,
+        expectedTableSessionId = request.tableSessionId,
+        touchSessionBeforeMutation = false,
         ttl = tableSessionConfig.ttl,
     ) { connection, confirmed ->
+        if (sessionId != confirmed.tableSession.id ||
+            (expectedTableSessionId != null && expectedTableSessionId != sessionId)
+        ) {
+            throw VisitGenerationChangedException()
+        }
+        tableSessionRepository.checkVisitGeneration(connection, userId, sessionId, generation)
         val verified =
             verifyConfirmedPlatformGuestTicketContext(
                 connection = connection,
@@ -994,6 +1021,10 @@ private suspend fun createConfirmedPlatformGuestTicket(
             endpoint = "support-ticket-create",
             selector = { supportTicket },
         )
+        tableSessionRepository.touchActiveSession(
+            connection, sessionId, confirmed.context.venueId, confirmed.context.tableId,
+            tableSessionConfig.ttl, Instant.now(),
+        ) ?: throw NotFoundException()
         supportThreadRepository.createTicket(
             connection = connection,
             input =
@@ -1006,6 +1037,7 @@ private suspend fun createConfirmedPlatformGuestTicket(
                 ),
         )
     }
+}
 
 private fun verifyConfirmedPlatformGuestTicketContext(
     connection: Connection,
@@ -1121,10 +1153,13 @@ private suspend fun changeGuestThreadStatus(
     platformOwnerUserId: Long?,
     lifecycleRepository: GuestTableContextLifecycleRepository?,
     tableSessionConfig: TableSessionConfig,
+    tableSessionRepository: TableSessionRepository,
     supportThreadRepository: SupportThreadRepository,
     auditLogRepository: AuditLogRepository?,
     detail: SupportThreadDetailRecord,
     newStatus: SupportThreadStatus,
+    expectedVisitGeneration: String?,
+    expectedTableSessionId: Long?,
 ): SupportThreadDetailRecord {
     if (!requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, detail.thread)) {
         requireThreadStatusChangeAllowed(detail.thread)
@@ -1149,6 +1184,7 @@ private suspend fun changeGuestThreadStatus(
             ?: throw NotFoundException()
     }
 
+    requiredVisitGeneration(expectedTableSessionId ?: 0, expectedVisitGeneration)
     val updated =
         requireConfirmedPlatformGuestMutation(
             userId = userId,
@@ -1156,13 +1192,21 @@ private suspend fun changeGuestThreadStatus(
             lifecycleRepository = lifecycleRepository,
             expectedVenueId = detail.thread.venueId,
             expectedTableId = detail.thread.tableId,
-            expectedTableSessionId = detail.thread.tableSessionId,
+            expectedTableSessionId = expectedTableSessionId,
             ttl = tableSessionConfig.ttl,
         ) { connection, confirmed ->
             val locked =
                 supportThreadRepository.lockGuestThread(connection, userId, detail.thread.id)
                     ?: throw NotFoundException()
             requireConfirmedPlatformGuestThread(locked.thread, detail.thread, confirmed)
+            requireTicketMutationGeneration(
+                connection,
+                tableSessionRepository,
+                userId,
+                confirmed.tableSession.id,
+                expectedTableSessionId,
+                expectedVisitGeneration,
+            )
             requireThreadStatusChangeAllowed(locked.thread)
             if (locked.thread.status != newStatus) {
                 supportThreadRepository.updateThreadStatus(connection, locked.thread.id, newStatus)
@@ -1200,6 +1244,7 @@ private suspend fun addGuestThreadMessage(
     platformOwnerUserId: Long?,
     lifecycleRepository: GuestTableContextLifecycleRepository?,
     tableSessionConfig: TableSessionConfig,
+    tableSessionRepository: TableSessionRepository,
     supportThreadRepository: SupportThreadRepository,
     outboxEnqueuer: TelegramOutboxEnqueuer,
     bookingMessageStaffChatNotifier: BookingMessageStaffChatNotifier,
@@ -1209,7 +1254,12 @@ private suspend fun addGuestThreadMessage(
     detail: SupportThreadDetailRecord,
     messageText: String,
     clientMessageId: String?,
+    expectedVisitGeneration: String?,
+    expectedTableSessionId: Long?,
 ): GuestThreadMessageResult {
+    if (requiresConfirmedPlatformGuestThreadMutation(userId, platformOwnerUserId, detail.thread)) {
+        requiredVisitGeneration(expectedTableSessionId ?: 0, expectedVisitGeneration)
+    }
     if (clientMessageId != null && detail.thread.threadType != SupportThreadType.BOOKING_THREAD) {
         val key = normalizeBookingClientMessageId(clientMessageId)
         val beforeInsert: (SupportThreadRecord) -> Unit = { thread ->
@@ -1232,13 +1282,17 @@ private suspend fun addGuestThreadMessage(
                     lifecycleRepository = lifecycleRepository,
                     expectedVenueId = detail.thread.venueId,
                     expectedTableId = detail.thread.tableId,
-                    expectedTableSessionId = detail.thread.tableSessionId,
+                    expectedTableSessionId = expectedTableSessionId,
                     ttl = tableSessionConfig.ttl,
                 ) { connection, confirmed ->
                     val locked =
                         supportThreadRepository.lockGuestThread(connection, userId, detail.thread.id)
                             ?: throw NotFoundException()
                     requireConfirmedPlatformGuestThread(locked.thread, detail.thread, confirmed)
+                    requireTicketMutationGeneration(
+                        connection, tableSessionRepository, userId, confirmed.tableSession.id,
+                        expectedTableSessionId, expectedVisitGeneration,
+                    )
                     supportThreadRepository.writeGuestMiniAppReply(
                         connection,
                         userId,
@@ -1361,13 +1415,21 @@ private suspend fun addGuestThreadMessage(
             lifecycleRepository = lifecycleRepository,
             expectedVenueId = detail.thread.venueId,
             expectedTableId = detail.thread.tableId,
-            expectedTableSessionId = detail.thread.tableSessionId,
+            expectedTableSessionId = expectedTableSessionId,
             ttl = tableSessionConfig.ttl,
         ) { connection, confirmed ->
             val locked =
                 supportThreadRepository.lockGuestThread(connection, userId, detail.thread.id)
                     ?: throw NotFoundException()
             requireConfirmedPlatformGuestThread(locked.thread, detail.thread, confirmed)
+            requireTicketMutationGeneration(
+                connection,
+                tableSessionRepository,
+                userId,
+                confirmed.tableSession.id,
+                expectedTableSessionId,
+                expectedVisitGeneration,
+            )
             requireThreadMessageAllowed(locked.thread)
             enforceGuestSupportRateLimit(
                 guestRateLimitConfig = guestRateLimitConfig,
@@ -1400,6 +1462,19 @@ private suspend fun addGuestThreadMessage(
         source = "GUEST_MINIAPP",
     )
     return result
+}
+
+private fun requireTicketMutationGeneration(
+    connection: Connection,
+    sessions: TableSessionRepository,
+    userId: Long,
+    confirmedSessionId: Long,
+    expectedSessionId: Long?,
+    expectedGeneration: String?,
+) {
+    val generation = requiredVisitGeneration(expectedSessionId ?: 0, expectedGeneration)
+    if (expectedSessionId != confirmedSessionId) throw VisitGenerationChangedException()
+    sessions.checkVisitGeneration(connection, userId, confirmedSessionId, generation)
 }
 
 private fun requiresConfirmedPlatformGuestThreadMutation(

@@ -86,6 +86,75 @@ class GuestTableContextActivationPostgresTest {
     }
 
     @Test
+    fun `review09 addressed Mini App quick order binds an existing visit and dialog atomically`() =
+        runBlocking {
+            PostgresTestEnv.createDataSource(PostgresTestEnv.createDatabase()).use { ds ->
+                val now = Instant.now()
+                val fixture =
+                    seedFixture(
+                        ds.connection,
+                        now,
+                        rollbackScenarios().first {
+                            it.sessionState == TestActivationSessionState.NEW &&
+                                it.contextState != TestActivationContextState.UPDATE
+                        },
+                    )
+                val tabs = GuestTabsRepository(ds)
+                val chats = ChatContextRepository(ds)
+                val dialogs = DialogStateRepository(ds, Json)
+                val sessions = TableSessionRepository(ds)
+                val live =
+                    ds.connection.use {
+                        it.insertSession(
+                            fixture.venueId,
+                            fixture.tableId,
+                            now.minusSeconds(90),
+                            now.minusSeconds(30),
+                            now.plusSeconds(900),
+                        )
+                    }
+                val tab = tabs.ensurePersonalTab(fixture.venueId, live, fixture.actorUserId)
+                val repository =
+                    GuestTableContextLifecycleRepository(
+                        ds,
+                        TableTokenRepository(ds),
+                        SubscriptionRepository(ds),
+                        sessions,
+                        tabs,
+                        chats,
+                        dialogs,
+                    )
+                val unbound = ds.connection.use(::loadTestActivationAuthoritativeSnapshot)
+                val exact = MiniAppFallbackVisit(live, 0, tab.id)
+
+                suspend fun handoff(
+                    address: MiniAppFallbackVisit,
+                    ordinary: Boolean = true,
+                ) = repository.activate(
+                    fixture.actorUserId, fixture.chatId, fixture.tableToken, fixture.venueId, fixture.tableId,
+                    Duration.ofHours(2), now, ordinaryBot = ordinary, fallback = address,
+                )
+
+                assertIs<GuestTableActivationResult.Denied>(handoff(exact.copy(visitGeneration = 12)))
+                assertIs<GuestTableActivationResult.Denied>(handoff(exact.copy(tableSessionId = live + 1)))
+                assertIs<GuestTableActivationResult.Denied>(handoff(exact.copy(tabId = tab.id + 1)))
+                assertIs<GuestTableActivationResult.Denied>(handoff(exact, ordinary = false))
+                assertEquals(unbound, ds.connection.use(::loadTestActivationAuthoritativeSnapshot))
+
+                val applied = assertIs<GuestTableActivationResult.Applied>(handoff(exact))
+                assertEquals(live, applied.tableSession.id)
+                assertEquals(live, chats.get(fixture.chatId)?.tableSessionId)
+                assertEquals(tab.id.toString(), dialogs.get(fixture.chatId).payload["tabId"])
+                assertEquals("0", dialogs.get(fixture.chatId).payload["visitGeneration"])
+                val committed = ds.connection.use(::loadTestActivationAuthoritativeSnapshot)
+                assertEquals(unbound.sessions, committed.sessions)
+                assertEquals(unbound.exits, committed.exits)
+                assertIs<GuestTableActivationResult.Denied>(handoff(exact))
+                assertEquals(committed, ds.connection.use(::loadTestActivationAuthoritativeSnapshot))
+            }
+        }
+
+    @Test
     fun `ordinary QR binds the locked physical session and rejects a later seat occupant`() =
         runBlocking {
             val database = PostgresTestEnv.createDatabase()

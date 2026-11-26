@@ -596,6 +596,24 @@ class PlatformGuestTableMutationCoordinatorTest {
                                 currentOrderableUntil = confirmed.tableSession.expiresAt,
                                 idempotencyKey = "race-proof",
                                 comment = null,
+                                confirmedTerms =
+                                    connection.prepareStatement(
+                                        "SELECT updated_at FROM shift_extension_settings WHERE venue_id = ?",
+                                    ).use { statement ->
+                                        statement.setLong(1, database.venueId)
+                                        statement.executeQuery().use { row ->
+                                            check(row.next())
+                                            com.hookah.platform.backend.miniapp.shift.ShiftExtensionSettings(
+                                                database.venueId,
+                                                true,
+                                                60,
+                                                1000,
+                                                "RUB",
+                                                2,
+                                                row.getTimestamp(1).toInstant(),
+                                            ).terms()
+                                        }
+                                    },
                             ),
                         now = fixture.now,
                     )

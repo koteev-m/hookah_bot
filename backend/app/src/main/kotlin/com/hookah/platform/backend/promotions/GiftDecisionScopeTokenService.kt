@@ -22,6 +22,7 @@ enum class GiftDecisionOfferType {
     SELECTABLE_ITEM,
 }
 
+@kotlinx.serialization.Serializable
 data class GiftDecisionCommand(
     val action: PromotionGiftDecisionAction,
     val selectedMenuItemId: Long? = null,
@@ -86,6 +87,7 @@ data class GiftDecisionCartScope(
     val tabId: Long,
     val items: List<GiftDecisionCartItem>,
     val comment: String? = null,
+    val expectedVisitGeneration: Long? = null,
 )
 
 data class GiftDecisionOfferIdentity(
@@ -290,7 +292,7 @@ class GiftDecisionScopeTokenService(
                 }
                 .sorted()
         return canonicalFields(
-            GIFT_DECISION_DOMAIN,
+            scope.expectedVisitGeneration?.let { "$GIFT_DECISION_DOMAIN:visit:$it" } ?: GIFT_DECISION_DOMAIN,
             scope.userId.toString(),
             scope.venueId.toString(),
             scope.tableSessionId.toString(),

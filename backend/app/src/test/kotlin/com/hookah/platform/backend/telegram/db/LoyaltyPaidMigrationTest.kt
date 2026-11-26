@@ -349,6 +349,7 @@ class LoyaltyPaidMigrationTest {
                         "V141__guest_exit_event_id.sql",
                         "V142__telegram_chat_table_session.sql",
                         "V143__billing_courtesy_operation.sql",
+                        "V144__guest_visit_generations.sql",
                     )
                 } else {
                     listOf(
@@ -359,12 +360,13 @@ class LoyaltyPaidMigrationTest {
                         "V142__guest_exit_event_id.sql",
                         "V143__telegram_chat_table_session.sql",
                         "V144__billing_courtesy_operation.sql",
+                        "V145__guest_visit_generations.sql",
                     )
                 }
             assertEquals(expectedTail, current.info().pending().map { it.script })
             assertEquals(expectedTail.size, current.migrate().migrationsExecuted)
             current.validate()
-            assertEquals(if (dialect == "postgresql") "143" else "144", current.info().current().version.version)
+            assertEquals(if (dialect == "postgresql") "144" else "145", current.info().current().version.version)
             assertEquals(before, snapshot())
             assertEquals(
                 history,

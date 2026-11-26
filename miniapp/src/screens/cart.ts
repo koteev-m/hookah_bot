@@ -1,6 +1,6 @@
 import { clearSession, getAccessToken } from '../shared/api/auth'
 import { normalizeErrorCode } from '../shared/api/errorMapping'
-import { guestAddBatch, guestCreateSharedTab, guestCreateTabInvite, guestGetTabs, guestJoinTab, guestOpenPersonalTab, guestPreviewCart } from '../shared/api/guestApi'
+import { guestAddBatch, guestCreateSharedTab, guestCreateTabInvite, guestGetTabs, guestInspectTabInvite, guestJoinTab, guestOpenPersonalTab, guestPreviewCart } from '../shared/api/guestApi'
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type {
   CartMenuSelectionIssue,
@@ -17,7 +17,9 @@ import {
   clearCartMenuSelectionIssues,
   clearMismatchedCartGiftDecisionOwner,
   clearExpiredCartGiftDecision,
-  clearCart,
+  finishCheckout,
+  prepareCheckout,
+  type PreparedCheckout,
   getCartSnapshot,
   reconcileCartGiftDecisionScope,
   removeCartLine,
@@ -515,6 +517,7 @@ function cartBusinessMutationSignature(snapshot: ReturnType<typeof getCartSnapsh
 
 function buildCanonicalSubmitFingerprint(
   accountId: number | null,
+  visitGeneration: string | undefined,
   venueId: number | null,
   tableSessionId: number,
   tabId: number,
@@ -523,6 +526,7 @@ function buildCanonicalSubmitFingerprint(
 ) {
   return JSON.stringify({
     accountId,
+    visitGeneration,
     venueId,
     tableSessionId,
     tabId,
@@ -553,8 +557,11 @@ export function renderCartScreen(options: CartScreenOptions) {
   let isChatSending = false
   let submitAbort: AbortController | null = null
   let tabActionAbort: AbortController | null = null
-  let lastSubmitFingerprint: string | null = null
-  let lastSubmitIdempotencyKey: string | null = null
+  const inviteButton = el('button', { text: 'Получить код приглашения' }) as HTMLButtonElement
+  refs.inviteToken.after(inviteButton)
+  const retryCheckout = el('button', { text: 'Повторить исходную отправку' }) as HTMLButtonElement
+  const checkoutHint = el('p')
+  refs.sendButton.before(checkoutHint, retryCheckout)
   let cartSnapshot = getCartSnapshot()
   let cartMutationSignature = cartBusinessMutationSignature(cartSnapshot)
   let tableSnapshot = getTableContext()
@@ -566,6 +573,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     creatingTab: false,
     joining: false
   }
+  let joinTarget: { token: string; sessionId: number; generation: string; userId: number; inviteId: string; tabId: number } | undefined
   let isJoinMode = false
   let hasSharedAccess = false
   let sharedInvite: SharedInviteState | null = null
@@ -729,7 +737,6 @@ export function renderCartScreen(options: CartScreenOptions) {
     setSelectedGuestTabId(tableSnapshot.tableSessionId, tabId)
     if (previousTabId !== tabId) {
       pendingItemMenuRecovery = null
-      resetSubmitIdempotency()
     }
     if (previousTabId != null && previousTabId !== tabId) {
       setCartGiftDecision(null)
@@ -792,7 +799,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     const result = await guestCreateTabInvite(
       backendUrl,
       selectedTab.id,
-      { tableSessionId },
+      { tableSessionId, expectedVisitGeneration: tableSnapshot.visitGeneration! },
       deps,
       controller.signal
     )
@@ -884,7 +891,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     refs.joinTokenInput.hidden = !showCreateJoinActions || !isJoinMode
     refs.joinTokenInput.disabled =
       tabState.loading || tabState.creatingTab || tabState.joining || !isTableReady() || !showCreateJoinActions
-    refs.joinButton.textContent = isJoinMode ? 'Присоединиться по коду' : 'Присоединиться к общему счёту'
+    refs.joinButton.textContent = joinTarget ? 'Вступить' : isJoinMode ? 'Проверить код' : 'Присоединиться к общему счёту'
     refs.joinButton.disabled =
       tabState.loading || tabState.creatingTab || tabState.joining || !isTableReady() || !showCreateJoinActions
     if (isJoinMode && !refs.joinTokenInput.value.trim()) {
@@ -893,9 +900,8 @@ export function renderCartScreen(options: CartScreenOptions) {
     const showInvite = sharedInvite != null && isCurrentSharedOwner && sharedInvite.tabId === selectedTab?.id
     refs.inviteSummary.hidden = !showInvite
     refs.inviteToken.hidden = !showInvite
-    if (isCurrentSharedOwner && !showInvite) {
-      void restoreSharedInviteForOwnerTab()
-    }
+    inviteButton.hidden = !(isCurrentSharedOwner && !showInvite)
+    inviteButton.disabled = !!inviteRestoreAbort || !isTableReady()
   }
 
   const syncDefaultTabSelection = () => {
@@ -972,6 +978,7 @@ export function renderCartScreen(options: CartScreenOptions) {
   const buildPreviewFingerprint = (tableToken: string, tableSessionId: number, tabId: number) =>
     JSON.stringify({
       tableToken,
+      visitGeneration: tableSnapshot.visitGeneration,
       tableSessionId,
       tabId,
       comment: cartSnapshot.commentDraft.trim() || null,
@@ -1338,7 +1345,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     }
   }
 
-  const loadCartPreview = async (fingerprint: string, tableToken: string, tableSessionId: number, tabId: number) => {
+  const loadCartPreview = async (visitGeneration: string, fingerprint: string, tableToken: string, tableSessionId: number, tabId: number) => {
     previewAbort?.abort()
     const controller = new AbortController()
     previewAbort = controller
@@ -1353,6 +1360,7 @@ export function renderCartScreen(options: CartScreenOptions) {
         tableToken,
         tableSessionId,
         tabId,
+        expectedVisitGeneration: visitGeneration,
         giftDecision: cartSnapshot.giftDecision,
         items: buildPreviewItems(),
         comment: cartSnapshot.commentDraft.trim() || null
@@ -1381,9 +1389,14 @@ export function renderCartScreen(options: CartScreenOptions) {
       }
       previewData = null
       previewFailed = true
-      previewMessage = cartSnapshot.menuSelectionIssues.size
-        ? 'Не удалось обновить расчёт. Исправьте отмеченные позиции или повторите проверку.'
-        : 'Не удалось рассчитать корзину. Повторите попытку.'
+      if (code === ApiErrorCodes.VISIT_VERSION_REQUIRED || code === ApiErrorCodes.VISIT_GENERATION_CHANGED) {
+        const notice = presentApiError(result.error, { isDebug, scope: 'table' })
+        previewMessage = notice.title + '. ' + notice.message
+      } else {
+        previewMessage = cartSnapshot.menuSelectionIssues.size
+          ? 'Не удалось обновить расчёт. Исправьте отмеченные позиции или повторите проверку.'
+          : 'Не удалось рассчитать корзину. Повторите попытку.'
+      }
       updateSubmitState()
       return
     }
@@ -1440,6 +1453,8 @@ export function renderCartScreen(options: CartScreenOptions) {
       resetCartPreview('Итог будет рассчитан при отправке заказа.')
       return
     }
+    const visitGeneration = tableSnapshot.visitGeneration
+    if (visitGeneration === undefined) { resetCartPreview(); return }
     const fingerprint = buildPreviewFingerprint(tableToken, tableSessionId, selectedTab.id)
     if (pendingItemMenuRecovery && pendingItemMenuRecovery.previewFingerprint !== fingerprint) {
       pendingItemMenuRecovery = null
@@ -1460,7 +1475,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     }
     previewTimer = window.setTimeout(() => {
       previewTimer = null
-      void loadCartPreview(fingerprint, tableToken, tableSessionId, selectedTab.id)
+      void loadCartPreview(visitGeneration, fingerprint, tableToken, tableSessionId, selectedTab.id)
     }, 250)
     renderCartPreview()
   }
@@ -1487,12 +1502,21 @@ export function renderCartScreen(options: CartScreenOptions) {
         previewDisabledReason = 'Добавьте подарок или выберите «Пропустить подарок».'
       }
     }
-    const submitDisabledReason = !hasItems
+    const storageHint = cartSnapshot.draftStorage !== 'ready' ? 'Восстановите или сохраните корзину перед отправкой.' : null
+    const submitDisabledReason = storageHint ?? (!hasItems
       ? 'Добавьте позиции в корзину.'
-      : tableHint ?? (!selectedTab ? 'Выберите счёт (tab) для заказа.' : previewDisabledReason)
+      : tableHint ?? (!selectedTab ? 'Выберите счёт (tab) для заказа.' : previewDisabledReason))
     refs.disabledReason.textContent = submitDisabledReason ?? ''
     refs.disabledReason.hidden = !submitDisabledReason
+    const pending = cartSnapshot.checkout
+    checkoutHint.hidden = retryCheckout.hidden = !pending
+    retryCheckout.disabled = !tableReady || !!storageHint || isSubmitting || isChatSending
+    if (pending) {
+      const qty = pending.payload.items.reduce((sum, line) => sum + line.qty, 0)
+      checkoutHint.textContent = `Ожидается результат отправки в счёт №${pending.payload.tabId}. Количество — ${qty}. Повтор отправит исходный состав с тем же ключом. Новые правки останутся в корзине.`
+    }
     refs.sendButton.disabled =
+      !!pending ||      !!storageHint ||
       isSubmitting ||
       isChatSending ||
       !hasItems ||
@@ -1503,7 +1527,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       previewTimer !== null ||
       hasUnresolvedMenuSelections ||
       giftDecisionRequired(previewData)
-    refs.chatButton.disabled = isSubmitting || isChatSending || !hasItems || !tableReady || hasUnresolvedMenuSelections
+    refs.chatButton.disabled = !!pending || !!storageHint || isSubmitting || isChatSending || !hasItems || !tableReady || hasUnresolvedMenuSelections
     updateTabsUi()
   }
 
@@ -1733,6 +1757,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     (requireAuthoritativePreview = true):
       | { ok: true; comment: string | null; tabId: number; tableSessionId: number }
       | { ok: false; reason: string } => {
+    if (cartSnapshot.draftStorage !== 'ready') return { ok: false, reason: 'Восстановите или сохраните корзину перед отправкой.' }
     if (cartSnapshot.items.size === 0 || cartSnapshot.items.size > MAX_ITEMS) {
       return { ok: false, reason: 'Выберите от 1 до 50 позиций.' }
     }
@@ -1787,66 +1812,85 @@ export function renderCartScreen(options: CartScreenOptions) {
   const generateIdempotencyKey = () =>
     globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
-  const resolveSubmitIdempotencyKey = (fingerprint: string) => {
-    if (fingerprint === lastSubmitFingerprint && lastSubmitIdempotencyKey) {
-      return lastSubmitIdempotencyKey
-    }
-    const nextIdempotencyKey = generateIdempotencyKey()
-    lastSubmitFingerprint = fingerprint
-    lastSubmitIdempotencyKey = nextIdempotencyKey
-    return nextIdempotencyKey
-  }
-
-  const resetSubmitIdempotency = () => {
-    lastSubmitFingerprint = null
-    lastSubmitIdempotencyKey = null
-  }
-
-  const handleSubmit = async () => {
-    if (isSubmitting) return
+  const handleSubmit = async (retry = cartSnapshot.checkout) => {
+    if (isSubmitting || !isTableReady()) return
     setMessage('')
     setChatMessage('')
     hideSubmitError()
-    const validation = validateBeforeSubmit()
-    if (!validation.ok) {
-      setMessage(validation.reason)
-      return
-    }
     const tableToken = tableSnapshot.tableToken
-    if (!tableToken) {
-      setMessage(resolveTableHint(tableSnapshot) ?? 'Не удалось загрузить стол. Попробуйте позже.')
-      return
+    const generation = tableSnapshot.visitGeneration
+    const userId = getTelegramContext().telegramUserId
+    const { venueId, tableId, tableSessionId } = tableSnapshot
+    if (!userId || !venueId || !tableId || !tableToken || !tableSessionId || generation === undefined) return
+    if (retry && (retry.userId !== userId || retry.venueId !== venueId || retry.tableId !== tableId ||
+        retry.payload.tableToken !== tableToken || retry.payload.tableSessionId !== tableSessionId ||
+        retry.payload.expectedVisitGeneration !== generation)) return
+    const validation = retry ? { ok: true as const, tabId: retry.payload.tabId, tableSessionId, comment: retry.payload.comment ?? null } : validateBeforeSubmit()
+    if (!validation.ok) { setMessage(validation.reason); return }
+    const payload = retry?.payload ?? {
+      tableToken, tableSessionId, tabId: validation.tabId, expectedVisitGeneration: generation,
+      idempotencyKey: generateIdempotencyKey(), previewFingerprint: previewData?.pricingFingerprint ?? null,
+      giftDecision: cartSnapshot.giftDecision, comment: validation.comment, items: buildSubmitItems()
     }
+    const { giftDecision } = payload
+    const fingerprint = buildCanonicalSubmitFingerprint(userId, generation, venueId, tableSessionId, payload.tabId,
+      payload.comment ?? null, payload.items)
     isSubmitting = true
     updateSubmitState()
-    if (submitAbort) {
-      submitAbort.abort()
-    }
     const controller = new AbortController()
     submitAbort = controller
-    const deps = buildApiDeps(isDebug)
-    const items = buildSubmitItems()
-    const giftDecision = cartSnapshot.giftDecision
-    const fingerprint = buildCanonicalSubmitFingerprint(
-      currentTelegramUserId,
-      tableSnapshot.venueId,
-      validation.tableSessionId,
-      validation.tabId,
-      validation.comment,
-      items
-    )
-    const payload = {
-      tableToken,
-      tableSessionId: validation.tableSessionId,
-      tabId: validation.tabId,
-      idempotencyKey: resolveSubmitIdempotencyKey(fingerprint),
-      previewFingerprint: previewData?.pricingFingerprint ?? null,
-      giftDecision,
-      comment: validation.comment,
-      items
+    let operation: PreparedCheckout | null
+    try {
+      operation = await prepareCheckout(userId, venueId, tableId, cartSnapshot.revision, payload, !!retry)
+    } catch { operation = null }
+    if (!operation || disposed || controller.signal.aborted || !isTableReady() ||
+        tableSnapshot.tableSessionId !== tableSessionId || tableSnapshot.visitGeneration !== generation ||
+        getTelegramContext().telegramUserId !== userId) {
+      if (!disposed) {
+        isSubmitting = false
+        updateSubmitState()
+        setMessage('Не удалось подготовить отправку. Проверьте сохранённую корзину и повторите.')
+      }
+      return
     }
-    const result = await guestAddBatch(backendUrl, payload, deps, controller.signal)
-    if (disposed) {
+    const result = await guestAddBatch(backendUrl, operation.payload, buildApiDeps(isDebug), controller.signal)
+    const currentTableSessionId = tableSnapshot.tableSessionId
+    const currentTabId = getSelectedTab()?.id ?? null
+    const currentFingerprint =
+      currentTableSessionId != null && currentTabId != null
+        ? buildCanonicalSubmitFingerprint(
+            getTelegramContext().telegramUserId,
+            tableSnapshot.visitGeneration,
+            tableSnapshot.venueId,
+            currentTableSessionId,
+            currentTabId,
+            refs.commentInput.value.trim() || null,
+            cartSnapshot.items.values()
+          )
+        : null
+    const submitted = result.ok && (result.data.submitted ?? (result.data.orderId != null && result.data.batchId != null))
+    // Only a committed outcome releases this reservation. Ordinary conflicts can still be retried.
+    const tabDenied = !result.ok && result.error.status === 403 && normalizeErrorCode(result.error) === ApiErrorCodes.ORDER_BATCH_TAB_ACCESS_DENIED
+    const details = !result.ok ? result.error.details : null
+    const closed = result.ok
+      ? result.data.operationClosed === true
+      : tabDenied || (details != null && typeof details === 'object' &&
+          'operationClosed' in details && details.operationClosed === true)
+    if (submitted || closed) {
+      try { await finishCheckout(operation, submitted) } catch {
+        if (!disposed) {
+          isSubmitting = false
+          setMessage('Не удалось сохранить результат. Повторите исходную отправку для проверки заказа.')
+          updateSubmitState()
+        }
+        return
+      }
+    }
+    if (disposed) return
+    if (tableSnapshot.tableSessionId !== tableSessionId || tableSnapshot.visitGeneration !== generation ||
+        getTelegramContext().telegramUserId !== userId) {
+      isSubmitting = false
+      updateSubmitState()
       return
     }
     if (controller.signal.aborted || submitAbort !== controller) {
@@ -1860,6 +1904,12 @@ export function renderCartScreen(options: CartScreenOptions) {
     isSubmitting = false
     submitAbort = null
     if (!result.ok) {
+      if (tabDenied) {
+        await reloadTabs()
+        setMessage('Доступ к счёту изменился. Выберите другой доступный счёт.')
+        updateSubmitState()
+        return
+      }
       const code = normalizeErrorCode(result.error)
       if (code === ApiErrorCodes.UNAUTHORIZED || code === ApiErrorCodes.INITDATA_INVALID) {
         clearSession()
@@ -1868,12 +1918,14 @@ export function renderCartScreen(options: CartScreenOptions) {
         updateSubmitState()
         return
       }
+      if (closed && code === ApiErrorCodes.ORDER_BATCH_GIFT_DECISION_REQUIRED) {
+        setCartGiftDecision(null)
+      }
       if (applyMenuSelectionError(result.error)) {
         updateSubmitState()
         return
       }
       if (result.error.status === 409 && code === ApiErrorCodes.ORDER_IDEMPOTENCY_PAYLOAD_MISMATCH) {
-        resetSubmitIdempotency()
         showSubmitError(result.error)
         updateSubmitState()
         return
@@ -1884,14 +1936,6 @@ export function renderCartScreen(options: CartScreenOptions) {
             label: 'Проверить активный заказ',
             kind: 'secondary',
             onClick: onNavigateOrder
-          },
-          {
-            label: 'Отправить как новый заказ',
-            kind: 'primary',
-            onClick: () => {
-              resetSubmitIdempotency()
-              void handleSubmit()
-            }
           }
         ])
         updateSubmitState()
@@ -1901,11 +1945,12 @@ export function renderCartScreen(options: CartScreenOptions) {
       updateSubmitState()
       return
     }
-    resetSubmitIdempotency()
-    const submitted =
-      result.data.submitted ??
-      (result.data.orderId != null && result.data.batchId != null)
     if (!submitted) {
+      if (!closed) {
+        setMessage('Результат отправки пока не подтверждён. Повторите исходную отправку.')
+        updateSubmitState()
+        return
+      }
       previewLoading = false
       previewFailed = false
       previewMessage = ''
@@ -1927,27 +1972,11 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     const wasRecalculated = result.data.recalculated === true
-    const currentTableSessionId = tableSnapshot.tableSessionId
-    const currentTabId = getSelectedTab()?.id ?? null
-    const currentFingerprint =
-      currentTableSessionId != null && currentTabId != null
-        ? buildCanonicalSubmitFingerprint(
-            getTelegramContext().telegramUserId,
-            tableSnapshot.venueId,
-            currentTableSessionId,
-            currentTabId,
-            refs.commentInput.value.trim() || null,
-            cartSnapshot.items.values()
-          )
-        : null
     if (currentFingerprint !== fingerprint) {
       setMessage(CART_CHANGED_DURING_SUBMIT_MESSAGE)
       updateSubmitState()
       return
     }
-    clearCart()
-    refs.commentInput.value = ''
-    refs.commentCounter.textContent = `0/${MAX_COMMENT_LENGTH}`
     updateSubmitState()
     showToast(wasRecalculated ? 'Условия акции изменились. Итог корзины пересчитан.' : 'Отправлено в заказ')
     onNavigateOrder()
@@ -1964,14 +1993,16 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     const tableToken = tableSnapshot.tableToken
-    if (!tableToken || !tableSnapshot.tableSessionId) {
+    if (!tableToken || !tableSnapshot.tableSessionId || tableSnapshot.visitGeneration === undefined) {
       setChatMessage(resolveTableHint(tableSnapshot) ?? 'Не удалось загрузить стол. Попробуйте позже.', 'error')
       return
     }
     const payload = {
       cmd: 'start_quick_order',
       table_token: tableToken,
-      table_session_id: tableSnapshot.tableSessionId
+      table_session_id: tableSnapshot.tableSessionId,
+      visit_generation: tableSnapshot.visitGeneration,
+      tab_id: validation.tabId
     }
     isChatSending = true
     updateSubmitState()
@@ -1999,6 +2030,8 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     const sessionId = tableSnapshot.tableSessionId
+    const generation = tableSnapshot.visitGeneration
+    if (generation === undefined) return
     tabActionAbort?.abort()
     const controller = new AbortController()
     tabActionAbort = controller
@@ -2010,14 +2043,14 @@ export function renderCartScreen(options: CartScreenOptions) {
     const createTab = personal ? guestOpenPersonalTab : guestCreateSharedTab
     const result = await createTab(
       backendUrl,
-      { tableSessionId: sessionId },
+      { tableSessionId: sessionId, expectedVisitGeneration: generation },
       deps,
       controller.signal
     )
     if (disposed) {
       return
     }
-    if (controller.signal.aborted || tabActionAbort !== controller || tableSnapshot.tableSessionId !== sessionId) {
+    if (controller.signal.aborted || tabActionAbort !== controller || (tableSnapshot.tableSessionId !== sessionId || tableSnapshot.visitGeneration !== generation)) {
       const isCurrent = tabActionAbort === controller
       if (isCurrent) {
         tabActionAbort = null
@@ -2061,14 +2094,14 @@ export function renderCartScreen(options: CartScreenOptions) {
     const inviteResult = await guestCreateTabInvite(
       backendUrl,
       result.data.tab.id,
-      { tableSessionId: sessionId },
+      { tableSessionId: sessionId, expectedVisitGeneration: generation },
       deps,
       controller.signal
     )
     if (disposed) {
       return
     }
-    if (controller.signal.aborted || tabActionAbort !== controller || tableSnapshot.tableSessionId !== sessionId) {
+    if (controller.signal.aborted || tabActionAbort !== controller || (tableSnapshot.tableSessionId !== sessionId || tableSnapshot.visitGeneration !== generation)) {
       const isCurrent = tabActionAbort === controller
       if (isCurrent) {
         tabActionAbort = null
@@ -2120,6 +2153,8 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     const sessionId = tableSnapshot.tableSessionId
+    const generation = tableSnapshot.visitGeneration
+    if (generation === undefined) return
     tabActionAbort?.abort()
     const controller = new AbortController()
     tabActionAbort = controller
@@ -2127,16 +2162,40 @@ export function renderCartScreen(options: CartScreenOptions) {
     setTabMessage('')
     updateSubmitState()
     const deps = buildApiDeps(isDebug)
+    const userId = getTelegramContext().telegramUserId
+    const target = joinTarget
+    if (!target || target.token !== token || target.sessionId !== sessionId ||
+        target.generation !== generation || target.userId !== userId) {
+      joinTarget = undefined
+      const preview = await guestInspectTabInvite(backendUrl,
+        { tableSessionId: sessionId, expectedVisitGeneration: generation, token }, deps, controller.signal)
+      if (disposed || controller.signal.aborted || tabActionAbort !== controller) return
+      tabState.joining = false
+      tabActionAbort = null
+      if (preview.ok && userId && tableSnapshot.tableSessionId === sessionId &&
+          tableSnapshot.visitGeneration === generation && getTelegramContext().telegramUserId === userId) {
+        joinTarget = { ...preview.data, token, sessionId, generation, userId }
+        isJoinMode = true
+        refs.joinTokenInput.value = token
+        setTabMessage(`Вступить в общий счёт №${preview.data.tabId}? Нажмите «Вступить» для подтверждения.`, 'info')
+      } else if (!preview.ok) {
+        setTabMessage(preview.error.message || 'Приглашение недоступно. Проверьте код.', 'error')
+      }
+      updateSubmitState()
+      return
+    }
+    joinTarget = undefined
     const result = await guestJoinTab(
       backendUrl,
-      { tableSessionId: sessionId, token, consent: true },
+      { tableSessionId: sessionId, expectedVisitGeneration: generation, token, consent: true,
+        inviteId: target.inviteId, expectedTabId: target.tabId },
       deps,
       controller.signal
     )
     if (disposed) {
       return
     }
-    if (controller.signal.aborted || tabActionAbort !== controller || tableSnapshot.tableSessionId !== sessionId) {
+    if (controller.signal.aborted || tabActionAbort !== controller || (tableSnapshot.tableSessionId !== sessionId || tableSnapshot.visitGeneration !== generation)) {
       const isCurrent = tabActionAbort === controller
       if (isCurrent) {
         tabActionAbort = null
@@ -2176,6 +2235,8 @@ export function renderCartScreen(options: CartScreenOptions) {
   let pendingJoinToken: string | null = parseJoinTokenFromLocation() || null
 
   disposables.push(
+    on(inviteButton, 'click', () => void restoreSharedInviteForOwnerTab()),
+    on(retryCheckout, 'click', () => { if (cartSnapshot.checkout) void handleSubmit(cartSnapshot.checkout) }),
     on(refs.sendButton, 'click', () => {
       void handleSubmit()
     }),
@@ -2217,6 +2278,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       void handleJoinTab()
     }),
     on(refs.joinTokenInput, 'input', () => {
+      joinTarget = undefined
       updateTabsUi()
     }),
     on(refs.commentInput, 'input', () => {
@@ -2238,9 +2300,10 @@ export function renderCartScreen(options: CartScreenOptions) {
     }
     if (nextMutationSignature !== cartMutationSignature) {
       cartMutationSignature = nextMutationSignature
-      resetSubmitIdempotency()
     }
     cartSnapshot = snapshot
+    refs.commentInput.readOnly = snapshot.draftStorage !== 'ready' && snapshot.draftStorage !== 'saving'
+    refs.commentInput.title = refs.commentInput.readOnly ? 'Редактирование приостановлено. Сначала восстановите или сохраните корзину.' : ''
     if (refs.commentInput.value !== snapshot.commentDraft) {
       refs.commentInput.value = snapshot.commentDraft
       refs.commentCounter.textContent = `${refs.commentInput.value.length}/${MAX_COMMENT_LENGTH}`
@@ -2250,6 +2313,7 @@ export function renderCartScreen(options: CartScreenOptions) {
   })
 
   const tableSubscription = subscribeTable((snapshot) => {
+    const generationChanged = snapshot.visitGeneration !== tableSnapshot.visitGeneration
     const previousTableSessionId = tableSnapshot.tableSessionId
     const previousVenueId = tableSnapshot.venueId
     if (
@@ -2267,10 +2331,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     ) {
       setCartGiftDecision(null)
     }
-    if (snapshot.tableSessionId !== previousTableSessionId || snapshot.venueId !== previousVenueId) {
-      resetSubmitIdempotency()
-    }
-    if (snapshot.tableSessionId !== previousTableSessionId) {
+    if (snapshot.tableSessionId !== previousTableSessionId || generationChanged) {
       tabActionAbort?.abort()
       tabActionAbort = null
       inviteRestoreAbort?.abort()

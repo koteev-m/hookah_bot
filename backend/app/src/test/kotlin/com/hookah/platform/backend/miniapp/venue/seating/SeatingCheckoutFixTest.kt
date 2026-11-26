@@ -33,6 +33,7 @@ internal data class CheckoutSeat(
 
 internal suspend fun checkoutSeat(ds: HikariDataSource): CheckoutSeat {
     val (venue, tables) = seedSeating(ds)
+    ds.connection.use { c -> c.write("INSERT INTO venue_subscriptions (venue_id, status) VALUES (?, 'ACTIVE')", venue) }
     val repo = SeatingRepository(ds, clock = seatingClock)
     val seat = repo.command(venue, STAFF, cmd("SEAT").copy(tableId = tables[0], partySize = 2))
     val session = repo.state(venue, STAFF).tables[0].seating!!.tableSessionId

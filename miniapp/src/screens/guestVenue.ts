@@ -1732,6 +1732,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     const payload = {
       tableToken,
       tableSessionId,
+      expectedVisitGeneration: tableSnapshot.visitGeneration!,
       reason: refs.staffReason.value,
       comment: commentValue ? commentValue : null
     }

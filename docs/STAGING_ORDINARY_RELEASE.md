@@ -786,3 +786,42 @@ Future recovery plan, after publication and separate execution authorization:
    smoke. Test reload/recreate durability only on the isolated VM, never by reloading
    the shared host for acceptance. FAILED/UNKNOWN stops without replay or rollback.
    Do not resume subdomain rollout as part of PDF recovery.
+
+### Guest participation offline cutovers
+
+HT70 refuses any ordinary deployment whose appended PostgreSQL manifest crosses
+an offline version. The current set is V144 through V147 inclusive. The refusal is
+`PARTICIPATION_OFFLINE_CUTOVER_REQUIRED`. Ordinary compatibility attestations
+do not override the check. Compatible additions outside that set keep the
+exact-manifest attestation requirement. Ordinary rollback requires identical manifests.
+
+V144 introduces participation generations. V145 adds the Bot preparation and final
+checkout outcomes. V146 adds one row per accepted extension key. V147 adds each new key’s confirmed quote revision and preserves unknown historical revisions as NULL. Old HTTP or Bot
+writers can bypass the invariants associated with those versions. Fence them before
+any crossing, including V143 to V145, V144 to V145, V145 to V146 and V146 to V147.
+
+1. Prepare a separately reviewed maintenance operation for the exact source and candidate
+   digests, CI evidence, database binding, Flyway inventories and expected site downtime.
+   Check all replicas, pollers, webhook consumers and processes with write access to this DB.
+   Verify the release tool in use contains the offline migration set and fence older automation that can
+   restart the previous image.
+   Include the guest instruction to close and reopen the Mini App after maintenance. The
+   shipped checkout screen replaces server preview errors with generic text. The backend
+   returns HTTP 428 and an update instruction, and the updated client displays the guidance.
+2. Fence incoming writes and Telegram deliveries, drain requests and stop all old writers.
+   Verify termination and prevent their supervisors from restarting them. Under the project
+   release lock use the existing verified backup procedure. Record its identity, committed
+   Flyway history and recovery point. Retain the old image and backup independently.
+3. Migrate once with the new backend while traffic remains closed. Verify the expected
+   schema and history, health, sole writer and image digest. Use disposable guests to check
+   end, rejoin, closed checkout replay, coalesced extension replay and fresh checkout. On a staging iPhone, close the old
+   Mini App completely, reopen it from Telegram, verify that the served asset hash matches
+   the candidate, and submit one fresh order. Verify exactly one new batch in the chosen bill.
+   Record the release and smoke result before reopening traffic.
+4. On failed or unknown migration, keep writes fenced. Inspect the actual history and
+   application state. Before migration, the original digest may resume against a verified
+   untouched database. After an offline migration, use a compatible forward fix. Disaster recovery to the
+   pre-cutover point requires a separately authorized restoration into an isolated database,
+   data-loss assessment and verified binding before traffic resumes. An old image must never
+   write against post-cutover data. The ordinary deployment command cannot perform this
+   exceptional transition. Do not bypass its guard or edit its durable state by hand.

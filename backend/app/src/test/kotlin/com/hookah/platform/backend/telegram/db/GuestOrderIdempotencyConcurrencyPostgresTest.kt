@@ -534,13 +534,19 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
             val initial = submit(ordersRepository(dataSource), fixture, scope, LEGACY_UPGRADE_KEY)
             clearRequestFingerprint(dataSource, scope.tableSessionId, LEGACY_UPGRADE_KEY)
             val before = readSnapshot(dataSource)
+            // An unversioned legacy row cannot prove which participation produced it.
+            kotlin.test.assertFailsWith<OrderIdempotencyPayloadMismatchException> {
+                submit(ordersRepository(dataSource), fixture, scope, LEGACY_UPGRADE_KEY)
+            }
+            assertEquals(before, readSnapshot(dataSource))
+
             val concurrentDataSource = TransactionStartBarrierDataSource(dataSource)
             val repository = ordersRepository(concurrentDataSource)
 
             val results =
                 runConcurrently(
-                    { submit(repository, fixture, scope, LEGACY_UPGRADE_KEY) },
-                    { submit(repository, fixture, scope, LEGACY_UPGRADE_KEY) },
+                    { submit(repository, fixture, scope, LEGACY_UPGRADE_KEY, expectedVisitGeneration = null) },
+                    { submit(repository, fixture, scope, LEGACY_UPGRADE_KEY, expectedVisitGeneration = null) },
                 ).map(Result<CreatedOrderBatch>::getOrThrow)
 
             assertEquals(setOf(initial.batchId), results.mapTo(mutableSetOf(), CreatedOrderBatch::batchId))
@@ -677,6 +683,7 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
         scope: OrderScope,
         idempotencyKey: String,
         items: List<OrderBatchItemInput> = fixture.cartItems(),
+        expectedVisitGeneration: Long? = 0,
     ): CreatedOrderBatch =
         assertNotNull(
             runBlocking {
@@ -686,6 +693,7 @@ class GuestOrderIdempotencyConcurrencyPostgresTest {
                     tableSessionId = scope.tableSessionId,
                     userId = USER_ID,
                     idempotencyKey = idempotencyKey,
+                    expectedVisitGeneration = expectedVisitGeneration,
                     tabId = scope.tabId,
                     comment = COMMENT,
                     items = items,
