@@ -34,13 +34,16 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
+// Approval, payment and order closure serialize at this venue row before locking the order.
+private const val VENUE_LOCK = "SELECT id FROM venues WHERE id = ? FOR NO KEY UPDATE"
+
 class AccountingExtensionConcurrencyPostgresTest {
     @Test
     fun `extension wins and order closure includes its charge without FK deadlock`() =
         runBlocking {
             fixture().use { f ->
                 SqlBarrier(f.ds, "INSERT INTO order_service_charges").use { extension ->
-                    SqlBarrier(f.ds, "SELECT status, updated_at FROM orders", hold = false).use { closing ->
+                    SqlBarrier(f.ds, VENUE_LOCK, hold = false).use { closing ->
                         val approve = async { ShiftExtensionRepository(extension).approveRequest(1, 81, 102) }
                         val extensionPid = extension.awaitEntered()
                         val close = async { f.closeOrder(closing) }
@@ -66,7 +69,7 @@ class AccountingExtensionConcurrencyPostgresTest {
             fixture().use { f ->
                 val before = f.extensionState()
                 SqlBarrier(f.ds, "UPDATE orders SET status = 'CLOSED'", after = true).use { closing ->
-                    SqlBarrier(f.ds, "SELECT status FROM orders", hold = false).use { extension ->
+                    SqlBarrier(f.ds, VENUE_LOCK, hold = false).use { extension ->
                         val close = async { f.closeOrder(closing) }
                         val closePid = closing.awaitEntered()
                         val approve =
@@ -96,7 +99,7 @@ class AccountingExtensionConcurrencyPostgresTest {
                 val before = f.extensionState()
                 val auditBefore = f.count("audit_log")
                 SqlBarrier(f.ds, "UPDATE venue_accounting_shifts SET status = 'CLOSED'").use { closing ->
-                    SqlBarrier(f.ds, "SELECT status FROM orders", hold = false).use { extension ->
+                    SqlBarrier(f.ds, VENUE_LOCK, hold = false).use { extension ->
                         val close =
                             async {
                                 AccountingRepository(closing).execute(
@@ -137,7 +140,7 @@ class AccountingExtensionConcurrencyPostgresTest {
                 val before = f.report()
                 val auditBefore = f.count("audit_log")
                 SqlBarrier(f.ds, "INSERT INTO order_service_charges").use { extension ->
-                    SqlBarrier(f.ds, "SELECT id, status FROM orders WHERE accounting_shift_id", hold = false).use {
+                    SqlBarrier(f.ds, VENUE_LOCK, hold = false).use {
                             payment ->
                         val approve = async { ShiftExtensionRepository(extension).approveRequest(1, 81, 102) }
                         val extensionPid = extension.awaitEntered()
@@ -179,7 +182,7 @@ class AccountingExtensionConcurrencyPostgresTest {
                 val before = f.extensionState()
                 val sale = f.report().sales.single()
                 SqlBarrier(f.ds, "INSERT INTO venue_accounting_sales", after = true).use { payment ->
-                    SqlBarrier(f.ds, "SELECT status FROM orders", hold = false).use { extension ->
+                    SqlBarrier(f.ds, VENUE_LOCK, hold = false).use { extension ->
                         val pay =
                             async {
                                 AccountingRepository(payment).execute(
@@ -210,7 +213,7 @@ class AccountingExtensionConcurrencyPostgresTest {
         runBlocking {
             fixture().use { f ->
                 SqlBarrier(f.ds, "INSERT INTO order_service_charges").use { first ->
-                    SqlBarrier(f.ds, "SELECT id FROM table_sessions", hold = false).use { second ->
+                    SqlBarrier(f.ds, VENUE_LOCK, hold = false).use { second ->
                         val a = async { ShiftExtensionRepository(first).approveRequest(1, 81, 102) }
                         val firstPid = first.awaitEntered()
                         val b = async { ShiftExtensionRepository(second).approveRequest(1, 81, 102) }
@@ -239,7 +242,7 @@ class AccountingExtensionConcurrencyPostgresTest {
                 val before = f.allState()
                 val sale = f.report().sales.single()
                 SqlBarrier(f.ds, "UPDATE orders SET updated_at", after = true, fail = true).use { extension ->
-                    SqlBarrier(f.ds, "SELECT id, status FROM orders WHERE accounting_shift_id", hold = false).use {
+                    SqlBarrier(f.ds, VENUE_LOCK, hold = false).use {
                             payment ->
                         val approve =
                             async { runCatching { ShiftExtensionRepository(extension).approveRequest(1, 81, 102) } }
@@ -274,6 +277,7 @@ class AccountingExtensionConcurrencyPostgresTest {
         seedAccounting(ds)
         seedDigitalOrder(ds, 31, closed = false)
         ds.connection.use { c ->
+            c.exec("INSERT INTO shift_extension_settings (venue_id, enabled, price_minor) VALUES (1, TRUE, 5000)")
             c.exec(
                 "INSERT INTO tab (id, venue_id, table_session_id, type, owner_user_id) " +
                     "VALUES (71, 1, 41, 'PERSONAL', 301)",

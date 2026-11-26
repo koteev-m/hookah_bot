@@ -302,12 +302,29 @@ class ProductionProfileTest(unittest.TestCase):
         self.assertFalse(p.matches_running_image(container, ref, image))
 
     def test_history_rejects_missing_failed_or_changed_migration(self):
-        rows = [dict(row, success=True) for row in p.history_for(p.source_manifest())]
+        rows = [dict(row, success=True) for row in p.history_for(p.source_manifest(historical=True))]
         p.check_history(json.dumps(rows))
-        for wrong in (rows[:-1], rows[:-1] + [dict(rows[-1], success=False)],
+        for wrong in (rows[:-1], rows + [dict(rows[-1], version=144)], rows[:-1] + [dict(rows[-1], success=False)],
                       rows[:-1] + [dict(rows[-1], checksum=0)]):
             with self.assertRaises(p.Refused):
                 p.check_history(json.dumps(wrong))
+
+    def test_historical_reads_do_not_admit_later_or_modified_pilot_sql(self):
+        directory = Path("backend/app/src/main/resources/db/migration/postgresql")
+        fixture = self.folder / directory
+        fixture.mkdir(parents=True)
+        for row in p.source_manifest(historical=True):
+            (fixture / row["script"]).write_bytes((p.ROOT / directory / row["script"]).read_bytes())
+        with patch.object(p, "ROOT", self.folder):
+            approved = p.source_manifest()
+            (fixture / "V144__later.sql").write_text("SELECT 1;\n")
+            self.assertEqual(p.source_manifest(historical=True), approved)
+            with self.assertRaises(p.Refused):
+                p.source_manifest()
+            with (fixture / approved[-1]["script"]).open("ab") as sql:
+                sql.write(b"\n")  # Flyway CRC unchanged, approved bytes differ.
+            with self.assertRaises(p.Refused):
+                p.source_manifest(historical=True)
 
 
 if __name__ == "__main__":

@@ -96,10 +96,14 @@ class ProductionBillingPostgresTest {
                 "INSERT INTO billing_adjustments(venue_id,kind,days,reason,previous_paid_through,new_paid_through," +
                     "actor_user_id) VALUES ($venue,'COURTESY_DAYS',3,'legacy','2026-10-31','2026-11-03',7001)",
             )
-            val upgraded = flyway().load()
+            val upgraded = flyway().target("143").load()
             assertEquals(1, upgraded.migrate().migrationsExecuted)
             upgraded.validate()
             assertEquals(0, upgraded.migrate().migrationsExecuted)
+            val current = flyway().load()
+            assertEquals(4, current.migrate().migrationsExecuted)
+            current.validate()
+            assertEquals(0, current.migrate().migrationsExecuted)
             assertEquals(3L, ds.number("SELECT sum(days) FROM billing_adjustments WHERE operation_key IS NULL"))
         }
     }

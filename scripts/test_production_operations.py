@@ -644,7 +644,7 @@ class PilotOperationsTest(unittest.TestCase):
             self.assertEqual(args[1:], ["inspect", pg])
             return json.dumps([container])
 
-        history = json.dumps([dict(row, success=True) for row in profile.history_for(profile.source_manifest())])
+        history = json.dumps([dict(row, success=True) for row in profile.history_for(profile.source_manifest(historical=True))])
         with patch.object(subprocess, "check_output", side_effect=docker), \
                 patch.object(profile, "pg_query", side_effect=["123|42", history]):
             self.assertEqual(profile.database_identity(self.plan)["container"], pg)

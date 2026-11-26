@@ -118,17 +118,65 @@ class TelegramWebhookRoutesTest {
             }
         }
 
+    private suspend fun awaitButton(
+        screenText: String,
+        label: String,
+    ): String =
+        withTimeout(15000) {
+            var screen = sentMessages.firstOrNull { it["text"]?.jsonPrimitive?.content == screenText }
+            while (screen == null) {
+                delay(20)
+                screen = sentMessages.firstOrNull { it["text"]?.jsonPrimitive?.content == screenText }
+            }
+            sentMessages.remove(screen)
+            screen.getValue("reply_markup").jsonObject.getValue("inline_keyboard").jsonArray
+                .flatMap { it.jsonArray }.map { it.jsonObject }
+                .single { it.getValue("text").jsonPrimitive.content == label }
+                .getValue("callback_data").jsonPrimitive.content
+        }
+
+    private suspend fun pressButton(
+        client: HttpClient,
+        actor: Long,
+        update: Int,
+        id: String,
+        data: String,
+    ) {
+        val response =
+            client.post("/telegram/webhook") {
+                contentType(ContentType.Application.Json)
+                headers { append("X-Telegram-Bot-Api-Secret-Token", "secret") }
+                setBody(
+                    """{"update_id":$update,"callback_query":{"id":"$id","chat_instance":"test",
+                    "from":{"id":$actor},"message":{"message_id":7001,"chat":{"id":$actor,"type":"private"}},
+                    "data":"$data"}}""",
+                )
+            }
+        assertEquals(HttpStatusCode.OK, response.status)
+    }
+
     @Test
     fun `an ordinary bot cart action refreshes its exact session before expiry`() =
         testApplication {
             val db = PostgresTestEnv.createDatabase()
             startOrdinaryVisit(db)
             environment { config = botVisitConfig(db) }
-            application { moduleWithOverrides(syntheticOverrides(callbackId = "cart-activity")) }
+            application { moduleWithOverrides(syntheticOverrides("cart-activity")) }
             client.get("/health")
             val actor = ALLOWED_USER_ID
             val session =
                 checkNotNull(db.scalar("SELECT table_session_id FROM telegram_chat_context WHERE user_id=$actor"))
+            val open =
+                client.post("/telegram/webhook") {
+                    contentType(ContentType.Application.Json)
+                    headers { append("X-Telegram-Bot-Api-Secret-Token", "secret") }
+                    setBody(
+                        """{"update_id":92,"message":{"message_id":92,"chat":{"id":$actor,"type":"private"},
+                        "from":{"id":$actor},"text":"🧺 Корзина"}}""",
+                    )
+                }
+            assertEquals(HttpStatusCode.OK, open.status)
+            val clear = awaitButton("Корзина пуста.", "🗑️ Очистить корзину")
             DriverManager.getConnection(db.jdbcUrl, db.user, db.password).use { conn ->
                 conn.createStatement().use {
                     it.executeUpdate(
@@ -136,26 +184,14 @@ class TelegramWebhookRoutesTest {
                     )
                 }
             }
-            val response =
-                client.post("/telegram/webhook") {
-                    contentType(ContentType.Application.Json)
-                    headers { append("X-Telegram-Bot-Api-Secret-Token", "secret") }
-                    setBody(
-                        """{"update_id":92,"callback_query":{"id":"cart-activity","chat_instance":"test",
-                            "from":{"id":$actor},"message":{"message_id":91,"chat":{"id":$actor,"type":"private"}},
-                            "data":"bot_menu_cart_clear"}}""",
-                    )
-                }
-            assertEquals(HttpStatusCode.OK, response.status)
-            withTimeout(15000) {
-                val ownedBill = "SELECT COUNT(*) FROM tab WHERE table_session_id=$session AND owner_user_id=$actor"
-                while (db.scalar(ownedBill) != "1") {
-                    delay(20)
-                }
-            }
+            pressButton(client, actor, 93, "cart-activity", clear)
             val refreshed =
                 "SELECT COUNT(*) FROM table_sessions WHERE id=$session AND expires_at>now()+interval '5 minutes'"
-            assertEquals("1", db.scalar(refreshed))
+            withTimeout(15000) {
+                while (db.scalar(refreshed) != "1") delay(20)
+            }
+            val ownedBill = "SELECT COUNT(*) FROM tab WHERE table_session_id=$session AND owner_user_id=$actor"
+            assertEquals("1", db.scalar(ownedBill))
             assertEquals(session, db.scalar("SELECT table_session_id FROM telegram_chat_context WHERE user_id=$actor"))
         }
 
@@ -166,7 +202,7 @@ class TelegramWebhookRoutesTest {
             val user = ALLOWED_USER_ID
             startOrdinaryVisit(db)
             environment { config = botVisitConfig(db) }
-            application { moduleWithOverrides(syntheticOverrides()) }
+            application { moduleWithOverrides(syntheticOverrides("exit-first", "exit-rejoined", "exit-other-table")) }
             client.get("/health")
             val second = createClient {}
 
@@ -203,6 +239,13 @@ class TelegramWebhookRoutesTest {
                 assertEquals(HttpStatusCode.OK, response.status)
             }
 
+            suspend fun confirmExit(callbackId: String) {
+                message("🚪 Завершить визит")
+                val prompt = "Завершить текущий визит? Корзина этого участия будет очищена."
+                val data = awaitButton(prompt, "Завершить визит")
+                pressButton(client, user, ++update, callbackId, data)
+            }
+
             suspend fun awaitMessage(predicate: (JsonObject) -> Boolean): JsonObject =
                 withTimeout(15000) {
                     while (sentMessages.none(predicate)) delay(20)
@@ -223,7 +266,7 @@ class TelegramWebhookRoutesTest {
             assertEquals("bot-closure", qr)
             assertEquals(session, pointer.parameters["tableSessionId"])
             assertEquals(before, snapshot())
-            message("🚪 Завершить визит")
+            confirmExit("exit-first")
             awaitMessage { it["text"]?.jsonPrimitive?.content?.startsWith("Визит завершён.") == true }
             val markerSql =
                 "SELECT exit_event_id FROM guest_table_session_exits " +
@@ -259,6 +302,8 @@ class TelegramWebhookRoutesTest {
             assertEquals(event, scannedEvent)
             assertEquals(session, scanned.getValue("tableSessionId").jsonPrimitive.content)
 
+            var generation = "0"
+
             suspend fun rejoin(
                 http: HttpClient,
                 auth: String,
@@ -273,11 +318,9 @@ class TelegramWebhookRoutesTest {
                     }
                 assertEquals(expected, response.status)
                 if (expected == HttpStatusCode.OK) {
-                    assertEquals(
-                        "true",
-                        Json.parseToJsonElement(response.bodyAsText()).jsonObject
-                            .getValue("tableSessionActive").jsonPrimitive.content,
-                    )
+                    val visit = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                    assertEquals("true", visit.getValue("tableSessionActive").jsonPrimitive.content)
+                    generation = visit.getValue("visitGeneration").jsonPrimitive.content
                 }
             }
 
@@ -326,7 +369,7 @@ class TelegramWebhookRoutesTest {
             assertEquals("1", db.scalar(activeChatSql))
             assertEquals(before, snapshot())
             rejoin(client, firstAuth, HttpStatusCode.Conflict)
-            message("🚪 Завершить визит")
+            confirmExit("exit-rejoined")
             withTimeout(15000) {
                 while (db.scalar(markerSql) == null) delay(20)
             }
@@ -347,14 +390,16 @@ class TelegramWebhookRoutesTest {
                 contentType(ContentType.Application.Json)
                 setBody(payload)
             }
-            val bill = """{"tableSessionId":$session}"""
-            val exit = """{"tableToken":"$qr","tableSessionId":$session}"""
-            assertEquals(HttpStatusCode.Forbidden, command("tabs/personal", bill).status)
+
+            fun bill() = """{"tableSessionId":$session,"expectedVisitGeneration":"$generation"}"""
+
+            fun exit() = """{"tableToken":"$qr","tableSessionId":$session,"expectedVisitGeneration":"$generation"}"""
+            assertEquals(HttpStatusCode.Forbidden, command("tabs/personal", bill()).status)
             rejoin(second, secondAuth, HttpStatusCode.OK, laterExit)
             val deniedActor = login(second, SECOND_PRODUCT_USER_ID)
-            assertEquals(HttpStatusCode.Forbidden, command("tabs/personal", bill, deniedActor).status)
-            assertEquals(HttpStatusCode.NotFound, command("table/session/end", exit, deniedActor).status)
-            val ended = command("table/session/end", exit)
+            assertEquals(HttpStatusCode.Forbidden, command("tabs/personal", bill(), deniedActor).status)
+            assertEquals(HttpStatusCode.NotFound, command("table/session/end", exit(), deniedActor).status)
+            val ended = command("table/session/end", exit())
             assertEquals(HttpStatusCode.OK, ended.status)
             assertEquals(
                 "true",
@@ -376,8 +421,8 @@ class TelegramWebhookRoutesTest {
             rejoin(second, secondAuth, HttpStatusCode.OK, miniAppExit)
             readTabs(HttpStatusCode.OK)
             assertEquals(before, snapshot())
-            val firstBill = command("tabs/personal", bill)
-            val sameBill = command("tabs/personal", bill, firstAuth)
+            val firstBill = command("tabs/personal", bill())
+            val sameBill = command("tabs/personal", bill(), firstAuth)
             assertEquals(HttpStatusCode.OK, firstBill.status)
             assertEquals(HttpStatusCode.OK, sameBill.status)
             val tab = Json.parseToJsonElement(firstBill.bodyAsText()).jsonObject.getValue("tab").jsonObject
@@ -387,7 +432,7 @@ class TelegramWebhookRoutesTest {
             assertEquals("1", db.scalar("SELECT COUNT(*) FROM tab_member WHERE user_id=$user"))
             assertEquals("1", db.scalar("SELECT COUNT(*) FROM tab WHERE table_session_id=$session"))
             assertEquals(before - setOf("tab", "tab_member"), snapshot() - setOf("tab", "tab_member"))
-            assertEquals(HttpStatusCode.OK, command("table/session/end", exit).status)
+            assertEquals(HttpStatusCode.OK, command("table/session/end", exit()).status)
 
             // A Platform prompt for an exited actor cannot provision a missing subscription.
             val platform = FIRST_PRODUCT_USER_ID
@@ -403,7 +448,7 @@ class TelegramWebhookRoutesTest {
             }
             val beforePrompt = snapshot()
             readTabs(HttpStatusCode.Locked)
-            assertEquals(HttpStatusCode.Locked, command("tabs/personal", bill).status)
+            assertEquals(HttpStatusCode.Locked, command("tabs/personal", bill()).status)
             assertEquals(beforePrompt, snapshot())
             message("/start bot-closure", platform)
             awaitMessage {
@@ -441,7 +486,7 @@ class TelegramWebhookRoutesTest {
             val previousMarker =
                 "SELECT exit_event_id FROM guest_table_session_exits " +
                     "WHERE user_id=$user AND table_session_id=$oldPhysical"
-            message("🚪 Завершить визит")
+            confirmExit("exit-other-table")
             withTimeout(15000) { while (db.scalar(previousMarker) == null) delay(20) }
             val oldEvent = checkNotNull(db.scalar(previousMarker))
             message("/start third-qr")
@@ -946,17 +991,17 @@ class TelegramWebhookRoutesTest {
         }
     }
 
-    private fun syntheticOverrides(callbackId: String? = null): ModuleOverrides =
+    private fun syntheticOverrides(vararg callbackIds: String): ModuleOverrides =
         ModuleOverrides(
-            telegramHttpClientFactory = { json -> syntheticTelegramClient(json, callbackId) },
+            telegramHttpClientFactory = { json -> syntheticTelegramClient(json, callbackIds.toSet()) },
             telegramCommandMenuConfigurator = {},
         )
 
-    private fun syntheticTelegramClient(json: Json): HttpClient = syntheticTelegramClient(json, null)
+    private fun syntheticTelegramClient(json: Json): HttpClient = syntheticTelegramClient(json, emptySet())
 
     private fun syntheticTelegramClient(
         json: Json,
-        callbackId: String?,
+        callbackIds: Set<String>,
     ): HttpClient =
         HttpClient(
             MockEngine { request ->
@@ -964,9 +1009,9 @@ class TelegramWebhookRoutesTest {
                     check(request.url.protocol.name == "https" && request.url.host == "api.telegram.org")
                     check(request.url.port == 443 && request.method == HttpMethod.Post)
                     check(request.url.parameters.isEmpty())
-                    if (callbackId != null && request.url.encodedPath == "/bottest-token/answerCallbackQuery") {
+                    if (callbackIds.isNotEmpty() && request.url.encodedPath == "/bottest-token/answerCallbackQuery") {
                         val payload = json.parseToJsonElement((request.body as TextContent).text).jsonObject
-                        check(payload.getValue("callback_query_id").jsonPrimitive.content == callbackId)
+                        check(payload.getValue("callback_query_id").jsonPrimitive.content in callbackIds)
                         return@MockEngine respond(
                             """{"ok":true,"result":true}""",
                             headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),

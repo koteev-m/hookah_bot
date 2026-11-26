@@ -2294,7 +2294,12 @@ class TelegramBotRouterTableTokenTest {
     fun `guest qr reentry removes bot keyboard and preserves draft session tab and order`() =
         runBlocking {
             val entryKeys = mutableListOf<String?>()
-            coEvery { outboxEnqueuer.enqueueSendMessage(any(), any(), any(), any(), any()) } answers {
+            coEvery {
+                outboxEnqueuer.enqueueSendMessage(
+                    any(), any(), any(), any(),
+                    matchNullable { it != null },
+                )
+            } answers {
                 entryKeys += invocation.args[4] as String?
                 TelegramOutboxEnqueueOutcome.ENQUEUED
             }
@@ -2611,9 +2616,10 @@ class TelegramBotRouterTableTokenTest {
     fun `fallback cannot rejoin an exited guest while a new bot start explicitly can`() =
         runBlocking {
             val context = stubBotGiftCartContext(Instant.now())
+            coEvery { chatContextRepository.get(100L) } returns null
             coEvery {
                 guestTableContextLifecycleRepository.activate(
-                    200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true, MiniAppFallbackVisit(null),
+                    200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true, MiniAppFallbackVisit(55, 0, 77),
                 )
             } returns
                 GuestTableActivationResult.Denied(GuestTableActivationDeniedReason.INVALID_CONTEXT)
@@ -2627,13 +2633,17 @@ class TelegramBotRouterTableTokenTest {
                             messageId = 81_001L,
                             chat = Chat(id = 100L, type = "private"),
                             fromUser = User(id = 200L),
-                            webAppData = WebAppData("""{"cmd":"start_quick_order","table_token":"TOKEN"}"""),
+                            webAppData =
+                                WebAppData(
+                                    """{"cmd":"start_quick_order","table_token":"TOKEN",""" +
+                                        """"table_session_id":55,"visit_generation":0,"tab_id":77}""",
+                                ),
                         ),
                 ),
             )
             coVerify(exactly = 1) {
                 guestTableContextLifecycleRepository.activate(
-                    200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true, MiniAppFallbackVisit(null),
+                    200L, 100L, "TOKEN", 10L, 11L, any(), any(), null, true, MiniAppFallbackVisit(55, 0, 77),
                 )
             }
             coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
@@ -2682,13 +2692,13 @@ class TelegramBotRouterTableTokenTest {
             }
             coVerify(exactly = 0) { chatContextRepository.saveContext(any(), any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) { dialogStateRepository.set(100L, any()) }
-            coVerify(exactly = 1) {
+            coVerify(exactly = 0) {
                 guestTableContextLifecycleRepository.validatePlatformBotContext(999L, 100L, any())
             }
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
-                    "Откройте QR-код ещё раз и подтвердите вход в Telegram.",
+                    "Обновите Mini App или выберите действие заново в меню стола.",
                     null,
                 )
             }
@@ -5954,7 +5964,7 @@ class TelegramBotRouterTableTokenTest {
     fun `existing guest exit clears platform test context and restores platform menu`() =
         runBlocking {
             val context = platformGuestQrContext()
-            val stored = StoredChatContext(userId = 999L, tableToken = "TOKEN")
+            val stored = StoredChatContext(userId = 999L, tableToken = "TOKEN", tableSessionId = 55L)
             stubPlatformGuestQrAccess(context)
             coEvery { chatContextRepository.get(100L) } returns stored
             coEvery {
@@ -5997,7 +6007,14 @@ class TelegramBotRouterTableTokenTest {
             )
 
             coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(999L, 100L, any())
+                guestTableContextLifecycleRepository.teardownByChat(
+                    999L,
+                    100L,
+                    any(),
+                    expectedToken = "TOKEN",
+                    expectedSessionId = 55L,
+                    expectedGeneration = 0,
+                )
             }
             coVerify(exactly = 0) { chatContextRepository.clear(100L) }
             coVerify(exactly = 0) {
@@ -6297,7 +6314,7 @@ class TelegramBotRouterTableTokenTest {
         }
 
     @Test
-    fun `platform stale availability teardown consumes pending confirmation`() =
+    fun `platform pause preserves participation and a refused confirmation cannot be replayed`() =
         runBlocking {
             val context = platformGuestQrContext()
             val targetRouter = routerWithWebAppPublicUrl("https://mini.app/miniapp/")
@@ -6324,6 +6341,12 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 ),
             )
+            processPlatformGuestQrCallback(
+                targetRouter = targetRouter,
+                updateId = 10_173_11,
+                callbackId = "platform-paused-confirm",
+                data = platformGuestQrConfirmCallback(),
+            )
             coEvery { platformVenueRepository.getVenueDetail(context.venueId) } returns platformGuestQrVenue()
             processPlatformGuestQrCallback(
                 targetRouter = targetRouter,
@@ -6332,8 +6355,15 @@ class TelegramBotRouterTableTokenTest {
                 data = platformGuestQrConfirmCallback(),
             )
 
-            coVerify(exactly = 1) {
-                guestTableContextLifecycleRepository.teardownByChat(999L, 100L, any())
+            coVerify(exactly = 0) {
+                guestTableContextLifecycleRepository.teardownByActorAndToken(
+                    999L,
+                    context.tableToken,
+                    any(),
+                    any(),
+                    false,
+                    any(),
+                )
             }
             coVerify(exactly = 0) { auditLogRepository.appendJson(any(), any(), any(), any(), any()) }
             coVerify(exactly = 0) {
@@ -6348,8 +6378,8 @@ class TelegramBotRouterTableTokenTest {
                 )
                 outboxEnqueuer.enqueueSendMessage(
                     100L,
-                    "Заведение пока не доступно для гостей. Гостевой режим завершён.",
-                    match { it is ReplyKeyboardMarkup },
+                    "Обслуживание временно приостановлено. Вернитесь после возобновления работы заведения.",
+                    null,
                 )
             }
         }
@@ -6370,15 +6400,21 @@ class TelegramBotRouterTableTokenTest {
             contexts.forEachIndexed { index, context ->
                 val chatId = 300L + index
                 coEvery {
-                    guestTableContextLifecycleRepository.teardownByChat(999L, chatId, any())
-                } returns
+                    guestTableContextLifecycleRepository.teardownByChat(
+                        999L, chatId, any(), expectedToken = context.tableToken,
+                        expectedSessionId = 550L + index, expectedGeneration = 0,
+                    )
+                } answers {
+                    coEvery { chatContextRepository.get(chatId) } returns null
                     GuestTableTeardownResult.Cleared(
                         identity = platformGuestIdentity(actorUserId = 999L, chatId = chatId, context = context),
                         tableSessionId = 550L + index,
                         exitRecorded = true,
+                        visitGeneration = 0,
                     )
+                }
                 coEvery { chatContextRepository.get(chatId) } returns
-                    StoredChatContext(userId = 999L, tableToken = context.tableToken, tableSessionId = 55L)
+                    StoredChatContext(userId = 999L, tableToken = context.tableToken, tableSessionId = 550L + index)
             }
             coEvery { tableTokenRepository.resolve("VALID") } returns contexts[0]
             coEvery { tableTokenRepository.resolve("ROTATED") } returns null
@@ -6417,8 +6453,17 @@ class TelegramBotRouterTableTokenTest {
                 )
             }
 
-            coVerify(exactly = contexts.size) {
-                guestTableContextLifecycleRepository.teardownByChat(999L, any(), any())
+            contexts.forEachIndexed { index, context ->
+                coVerify(exactly = 1) {
+                    guestTableContextLifecycleRepository.teardownByChat(
+                        999L,
+                        300L + index,
+                        any(),
+                        expectedToken = context.tableToken,
+                        expectedSessionId = 550L + index,
+                        expectedGeneration = 0,
+                    )
+                }
             }
             coVerify(exactly = 0) { tableTokenRepository.resolve(any()) }
             coVerify(exactly = 0) { tableTokenRepository.resolveInactiveTable(any()) }
@@ -6426,7 +6471,7 @@ class TelegramBotRouterTableTokenTest {
             coVerify(exactly = 0) { subscriptionRepository.getSubscriptionStatus(any()) }
             coVerify(exactly = 0) { tableSessionRepository.endUserTableSession(any(), any(), any(), any(), any()) }
             coVerify(exactly = contexts.size) {
-                outboxEnqueuer.enqueueSendMessage(
+                outboxEnqueuer.enqueueGuestTeardownMenu(
                     any(),
                     "Визит завершён. Чтобы снова заказать за столом, отсканируйте QR.",
                     match { it is ReplyKeyboardMarkup },
@@ -29162,6 +29207,23 @@ class TelegramBotRouterTableTokenTest {
                 )
 
             router.process(update)
+            val choice = "guest_tab:55:0:9"
+            coVerify {
+                outboxEnqueuer.enqueueSendMessage(
+                    100L,
+                    "Выберите счёт для этого посещения.",
+                    match {
+                        it is InlineKeyboardMarkup &&
+                            it.inlineKeyboard.flatten().any {
+                                    b ->
+                                b.callbackData == choice
+                            }
+                    },
+                )
+            }
+            coEvery { guestTabsRepository.isTabMember(9, 10, 55, 200) } returns true
+            processBotCallback(11_003, "choose-owner-tab", choice)
+            router.process(update.copy(updateId = 11_004))
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(
@@ -29554,7 +29616,7 @@ class TelegramBotRouterTableTokenTest {
                         ),
                 )
 
-            router.process(update)
+            router.performGuestAction(update)
 
             coVerify {
                 outboxEnqueuer.enqueueSendMessage(

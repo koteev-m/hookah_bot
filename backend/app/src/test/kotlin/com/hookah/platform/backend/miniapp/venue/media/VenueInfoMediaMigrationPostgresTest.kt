@@ -94,11 +94,14 @@ class VenueInfoMediaMigrationPostgresTest {
                     "142" to "V142__telegram_chat_table_session.sql",
                     "143" to "V143__billing_courtesy_operation.sql",
                     "144" to "V144__guest_visit_generations.sql",
+                    "145" to "V145__bot_prepared_checkouts.sql",
+                    "146" to "V146__shift_extension_request_keys.sql",
+                    "147" to "V147__shift_extension_terms_revision.sql",
                 ),
                 current.info().pending().map { it.version.version to it.script },
             )
-            assertEquals(16, current.migrate().migrationsExecuted)
-            assertEquals("144", current.info().current().version.version)
+            assertEquals(19, current.migrate().migrationsExecuted)
+            assertEquals("147", current.info().current().version.version)
             assertTrue(current.info().pending().isEmpty())
             current.validate()
             assertEquals(0, current.migrate().migrationsExecuted)
