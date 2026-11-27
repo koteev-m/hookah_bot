@@ -60,7 +60,7 @@ class FixtureStaging(s.Staging):
     def candidate(self, record):
         # CI is a transport fixture; production now uses anonymous HTTPS, not gh.
         # Exact public API validation has its own portable regression suite.
-        def fixture_ci(revision, run_id):
+        def fixture_ci(revision, run_id, *, expected_attempt=None):
             s.require(revision == self.ci_revision, 'FIXTURE_CI_REVISION_MISMATCH')
             return {'id': run_id, 'sha': revision, 'url': 'fixture://ci'}
         with patch.object(s, 'verify_ci', side_effect=fixture_ci):

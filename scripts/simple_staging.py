@@ -155,7 +155,7 @@ def public_ci_json(opener, url, deadline):
     return value
 
 
-def verify_ci(revision, run_id):
+def verify_ci(revision, run_id, *, expected_attempt=None):
     require(isinstance(revision, str) and re.fullmatch(r'[0-9a-f]{40}', revision)
             and re.fullmatch(r'[1-9][0-9]{0,19}', str(run_id)), 'CI_INPUT_INVALID')
     run_id = int(run_id)
@@ -179,6 +179,8 @@ def verify_ci(revision, run_id):
         return record
 
     record = read_run()
+    if expected_attempt is not None:
+        require(record['run_attempt'] == expected_attempt and record.get('head_branch') == 'main', 'CUTOVER_CI_ATTEMPT_CHANGED')
     total = None
     ids, names = set(), set()
     # Request numbered pages from the fixed endpoint, never URLs supplied in Link.
@@ -200,6 +202,8 @@ def verify_ci(revision, run_id):
         if len(ids) == total:
             break
     require(len(ids) == total and REQUIRED_JOBS <= names, 'REQUIRED_CI_JOB_NOT_GREEN')
+    if expected_attempt is not None:
+        require('publish-ghcr' in names, 'CUTOVER_PUBLISH_JOB_REQUIRED')
     # A rerun during pagination must not combine evidence from different executions.
     require(read_run()['run_attempt'] == record['run_attempt'], 'CI_RUN_CHANGED')
     return {'id': run_id, 'sha': revision, 'url': html_url}
@@ -417,6 +421,19 @@ class PdfWorkerAdmission:
         return {'driver': driver, 'cgroup': actual, 'systemd': systemd}
 
 
+PARTICIPATION_SOURCE = ('207d5f1fcb410f1c89d6df391ed920f5334c6f1b',
+                        'sha256:f82acbf199faa917e7eea1d82e3404367332db7cc6c98ef3e9dd0f583c950222',
+                        'd1474a3b83ce086761a058edf124cecb3ca6d5687462a2bc868c2118e1f87b39')
+PARTICIPATION_TARGET = ('581ee73b26805acb150a5765ffa2839cbbeb3da4',
+                        'sha256:6b5e984903624606662c63e63773dbdcf93aa71c037aa851fe231e7803824980',
+                        '111a982031d430f7528f0c87c1b8d150680b5e307188430a630d4439271ec97a')
+
+
+def participation_identity(image):
+    require(re.fullmatch(IMAGE_RE, image['image']), 'CUTOVER_IMAGE_REFERENCE_INVALID')
+    return image['revision'], image['image'].split('@')[-1], digest(image['manifest'])
+
+
 class Staging(PdfWorkerAdmission):
     project = 'hookah-bot'
     port = 8080
@@ -476,10 +493,10 @@ class Staging(PdfWorkerAdmission):
         require(ref in data.get('RepoDigests', []), 'IMAGE_DIGEST_MISMATCH')
         return data
 
-    def candidate(self, record):
+    def candidate(self, record, *, expected_attempt=None):
         require(set(record) == {'image', 'revision', 'ci_run'}, 'CANDIDATE_FIELDS_INVALID')
         require(re.fullmatch(IMAGE_RE, record['image']), 'HOOKAH_IMMUTABLE_IMAGE_REQUIRED')
-        ci = verify_ci(record['revision'], record['ci_run'])
+        ci = verify_ci(record['revision'], record['ci_run'], expected_attempt=expected_attempt)
         data = self.inspect_image(record['image'])
         labels = data.get('Config', {}).get('Labels') or {}
         require(labels.get('org.opencontainers.image.source') == SOURCE
@@ -566,14 +583,14 @@ class Staging(PdfWorkerAdmission):
         # Compare every receipt field, including JSON types (e.g. mount RW=true versus 1).
         return json.dumps(observed, sort_keys=True) == json.dumps(recorded, sort_keys=True)
 
-    def observe(self, image, binding):
+    def observe(self, image, binding, *, smoke_user=None, smoke_port=None):
         require(self.binding_matches(binding), 'POSTGRES_BINDING_CHANGED')
         require(self.history() == history_for(image['manifest']), 'DATABASE_HISTORY_MISMATCH')
         apps = [i for i in self.containers() if i['Config']['Labels'].get('com.docker.compose.service') == 'backend']
         require(len(apps) == 1, 'BACKEND_IDENTITY_UNKNOWN')
         app = apps[0]
         require(app['Image'] == image['id'] and app['State']['Running'], 'BACKEND_IMAGE_NOT_RUNNING')
-        require(app['HostConfig']['PortBindings'] == {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(self.port)}]}
+        require(app['HostConfig']['PortBindings'] == {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(smoke_port or self.port)}]}
                 and set(app['NetworkSettings']['Networks']) == {self.project + '_default'}, 'BACKEND_ISOLATION_MISMATCH')
         workers = [i for i in self.containers() if i['Config']['Labels'].get('com.docker.compose.service') == 'pdf-worker']
         if self.config['runtime'].get(PDF_FLAG) == 'true':
@@ -584,24 +601,26 @@ class Staging(PdfWorkerAdmission):
         else:
             require(not app['Mounts'] and not workers, 'BACKEND_ISOLATION_MISMATCH')
         actual = dict(x.split('=', 1) for x in app['Config']['Env'])
-        require(all(actual.get(k) == v for k, v in self.document(image)['services']['backend']['environment'].items()), 'BACKEND_RUNTIME_CONFIG_MISMATCH')
+        require(all(actual.get(k) == v for k, v in self.participation_document(image, smoke_user, smoke_port)['services']['backend']['environment'].items()), 'BACKEND_RUNTIME_CONFIG_MISMATCH')
         require({k: v for k, v in actual.items() if k in OPTIONAL_RUNTIME_KEYS}
                 == {k: v for k, v in self.config['runtime'].items() if k in OPTIONAL_RUNTIME_KEYS},
                 'BACKEND_RUNTIME_CONFIG_MISMATCH')
 
-    def ready(self, image):
+    def ready(self, image, *, smoke_port=None):
+        port = smoke_port or self.port
+        catalog_status = 503 if smoke_port else 401
         deadline = time.monotonic() + self.readiness_seconds
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         while time.monotonic() < deadline:
             try:
                 for path in ('/health', '/db/health', '/version', '/miniapp/', '/api/guest/catalog'):
                     try:
-                        response = opener.open(f'http://127.0.0.1:{self.port}' + path, timeout=3)
+                        response = opener.open(f'http://127.0.0.1:{port}' + path, timeout=3)
                     except urllib.error.HTTPError as exc:
                         response = exc
                     with response:
                         body = response.read(1024 * 1024)
-                        require(response.status == (401 if path.startswith('/api/') else 200), 'HTTP_SMOKE_FAILED')
+                        require(response.status == (catalog_status if path.startswith('/api/') else 200), 'HTTP_SMOKE_FAILED')
                     if path in ('/health', '/db/health'):
                         require(json.loads(body).get('status') == 'ok', 'HEALTH_BODY_INVALID')
                     elif path == '/version':
@@ -613,7 +632,7 @@ class Staging(PdfWorkerAdmission):
                         assets = re.findall(rb'(?:src|href)="(/miniapp/assets/[^"]+)"', body)
                         require(assets, 'MINIAPP_ASSETS_MISSING')
                         for asset in assets:
-                            with opener.open(f'http://127.0.0.1:{self.port}' + asset.decode(), timeout=3) as resource:
+                            with opener.open(f'http://127.0.0.1:{port}' + asset.decode(), timeout=3) as resource:
                                 require(resource.status == 200 and len(resource.read(1024 * 1024)) > 32, 'MINIAPP_ASSET_FAILED')
                 return
             except (OSError, ValueError, Refused):
@@ -652,9 +671,13 @@ class Staging(PdfWorkerAdmission):
         if action == 'status':
             return {'status': state['status'] if state else 'NOT_INSTALLED',
                     'operation': state['operation'] if state else None,
+                    **({'phase': state['phase'], 'smoke_port': state.get('smoke_port')}
+                       if state and state.get('action') == 'participation-cutover' else {}),
                     'intended_image': state['target']['image'] if state else None,
                     'containers': [{'id': i['Id'], 'service': i['Config']['Labels'].get('com.docker.compose.service'),
                                     'running': i['State']['Running']} for i in self.containers()]}
+        require(not (state and state.get('action') == 'participation-cutover' and state['status'] != 'SUCCESS'),
+                'PARTICIPATION_CUTOVER_IN_PROGRESS')
         require(action in ('install', 'deploy', 'reconcile', 'rollback', 'backup'), 'ACTION_INVALID')
         if state:
             require(state['config_binding'] == self.config_binding(), 'DATABASE_OR_HOST_CONFIG_CHANGED')
@@ -738,6 +761,221 @@ class Staging(PdfWorkerAdmission):
             self.save(operation)
             raise
 
+    def check_smoke_port(self, port):
+        require(type(port) is int and 1 <= port <= 65535, 'CUTOVER_SMOKE_PORT_REQUIRED')
+        require(port not in (self.port, 18080), 'CUTOVER_SMOKE_PORT_RESERVED')
+
+    def require_free_smoke_port(self, port):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(('127.0.0.1', port))
+        except OSError as exc:
+            raise Refused('CUTOVER_SMOKE_PORT_UNAVAILABLE') from exc
+        # Docker can publish via NAT without a host listener.
+        ids = self.run(['docker', 'ps', '--quiet', '--no-trunc']).decode().splitlines()
+        if ids:
+            published = self.run(['docker', 'inspect', '--type', 'container',
+                                  '--format', '{{json .NetworkSettings.Ports}}', *ids]).decode().splitlines()
+            require(len(published) == len(ids), 'CUTOVER_SMOKE_PORT_INVENTORY_INCOMPLETE')
+            for line in published:
+                ports = json.loads(line) or {}
+                require(all(binding['HostPort'] != str(port)
+                            for endpoint, bindings in ports.items() if endpoint.endswith('/tcp')
+                            for binding in (bindings or [])), 'CUTOVER_SMOKE_PORT_UNAVAILABLE')
+
+    def participation_document(self, image, smoke_user, smoke_port):
+        doc = self.document(image)
+        if smoke_user:
+            app = doc['services']['backend']
+            app['ports'] = [f'127.0.0.1:{smoke_port}:8080']
+            app['restart'] = 'no'
+            app['environment'].update(STAGING_MAINTENANCE_MODE='V126_SMOKE',
+                                      STAGING_MAINTENANCE_ALLOWED_USER_IDS=smoke_user,
+                                      STAGING_MAINTENANCE_ALLOWED_CHAT_IDS=smoke_user)
+        return doc
+
+    def participation_backends(self):
+        return [c for c in self.containers() if c['Config']['Labels']['com.docker.compose.service'] == 'backend']
+
+    def quiet_database(self, state):
+        require(self.binding_matches(state['binding']) and self.history() == history_for(state['previous']['manifest']),
+                'CUTOVER_SOURCE_DATABASE_CHANGED')
+        require(self.db("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() "
+                        "AND backend_type='client backend' AND pid<>pg_backend_pid()") == '0',
+                'CUTOVER_DATABASE_CLIENT_REMAINS')
+        network = json.loads(self.run(['docker', 'network', 'inspect', self.project + '_default']))[0]
+        require(set(network['Containers']) == {state['binding']['container']}, 'CUTOVER_NETWORK_NOT_QUIESCENT')
+
+    def cutover_backend(self, target, user=None, smoke_port=None):
+        apps = self.participation_backends()
+        require(len(apps) == 1 and apps[0]['Image'] == target['id'], 'CUTOVER_BACKEND_IDENTITY_CHANGED')
+        app = apps[0]
+        expected = self.participation_document(target, user, smoke_port)['services']['backend']
+        env = dict(v.split('=', 1) for v in app['Config']['Env'])
+        port = str(smoke_port or self.port)
+        require(all(env.get(k) == v for k, v in expected['environment'].items())
+                and app['Config']['Labels'].get('com.docker.compose.project.working_dir') == str(self.root)
+                and app['HostConfig']['RestartPolicy']['Name'] == expected['restart']
+                and app['HostConfig']['PortBindings'] == {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': port}]},
+                'CUTOVER_BACKEND_CONFIGURATION_CHANGED')
+        return app
+
+    def verify_participation_backup(self, st):
+        backup = st['backup']
+        path = Path(backup['path'])
+        require(path.parent == self.root and path.resolve() == path and backup['binding'] == st['binding']
+                and private_json(path.with_suffix('.json')) == backup
+                and hashlib.sha256(path.read_bytes()).hexdigest() == backup['sha256'], 'CUTOVER_BACKUP_CHANGED')
+
+    def participation_history(self):
+        # Keep full historical Flyway records, including installation timestamps/ranks.
+        return self.db("SELECT md5(jsonb_agg(to_jsonb(h) ORDER BY installed_rank)::text) "
+                       "FROM flyway_schema_history h WHERE version::int <= 143")
+
+    def begin_participation(self, st, record, user, smoke_port):
+        self.check_smoke_port(smoke_port)
+        self.require_free_smoke_port(smoke_port)
+        old = st['target']
+        require(participation_identity(old) == PARTICIPATION_SOURCE and
+                digest(private_json(self.compose_file)) == st['compose_hash'], 'CUTOVER_SOURCE_MISMATCH')
+        require(self.config['runtime'].get(PDF_FLAG) == 'true', 'CUTOVER_PDF_REQUIRED')
+        self.observe(old, st['binding']); self.ready(old)
+        require(record and record.get('ci_run') == 45891729670 and record.get('revision') == PARTICIPATION_TARGET[0]
+                and record.get('image') == 'ghcr.io/koteev-m/hookah_bot/backend@' + PARTICIPATION_TARGET[1],
+                'CUTOVER_CANDIDATE_MISMATCH')
+        source_info = self.inspect_image(old['image'], pull=False)
+        labels = source_info['Config'].get('Labels', {})
+        require(source_info['Id'] == old['id'] and labels.get('org.opencontainers.image.revision') == old['revision']
+                and labels.get('org.opencontainers.image.source') == SOURCE, 'CUTOVER_SOURCE_IMAGE_CHANGED')
+        require(re.fullmatch(r'17[0-9]{4}', self.db('SHOW server_version_num')),
+                'CUTOVER_POSTGRES_17_REQUIRED')
+        new = self.candidate(record, expected_attempt=2)
+        require(participation_identity(new) == PARTICIPATION_TARGET and new['manifest'][:143] == old['manifest'],
+                'CUTOVER_TARGET_MISMATCH')
+        self.require_free_smoke_port(smoke_port)
+        st = dict(status='APPLYING', operation=uuid.uuid4().hex, action='participation-cutover', phase='FENCE', target=new,
+                  previous=old, binding=st['binding'], runtime_hash=st['runtime_hash'],
+                  previous_runtime_hash=st['runtime_hash'], config_binding=st['config_binding'],
+                  compose_hash=st['compose_hash'], smoke_user=user, smoke_port=smoke_port,
+                  old_backend=self.participation_backends()[0]['Id'])
+        self.save(st)
+        return st
+
+    def participation(self, action, record, user, operation, *, smoke_port=None):
+        self.host_check()
+        st = self.state()
+        require(st and st['config_binding'] == self.config_binding() and
+                st['runtime_hash'] == digest(self.config['runtime']), 'CUTOVER_CONFIG_CHANGED')
+        if (action == 'participation-open' and st.get('action') == 'participation-cutover'
+                and st['status'] == 'SUCCESS' and st.get('phase') == 'COMPLETE'):
+            require(operation == st['operation'] and record is None and user is None and smoke_port is None,
+                    'CUTOVER_RESUME_ID_REQUIRED')
+            require(digest(private_json(self.compose_file)) == st['compose_hash'], 'CUTOVER_COMPOSE_CHANGED')
+            self.observe(st['target'], st['binding']); self.ready(st['target'])
+            # Complete the operation copy if the process died between HT70's two atomic saves.
+            self.save(st)
+            return {'operation': operation, 'status': 'SUCCESS', 'phase': 'COMPLETE', 'smoke_port': st['smoke_port']}
+        if st.get('action') != 'participation-cutover' or st['status'] == 'SUCCESS':
+            require(action == 'participation-cutover' and st['status'] == 'SUCCESS' and not operation
+                    and isinstance(user, str) and re.fullmatch(r'[1-9][0-9]{0,17}', user), 'CUTOVER_ADMISSION_REQUIRED')
+            st = self.begin_participation(st, record, user, smoke_port)
+        else:
+            require(operation == st['operation'] and record is None and user is None and smoke_port is None,
+                    'CUTOVER_RESUME_ID_REQUIRED')
+
+        smoke_port = st.get('smoke_port')
+        self.check_smoke_port(smoke_port)
+        target, binding = st['target'], st['binding']
+        require(participation_identity(target) == PARTICIPATION_TARGET and
+                participation_identity(st['previous']) == PARTICIPATION_SOURCE and self.binding_matches(binding),
+                'CUTOVER_BINDING_CHANGED')
+        smoke = self.participation_document(target, st['smoke_user'], smoke_port)
+        product = self.document(target)
+        fenced = self.document(st['previous'])
+        del fenced['services']['backend']
+        # Only the two exact documents adjacent to a durable transition may occur across a crash.
+        allowed = {st['compose_hash']}
+        if st['phase'] == 'FENCE':
+            self.require_free_smoke_port(smoke_port)
+            allowed.add(digest(fenced))
+        if st['phase'] == 'PREPARE':
+            allowed.add(digest(smoke))
+        if st['phase'] == 'OPENING':
+            allowed.add(digest(product))
+        require(digest(private_json(self.compose_file)) in allowed, 'CUTOVER_COMPOSE_CHANGED')
+        require(action in ('participation-cutover', 'participation-open') and
+                st['phase'] in ('FENCE', 'PREPARE', 'START', 'ACCEPTANCE', 'OPENING'), 'CUTOVER_PHASE_INVALID')
+        require(action != 'participation-open' or st['phase'] in ('ACCEPTANCE', 'OPENING'), 'CUTOVER_NOT_ACCEPTED')
+
+        def checkpoint(phase):
+            st['phase'] = phase
+            self.save(st)
+
+        if st['phase'] == 'FENCE':
+            # A supervisor using the managed Compose file can no longer recreate the old writer.
+            atomic(self.compose_file, fenced)
+            for app in self.participation_backends():
+                require(app['Id'] == st['old_backend'] and app['Image'] == st['previous']['id'], 'CUTOVER_UNKNOWN_WRITER')
+                self.run(['docker', 'update', '--restart=no', app['Id']])
+                self.run(['docker', 'stop', '--time', '30', app['Id']])
+                self.run(['docker', 'rm', app['Id']])
+            self.quiet_database(st)
+            st['historical_rows'] = self.participation_history()
+            st['backup'] = self.backup(binding)
+            st['compose_hash'] = digest(fenced)
+            checkpoint('PREPARE')
+            # Give the operator a fenced V143 recovery point to retain off-host.
+            return {'operation': st['operation'], 'status': st['status'], 'phase': 'PREPARE',
+                    'backup': st['backup']['path'], 'sha256': st['backup']['sha256'], 'smoke_port': smoke_port}
+        if st['phase'] == 'PREPARE':
+            self.require_free_smoke_port(smoke_port)
+            self.quiet_database(st)
+            self.verify_participation_backup(st)
+            atomic(self.compose_file, smoke)
+            self.compose('up', '-d', '--no-deps', '--pull', 'never', '--wait', 'pdf-worker')
+            self.compose('up', '--no-start', '--no-deps', '--pull', 'never', 'backend')
+            app = self.cutover_backend(target, st['smoke_user'], smoke_port)
+            require(app['State']['Status'] == 'created', 'CUTOVER_CREATED_BACKEND_REQUIRED')
+            st['smoke_container'] = app['Id']
+            st['compose_hash'] = digest(smoke)
+            checkpoint('START')
+        if st['phase'] == 'START':
+            app = self.cutover_backend(target, st['smoke_user'], smoke_port)
+            require(app['Id'] == st['smoke_container'], 'CUTOVER_START_ID_CHANGED')
+            if app['State']['Status'] == 'created':
+                self.verify_participation_backup(st)
+                self.quiet_database(st)
+                self.require_free_smoke_port(smoke_port)
+                self.run(['docker', 'start', app['Id']])
+            else:
+                require(app['State']['Running'], 'CUTOVER_START_OUTCOME_UNKNOWN')
+            self.ready(target, smoke_port=smoke_port)
+            self.observe(target, binding, smoke_user=st['smoke_user'], smoke_port=smoke_port)
+            require(self.participation_history() == st['historical_rows'], 'CUTOVER_HISTORICAL_ROWS_CHANGED')
+            checkpoint('ACCEPTANCE')
+        if action == 'participation-open' and st['phase'] == 'ACCEPTANCE':
+            self.ready(target, smoke_port=smoke_port)
+            self.observe(target, binding, smoke_user=st['smoke_user'], smoke_port=smoke_port)
+            st['accepted_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            checkpoint('OPENING')
+        if st['phase'] == 'OPENING':
+            require(action == 'participation-open', 'CUTOVER_OPEN_CONFIRMATION_REQUIRED')
+            require(self.history() == history_for(target['manifest']), 'CUTOVER_HISTORY_CHANGED')
+            atomic(self.compose_file, product)
+            apps = self.participation_backends()
+            if not apps or (len(apps) == 1 and apps[0]['Id'] == st['smoke_container']):
+                self.compose('up', '--no-start', '--no-deps', '--pull', 'never', 'backend')
+            app = self.cutover_backend(target)
+            if app['State']['Status'] == 'created':
+                self.run(['docker', 'start', app['Id']])
+            else:
+                require(app['State']['Running'], 'CUTOVER_PRODUCT_OUTCOME_UNKNOWN')
+            self.ready(target); self.observe(target, binding)
+            st['compose_hash'] = digest(product)
+            st['status'] = 'SUCCESS'
+            checkpoint('COMPLETE')
+        return {'operation': st['operation'], 'status': st['status'], 'phase': st['phase'], 'smoke_port': smoke_port}
+
     def check_previous(self, state):
         # Config changes are explicit; verify the old running environment before replacing it.
         desired = self.config
@@ -757,8 +995,11 @@ class Staging(PdfWorkerAdmission):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['init-config', 'inspect', 'verify-ci', 'install', 'deploy', 'status', 'backup', 'reconcile', 'rollback'])
+    parser.add_argument('action', choices=['init-config', 'inspect', 'verify-ci', 'install', 'deploy', 'status', 'backup', 'reconcile', 'rollback', 'participation-cutover', 'participation-open'])
     parser.add_argument('--directory', type=Path)
+    parser.add_argument('--smoke-user')
+    parser.add_argument('--smoke-port', type=int, help='loopback port for a new participation cutover')
+    parser.add_argument('--operation')
     parser.add_argument('--candidate', type=Path)
     parser.add_argument('--compatibility-review', type=Path)
     parser.add_argument('--apply-config', action='store_true')
@@ -770,6 +1011,7 @@ def main():
     parser.add_argument('--lock-wait', type=int, default=30)
     args = parser.parse_args()
     try:
+        require(args.smoke_port is None or args.action == 'participation-cutover', 'CUTOVER_OPTIONS_INVALID')
         if args.action == 'verify-ci':
             result = verify_ci(args.revision or '', args.ci_run or '')
         else:
@@ -797,7 +1039,11 @@ def main():
                 record = private_json(args.candidate) if args.candidate else None
                 review = private_json(args.compatibility_review) if args.compatibility_review else None
                 require(args.action not in ('install', 'deploy') or record is not None, 'CANDIDATE_REQUIRED')
-                if args.action == 'inspect':
+                if args.action in ('participation-cutover', 'participation-open'):
+                    require(not args.apply_config and review is None, 'CUTOVER_OPTIONS_INVALID')
+                    result = runtime.participation(args.action, record, args.smoke_user, args.operation,
+                                                   smoke_port=args.smoke_port)
+                elif args.action == 'inspect':
                     runtime.host_check()
                     require(record is not None, 'CANDIDATE_REQUIRED')
                     result = runtime.candidate(record)
@@ -806,8 +1052,12 @@ def main():
         print(json.dumps(result, sort_keys=True))
     except (Refused, OSError, ValueError, KeyError, TypeError) as exc:
         # No subprocess stderr, configuration, token or HTTP response is emitted.
+        next_step = ('Read status and the cutover phase. Resume only the recorded operation ID; '
+                     'keep traffic fenced on unexpected history or process identity.'
+                     if args.action.startswith('participation-') or str(exc) == 'PARTICIPATION_CUTOVER_IN_PROGRESS'
+                     else 'Read result.json and status; reconcile only a verified running result. Do not delete data or retry UNKNOWN.')
         print(json.dumps({'status': 'STOP', 'reason': str(exc) if isinstance(exc, Refused) else type(exc).__name__,
-                          'next': 'Read result.json and status; reconcile only a verified running result. Do not delete data or retry UNKNOWN.'}))
+                          'next': next_step}))
         return 1
     return 0
 

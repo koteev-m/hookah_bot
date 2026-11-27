@@ -601,6 +601,44 @@ class DeploymentTests(unittest.TestCase):
         self.assertLess(self.r.calls.index(['stop', '--timeout', '30', 'backend']), self.r.calls.index(['backup']))
         self.assertEqual(self.r.calls[-1][-1], 'backend')
         with self.assertRaisesRegex(s.Refused, 'SCHEMA_ROLLBACK'): self.r.apply('rollback')
+    def test_pending_participation_only_accepts_its_scoped_resume(self):
+        self.install()
+        state = self.r.state()
+        state.update(action='participation-cutover', phase='START', status='APPLYING')
+        self.r.save(state)
+        for action in ('install', 'deploy', 'reconcile', 'rollback', 'backup'):
+            with self.subTest(action=action), self.assertRaisesRegex(s.Refused, 'PARTICIPATION_CUTOVER_IN_PROGRESS'):
+                self.r.apply(action)
+        with self.assertRaisesRegex(s.Refused, 'CUTOVER_RESUME_ID_REQUIRED'):
+            self.r.participation('participation-open', None, None, 'other-operation')
+        self.assertEqual(self.r.state(), state)
+
+    def test_smoke_port_must_be_explicit_and_separate_from_product(self):
+        self.install()
+        for port, reason in ((None, 'REQUIRED'), (0, 'REQUIRED'), (65536, 'REQUIRED'),
+                             (self.r.port, 'RESERVED'), (18080, 'RESERVED')):
+            with self.subTest(port=port), self.assertRaisesRegex(s.Refused, 'CUTOVER_SMOKE_PORT_' + reason):
+                self.r.participation('participation-cutover', None, '123', None, smoke_port=port)
+        self.assertEqual(self.r.state()['status'], 'SUCCESS')
+
+    def test_smoke_port_checks_docker_publish_even_without_host_listener(self):
+        mapping = {'8080/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '28080'}]}
+        with patch.object(s.socket, 'socket') as sock, \
+                patch.object(self.r, 'run', side_effect=[b'neighbor-container\n', json.dumps(mapping).encode()]), \
+                self.assertRaisesRegex(s.Refused, 'CUTOVER_SMOKE_PORT_UNAVAILABLE'):
+            self.r.require_free_smoke_port(28080)
+        sock.return_value.__enter__.return_value.bind.assert_called_once_with(('127.0.0.1', 28080))
+
+    def test_cli_passes_smoke_port_to_new_cutover(self):
+        app = Mock()
+        app.participation.return_value = {}
+        argv = ['simple_staging.py', 'participation-cutover', '--directory', str(self.root), '--smoke-port', '28080']
+        with patch.object(s.sys, 'argv', argv), patch.object(s.sys, 'platform', 'linux'), \
+                patch.object(s.os, 'geteuid', return_value=0), patch.object(s, 'shared_lock', return_value=contextlib.nullcontext()), \
+                patch.object(s, 'Staging', return_value=app), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(s.main(), 0)
+        app.participation.assert_called_once_with('participation-cutover', None, None, None, smoke_port=28080)
+
     def test_changed_historical_sql_rejected(self):
         self.install(); target = self.r.images[image('b')['image']]; target['manifest'][0]['sha256'] = 'changed'
         with self.assertRaisesRegex(s.Refused, 'APPEND_ONLY'): self.r.apply('deploy', record(target))
@@ -866,6 +904,17 @@ class PublicCiTests(unittest.TestCase):
 
     def verify(self):
         return s.verify_ci('a' * 40, '1')
+
+    def test_cutover_requires_main_attempt_two_and_successful_publisher(self):
+        def verify():
+            return s.verify_ci('a' * 40, 1, expected_attempt=2)
+        with self.assertRaisesRegex(s.Refused, 'CUTOVER_CI_ATTEMPT_CHANGED'):
+            verify()
+        self.info.update(run_attempt=2, head_branch='main')
+        with self.assertRaisesRegex(s.Refused, 'CUTOVER_PUBLISH_JOB_REQUIRED'):
+            verify()
+        self.jobs.append(self.job(100, 'publish-ghcr'))
+        self.assertEqual(verify()['sha'], 'a' * 40)
 
     def test_anonymous_exact_ci_ignores_tokens_proxy_and_gh(self):
         with patch.dict(os.environ, {'GH_TOKEN': 'unused', 'GITHUB_TOKEN': 'unused',
