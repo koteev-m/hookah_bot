@@ -141,8 +141,11 @@ for (const code of [400, 409, 408, 500, -1]) test(`payment refusal or uncertain 
   const api = await setup(page, [makeSale('manual:failure')]); await open(page)
   await page.getByLabel('Способ оплаты').selectOption('SPLIT'); await page.getByLabel('Наличные, ₽').fill('400'); await page.getByLabel('Карта, ₽').fill('590'); api.fail(code); await pay(page).click()
   if ([400, 409].includes(code)) { await expect(page.locator('.accounting-submit-error')).toBeVisible(); await expect(page.getByLabel('Наличные, ₽')).toHaveValue('400'); await page.reload(); await expect(page.getByLabel('Карта, ₽')).toHaveValue('590'); await pay(page).click() }
-  else { await expect(page.locator('.accounting-pending')).toBeVisible(); await page.reload(); await page.getByRole('button', { name: 'Проверить и повторить операцию' }).click(); expect(api.commands[1]).toEqual(api.commands[0]) }
+  else { await expect(page.locator('.accounting-pending')).toBeVisible(); await page.reload(); await page.getByRole('button', { name: 'Проверить и повторить операцию' }).click() }
   await expect(page.getByText('Оплачено полностью', { exact: true })).toBeVisible()
+  expect(api.commands).toHaveLength(2)
+  if (![400, 409].includes(code)) expect(api.commands[1]).toEqual(api.commands[0])
+  expect(api.state().totals).toMatchObject({ paidMinor: 99000, cashMinor: 40000, cardMinor: 59000, unpaidMinor: 0 })
 })
 test('free canceled unknown and reconciliation remain honest in every sales filter', async ({ page }) => {
   const free = makeSale('manual:free', 0); free.lines[0].giftReason = 'Подарок'

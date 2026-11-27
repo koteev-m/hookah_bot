@@ -1756,10 +1756,8 @@ jobs:
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Install real psql17 and libpq18 consumer (isolated CI runner)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-common ca-certificates curl
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 postgresql-client-18 openssh-server age 'libpq5=18.*'
+          python3 -B -m unittest discover -s scripts -p test_install_compose_ci_postgres.py -v
+          python3 -B scripts/install-compose-ci-postgres.py --with-age
           echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
           mkdir -m 0700 "$RUNNER_TEMP/v126-caddy-package"
           cd "$RUNNER_TEMP/v126-caddy-package"
@@ -1769,6 +1767,7 @@ jobs:
       - name: Validate test endpoint confinement
         run: python3 scripts/v126-test-endpoint-guard.py --self-test
       - name: Record isolated Linux tool versions
+        id: verify_tools
         run: |
           uname -srmo
           cat /etc/os-release
@@ -1817,15 +1816,15 @@ jobs:
           docker build --tag "$image" "$context"
           bash scripts/test-v126-policy-b-isolated.sh "$image"
       - name: Exercise V126 canonical IDs with real Docker and Compose (isolated runner)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-container-ids-endpoints" -- python3 scripts/test-v126-container-ids.py --real-cli
       - name: Compare original and repaired supervisor deadline and cancellation consumers
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: |
           git show 09e19461cf54376714ae51f2d4c9e480f8365d8e:scripts/v126-cutover.sh > "$RUNNER_TEMP/v126-supervisor-before.sh"
           python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-supervisor-before-endpoints" -- python3 scripts/test-v126-remote-operation.py --require-linux-ssh --before-supervisor-source "$RUNNER_TEMP/v126-supervisor-before.sh"
       - name: Exercise V126 real process guard regression
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-process-endpoints" -- python3 scripts/test-v126-process-guard.py
       - name: Create CI compose env
         if: ${{ !cancelled() }}
@@ -1961,10 +1960,7 @@ jobs:
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Install real psql17 and libpq18 consumer (isolated CI runner)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-common ca-certificates curl
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 postgresql-client-18 openssh-server 'libpq5=18.*'
+          python3 -B scripts/install-compose-ci-postgres.py
           echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
           mkdir -m 0700 "$RUNNER_TEMP/v126-caddy-package"
           cd "$RUNNER_TEMP/v126-caddy-package"
@@ -1974,6 +1970,7 @@ jobs:
       - name: Validate test endpoint confinement
         run: python3 scripts/v126-test-endpoint-guard.py --self-test
       - name: Record isolated Linux tool versions
+        id: verify_tools
         run: |
           uname -srmo
           cat /etc/os-release
@@ -1986,14 +1983,14 @@ jobs:
           ssh -V
           java -version
       - name: Exercise real Caddy disk and active configuration consumers
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-caddy-endpoints" -- python3 scripts/test-v126-caddy-linux.py --require-linux-caddy
       - name: Exercise actual root ownership and fixed operational Compose guard
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: |
           python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-handoff-endpoints" -- bash -c 'exec sudo -n env PATH="$PATH" GITHUB_ACTIONS=true RUNNER_OS=Linux python3 scripts/test-v126-operational-handoff.py --require-linux-root-compose'
       - name: Exercise connected PostgreSQL17 Docker and JVM runtime
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: |
           python3 scripts/test-v126-linux-runtime.py --diagnostics-self-test
           python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-runtime-endpoints" -- python3 scripts/test-v126-linux-runtime.py --require-hosted-ci --evidence-dir "$RUNNER_TEMP/v126-linux-runtime-evidence"
@@ -2006,18 +2003,18 @@ jobs:
             echo 'No runtime result was produced; connected runtime is unverified.'
           fi
       - name: Exercise owned real systemd Caddy interruption and active configuration
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: |
           python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-systemd-endpoints" -- \
             python3 scripts/test-v126-systemd-linux.py --require-hosted-systemd --evidence-dir "$RUNNER_TEMP/v126-systemd-evidence"
       - name: Exercise reconciled terminal and ordinary deploy shared target lifecycle
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: |
           sudo -n env PATH="$PATH" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_OS=Linux \
             python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-ordinary-root-endpoints" -- \
             python3 scripts/test-v126-ordinary-deploy.py --require-linux-integration --evidence "$RUNNER_TEMP/v126-ordinary-evidence"
       - name: Exercise isolated Docker daemon interruption and blocked replay
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: |
           sudo -n env PATH="$PATH" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted RUNNER_OS=Linux \
             python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-daemon-root-endpoints" -- \
@@ -2078,10 +2075,7 @@ jobs:
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Install real psql17 and libpq18 consumer (isolated CI runner)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-common ca-certificates curl
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 postgresql-client-18 openssh-server 'libpq5=18.*'
+          python3 -B scripts/install-compose-ci-postgres.py
           echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
           mkdir -m 0700 "$RUNNER_TEMP/v126-caddy-package"
           cd "$RUNNER_TEMP/v126-caddy-package"
@@ -2091,6 +2085,7 @@ jobs:
       - name: Validate test endpoint confinement
         run: python3 scripts/v126-test-endpoint-guard.py --self-test
       - name: Record isolated Linux tool versions
+        id: verify_tools
         run: |
           uname -srmo
           cat /etc/os-release
@@ -2103,10 +2098,10 @@ jobs:
           ssh -V
           java -version
       - name: Exercise prerequisite fixture deadlines and cleanup
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-sync-fixture-endpoints" -- python3 scripts/test-v126-prerequisite-timeout.py
       - name: Exercise V126 pre-Gate-A prerequisite sync fixtures
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}
         run: python3 scripts/v126-test-endpoint-guard.py --run "$RUNNER_TEMP/v126-sync-endpoints" -- bash scripts/test-v126-staging-prerequisite-sync.sh
       - name: Confirm mandatory group completion
         id: completed
