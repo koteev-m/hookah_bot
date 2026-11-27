@@ -1756,10 +1756,8 @@ jobs:
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Install real psql17 and libpq18 consumer (isolated CI runner)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-common ca-certificates curl
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 postgresql-client-18 openssh-server age 'libpq5=18.*'
+          python3 -B -m unittest discover -s scripts -p test_install_compose_ci_postgres.py -v
+          python3 -B scripts/install-compose-ci-postgres.py --with-age
           echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
           mkdir -m 0700 "$RUNNER_TEMP/v126-caddy-package"
           cd "$RUNNER_TEMP/v126-caddy-package"
@@ -1961,10 +1959,7 @@ jobs:
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Install real psql17 and libpq18 consumer (isolated CI runner)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-common ca-certificates curl
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 postgresql-client-18 openssh-server 'libpq5=18.*'
+          python3 -B scripts/install-compose-ci-postgres.py
           echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
           mkdir -m 0700 "$RUNNER_TEMP/v126-caddy-package"
           cd "$RUNNER_TEMP/v126-caddy-package"
@@ -2078,10 +2073,7 @@ jobs:
         run: bash scripts/validate-staging-admission.sh --self-test docker-compose.yml
       - name: Install real psql17 and libpq18 consumer (isolated CI runner)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-common ca-certificates curl
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y --no-install-recommends postgresql-17 postgresql-client-17 postgresql-client-18 openssh-server 'libpq5=18.*'
+          python3 -B scripts/install-compose-ci-postgres.py
           echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
           mkdir -m 0700 "$RUNNER_TEMP/v126-caddy-package"
           cd "$RUNNER_TEMP/v126-caddy-package"
