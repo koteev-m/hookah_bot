@@ -276,6 +276,23 @@ class ReleaseCiTest(unittest.TestCase):
         self.assertIn('contents: read', workflow.split('\njobs:\n', 1)[0])
         self.assertNotRegex(workflow, r'(?m)^\s*(?:environment|workflow_run|secrets|continue-on-error):')
 
+    def test_compose_runtime_fixtures_require_successful_tool_preflight(self):
+        jobs = workflow_jobs()
+        for name in COMPOSE_GROUPS:
+            steps = jobs[name].split('      - name: ')
+            verified = next(i for i, step in enumerate(steps) if '        id: verify_tools\n' in step)
+            self.assertIn('scripts/install-compose-ci-postgres.py', ''.join(steps[:verified]))
+            self.assertIn('caddy version', steps[verified])
+            self.assertNotIn('        if:', steps[verified])
+            for i, step in enumerate(steps):
+                with self.subTest(job=name, step=step.splitlines()[0]):
+                    if 'scripts/v126-test-endpoint-guard.py --run ' in step:
+                        self.assertGreater(i, verified)
+                        if '        if:' in step:
+                            self.assertIn("        if: ${{ !cancelled() && steps.verify_tools.outcome == 'success' }}\n", step)
+                    if step.startswith('Record safe '):
+                        self.assertIn('        if: ${{ !cancelled() }}\n', step)
+
     def test_compose_aggregate_executes_and_requires_every_confirmed_success(self):
         body = workflow_jobs()['compose']
         header = body.split('    steps:\n', 1)[0]

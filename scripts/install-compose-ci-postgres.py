@@ -88,7 +88,8 @@ def install_tools(with_age):
         packages.append("age")
     packages.extend(f"{package}={target}" for package, target in requested.items())
     print(f"Installed libpq packages: {installed}; requested: {requested}", flush=True)
-    plan = run(*APT_INSTALL, "-s", "install", *packages, capture=True)
+    # Hosted images set Assume-Yes globally, which rejects even a simulated downgrade.
+    plan = run(*APT_INSTALL, "-s", "-o", "APT::Get::Assume-Yes=false", "install", *packages, capture=True)
     downgrades = checked_downgrades(plan, arch, requested)
     if downgrades:
         print("Approved exact libpq downgrade plan:\n" + "\n".join(downgrades), flush=True)
