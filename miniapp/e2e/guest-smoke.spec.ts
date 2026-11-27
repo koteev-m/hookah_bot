@@ -13240,17 +13240,24 @@ test('expired gift scope is not restored from the saved cart', async ({ page }) 
   await expect(page.getByText('Подарок добавлен: Чай')).toBeVisible()
 
   const saved = JSON.parse((await storedCart(page, draftKey))!)
-  expect(saved.giftDecisionDraft).toBeTruthy()
+  expect(saved.giftDecisionDraft).toMatchObject({ tableSessionId: 77, tabId: 88 })
   saved.giftDecisionDraft.expiresAtEpochSeconds = 1
   await seedCart(page, draftKey, JSON.stringify(saved))
   const requestsBeforeReload = api.getPreviewRequests().length
   await page.reload()
 
+  await expect(page.locator('.cart-accounts summary')).toContainText('Личный счёт')
+  await expect(page.locator('.cart-item')).toContainText('Double Apple')
   await expect.poll(() => api.getPreviewRequests().length).toBeGreaterThan(requestsBeforeReload)
-  expect(api.getPreviewRequests().slice(requestsBeforeReload).every((request) => request.giftDecision == null)).toBe(true)
+  for (const request of api.getPreviewRequests().slice(requestsBeforeReload)) {
+    expect(request).toMatchObject({ tableSessionId: 77, tabId: 88, items: [{ itemId: 200, qty: 1 }] })
+    expect(request.giftDecision ?? null).toBeNull()
+  }
   await expect(page.locator('.cart-gift-offer')).toContainText('Вам доступен подарок: Чай')
-  const persistedDraft = JSON.parse((await storedCart(page, draftKey))!)
-  expect(persistedDraft?.giftDecisionDraft).toBeUndefined()
+  await expect(page.getByText('Подарок добавлен: Чай')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Отправить', exact: true })).toBeDisabled()
+  expect(api.getAddBatchRequests()).toEqual([])
+  await expect.poll(async () => JSON.parse((await storedCart(page, draftKey))!).giftDecisionDraft).toBeUndefined()
 })
 
 test('account switch clears the prior user gift decision cache', async ({ page }) => {

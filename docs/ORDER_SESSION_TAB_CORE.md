@@ -256,8 +256,8 @@ Incomplete writes from an older Mini App return HTTP 428 before mutation. Read a
   session or a confirmed Bot visit at that table. An exit blocks the operation. Repeating it
   returns the same personal bill. Checkout on a SHARED bill uses its selected membership and leaves the set of bills unchanged. A revoked membership cannot be restored by opening the bill.
   A guest with a confirmed Bot visit can also end it in the Mini App before opening a bill.
-  The cart defaults to the personal bill and remembers an explicit bill choice for the same
-  account and participation generation. Losing access to the chosen bill requires a new choice.
+  The cart remembers the selected personal default and explicit bill choices across reloads for
+  the same account and participation generation. Losing access to the chosen bill requires a new choice.
   A prepared checkout retains its original bill, contents and key until the server resolves it.
   The account disclosure gives access to switching, shared bill creation and joining. The cart
   shows the server preview with options and discounts and waits for a valid total before sending.

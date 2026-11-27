@@ -724,10 +724,10 @@ export function renderCartScreen(options: CartScreenOptions) {
   const isTableReady = () =>
     tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && tableSnapshot.orderAllowed
 
-  const setSelectedTabId = (tabId: number | null, explicit = true) => {
+  const setSelectedTabId = (tabId: number | null, remember = true) => {
     const previousTabId = tabState.selectedTabId
     tabState.selectedTabId = tabId
-    if (explicit) setSelectedGuestTabId(tableSnapshot.tableSessionId, tabId)
+    if (remember) setSelectedGuestTabId(tableSnapshot.tableSessionId, tabId)
     if (previousTabId !== tabId) {
       pendingItemMenuRecovery = null
     }
@@ -858,8 +858,11 @@ export function renderCartScreen(options: CartScreenOptions) {
   }
 
   const syncDefaultTabSelection = () => {
-    const selected = chooseGuestTab(tabState.tabs, tableSnapshot.tableSessionId)
-    setSelectedTabId(selected?.id ?? null, false)
+    const sessionId = tableSnapshot.tableSessionId
+    const selected = chooseGuestTab(tabState.tabs, sessionId)
+    // A saved draft can resume a known personal bill without guessing its account after reload.
+    const rememberDefault = selected?.type === 'PERSONAL' && getSelectedGuestTabId(sessionId) === null
+    setSelectedTabId(selected?.id ?? null, rememberDefault)
     if (!selected && getActiveTabs().length) refs.tabDisclosure.open = true
   }
 
