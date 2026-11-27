@@ -239,8 +239,10 @@ open class GuestTableResolveAvailabilityTest {
             val after = snapshot(connection)
             assertNotEquals(before.getValue("table_sessions"), after.getValue("table_sessions"))
             assertEquals(1, after.getValue("table_sessions").size)
-            assertEquals(before.getValue("tab"), after.getValue("tab"))
-            assertEquals(before.getValue("tab_member"), after.getValue("tab_member"))
+            for (table in listOf("tab", "tab_member")) {
+                assertEquals(before.getValue(table).size + 1, after.getValue(table).size)
+                assertTrue(after.getValue(table).containsAll(before.getValue(table)))
+            }
             assertEquals(1, after.getValue("guest_table_session_exits").size)
             connection.createStatement().use { statement ->
                 statement.executeQuery("SELECT user_id FROM guest_table_session_exits").use { rows ->
@@ -251,7 +253,7 @@ open class GuestTableResolveAvailabilityTest {
                     "SELECT COUNT(*) FROM tab WHERE type = 'PERSONAL' AND owner_user_id = 501",
                 ).use { rows ->
                     assertTrue(rows.next())
-                    assertEquals(0, rows.getInt(1))
+                    assertEquals(1, rows.getInt(1))
                 }
             }
             assertEquals(before.getValue("analytics_events"), after.getValue("analytics_events"))

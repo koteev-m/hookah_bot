@@ -817,6 +817,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
   }
   const menuButton = el('button', { className: 'guest-venue-menu-button', text: 'Меню' })
   const catalogButton = el('button', { className: 'button-secondary button-small', text: 'Другие заведения' })
+  catalogButton.hidden = true
   if (!readOnlyPreview && venueId) {
     refs.bookingButton.before(menuButton)
     refs.retryButton.before(catalogButton)
@@ -1797,7 +1798,6 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     refs.maps.hidden = true
     refs.maps.open = false
     refs.retryButton.hidden = false
-    catalogButton.hidden = !options.onOpenCatalog
     refs.promotionsSlot.replaceChildren()
     refs.promotionsSlot.hidden = true
     refs.todayStaffSlot.replaceChildren()
@@ -1813,6 +1813,7 @@ export function renderGuestVenueScreen(options: VenueScreenOptions) {
     }
 
     const orderMenuMode = shouldShowOrderMenu()
+    catalogButton.hidden = !options.onOpenCatalog || orderMenuMode
     updateBookingButtonVisibility()
     setStatus(
       readOnlyPreview

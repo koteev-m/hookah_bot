@@ -293,6 +293,9 @@ class GuestTableContextLifecycleRepository(
                 return@transaction staleConfirmation
             }
             activationCheckpoint(GuestTableActivationCheckpoint.AFTER_EXIT_CLEAR)
+            if (fallback == null) {
+                guestTabsRepository.ensurePersonalTab(connection, expectedVenueId, tableSession.id, actorUserId)
+            }
             if (fallback?.visitGeneration != null) {
                 dialogStateRepository.set(
                     connection,
@@ -667,6 +670,7 @@ class GuestTableContextLifecycleRepository(
         sessionId: Long,
         eventId: Long,
         forUpdate: Boolean,
+        includeBillOwners: Boolean = false,
     ): Long? =
         chatContextRepository.findExitedBotChat(
             connection,
@@ -676,6 +680,7 @@ class GuestTableContextLifecycleRepository(
             sessionId,
             eventId,
             forUpdate,
+            includeBillOwners,
         )
 
     fun resumeBotChat(
@@ -944,7 +949,7 @@ class GuestTableContextLifecycleRepository(
             tableSessionRepository.recordUserExit(connection, actorUserId, tableSession.id, now)
             exitRecorded = true
         }
-        if (botSession != null && retainBotChatForRejoin) {
+        if (tableSession != null && retainBotChatForRejoin) {
             chatContextRepository.detachTableToken(connection, identity.chatId, actorUserId, now)
         } else {
             chatContextRepository.clear(connection, identity.chatId, actorUserId)

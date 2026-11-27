@@ -32,7 +32,7 @@ import {
   type CartGiftDecisionScope,
   type CartLine
 } from '../shared/state/cartStore'
-import { chooseGuestTab, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
+import { chooseGuestTab, getSelectedGuestTabId, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
 import { getItemMeta } from '../shared/state/itemCache'
 import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
 import { getTelegramContext } from '../shared/telegram'
@@ -83,9 +83,9 @@ type CartRefs = {
   chatMessage: HTMLParagraphElement
   tableHint: HTMLParagraphElement
   tabSelector: HTMLSelectElement
-  tabSummary: HTMLParagraphElement
+  tabDisclosure: HTMLDetailsElement
+  tabSummary: HTMLElement
   tabMessage: HTMLParagraphElement
-  switchTabButton: HTMLButtonElement
   personalButton: HTMLButtonElement
   createSharedButton: HTMLButtonElement
   joinTokenInput: HTMLInputElement
@@ -139,7 +139,7 @@ function resolveTableHint(snapshot: ReturnType<typeof getTableContext>): string 
 
 function buildCartDom(root: HTMLDivElement): CartRefs {
   const wrapper = el('div', { className: 'cart-screen' })
-  const header = el('div', { className: 'card' })
+  const header = el('div', { className: 'card cart-heading-card' })
   const title = el('h3', { text: 'Корзина' })
   title.tabIndex = -1
   const tableHint = el('p', { className: 'cart-hint', text: '' })
@@ -154,17 +154,18 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   const previewContent = el('div', { className: 'cart-preview-content' })
   append(previewCard, previewTitle, previewContent)
 
-  const commentCard = el('div', { className: 'card' })
-  const tabLabel = el('p', { className: 'field-label', text: 'Счёт для заказа' })
+  const tabCard = el('div', { className: 'card' })
+  const tabDisclosure = el('details', { className: 'cart-accounts' })
+  const tabHeader = el('summary')
+  const tabSummary = el('strong', { text: 'Счёт не выбран' })
+  append(tabHeader, el('span', { text: 'Счёт для заказа' }), tabSummary)
   const tabSelector = document.createElement('select')
   tabSelector.className = 'staff-select'
+  tabSelector.setAttribute('aria-label', 'Выберите счёт')
   tabSelector.disabled = true
   tabSelector.hidden = true
-  const tabSummary = el('p', { className: 'cart-summary', text: 'Текущий счёт: Личный счёт' })
   const tabMessage = el('p', { className: 'cart-message', text: '' })
   tabMessage.hidden = true
-  const switchTabButton = el('button', { className: 'button-secondary', text: 'Переключить счёт' }) as HTMLButtonElement
-  switchTabButton.hidden = true
   const personalButton = el('button', { className: 'button-secondary', text: 'Открыть личный счёт' }) as HTMLButtonElement
   const createSharedButton = el('button', { className: 'button-secondary', text: 'Создать общий счёт' }) as HTMLButtonElement
   const joinRow = el('div', { className: 'cart-join-row' })
@@ -179,29 +180,22 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   const inviteToken = el('p', { className: 'cart-summary', text: '' })
   inviteSummary.hidden = true
   inviteToken.hidden = true
-  const commentLabel = el('p', { className: 'field-label', text: 'Комментарий' })
+  const tabActions = el('div', { className: 'cart-account-actions' })
+  append(tabActions, tabSelector, personalButton, createSharedButton, joinRow, inviteSummary, inviteToken)
+  append(tabDisclosure, tabHeader, tabActions)
+  append(tabCard, tabDisclosure, tabMessage)
+
+  const commentCard = el('div', { className: 'card' })
+  const commentLabel = el('label', { className: 'field-label', text: 'Комментарий (необязательно)' })
   const commentInput = document.createElement('textarea')
+  commentInput.id = 'guest-cart-comment'
+  commentLabel.htmlFor = commentInput.id
   commentInput.className = 'cart-comment'
   commentInput.maxLength = MAX_COMMENT_LENGTH
-  commentInput.rows = 3
+  commentInput.rows = 2
   commentInput.placeholder = 'Комментарий к заказу'
   const commentCounter = el('p', { className: 'field-counter', text: `0/${MAX_COMMENT_LENGTH}` })
-  append(
-    commentCard,
-    tabLabel,
-    tabSelector,
-    tabSummary,
-    tabMessage,
-    switchTabButton,
-    personalButton,
-    createSharedButton,
-    joinRow,
-    inviteSummary,
-    inviteToken,
-    commentLabel,
-    commentInput,
-    commentCounter
-  )
+  append(commentCard, commentLabel, commentInput, commentCounter)
 
   const actionCard = el('div', { className: 'card cart-actions' })
   const message = el('p', { className: 'cart-message', text: '' })
@@ -220,7 +214,7 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
   chatMessage.hidden = true
   const chatButton = el('button', { className: 'button-secondary', text: 'Оформить в чате' }) as HTMLButtonElement
   append(actionCard, message, submitError, sendButton, disabledReason, chatMessage, chatButton)
-  append(wrapper, header, items, previewCard, commentCard, actionCard)
+  append(wrapper, header, items, tabCard, previewCard, commentCard, actionCard)
   root.replaceChildren(wrapper)
 
   return {
@@ -243,9 +237,9 @@ function buildCartDom(root: HTMLDivElement): CartRefs {
     chatMessage,
     tableHint,
     tabSelector,
+    tabDisclosure,
     tabSummary,
     tabMessage,
-    switchTabButton,
     personalButton,
     createSharedButton,
     joinTokenInput,
@@ -575,7 +569,6 @@ export function renderCartScreen(options: CartScreenOptions) {
   }
   let joinTarget: { token: string; sessionId: number; generation: string; userId: number; inviteId: string; tabId: number } | undefined
   let isJoinMode = false
-  let hasSharedAccess = false
   let sharedInvite: SharedInviteState | null = null
   let inviteRestoreAbort: AbortController | null = null
   let inviteRestoreTabId: number | null = null
@@ -731,10 +724,10 @@ export function renderCartScreen(options: CartScreenOptions) {
   const isTableReady = () =>
     tableSnapshot.status === 'resolved' && Boolean(tableSnapshot.tableToken) && tableSnapshot.orderAllowed
 
-  const setSelectedTabId = (tabId: number | null) => {
+  const setSelectedTabId = (tabId: number | null, explicit = true) => {
     const previousTabId = tabState.selectedTabId
     tabState.selectedTabId = tabId
-    setSelectedGuestTabId(tableSnapshot.tableSessionId, tabId)
+    if (explicit) setSelectedGuestTabId(tableSnapshot.tableSessionId, tabId)
     if (previousTabId !== tabId) {
       pendingItemMenuRecovery = null
     }
@@ -830,70 +823,30 @@ export function renderCartScreen(options: CartScreenOptions) {
     updateSubmitState()
   }
 
-  const getSimpleToggleTabs = () => {
-    const activeTabs = getActiveTabs()
-    if (activeTabs.length !== 2) {
-      return null
-    }
-    const personalTab = activeTabs.find((tab) => tab.type === 'PERSONAL') ?? null
-    const sharedTabs = activeTabs.filter((tab) => tab.type === 'SHARED')
-    if (!personalTab || sharedTabs.length !== 1) {
-      return null
-    }
-    return { personalTab, sharedTab: sharedTabs[0] }
-  }
-
   let loadedTabsSession: number | null = null
   const updateTabsUi = () => {
     const activeTabs = getActiveTabs()
     const selectedTab = getSelectedTab()
-    const toggleTabs = hasSharedAccess ? getSimpleToggleTabs() : null
     const isCurrentSharedOwner = isOwnerSharedTab(selectedTab)
-    const showCreateJoinActions = !hasSharedAccess
-    if (!showCreateJoinActions && isJoinMode) {
-      isJoinMode = false
-      refs.joinTokenInput.value = ''
-    }
     const needsChoice = !selectedTab && activeTabs.length > 0
-    refs.tabSelector.setAttribute('aria-label', 'Выберите счёт')
     refs.tabSelector.replaceChildren()
     if (needsChoice) refs.tabSelector.appendChild(new Option('Выберите счёт', ''))
-    if (!activeTabs.length) {
-      refs.tabSelector.appendChild(new Option('Сначала загрузите стол', ''))
-    } else {
-      activeTabs.forEach((tab) =>
-        refs.tabSelector.appendChild(new Option(formatGuestTabLabel(tab, activeTabs), String(tab.id)))
-      )
-    }
+    activeTabs.forEach(tab => refs.tabSelector.add(new Option(formatGuestTabLabel(tab, activeTabs), String(tab.id))))
     refs.tabSelector.value = selectedTab ? String(selectedTab.id) : ''
-    const summary =
-      !hasSharedAccess || !selectedTab
-        ? 'Личный счёт'
-        : selectedTab.type === 'PERSONAL'
-          ? 'Личный счёт'
-          : 'Общий счёт'
-    refs.tabSummary.textContent = needsChoice
-      ? 'Выбранный счёт недоступен. Выберите другой счёт для заказа.'
-      : selectedTab ? `Текущий счёт: ${summary}` : 'Счёт не выбран'
-    refs.tabSelector.hidden = !needsChoice && (!hasSharedAccess || toggleTabs !== null || activeTabs.length <= 1)
+    refs.tabSummary.textContent = selectedTab
+      ? formatGuestTabLabel(selectedTab, activeTabs)
+      : tabState.loading ? 'Загрузка…' : 'Счёт не выбран'
+    refs.tabSelector.hidden = !needsChoice && activeTabs.length <= 1
     refs.tabSelector.disabled = tabState.loading || tabState.creatingTab || tabState.joining || !activeTabs.length
-    refs.switchTabButton.hidden = !selectedTab || !hasSharedAccess || toggleTabs === null
-    if (toggleTabs) {
-      const targetLabel = selectedTab?.type === 'SHARED' ? 'Личный счёт' : 'Общий счёт'
-      refs.switchTabButton.textContent = `Переключить на ${targetLabel}`
-    }
-    refs.switchTabButton.disabled = tabState.loading || tabState.creatingTab || tabState.joining || !isTableReady()
     refs.personalButton.hidden = !isTableReady() || loadedTabsSession !== tableSnapshot.tableSessionId || activeTabs.some((tab) => tab.type === 'PERSONAL')
     refs.personalButton.disabled = tabState.loading || tabState.creatingTab || tabState.joining
-    refs.createSharedButton.hidden = !showCreateJoinActions
     refs.createSharedButton.disabled = tabState.loading || tabState.creatingTab || tabState.joining || !isTableReady()
-    refs.joinButton.hidden = !showCreateJoinActions
-    refs.joinTokenInput.hidden = !showCreateJoinActions || !isJoinMode
+    refs.joinTokenInput.hidden = !isJoinMode
     refs.joinTokenInput.disabled =
-      tabState.loading || tabState.creatingTab || tabState.joining || !isTableReady() || !showCreateJoinActions
+      tabState.loading || tabState.creatingTab || tabState.joining || !isTableReady()
     refs.joinButton.textContent = joinTarget ? 'Вступить' : isJoinMode ? 'Проверить код' : 'Присоединиться к общему счёту'
     refs.joinButton.disabled =
-      tabState.loading || tabState.creatingTab || tabState.joining || !isTableReady() || !showCreateJoinActions
+      tabState.loading || tabState.creatingTab || tabState.joining || !isTableReady()
     if (isJoinMode && !refs.joinTokenInput.value.trim()) {
       refs.joinButton.disabled = true
     }
@@ -906,8 +859,8 @@ export function renderCartScreen(options: CartScreenOptions) {
 
   const syncDefaultTabSelection = () => {
     const selected = chooseGuestTab(tabState.tabs, tableSnapshot.tableSessionId)
-    if (selected) setSelectedTabId(selected.id)
-    else tabState.selectedTabId = null
+    setSelectedTabId(selected?.id ?? null, false)
+    if (!selected && getActiveTabs().length) refs.tabDisclosure.open = true
   }
 
   const reloadTabs = async () => {
@@ -919,6 +872,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     const tableSessionId = tableSnapshot.tableSessionId
+    const visitGeneration = tableSnapshot.visitGeneration
     tabState.loading = true
     updateSubmitState()
     tabsAbort?.abort()
@@ -942,17 +896,15 @@ export function renderCartScreen(options: CartScreenOptions) {
       updateSubmitState()
       return
     }
-    if (tableSnapshot.tableSessionId !== tableSessionId) {
+    if (tableSnapshot.tableSessionId !== tableSessionId || tableSnapshot.visitGeneration !== visitGeneration) {
       updateSubmitState()
       return
     }
     loadedTabsSession = tableSessionId
     tabState.tabs = result.data.tabs
-    hasSharedAccess = tabState.tabs.some(
-      (tab) => tab.status === 'ACTIVE' && tab.type === 'SHARED' && tab.tableSessionId === tableSessionId
-    )
     syncDefaultTabSelection()
-    setTabMessage('')
+    const unavailable = tabState.selectedTabId === null && getSelectedGuestTabId(tableSessionId) !== null
+    setTabMessage(unavailable ? 'Выбранный счёт недоступен. Выберите другой счёт для заказа.' : '', 'error')
     updateSubmitState()
     if (pendingJoinToken && !initialTabsLoadedForSession.has(tableSessionId)) {
       initialTabsLoadedForSession.add(tableSessionId)
@@ -1238,6 +1190,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     giftDisposables.splice(0).forEach((dispose) => dispose())
     const hasItems = cartSnapshot.items.size > 0
     refs.previewCard.hidden = !hasItems
+    refs.previewCard.setAttribute('aria-busy', String(previewLoading || previewTimer !== null))
     refs.previewContent.replaceChildren()
     if (!hasItems) {
       return
@@ -1326,7 +1279,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     refs.previewContent.appendChild(
       el('p', {
         className: 'cart-summary',
-        text: previewMessage || 'Итог будет рассчитан при отправке заказа.'
+        text: previewMessage || 'Итог пока недоступен.'
       })
     )
     if (previewFailed) {
@@ -1446,11 +1399,15 @@ export function renderCartScreen(options: CartScreenOptions) {
       resetCartPreview()
       return
     }
+    if (tabState.loading) {
+      resetCartPreview('Проверяем доступные счета…')
+      return
+    }
     const selectedTab = getSelectedTab()
     const tableToken = tableSnapshot.tableToken
     const tableSessionId = tableSnapshot.tableSessionId
     if (!isTableReady() || !tableToken || !tableSessionId || !selectedTab) {
-      resetCartPreview('Итог будет рассчитан при отправке заказа.')
+      resetCartPreview(isTableReady() ? 'Выберите счёт, чтобы увидеть итог.' : 'Итог появится после подтверждения стола.')
       return
     }
     const visitGeneration = tableSnapshot.visitGeneration
@@ -1505,7 +1462,7 @@ export function renderCartScreen(options: CartScreenOptions) {
     const storageHint = cartSnapshot.draftStorage !== 'ready' ? 'Восстановите или сохраните корзину перед отправкой.' : null
     const submitDisabledReason = storageHint ?? (!hasItems
       ? 'Добавьте позиции в корзину.'
-      : tableHint ?? (!selectedTab ? 'Выберите счёт (tab) для заказа.' : previewDisabledReason))
+      : tableHint ?? (!selectedTab ? 'Выберите счёт для заказа.' : previewDisabledReason))
     refs.disabledReason.textContent = submitDisabledReason ?? ''
     refs.disabledReason.hidden = !submitDisabledReason
     const pending = cartSnapshot.checkout
@@ -2090,7 +2047,6 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     setSelectedTabId(result.data.tab.id)
-    hasSharedAccess = true
     const inviteResult = await guestCreateTabInvite(
       backendUrl,
       result.data.tab.id,
@@ -2175,6 +2131,7 @@ export function renderCartScreen(options: CartScreenOptions) {
       if (preview.ok && userId && tableSnapshot.tableSessionId === sessionId &&
           tableSnapshot.visitGeneration === generation && getTelegramContext().telegramUserId === userId) {
         joinTarget = { ...preview.data, token, sessionId, generation, userId }
+        refs.tabDisclosure.open = true
         isJoinMode = true
         refs.joinTokenInput.value = token
         setTabMessage(`Вступить в общий счёт №${preview.data.tabId}? Нажмите «Вступить» для подтверждения.`, 'info')
@@ -2220,7 +2177,6 @@ export function renderCartScreen(options: CartScreenOptions) {
       return
     }
     setSelectedTabId(result.data.tab.id)
-    hasSharedAccess = true
     isJoinMode = false
     refs.joinTokenInput.value = ''
     setTabMessage('Вы присоединились к общему счёту.', 'success')
@@ -2247,19 +2203,6 @@ export function renderCartScreen(options: CartScreenOptions) {
       const parsed = Number(refs.tabSelector.value)
       if (!getActiveTabs().some(tab => tab.id === parsed)) return
       setSelectedTabId(parsed)
-      setTabMessage('')
-      updateSubmitState()
-    }),
-    on(refs.switchTabButton, 'click', () => {
-      if (!hasSharedAccess) {
-        return
-      }
-      const selectedTab = getSelectedTab()
-      const toggleTabs = getSimpleToggleTabs()
-      if (!selectedTab || !toggleTabs) {
-        return
-      }
-      setSelectedTabId(selectedTab.type === 'PERSONAL' ? toggleTabs.sharedTab.id : toggleTabs.personalTab.id)
       setTabMessage('')
       updateSubmitState()
     }),
@@ -2313,6 +2256,7 @@ export function renderCartScreen(options: CartScreenOptions) {
   })
 
   const tableSubscription = subscribeTable((snapshot) => {
+    const previousStatus = tableSnapshot.status
     const generationChanged = snapshot.visitGeneration !== tableSnapshot.visitGeneration
     const previousTableSessionId = tableSnapshot.tableSessionId
     const previousVenueId = tableSnapshot.venueId
@@ -2342,23 +2286,26 @@ export function renderCartScreen(options: CartScreenOptions) {
       tabState.creatingTab = false
       tabState.joining = false
       isJoinMode = false
-      hasSharedAccess = false
+      refs.tabDisclosure.open = false
       setSharedInvite(null)
       refs.joinTokenInput.value = ''
       setTabMessage('')
       updateSubmitState()
     }
-    if (snapshot.status === 'resolved' && snapshot.tableSessionId && snapshot.tableSessionId !== previousTableSessionId) {
+    if (snapshot.status === 'resolved' && snapshot.tableSessionId &&
+        (previousStatus !== 'resolved' || generationChanged || snapshot.tableSessionId !== previousTableSessionId)) {
       void reloadTabs()
     }
     if (snapshot.status !== 'resolved') {
+      tabsAbort?.abort()
+      tabsAbort = null
+      tabState.loading = false
       inviteRestoreAbort?.abort()
       inviteRestoreAbort = null
       inviteRestoreTabId = null
       tabState.tabs = []
       tabState.selectedTabId = null
       isJoinMode = false
-      hasSharedAccess = false
       setSharedInvite(null)
       refs.joinTokenInput.value = ''
     }

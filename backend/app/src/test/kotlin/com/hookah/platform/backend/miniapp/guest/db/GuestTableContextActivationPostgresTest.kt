@@ -211,6 +211,10 @@ class GuestTableContextActivationPostgresTest {
                 assertEquals(original, chats.get(fixture.chatId)?.tableSessionId)
                 ds.connection.use { conn ->
                     assertTrue(repository.hasExactBotVisit(conn, actor, activation.context, original, now))
+                    assertEquals(
+                        "PERSONAL",
+                        GuestTabsRepository(ds).findPersonalTabForUpdate(conn, fixture.venueId, original, actor)?.type,
+                    )
                     conn.createStatement().use { sql ->
                         val replacement =
                             sql.executeQuery("SELECT id FROM table_sessions WHERE table_id <> $seat").use {

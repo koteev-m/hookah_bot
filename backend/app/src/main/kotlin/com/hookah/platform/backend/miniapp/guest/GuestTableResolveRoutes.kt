@@ -61,10 +61,11 @@ fun Route.guestTableResolveRoutes(
     ): TableResolveResponse =
         transactions.execute { connection ->
             // Bot teardown locks the chat before the physical table. Keep that lock order.
+            val rejoinWithMembership =
+                requestedId != null && exitEventId != null &&
+                    tableSessionRepository.hasActiveUserTabMembership(connection, userId, pointer.venueId, requestedId)
             val exitedBotChat =
-                if (requestedId != null && exitEventId != null &&
-                    !tableSessionRepository.hasActiveUserTabMembership(connection, userId, pointer.venueId, requestedId)
-                ) {
+                if (requestedId != null && exitEventId != null) {
                     guestTableContextLifecycleRepository?.findExitedBotChat(
                         connection,
                         userId,
@@ -72,6 +73,7 @@ fun Route.guestTableResolveRoutes(
                         requestedId,
                         exitEventId,
                         forUpdate = true,
+                        includeBillOwners = rejoinWithMembership,
                     )
                 } else {
                     null
@@ -113,7 +115,8 @@ fun Route.guestTableResolveRoutes(
             if (exitEventId != null) {
                 if (!availability.available) throw SubscriptionBlockedException()
                 if (active == null || exitEventId != marker) throw TableRejoinStaleException()
-                if (exitedBotChat == null &&
+                // A detached chat found through existing membership does not replace that authorization.
+                if ((exitedBotChat == null || rejoinWithMembership) &&
                     !tableSessionRepository.hasActiveUserTabMembership(
                         connection,
                         userId,
@@ -200,7 +203,7 @@ fun Route.guestTableResolveRoutes(
                         )
                     else -> ResolvedTableSession(null, active = false, inactiveReason = "TABLE_SESSION_MISSING")
                 }
-            if (firstEntry && state.active && availability.available) {
+            if ((firstEntry || exitEventId != null) && state.active && availability.available) {
                 guestTabsRepository.ensurePersonalTab(connection, venueId, state.tableSessionId, userId)
             }
             val challengeRequested = (allowCreate && requestedId == null) || (verifyOnly && requestedId == active?.id)

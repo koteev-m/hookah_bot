@@ -243,15 +243,24 @@ Incomplete writes from an older Mini App return HTTP 428 before mutation. Read a
   `TABLE_SESSION_EXITED` and the current `exitEventId` as a decimal string. After the guest confirms,
   the Mini App sends authenticated `POST /api/guest/table/session/rejoin` with `tableToken`,
   `tableSessionId` and `exitEventId`. The server locks the session, verifies current availability
-  and consumes the matching actor/session/event in the same transaction. A guest with no bill can
-  also resume a previously confirmed Bot visit. On exit the Bot removes the token from its server-owned
+  and consumes the matching actor/session/event in the same transaction. A confirmed Mini App QR entry
+  or rejoin and a confirmed Bot QR entry or rejoin also ensure one active personal bill in that
+  transaction. Controlled Platform Guest keeps the existing server-owned Bot binding checks.
+  An active personal bill is reused and closed bills stay closed. Opening the Mini App from an
+  existing Bot visit and an addressed Mini App-to-Bot handoff do not create a bill.
+  On exit the Bot removes the token from its server-owned
   chat binding. Only that actor’s matching chat, table, physical session and current exit event can
-  reactivate it. This restores the visit without creating a tab or granting access to existing bills.
-  Exact table reads, bill lists and active-order reads leave the bill list unchanged. When the guest has no personal bill, «Открыть личный счёт»
+  reactivate it. Exact table reads, bill lists and active-order reads leave the bill list unchanged.
+  For legacy visits without a personal bill, «Открыть личный счёт» in the account disclosure
   calls `POST /api/guest/tabs/personal`. An ordinary guest needs a current membership in that
   session or a confirmed Bot visit at that table. An exit blocks the operation. Repeating it
   returns the same personal bill. Checkout on a SHARED bill uses its selected membership and leaves the set of bills unchanged. A revoked membership cannot be restored by opening the bill.
   A guest with a confirmed Bot visit can also end it in the Mini App before opening a bill.
+  The cart defaults to the personal bill and remembers an explicit bill choice for the same
+  account and participation generation. Losing access to the chosen bill requires a new choice.
+  A prepared checkout retains its original bill, contents and key until the server resolves it.
+  The account disclosure gives access to switching, shared bill creation and joining. The cart
+  shows the server preview with options and discounts and waits for a valid total before sending.
   The Mini App clears the visit only after the server confirms the exit. On refusal, the guest checks the current table in the Bot menu before ending a visit there.
   After a lost SDK rejoin response, the guest can explicitly retry. The Mini App first verifies
   the original physical session read-only, including after a reload in the same WebView. That response can supply a fresh challenge for the

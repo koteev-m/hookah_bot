@@ -46,8 +46,8 @@ class GuestTableContextActivationRepositoryTest {
                 val joined = assertIs<GuestTableActivationResult.Applied>(confirm(true))
                 assertEquals(session, joined.tableSession.id)
                 assertNull(db.exitSnapshot(session))
-                assertEquals(0, db.countRows("tab"))
-                assertEquals(0, db.countRows("tab_member"))
+                assertEquals(1, db.countRows("tab"))
+                assertEquals(1, db.countRows("tab_member"))
                 assertIs<GuestTableActivationResult.Denied>(confirm(true))
             }
         }
@@ -85,6 +85,8 @@ class GuestTableContextActivationRepositoryTest {
             val applied = assertIs<GuestTableActivationResult.Applied>(result)
             assertEquals(tableSessionId, applied.tableSession.id)
             assertEquals(database.tableToken, applied.context.tableToken)
+            assertEquals(1, database.countRows("tab"))
+            assertEquals(1, database.countRows("tab_member"))
             assertEquals(now, database.sessionSnapshot(tableSessionId)?.lastActivityAt)
             assertEquals(now.plus(Duration.ofHours(4)), database.sessionSnapshot(tableSessionId)?.expiresAt)
             assertNull(database.exitSnapshot(tableSessionId))

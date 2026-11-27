@@ -240,6 +240,7 @@ class ChatContextRepository(private val dataSource: DataSource?) {
         sessionId: Long,
         eventId: Long,
         forUpdate: Boolean,
+        includeBillOwners: Boolean = false,
     ): Long? =
         connection.prepareStatement(
             """
@@ -252,9 +253,9 @@ class ChatContextRepository(private val dataSource: DataSource?) {
                     AND e.exited_at = c.updated_at AND e.table_session_id = c.table_session_id
                     AND s.venue_id = c.venue_id AND s.table_id = c.table_id
               )
-              AND NOT EXISTS (
+              AND (? OR NOT EXISTS (
                   SELECT 1 FROM tab t WHERE t.table_session_id = ? AND t.owner_user_id = c.user_id
-              )
+              ))
             ORDER BY c.chat_id LIMIT 2
             """.trimIndent() + if (forUpdate) " FOR UPDATE" else "",
         ).use {
@@ -263,7 +264,8 @@ class ChatContextRepository(private val dataSource: DataSource?) {
             it.setLong(3, tableId)
             it.setLong(4, sessionId)
             it.setLong(5, eventId)
-            it.setLong(6, sessionId)
+            it.setBoolean(6, includeBillOwners)
+            it.setLong(7, sessionId)
             it.executeQuery().use { rows ->
                 if (rows.next()) {
                     val chatId = rows.getLong(1)

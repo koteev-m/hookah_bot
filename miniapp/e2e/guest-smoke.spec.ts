@@ -12995,6 +12995,191 @@ test('initial tab restore rejects a gift draft from a replaced table session on 
   }).toPass()
 })
 
+async function openGuestCartAccounts(page: Page) {
+  const disclosure = page.locator('.cart-accounts')
+  if (!(await disclosure.evaluate((element: HTMLDetailsElement) => element.open))) {
+    await disclosure.locator('summary').click()
+  }
+}
+
+async function expectCartControlAboveNav(control: Locator) {
+  await control.evaluate(element => element.scrollIntoView({ block: 'center' }))
+  await expect.poll(() => control.evaluate(element => {
+    const rect = element.getBoundingClientRect()
+    const navTop = document.querySelector('.guest-nav')!.getBoundingClientRect().top
+    const middle = (rect.left + rect.right) / 2
+    return rect.top >= 0 && rect.bottom <= Math.min(navTop, innerHeight) &&
+      [rect.top + 2, (rect.top + rect.bottom) / 2, rect.bottom - 2].every(
+        y => element.contains(document.elementFromPoint(middle, y))
+      )
+  }), 'control fits in the visible viewport and receives touch above the guest nav').toBe(true)
+}
+
+test.describe('cart mobile layout', () => {
+  test.use({ isMobile: true, hasTouch: true })
+  for (const [theme, width] of [['light', 360], ['light', 390], ['dark', 360], ['dark', 390]] as const) {
+    test(`server total and reachable checkout in ${theme} at ${width}px`, async ({ page }, info) => {
+      await page.setViewportSize({ width, height: 844 })
+      await installTelegramWebApp(page, 123456789)
+      await installPolishTheme(page, theme)
+      const personal = { id: 121, tableSessionId: 77, type: 'PERSONAL', ownerUserId: 123456789, status: 'ACTIVE' } as const
+      const api = await mockGuestApi(page, {
+        restoreContext: buildRestoreContext({ tabId: personal.id }),
+        tabs: [personal],
+        menuCategories: [{
+          id: 20, name: 'Кальянное меню', categoryType: 'OTHER',
+          items: [{ id: 200, name: 'Кальян на воде', priceMinor: 150000, currency: 'RUB', isAvailable: true,
+            effectiveItemType: 'OTHER', options: [{ id: 302, name: 'Мята', priceDeltaMinor: 25000, isAvailable: true }] }]
+        }],
+        cartPreviewResolver: request => ({
+          grossTotalMinor: 175000, promoDiscountTotalMinor: 20000, loyaltyDiscountTotalMinor: 0,
+          finalPayableTotalMinor: 155000, currency: 'RUB',
+          discounts: [{ ruleType: 'HAPPY_HOURS_PERCENT', label: 'Счастливые часы', discountMinor: 20000, currency: 'RUB' }],
+          items: [{ itemId: 200, name: 'Кальян на воде', qty: 1, currency: 'RUB', priceMinor: 175000,
+            selectedOption: { optionId: 302, name: 'Мята', priceDeltaMinor: 25000 },
+            lineGrossMinor: 175000, discountMinor: 20000, linePayableMinor: 155000 }],
+          pricingFingerprint: 'server-price-' + request.tabId, cartFingerprint: 'cart-200-302'
+        })
+      })
+      const tabWrites: string[] = []
+      page.on('request', request => {
+        if (request.method() === 'POST' && new URL(request.url()).pathname.startsWith('/api/guest/tabs/')) tabWrites.push(request.url())
+      })
+      await page.goto('?mode=guest')
+      await expect(page.locator(':root')).toHaveAttribute('data-color-scheme', theme)
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty('--tg-safe-area-inset-bottom', '20px')
+        document.documentElement.style.setProperty('--tg-content-safe-area-inset-bottom', '8px')
+      })
+      await page.getByRole('button', { name: /Кальянное меню/ }).click()
+      await page.getByRole('button', { name: 'Выбрать', exact: true }).click()
+      await page.getByRole('button', { name: /Мята/ }).click()
+      await page.getByRole('button', { name: 'Добавить в корзину' }).click()
+      await page.getByRole('button', { name: 'Корзина (1)' }).click()
+      const accounts = page.locator('.cart-accounts')
+      await expect(accounts.locator('summary')).toContainText('Личный счёт')
+      const shared = page.getByRole('button', { name: 'Создать общий счёт' })
+      const join = page.getByRole('button', { name: 'Присоединиться к общему счёту' })
+      await expect(shared).toBeHidden()
+      await expect(join).toBeHidden()
+      await expect(page.locator('.cart-item')).toContainText('Мята')
+      const total = page.locator('.cart-preview-content > .order-bill-total')
+      await expect(total).toContainText(/К оплате.*1\s*550,00\s*₽/)
+      await expect(page.locator('.cart-preview-content > .order-bill-row').filter({ hasText: 'Счастливые часы' }))
+        .toContainText(/200,00\s*₽/)
+      await expect.poll(() => api.getPreviewRequests().at(-1)?.items[0]?.selectedOptionId).toBe(302)
+      const send = page.getByRole('button', { name: 'Отправить', exact: true })
+      const chat = page.getByRole('button', { name: 'Оформить в чате', exact: true })
+      await expect(send).toBeEnabled()
+      const comment = page.getByLabel('Комментарий (необязательно)')
+      await comment.fill('Покрепче')
+      await comment.blur()
+      await expect(total).toContainText(/К оплате.*1\s*550,00\s*₽/)
+      const bottomGaps: number[] = []
+      for (const expanded of [false, true]) {
+        if (expanded) {
+          await openGuestCartAccounts(page)
+          await expect(shared).toBeVisible()
+          await expect(join).toBeVisible()
+          await expect(page.getByRole('button', { name: 'Открыть личный счёт' })).toHaveCount(0)
+        }
+        await expect(accounts).toHaveJSProperty('open', expanded)
+        for (const control of [comment, send, chat]) await expectCartControlAboveNav(control)
+        await send.click({ trial: true })
+        await chat.click({ trial: true })
+        await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+        const bottom = await page.locator('.guest-nav').evaluate(nav => {
+          const actions = document.querySelector('.cart-actions')!.getBoundingClientRect()
+          const rect = nav.getBoundingClientRect()
+          return {
+            gap: Math.round(rect.top - actions.bottom),
+            padding: parseFloat(getComputedStyle(nav).paddingBottom),
+            viewportGap: Math.round(innerHeight - rect.bottom)
+          }
+        })
+        expect(bottom.gap).toBeGreaterThanOrEqual(16)
+        expect(bottom.padding).toBe(36)
+        expect(bottom.viewportGap).toBe(0)
+        bottomGaps.push(bottom.gap)
+        await expect(send).toBeInViewport({ ratio: 1 })
+        await expect(chat).toBeInViewport({ ratio: 1 })
+        await expectNoHorizontalOverflow(page)
+        await page.screenshot({ path: info.outputPath(`cart-${theme}-${width}-${expanded ? 'expanded' : 'collapsed'}.png`) })
+      }
+      expect(tabWrites).toEqual([])
+      expect(api.getAddBatchRequests()).toEqual([])
+      const amounts = await page.locator('.cart-preview-content .order-bill-row > strong').evaluateAll(values =>
+        values.map(value => {
+          const range = document.createRange()
+          range.selectNodeContents(value)
+          const lineTops = new Set(Array.from(range.getClientRects(), rect => Math.round(rect.top)))
+          return { text: value.textContent, lines: lineTops.size }
+        })
+      )
+      await info.attach('cart-viewport-measurements', {
+        contentType: 'application/json',
+        body: JSON.stringify({ bottomGaps, amounts })
+      })
+      expect(amounts).toHaveLength(3)
+      for (const amount of amounts) expect(amount.lines, amount.text ?? '').toBe(1)
+    })
+  }
+})
+
+test('cart ux shows other venues only on the venue home and preserves the table basket', async ({ page }) => {
+  await installTelegramWebApp(page, 123456789)
+  const api = await mockGuestApi(page, { restoreContext: buildRestoreContext() })
+  const other = page.getByRole('button', { name: 'Другие заведения', exact: true })
+  await page.goto('?mode=guest')
+  await page.getByRole('button', { name: /Кальянное меню/ }).click()
+  await expect(other).toHaveCount(0)
+  await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
+  const cart = page.getByRole('button', { name: 'Корзина (1)' })
+  await cart.click()
+  await expect(other).toHaveCount(0)
+  await page.getByRole('button', { name: 'Мои заказы', exact: true }).click()
+  await expect(other).toHaveCount(0)
+  await page.getByRole('navigation', { name: 'Гостевая навигация' })
+    .getByRole('button', { name: 'Заведение', exact: true }).click()
+  await expect(other).toBeVisible()
+  await other.click()
+  await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
+  await expect(other).toHaveCount(0)
+  await page.getByRole('button', { name: /К столу/ }).click()
+  await cart.click()
+  await expect(page.locator('.cart-item')).toHaveCount(1)
+  expect(api.getTableSessionEndRequests()).toEqual([])
+  expect(api.getAddBatchRequests()).toEqual([])
+})
+
+test('cart ux creates and selects a shared bill and exposes its invitation inside the account chooser', async ({ page }) => {
+  await installQrScanner(page)
+  const personal = { id: 121, tableSessionId: 77, type: 'PERSONAL', ownerUserId: 123456789, status: 'ACTIVE' } as const
+  const shared = { ...personal, id: 122, type: 'SHARED' } as const
+  const api = await mockGuestApi(page, { restoreContext: buildRestoreContext(), tabs: [personal] })
+  const writes: unknown[] = []
+  await page.route('**/api/guest/tabs/shared', route => {
+    writes.push(route.request().postDataJSON())
+    api.setTabs([personal, shared])
+    return route.fulfill(jsonResponse({ tab: shared }))
+  })
+  await page.route('**/api/guest/tabs/122/invite', route => {
+    writes.push(route.request().postDataJSON())
+    return route.fulfill(jsonResponse({ token: '0123', expiresAtEpochSeconds: Math.floor(Date.now() / 1000) + 300 }))
+  })
+  await page.goto('?mode=guest')
+  await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await openGuestCartAccounts(page)
+  await page.getByRole('button', { name: 'Создать общий счёт' }).click()
+  await expect(page.getByRole('combobox', { name: 'Выберите счёт' })).toHaveValue('122')
+  await expect(page.getByText('Код приглашения: 0123')).toBeVisible()
+  expect(writes).toEqual([
+    { tableSessionId: 77, expectedVisitGeneration: '0' },
+    { tableSessionId: 77, expectedVisitGeneration: '0' }
+  ])
+  expect(api.getAddBatchRequests()).toEqual([])
+})
+
 test('switching tab in the same table session clears the gift decision', async ({ page }) => {
   await installTelegramWebApp(page, 123456789)
   const api = await mockGuestApi(page, {
@@ -13023,13 +13208,14 @@ test('switching tab in the same table session clears the gift decision', async (
   await page.getByRole('button', { name: /Кальянное меню/ }).click()
   await page.getByRole('button', { name: 'Добавить' }).click()
   await page.getByRole('button', { name: 'Корзина (1)' }).click()
-  await page.getByRole('combobox', { name: 'Выберите счёт' }).selectOption('88')
+  await expect.poll(() => api.getPreviewRequests().at(-1)?.tabId).toBe(88)
   await page.getByRole('button', { name: 'Добавить подарок' }).click()
   await expect(page.getByText('Подарок добавлен: Чай')).toBeVisible()
   expect(api.getPreviewRequests().at(-1)?.tabId).toBe(88)
   expect(api.getPreviewRequests().at(-1)?.giftDecision?.action).toBe('ACCEPT_FIXED')
 
-  await page.getByRole('button', { name: 'Переключить на Общий счёт' }).click()
+  await openGuestCartAccounts(page)
+  await page.getByRole('combobox', { name: 'Выберите счёт' }).selectOption('89')
 
   await expect.poll(() => api.getPreviewRequests().at(-1)?.tabId).toBe(89)
   expect(api.getPreviewRequests().at(-1)?.tableSessionId).toBe(77)
@@ -13749,7 +13935,7 @@ test('guest fallback chat order sends supported quick order payload through Tele
 
   await expect(page.getByRole('button', { name: 'Корзина (1)' })).toBeVisible()
   await page.getByRole('button', { name: 'Корзина (1)' }).click()
-  await expect(page.getByText('Выберите счёт (tab) для заказа.')).toHaveCount(0)
+  await expect(page.getByText('Выберите счёт для заказа.')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Оформить в чате' })).toBeEnabled()
   await page.getByRole('button', { name: 'Оформить в чате' }).click()
 
@@ -28408,6 +28594,8 @@ test('personal links browse B retain visit cart and order A and explicit catalog
   await finishedB
   await expect(page.getByText(/Баумана, 2/)).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^Корзина/ }).first()).toBeVisible()
+  await page.getByRole('navigation', { name: 'Гостевая навигация' })
+    .getByRole('button', { name: 'Заведение', exact: true }).click()
   await page.getByRole('button', { name: 'Другие заведения', exact: true }).click()
   await expect(page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })).toBeVisible()
   expect(api.getTableSessionEndRequests()).toHaveLength(0)
@@ -31540,6 +31728,8 @@ test('guest navigation reload QR explicit catalog survives discarded Forward and
   await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}`)
   await page.getByRole('button', { name: 'Корзина', exact: true }).click()
   await page.goBack()
+  await page.getByRole('navigation', { name: 'Гостевая навигация' })
+    .getByRole('button', { name: 'Заведение', exact: true }).click()
   await page.getByRole('button', { name: 'Другие заведения', exact: true }).click()
   const catalog = page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })
   await expect(catalog).toBeVisible()
@@ -31688,6 +31878,8 @@ test('guest navigation final reload returns from nested profile to explicitly ch
     if (path.startsWith('/api/guest/') && request.method() !== 'GET') mutations.push(path)
   })
   await page.goto(`?mode=guest&screen=menu&table_token=${tableToken}`)
+  await page.getByRole('navigation', { name: 'Гостевая навигация' })
+    .getByRole('button', { name: 'Заведение', exact: true }).click()
   await page.getByRole('button', { name: 'Другие заведения', exact: true }).click()
   const catalog = page.getByRole('searchbox', { name: 'Поиск по названию, городу или адресу' })
   const returnToTable = page.getByRole('button', { name: 'К столу · Микс' })
@@ -32635,6 +32827,7 @@ test('guest context continuity keeps the shared tab and requires a choice if it 
   await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
   const cart = page.getByRole('button', { name: 'Корзина (1)' })
   await cart.click()
+  await openGuestCartAccounts(page)
   await page.getByRole('combobox', { name: 'Выберите счёт' }).selectOption('122')
   await expect.poll(() => api.getPreviewRequests().at(-1)?.tabId).toBe(122)
   for (const state of ['active', 'lost', 'closed'] as const) {
@@ -32647,7 +32840,7 @@ test('guest context continuity keeps the shared tab and requires a choice if it 
     await clickTelegramBackButton(page)
     await page.getByRole('button', { name: /К столу/ }).click()
     await cart.click()
-    if (state !== 'active') {
+    if (closed) {
       await expect(page.getByText(/Выбранный счёт недоступен/)).toBeVisible()
       expect(api.getPreviewRequests().length).toBe(before)
       await page.getByRole('combobox', { name: 'Выберите счёт' }).selectOption(closed ? '121' : '122')
@@ -32658,7 +32851,7 @@ test('guest context continuity keeps the shared tab and requires a choice if it 
   expect(api.getAddBatchRequests()).toEqual([])
 })
 
-test('review06 a shared bill selected in an earlier participation requires a fresh choice', async ({ page }) => {
+test('review06 a new participation defaults to personal instead of a previously selected shared bill', async ({ page }) => {
   await installQrScanner(page)
   const personal = { id: 121, tableSessionId: 77, type: 'PERSONAL', ownerUserId: 123456789, status: 'ACTIVE' } as const
   const api = await mockGuestApi(page, {
@@ -32673,6 +32866,7 @@ test('review06 a shared bill selected in an earlier participation requires a fre
   await page.goto('?mode=guest')
   await add()
   const bills = page.getByRole('combobox', { name: 'Выберите счёт' })
+  await openGuestCartAccounts(page)
   await bills.selectOption('122')
   await expect.poll(() => api.getPreviewRequests().at(-1)?.tabId).toBe(122)
   const before = api.getPreviewRequests().length
@@ -32682,10 +32876,9 @@ test('review06 a shared bill selected in an earlier participation requires a fre
   await page.goto('?mode=guest')
   await expect(page.getByRole('button', { name: 'Корзина', exact: true })).toBeVisible()
   await add()
-  await expect(bills).toBeVisible()
-  expect(api.getPreviewRequests()).toHaveLength(before)
-  await bills.selectOption('121')
+  await expect(bills).toBeHidden()
   await expect.poll(() => api.getPreviewRequests().at(-1)).toMatchObject({ tabId: 121, expectedVisitGeneration: '73' })
+  expect(api.getPreviewRequests().slice(before).every(request => request.tabId === 121)).toBe(true)
   expect(api.getAddBatchRequests()).toEqual([])
 })
 
@@ -32971,6 +33164,7 @@ for (const readFailure of [false, true]) {
     await page.getByRole('button', { name: /Кальянное меню/ }).click()
     await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
     await page.getByRole('button', { name: 'Корзина (1)' }).click()
+    await openGuestCartAccounts(page)
     await page.getByRole('combobox', { name: 'Выберите счёт' }).selectOption('122')
     await expect.poll(() => api.getPreviewRequests().at(-1)?.tabId).toBe(122)
     const reopened = await context.newPage()
@@ -32996,11 +33190,8 @@ for (const readFailure of [false, true]) {
       await retry.click()
     }
     await reopened.getByRole('button', { name: 'Корзина (1)' }).click()
-    const select = reopened.getByRole('combobox', { name: 'Выберите счёт' })
-    await expect(select).toBeVisible()
-    expect(next.getPreviewRequests()).toEqual([])
+    await expect(reopened.locator('.cart-accounts summary')).toContainText('Общий счёт')
     expect(next.getAddBatchRequests()).toEqual([])
-    await select.selectOption('122')
     await expect.poll(() => next.getPreviewRequests().map(x => [x.tableSessionId, x.tabId])).toContainEqual([77, 122])
     await reopened.getByRole('button', { name: 'Отправить', exact: true }).click()
     await expect.poll(() => next.getAddBatchRequests().map(x => [x.tableSessionId, x.tabId])).toEqual([[77, 122]])
@@ -33022,6 +33213,7 @@ test('review08 releases a definitively rejected order after membership loss and 
   await page.getByRole('button', { name: /Кальянное меню/ }).click()
   await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
   await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await openGuestCartAccounts(page)
   await page.getByRole('combobox', { name: 'Выберите счёт' }).selectOption('122')
   const send = page.getByRole('button', { name: 'Отправить', exact: true })
   await send.click()
@@ -33058,6 +33250,7 @@ test('review08 confirms the displayed invitation instance before joining a share
   })
   await page.goto('?mode=guest')
   await page.getByRole('button', { name: 'Корзина', exact: true }).click()
+  await openGuestCartAccounts(page)
   await page.getByRole('button', { name: 'Присоединиться к общему счёту' }).click()
   await page.getByPlaceholder('Код приглашения').fill('0123')
   await page.getByRole('button', { name: 'Проверить код' }).click()
@@ -33074,6 +33267,8 @@ test('guest reconciliation remembers the ordinary catalog card across business r
   await mockGuestApi(page, { catalogVenues: [buildGuestCatalogVenue({ id: 2, name: 'Карточка Б' })], restoreContext: buildRestoreContext() })
   await mockPersonalVenue(page)
   await page.goto('?mode=guest')
+  await page.getByRole('navigation', { name: 'Гостевая навигация' })
+    .getByRole('button', { name: 'Заведение', exact: true }).click()
   await page.getByRole('button', { name: 'Другие заведения' }).click()
   await page.locator('.catalog-item').filter({ hasText: 'Карточка Б' }).getByRole('button', { name: 'Открыть' }).click()
   await expect(page).toHaveURL(/#\/venue\/2$/)
@@ -33196,6 +33391,8 @@ test('release findings isolated catalog choice survives a QR in a second window'
   await mockGuestApi(page, { catalogVenues: [buildGuestCatalogVenue({ id: 2, name: 'Карточка Б' })], restoreContext: a })
   await mockPersonalVenue(page)
   await page.goto('?mode=guest')
+  await page.getByRole('navigation', { name: 'Гостевая навигация' })
+    .getByRole('button', { name: 'Заведение', exact: true }).click()
   await page.getByRole('button', { name: 'Другие заведения' }).click()
   await page.locator('.catalog-item').filter({ hasText: 'Карточка Б' }).getByRole('button', { name: 'Открыть' }).click()
   await openGuestBusinessFromProfile(page)
@@ -33477,6 +33674,7 @@ test('rejoin ux opens the first personal bill explicitly and keeps the basket on
   await page.getByRole('button', { name: /Кальянное меню/ }).click()
   await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
   await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await openGuestCartAccounts(page)
   const open = page.getByRole('button', { name: 'Открыть личный счёт' })
   await expect(open).toBeVisible()
   expect(requests).toEqual([])
@@ -33583,6 +33781,7 @@ test('rejoin ux fresh Bot WebView reads its original session before opening a pe
     await page.getByRole('button', { name: /Кальянное меню/ }).click()
     await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
     await page.getByRole('button', { name: 'Корзина (1)' }).click()
+    await openGuestCartAccounts(page)
     await expect(page.getByRole('button', { name: 'Открыть личный счёт' })).toBeVisible()
     expect(writes).toEqual([])
     expect(api.getPreviewRequests()).toEqual([])
@@ -33605,6 +33804,7 @@ test('rejoin ux offers a personal bill with only a shared bill and keeps the sel
   await page.getByRole('button', { name: /Кальянное меню/ }).click()
   await page.getByRole('button', { name: 'Добавить', exact: true }).first().click()
   await page.getByRole('button', { name: 'Корзина (1)' }).click()
+  await openGuestCartAccounts(page)
   const open = page.getByRole('button', { name: 'Открыть личный счёт' })
   await expect(open).toBeVisible()
   expect(opens).toEqual([])
