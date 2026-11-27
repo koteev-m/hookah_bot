@@ -1282,7 +1282,113 @@ class GuestTableResolveRoutesTest {
             val reenterPayload = json.decodeFromString(TableResolveResponse.serializer(), reenterResponse.bodyAsText())
             assertEquals(tableSessionId, reenterPayload.tableSessionId)
             assertEquals(true, reenterPayload.tableSessionActive)
+            assertEquals(exited.exitEventId, reenterPayload.visitGeneration)
+            assertEquals(1, countPersonalTabs(jdbcUrl, guestA, tableSessionId))
             assertEquals(0, countUserTableSessionExits(jdbcUrl, guestA, tableSessionId))
+        }
+
+    @Test
+    fun `confirmed rejoin provisions a personal tab without reopening the closed tab or changing shared membership`() =
+        testApplication {
+            val jdbcUrl = buildJdbcUrl("guest-rejoin-personal-tab")
+            val config = buildConfig(jdbcUrl)
+            environment { this.config = config }
+            application { module() }
+
+            client.get("/health")
+            createTelegramChatContextFixture(jdbcUrl)
+            val userId = TELEGRAM_USER_ID
+            val token = "shared-only-rejoin-token"
+            val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
+            seedSubscription(jdbcUrl, venueId, "ACTIVE")
+            val tableId = seedTable(jdbcUrl, venueId, 31)
+            seedTableToken(jdbcUrl, tableId, token)
+            seedUser(jdbcUrl, userId)
+            val sessionId = seedTableSession(jdbcUrl, venueId, tableId, "ACTIVE", Instant.now().plusSeconds(3600), null)
+            val sharedId = seedTab(jdbcUrl, venueId, sessionId, userId, type = "SHARED")
+            val closedId = seedTab(jdbcUrl, venueId, sessionId, userId)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement("UPDATE tab SET status = 'CLOSED' WHERE id = ?").use {
+                    it.setLong(1, closedId)
+                    assertEquals(1, it.executeUpdate())
+                }
+            }
+            val jwt = issueToken(config, userId)
+            val before = fetchTableSessionTiming(jdbcUrl, sessionId)
+            val restored =
+                client.get("/api/guest/table/restore?tableToken=$token&tableSessionId=$sessionId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $jwt") }
+                }
+            assertEquals(sharedId, json.decodeFromString<TableRestoreResponse>(restored.bodyAsText()).context?.tabId)
+            assertEquals(1, countPersonalTabs(jdbcUrl, userId, sessionId))
+            assertEquals(before, fetchTableSessionTiming(jdbcUrl, sessionId))
+
+            val ended =
+                client.post("/api/guest/table/session/end") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $jwt") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"tableToken":"$token","tableSessionId":$sessionId,"expectedVisitGeneration":"0"}""")
+                }
+            assertEquals(true, json.decodeFromString<TableSessionEndResponse>(ended.bodyAsText()).ended)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.prepareStatement(
+                    """
+                    INSERT INTO telegram_chat_context (chat_id, user_id, venue_id, table_id, table_session_id, updated_at)
+                    SELECT ?, user_id, ?, ?, table_session_id, exited_at
+                    FROM guest_table_session_exits WHERE user_id = ? AND table_session_id = ?
+                    """.trimIndent(),
+                ).use {
+                    it.setLong(1, userId)
+                    it.setLong(2, venueId)
+                    it.setLong(3, tableId)
+                    it.setLong(4, userId)
+                    it.setLong(5, sessionId)
+                    assertEquals(1, it.executeUpdate())
+                }
+            }
+            val scanned =
+                client.get("/api/guest/table/resolve?tableToken=$token&resolveMode=create") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $jwt") }
+                }
+            val exit = checkNotNull(json.decodeFromString<TableResolveResponse>(scanned.bodyAsText()).exitEventId)
+            assertEquals(1, countPersonalTabs(jdbcUrl, userId, sessionId))
+            val confirmed =
+                client.post("/api/guest/table/session/rejoin") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $jwt") }
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"tableToken":"$token","tableSessionId":$sessionId,"exitEventId":"$exit"}""")
+                }
+            assertEquals(HttpStatusCode.OK, confirmed.status)
+            assertEquals(exit, json.decodeFromString<TableResolveResponse>(confirmed.bodyAsText()).visitGeneration)
+            assertEquals(2, countPersonalTabs(jdbcUrl, userId, sessionId))
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                val tabs =
+                    connection.prepareStatement(
+                        """
+                        SELECT t.id, t.type, t.status, m.role FROM tab t JOIN tab_member m ON m.tab_id = t.id
+                        WHERE t.table_session_id = ? AND m.user_id = ? ORDER BY t.id
+                        """.trimIndent(),
+                    ).use {
+                        it.setLong(1, sessionId)
+                        it.setLong(2, userId)
+                        it.executeQuery().use { rows ->
+                            buildList {
+                                while (rows.next()) add(List(4) { column -> rows.getString(column + 1) })
+                            }
+                        }
+                    }
+                assertEquals(3, tabs.size)
+                assertEquals(listOf("$sharedId", "SHARED", "ACTIVE", "OWNER"), tabs[0])
+                assertEquals(listOf("$closedId", "PERSONAL", "CLOSED", "OWNER"), tabs[1])
+                assertEquals(listOf("PERSONAL", "ACTIVE", "OWNER"), tabs[2].drop(1))
+                connection.prepareStatement("SELECT table_token FROM telegram_chat_context WHERE chat_id = ?").use {
+                    it.setLong(1, userId)
+                    it.executeQuery().use { rows ->
+                        assertTrue(rows.next())
+                        assertEquals(token, rows.getString(1))
+                    }
+                }
+            }
         }
 
     @Test
@@ -2029,19 +2135,21 @@ class GuestTableResolveRoutesTest {
         venueId: Long,
         tableSessionId: Long,
         userId: Long,
+        type: String = "PERSONAL",
     ): Long {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
             val tabId =
                 connection.prepareStatement(
                     """
                     INSERT INTO tab (venue_id, table_session_id, type, owner_user_id, status)
-                    VALUES (?, ?, 'PERSONAL', ?, 'ACTIVE')
+                    VALUES (?, ?, ?, ?, 'ACTIVE')
                     """.trimIndent(),
                     Statement.RETURN_GENERATED_KEYS,
                 ).use { statement ->
                     statement.setLong(1, venueId)
                     statement.setLong(2, tableSessionId)
-                    statement.setLong(3, userId)
+                    statement.setString(3, type)
+                    statement.setLong(4, userId)
                     statement.executeUpdate()
                     statement.generatedKeys.use { rs ->
                         if (rs.next()) {

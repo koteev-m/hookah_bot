@@ -15,7 +15,7 @@ import type {
   ShiftExtensionRequestDto,
   ShiftExtensionTerms
 } from '../shared/api/guestDtos'
-import { chooseGuestTab, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
+import { chooseGuestTab } from '../shared/state/guestTabSelection'
 import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
 import { transactRecord } from '../shared/state/visitStorage'
 import { getTelegramContext } from '../shared/telegram'
@@ -391,7 +391,6 @@ export function renderGuestShiftExtensionCard(options: GuestShiftExtensionOption
       hideCard('ACTIVE_TAB_NOT_FOUND')
       return null
     }
-    setSelectedGuestTabId(baseScope.tableSessionId, selectedTab.id)
     return {
       ...baseScope,
       tabId: selectedTab.id

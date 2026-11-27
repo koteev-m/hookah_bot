@@ -196,7 +196,7 @@ class TelegramWebhookRoutesTest {
         }
 
     @Test
-    fun `confirmed bot exit before the first bill protects the old Mini App button in both clients`() =
+    fun `confirmed bot exit protects the old Mini App button without duplicating the personal bill`() =
         testApplication {
             val db = PostgresTestEnv.createDatabase()
             val user = ALLOWED_USER_ID
@@ -257,6 +257,15 @@ class TelegramWebhookRoutesTest {
             val before = snapshot()
             val session =
                 checkNotNull(db.scalar("SELECT id FROM table_sessions WHERE table_id=201 AND status='ACTIVE'"))
+            val personalTabId =
+                checkNotNull(
+                    db.scalar(
+                        "SELECT id FROM tab WHERE table_session_id=$session AND owner_user_id=$user " +
+                            "AND type='PERSONAL' AND status='ACTIVE'",
+                    ),
+                )
+            assertEquals("1", before.getValue("tab"))
+            assertEquals("1", before.getValue("tab_member"))
             message("📱 Заказывать в Mini App")
             val link = awaitMessage { it["text"]?.jsonPrimitive?.content?.startsWith("📱 Mini App") == true }
             val buttons = link.getValue("reply_markup").jsonObject.getValue("inline_keyboard").jsonArray
@@ -340,9 +349,11 @@ class TelegramWebhookRoutesTest {
                     }
                 assertEquals(expected, response.status)
                 if (expected == HttpStatusCode.OK) {
-                    assertTrue(
-                        Json.parseToJsonElement(response.bodyAsText()).jsonObject.getValue("tabs").jsonArray.isEmpty(),
-                    )
+                    val body = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                    val tab = body.getValue("tabs").jsonArray.single().jsonObject
+                    assertEquals(personalTabId, tab.getValue("id").jsonPrimitive.content)
+                    assertEquals("PERSONAL", tab.getValue("type").jsonPrimitive.content)
+                    assertEquals("ACTIVE", tab.getValue("status").jsonPrimitive.content)
                 }
             }
             assertFalse(hasVisit())
@@ -421,17 +432,18 @@ class TelegramWebhookRoutesTest {
             rejoin(second, secondAuth, HttpStatusCode.OK, miniAppExit)
             readTabs(HttpStatusCode.OK)
             assertEquals(before, snapshot())
-            val firstBill = command("tabs/personal", bill())
+            val personalBill = command("tabs/personal", bill())
             val sameBill = command("tabs/personal", bill(), firstAuth)
-            assertEquals(HttpStatusCode.OK, firstBill.status)
+            assertEquals(HttpStatusCode.OK, personalBill.status)
             assertEquals(HttpStatusCode.OK, sameBill.status)
-            val tab = Json.parseToJsonElement(firstBill.bodyAsText()).jsonObject.getValue("tab").jsonObject
+            val tab = Json.parseToJsonElement(personalBill.bodyAsText()).jsonObject.getValue("tab").jsonObject
             assertEquals(tab, Json.parseToJsonElement(sameBill.bodyAsText()).jsonObject.getValue("tab"))
+            assertEquals(personalTabId, tab.getValue("id").jsonPrimitive.content)
             assertEquals("PERSONAL", tab.getValue("type").jsonPrimitive.content)
             assertEquals(session, tab.getValue("tableSessionId").jsonPrimitive.content)
             assertEquals("1", db.scalar("SELECT COUNT(*) FROM tab_member WHERE user_id=$user"))
             assertEquals("1", db.scalar("SELECT COUNT(*) FROM tab WHERE table_session_id=$session"))
-            assertEquals(before - setOf("tab", "tab_member"), snapshot() - setOf("tab", "tab_member"))
+            assertEquals(before, snapshot())
             assertEquals(HttpStatusCode.OK, command("table/session/end", exit()).status)
 
             // A Platform prompt for an exited actor cannot provision a missing subscription.
@@ -483,6 +495,16 @@ class TelegramWebhookRoutesTest {
                 }
             awaitTable(202)
             val oldPhysical = checkNotNull(db.scalar("SELECT id FROM table_sessions WHERE table_id=202"))
+            // Exercise the detached-chat fallback for visits created before automatic personal bills.
+            DriverManager.getConnection(db.jdbcUrl, db.user, db.password).use { connection ->
+                connection.createStatement().use { sql ->
+                    val deleted =
+                        sql.executeUpdate(
+                            "DELETE FROM tab WHERE table_session_id=$oldPhysical AND owner_user_id=$user",
+                        )
+                    assertEquals(1, deleted)
+                }
+            }
             val previousMarker =
                 "SELECT exit_event_id FROM guest_table_session_exits " +
                     "WHERE user_id=$user AND table_session_id=$oldPhysical"

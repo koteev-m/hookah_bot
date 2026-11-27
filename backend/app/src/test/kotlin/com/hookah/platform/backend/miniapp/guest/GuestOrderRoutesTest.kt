@@ -15,6 +15,7 @@ import com.hookah.platform.backend.miniapp.guest.api.CartPreviewResponse
 import com.hookah.platform.backend.miniapp.guest.api.GiftDecisionDto
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestRequest
 import com.hookah.platform.backend.miniapp.guest.api.GuestBillRequestResponse
+import com.hookah.platform.backend.miniapp.guest.api.GuestTabsResponse
 import com.hookah.platform.backend.miniapp.guest.api.MenuResponse
 import com.hookah.platform.backend.miniapp.guest.db.GuestOrderContextCheckpoint
 import com.hookah.platform.backend.miniapp.session.SessionTokenConfig
@@ -5960,6 +5961,7 @@ class GuestOrderRoutesTest {
             application { module() }
             client.get("/health")
 
+            DriverManager.getConnection(jdbcUrl, "sa", "").use(::ensureTelegramChatContextTable)
             val venueId = seedVenue(jdbcUrl, VenueStatus.PUBLISHED.dbValue)
             val tableId = seedTable(jdbcUrl, venueId, 17)
             val tableToken = "exited-shared-token"
@@ -6080,6 +6082,17 @@ class GuestOrderRoutesTest {
                     setBody("""{"tableToken":"$tableToken","tableSessionId":$tableSessionId,"exitEventId":"$event"}""")
                 }
             assertEquals(HttpStatusCode.OK, confirmed.status)
+            val tabs =
+                client.get("/api/guest/tabs?table_session_id=$tableSessionId") {
+                    headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
+                }
+            assertEquals(HttpStatusCode.OK, tabs.status)
+            val activeTabs = json.decodeFromString<GuestTabsResponse>(tabs.bodyAsText()).tabs
+            assertEquals(2, activeTabs.size)
+            assertEquals(sharedTabId, activeTabs.single { it.type == "SHARED" }.id)
+            val personalTab = activeTabs.single { it.type == "PERSONAL" }
+            assertEquals(guestA, personalTab.ownerUserId)
+            assertEquals("ACTIVE", personalTab.status)
             val afterReentry =
                 client.get(activePath) {
                     headers { append(HttpHeaders.Authorization, "Bearer $guestAToken") }
@@ -6934,6 +6947,30 @@ class GuestOrderRoutesTest {
         }
     }
 
+    private fun ensureTelegramChatContextTable(connection: java.sql.Connection) {
+        connection.createStatement().use { statement ->
+            statement.execute(
+                """
+                CREATE TABLE IF NOT EXISTS telegram_chat_context (
+                    table_session_id BIGINT REFERENCES table_sessions(id) ON DELETE SET NULL,
+                    chat_id BIGINT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    venue_id BIGINT NULL,
+                    table_id BIGINT NULL,
+                    table_token VARCHAR(64) NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT fk_test_chat_context_user
+                        FOREIGN KEY (user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
+                    CONSTRAINT fk_test_chat_context_venue
+                        FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE SET NULL,
+                    CONSTRAINT fk_test_chat_context_table
+                        FOREIGN KEY (table_id) REFERENCES venue_tables(id) ON DELETE SET NULL
+                )
+                """.trimIndent(),
+            )
+        }
+    }
+
     private fun seedConfirmedPlatformGuestContext(
         tableSessionId: Long,
         jdbcUrl: String,
@@ -6944,27 +6981,7 @@ class GuestOrderRoutesTest {
         tableToken: String,
     ) {
         DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
-            connection.createStatement().use { statement ->
-                statement.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS telegram_chat_context (
-                        table_session_id BIGINT REFERENCES table_sessions(id) ON DELETE SET NULL,
-                        chat_id BIGINT PRIMARY KEY,
-                        user_id BIGINT NOT NULL,
-                        venue_id BIGINT NULL,
-                        table_id BIGINT NULL,
-                        table_token VARCHAR(64) NULL,
-                        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        CONSTRAINT fk_test_chat_context_user
-                            FOREIGN KEY (user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
-                        CONSTRAINT fk_test_chat_context_venue
-                            FOREIGN KEY (venue_id) REFERENCES venues(id) ON DELETE SET NULL,
-                        CONSTRAINT fk_test_chat_context_table
-                            FOREIGN KEY (table_id) REFERENCES venue_tables(id) ON DELETE SET NULL
-                    )
-                    """.trimIndent(),
-                )
-            }
+            ensureTelegramChatContextTable(connection)
             connection.prepareStatement(
                 """
                 INSERT INTO telegram_chat_context (

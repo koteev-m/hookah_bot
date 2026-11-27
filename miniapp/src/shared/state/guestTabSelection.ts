@@ -2,6 +2,7 @@ import type { GuestTabDto } from '../api/guestDtos'
 import { getTelegramContext } from '../telegram'
 
 const STORAGE_KEY = 'hookahMiniAppGuestTabSelection'
+const CONFIRMED_SELECTION_KEY = /^user:\d+:session:\d+:visit:\d+$/
 
 type TabSelection = number | 'choose'
 let memorySelection: Record<string, TabSelection> = {}
@@ -70,12 +71,26 @@ function writeStorage(selection: Record<string, TabSelection>): void {
   }
 }
 
+function readSelection(sessionId: number): TabSelection | undefined {
+  const key = resolveSelectionKey(sessionId)
+  const current = readStorage()[key]
+  if (current !== undefined) return current
+  if (!CONFIRMED_SELECTION_KEY.test(key)) return undefined
+  try {
+    const stored = normalizeId(Number(window.localStorage.getItem(`${STORAGE_KEY}:${key}`)))
+    if (stored !== null) return stored
+  } catch {
+    // A draft without a readable account choice still requires an explicit choice.
+  }
+  return undefined
+}
+
 export function getSelectedGuestTabId(tableSessionId: number | null | undefined): number | null {
   const sessionId = normalizeId(tableSessionId)
   if (!sessionId) {
     return null
   }
-  const value = readStorage()[resolveSelectionKey(sessionId)]
+  const value = readSelection(sessionId)
   return typeof value === 'number' ? normalizeId(value) : null
 }
 
@@ -96,19 +111,27 @@ export function setSelectedGuestTabId(
     selection[selectionKey] = normalizedTabId
   }
   writeStorage(selection)
+  if (!CONFIRMED_SELECTION_KEY.test(selectionKey)) return
+  try {
+    const key = `${STORAGE_KEY}:${selectionKey}`
+    if (normalizedTabId) window.localStorage.setItem(key, String(normalizedTabId))
+    else window.localStorage.removeItem(key)
+  } catch {
+    // Keep the current WebView selection when durable storage is unavailable.
+  }
 }
 
 export function restoreGuestTabSelection(sessionId: number, hasDraft: boolean): void {
   const selection = readStorage()
   const key = resolveSelectionKey(sessionId)
-  if (selection[key] !== undefined) return
+  if (readSelection(sessionId) !== undefined) return
   if (hasDraft) writeStorage({ ...selection, [key]: 'choose' })
 }
 
 export function chooseGuestTab(tabs: GuestTabDto[], tableSessionId: number | null): GuestTabDto | null {
   const active = tabs.filter(tab => tab.status === 'ACTIVE' && tab.tableSessionId === tableSessionId)
-  const selected = tableSessionId ? readStorage()[resolveSelectionKey(tableSessionId)] : undefined
+  const selected = tableSessionId ? readSelection(tableSessionId) : undefined
   if (selected === 'choose') return null
   if (selected !== undefined) return active.find(tab => tab.id === selected) ?? null
-  return active.length === 1 ? active[0] : null
+  return active.find(tab => tab.type === 'PERSONAL') ?? (active.length === 1 ? active[0] : null)
 }

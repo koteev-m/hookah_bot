@@ -4,7 +4,7 @@ import { guestGetActiveOrder, guestGetTabs, guestRequestBill } from '../shared/a
 import { ApiErrorCodes, type ApiErrorInfo } from '../shared/api/types'
 import type { ActiveOrderDto, BillPaymentMethod, OrderBatchDto } from '../shared/api/guestDtos'
 import { getItemMeta } from '../shared/state/itemCache'
-import { chooseGuestTab, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
+import { chooseGuestTab } from '../shared/state/guestTabSelection'
 import { getTableContext, subscribe as subscribeTable } from '../shared/state/tableContext'
 import { append, el, on } from '../shared/ui/dom'
 import { presentApiError, type ApiErrorAction } from '../shared/ui/apiErrorPresenter'
@@ -648,7 +648,6 @@ export function renderOrderScreen(options: OrderScreenOptions) {
       renderState()
       return
     }
-    setSelectedGuestTabId(tableScope.tableSessionId, selectedTab.id)
     currentAccountLabel = formatGuestTabLabel(selectedTab, tabsResult.data.tabs)
     currentAccountType = selectedTab.type
 

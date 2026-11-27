@@ -23,7 +23,7 @@ import type {
 } from '../shared/api/guestDtos'
 import type { ApiErrorInfo } from '../shared/api/types'
 import { addLinesToCart } from '../shared/state/cartStore'
-import { chooseGuestTab, setSelectedGuestTabId } from '../shared/state/guestTabSelection'
+import { chooseGuestTab } from '../shared/state/guestTabSelection'
 import { updateItemCache } from '../shared/state/itemCache'
 import type { TableContextSnapshot } from '../shared/state/tableContext'
 import { append, el, on } from '../shared/ui/dom'
@@ -392,7 +392,6 @@ function renderVisitRepeatBlock(
         message.textContent = 'Выберите доступный счёт для текущего стола.'
         return
       }
-      setSelectedGuestTabId(tableSessionId, selectedTab.id)
       const result = await guestBuildVisitRepeatPlan(
         backendUrl,
         visit.visitId,
