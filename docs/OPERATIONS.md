@@ -76,6 +76,24 @@ docker compose logs --tail=120 backend
 
 Если deploy упал до запуска контейнера на шаге Docker build из-за `SocketTimeoutException` при скачивании Gradle Wrapper distribution или Maven dependencies, это не runtime incident. Повторить тот же deploy можно после проверки, что в логе нет Kotlin compile/test failure: backend Dockerfile прогревает Gradle wrapper/cache через BuildKit, а повтор обычно использует уже скачанные слои.
 
+### Production long polling после HT-PRODUCTION-RELIABILITY-01
+
+Проверяйте публичный HTTPS, а `/version`, `/metrics` и `/db/health` также
+через локальный production endpoint. Вход guest API без токена должен отвечать
+401 при открытом ingress. HTTP 200 на loopback `/health` само по себе
+не подтверждает публичную доступность.
+
+| Наблюдение | Действие |
+| --- | --- |
+| `polling=degraded`, HTTPS и БД доступны | Сверить `production_telegram_polling_degraded`, `outbound_queue_depth` и ошибки связи. Оставить очередь и процесс на месте. |
+| Деградация длится 5 минут | Подключить `deploy/production/telegram-polling.rules.yml` в rule_files существующего приватного Prometheus. Для HookahProductionPollingDegraded указать действующий независимый receiver с отправкой resolved. Перед выпуском проверить доставку дежурному через действующий независимый канал и сигнал восстановления. Недоступность самого сборщика и публичный 503 отслеживать отдельно. |
+| `polling=running` после сбоя | Сверить запись восстановления с длительностью, значение метрики 0, уменьшение очереди и число успешных отправок. Старый заказ не отправлять повторно. |
+| `polling=revoked` | Сверить причину в журнале, DB binding, учётные данные и наличие второго poller/webhook. Штатный повторный допуск описан в `docs/PRODUCTION_PILOT.md`. |
+
+Изолированная проверка границ времени из `deploy/production/` — `promtool test rules telegram-polling.rules.test.yml`.
+Отдельно проверить, что сборщик читает метрику нужного экземпляра, дежурный получает firing и resolved,
+а сбой самого сборщика виден по существующему мониторингу. Реальные уведомления проверяются в согласованном окне.
+
 ### 3.1 Telegram API отвечает `429`
 
 Симптомы:

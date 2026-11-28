@@ -1,0 +1,11 @@
+groups:
+  - name: hookah-production-telegram
+    interval: 15s
+    rules:
+      - alert: HookahProductionPollingDegraded
+        expr: production_telegram_polling_degraded == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hookah production polling has been degraded for five minutes"

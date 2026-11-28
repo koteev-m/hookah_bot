@@ -81,13 +81,24 @@ class TelegramOutboxWorker(
         for (message in batch) {
             try {
                 recipientLocks.withRecipientLock(message.chatId) {
-                    if (canDispatch()) processMessage(message)
+                    if (canDispatch()) processMessage(message) else releaseUnsent(message)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 scheduleRetry(message, "Telegram outbox processing exception", null)
             }
+        }
+    }
+
+    private suspend fun releaseUnsent(message: TelegramOutboxMessage) {
+        try {
+            repository.releaseUnsent(message)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The visibility timeout still recovers this claim after a database outage.
+            logWorkerException("release unsent claim", e)
         }
     }
 
@@ -123,7 +134,7 @@ class TelegramOutboxWorker(
             return
         }
 
-        if (!canDispatch()) return
+        if (!canDispatch()) return releaseUnsent(message)
         if (message.method == GUEST_TEARDOWN_MENU_METHOD && hasGuestBinding(message.chatId)) {
             markSent(message, TelegramCallResult.Success(responseJson = null))
             return

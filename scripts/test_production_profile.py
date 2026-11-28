@@ -316,7 +316,7 @@ class ProductionProfileTest(unittest.TestCase):
         for row in p.source_manifest(historical=True):
             (fixture / row["script"]).write_bytes((p.ROOT / directory / row["script"]).read_bytes())
         with patch.object(p, "ROOT", self.folder):
-            approved = p.source_manifest()
+            approved = p.source_manifest(historical=True)
             (fixture / "V144__later.sql").write_text("SELECT 1;\n")
             self.assertEqual(p.source_manifest(historical=True), approved)
             with self.assertRaises(p.Refused):

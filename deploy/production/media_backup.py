@@ -276,6 +276,11 @@ def repair_object(plan, recipient, key, source):
 
 
 def backup(plan, point, recipient, metadata_only, *, online=False):
+    with host.operator_lock():
+        backup_locked(plan, point, recipient, metadata_only, online=online)
+
+
+def backup_locked(plan, point, recipient, metadata_only, *, online=False):
     from production_profile import PRODUCTION_PROJECT, pg_query, plan_schema
 
     def cold():
@@ -284,51 +289,51 @@ def backup(plan, point, recipient, metadata_only, *, online=False):
                                              PRODUCTION_PROJECT, "--filter", "label=com.docker.compose.service=backend"]).strip(),
                 "close traffic and stop the production backend before media backup")
 
-    with host.operator_lock():
-        require(not (online and metadata_only), "online backup must include media")
-        binding = backup_target(plan, recipient, online=online)
-        cid, _, mode = binding
-        media = mode == "true"
-        require(media or not metadata_only, "metadata-only requires media mode")
-        if media and not online:
+    require(not (online and metadata_only), "online backup must include media")
+    binding = backup_target(plan, recipient, online=online)
+    cid, _, mode = binding
+    media = mode == "true"
+    require(media or not metadata_only, "metadata-only requires media mode")
+    if media and not online:
+        cold()
+    host.lock_args()
+    storage = host.database_space(cid)
+    point.mkdir(mode=0o700)
+    doc = json.loads(plan.read_bytes())
+    (point / "schema-version").write_text(str(plan_schema(doc)) + "\n")
+    (point / "postgres-image").write_bytes(subprocess.check_output(["docker", "inspect", "--format", "{{.Config.Image}}", cid]))
+    require(backup_target(plan, recipient, online=online) == binding, "backup target changed before snapshot")
+    source = (" FROM pg_control_system(), pg_control_checkpoint(), pg_database "
+              "WHERE datname=current_database()")
+    lineage_sql = "SELECT system_identifier, oid, timeline_id"
+    if online:
+        lineage = pg_query(cid, "postgres", lineage_sql + source)
+    env = doc["services"]["backend"]["environment"]
+    captured = capture(cid, env, point, recipient, media, metadata_only, storage=storage, online=online, **host.lock_args())
+    members = ["database.dump.age", "postgres-image", "schema-version"]
+    if media:
+        if not metadata_only:
+            members.append("media.tar.age")
+        if online:
+            # A later WAL position would misdate the exported MVCC snapshot for two-point recovery.
+            wal, rows, etags = captured
+            require(pg_query(cid, "postgres", lineage_sql + source) == lineage, "online source lineage changed")
+            coordinate = lineage + "|" + wal
+        else:
+            coordinate = pg_query(cid, "postgres", lineage_sql + ", pg_current_wal_insert_lsn()" + source)
+        (point / "source-coordinate").write_text(coordinate + "\n")
+        members.append("source-coordinate")
+        if not online:
             cold()
-        storage = host.database_space(cid)
-        point.mkdir(mode=0o700)
-        doc = json.loads(plan.read_bytes())
-        (point / "schema-version").write_text(str(plan_schema(doc)) + "\n")
-        (point / "postgres-image").write_bytes(subprocess.check_output(["docker", "inspect", "--format", "{{.Config.Image}}", cid]))
-        require(backup_target(plan, recipient, online=online) == binding, "backup target changed before snapshot")
-        source = (" FROM pg_control_system(), pg_control_checkpoint(), pg_database "
-                  "WHERE datname=current_database()")
-        lineage_sql = "SELECT system_identifier, oid, timeline_id"
-        if online:
-            lineage = pg_query(cid, "postgres", lineage_sql + source)
-        env = doc["services"]["backend"]["environment"]
-        captured = capture(cid, env, point, recipient, media, metadata_only, storage=storage, online=online, **host.lock_args())
-        members = ["database.dump.age", "postgres-image", "schema-version"]
-        if media:
-            if not metadata_only:
-                members.append("media.tar.age")
-            if online:
-                # A later WAL position would misdate the exported MVCC snapshot for two-point recovery.
-                wal, rows, etags = captured
-                require(pg_query(cid, "postgres", lineage_sql + source) == lineage, "online source lineage changed")
-                coordinate = lineage + "|" + wal
-            else:
-                coordinate = pg_query(cid, "postgres", lineage_sql + ", pg_current_wal_insert_lsn()" + source)
-            (point / "source-coordinate").write_text(coordinate + "\n")
-            members.append("source-coordinate")
-            if not online:
-                cold()
-        partial = point / "SHA256SUMS.partial"
-        with partial.open("xb") as output:
-            subprocess.run(["shasum", "-a", "256", *members], cwd=point, stdout=output, check=True)
-        require(backup_target(plan, recipient, online=online) == binding, "backup target changed during capture")
-        host.check_space([(point, 0), (storage[0], 0)])
-        if online:
-            verify_online_media(cid, env, rows, etags)
-        partial.rename(point / "SHA256SUMS")
-        print("Encrypted backup written")
+    partial = point / "SHA256SUMS.partial"
+    with partial.open("xb") as output:
+        subprocess.run(["shasum", "-a", "256", *members], cwd=point, stdout=output, check=True)
+    require(backup_target(plan, recipient, online=online) == binding, "backup target changed during capture")
+    host.check_space([(point, 0), (storage[0], 0)])
+    if online:
+        verify_online_media(cid, env, rows, etags)
+    partial.rename(point / "SHA256SUMS")
+    print("Encrypted backup written")
 
 
 def main():

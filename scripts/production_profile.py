@@ -118,6 +118,14 @@ def render(values, release, *, bind_directory=None):
     return raw
 
 
+PILOT_MANIFEST = "d1474a3b83ce086761a058edf124cecb3ca6d5687462a2bc868c2118e1f87b39"
+PARTICIPATION_MANIFEST = "111a982031d430f7528f0c87c1b8d150680b5e307188430a630d4439271ec97a"
+PARTICIPATION_SOURCE = {
+    "revision": "59bde4074cbb190582e783ea9c1879cc74bb14c7",
+    "image": "ghcr.io/koteev-m/hookah_bot/backend@sha256:842c7d4d0d7ab0af9ae162146c2da7083b748c0520491d098db949bded3c696f",
+}
+
+
 def source_manifest(*, historical=False):
     files = ROOT / "backend/app/src/main/resources/db/migration/postgresql"
     archive = io.BytesIO()
@@ -125,12 +133,10 @@ def source_manifest(*, historical=False):
         for sql in files.glob("V*__*.sql"):
             jar.write(sql, "db/migration/postgresql/" + sql.name)
     rows = manifest(archive.getvalue())
+    require(len(rows) >= 143 and digest(rows[:143]) == PILOT_MANIFEST, "historical pilot migrations changed")
     if historical:
-        # A V143 backup still uses the pilot schema when this checkout contains later SQL.
-        rows = rows[:143]
-    # SHA-256 of the complete, ordered pilot manifest (names, Flyway CRCs and SQL hashes).
-    require(len(rows) == 143 and digest(rows) == "d1474a3b83ce086761a058edf124cecb3ca6d5687462a2bc868c2118e1f87b39",
-            "pilot requires approved V1–V143 schema")
+        return rows[:143]
+    require(len(rows) == 147 and digest(rows) == PARTICIPATION_MANIFEST, "expected reviewed V1–V147 manifest")
     return rows
 
 
@@ -244,7 +250,7 @@ def verify_bot(values):
             and bot.get("username", "").lower() == "hookah_tootah_bot", "token does not belong to production bot")
 
 
-def verify_images(values, release, measurements=None, allocations=()):
+def verify_images(values, release, measurements=None, allocations=(), *, schema=147):
     host.verify_slice()
     refs = (values["POSTGRES_IMAGE"], release["image"])
     missing = host.image_space(refs, measurements, allocations, reserve_release=True)
@@ -276,14 +282,14 @@ def verify_images(values, release, measurements=None, allocations=()):
                     PRODUCTION_BUCKET.encode() in package.read(
                         "com/hookah/platform/backend/miniapp/venue/staff/StaffPhotoStorageKt.class"),
                     "image lacks the production R2 or PDF worker contract")
-    require(manifest(jar) == source_manifest(), "packaged migrations differ from approved V1–V143")
+    require(manifest(jar) == source_manifest(historical=schema == 143), "packaged migration manifest differs")
 
 
 def check_history(raw, allowed=(143,)):
     rows = json.loads(raw)
     require(isinstance(rows, list) and all(r.get("success") is True for r in rows), "unsuccessful Flyway history")
     actual = [{k: row[k] for k in ("version", "script", "checksum")} for row in rows]
-    expected = history_for(source_manifest(historical=True))
+    expected = history_for(source_manifest(historical=max(allowed) <= 143))
     require(len(actual) in allowed and actual == expected[:len(actual)], "Flyway versions, scripts or checksums differ")
 
 
@@ -312,10 +318,15 @@ def release_identity(doc):
     return {"revision": sha, "image": image}
 
 
-def confirm_transition(previous, desired):
+def confirm_transition(previous, desired, *, offline=False):
     old, new = json.loads(previous.read_bytes()), json.loads(desired)
     compare_update(previous, desired)
-    require(plan_schema(old) <= plan_schema(new) == 143, "unapproved schema transition")
+    versions = plan_schema(old), plan_schema(new)
+    if offline:
+        require(versions == (143, 147) and release_identity(old) == PARTICIPATION_SOURCE,
+                "offline cutover requires the approved V143 predecessor and V147 target")
+    else:
+        require(versions in ((142, 143), (143, 143), (147, 147)), "production offline cutover required")
     predecessor, target = release_identity(old), release_identity(new)
     require(predecessor["revision"] != target["revision"] and predecessor["image"] != target["image"]
             and new.get("x-hookah-transition") == {"from": predecessor, "to": target}, "update lacks this admitted forward transition")
@@ -479,7 +490,7 @@ def pg_query(cid, user, sql):
 
 def plan_schema(document):
     version = document.get("x-hookah-schema", 142)
-    require(type(version) is int and version in (142, 143), "unapproved plan schema")
+    require(type(version) is int and version in (142, 143, 147), "unapproved plan schema")
     return version
 
 
@@ -504,7 +515,14 @@ def database_identity(plan, transition_from=None):
     identity = cluster_identity(plan)
     allowed = [plan_schema(json.loads(plan.read_bytes()))]
     if transition_from is not None:
-        allowed.append(plan_schema(json.loads(transition_from.read_bytes())))
+        predecessor = plan_schema(json.loads(transition_from.read_bytes()))
+        if (predecessor, allowed[0]) == (143, 147):
+            # Observe an interrupted Flyway run only for the exact admitted maintenance pair.
+            # A single-plan check (including open, rollback and backup) still requires its final version.
+            confirm_transition(transition_from, plan.read_bytes(), offline=True)
+            allowed = range(143, 148)
+        else:
+            allowed.append(predecessor)
     check_history(pg_query(identity["container"], "hookah_app", (PROFILE / "history.sql").read_text()), allowed)
     return identity
 
@@ -583,7 +601,8 @@ def enroll_database(plan, recipient, *, first_install=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest="action", required=True)
-    actions.add_parser("history", help="verify ordered Flyway JSON on stdin")
+    actions.add_parser("history", help="verify ordered Flyway JSON on stdin").add_argument(
+        "--schema", type=int, choices=(142, 143, 147), default=143)
     actions.add_parser("running", help="check live image, configuration and bindings").add_argument("plan", type=Path)
     for name in ("bind-db", "backup-db"):
         cmd = actions.add_parser(name)
@@ -597,6 +616,8 @@ def main():
         cmd.add_argument("candidate", type=Path)
         if name == "admit":
             cmd.add_argument("output", type=Path)
+            cmd.add_argument("--schema", type=int, choices=(143, 147), default=147,
+                             help="select 143 only for the pinned historical pilot image")
             cmd.add_argument("--image-sizes", type=Path, help="qualified packed and unpacked bounds per missing linux/amd64 digest and storage driver")
             cmd.add_argument("--evidence", type=Path, help="previously qualified release receipt from custody")
             cmd.add_argument("--evidence-sha256", help="independent pin recorded at live admission")
@@ -612,7 +633,7 @@ def main():
 
 def execute(args):
     if args.action == "history":
-        check_history(sys.stdin.buffer.read())
+        check_history(sys.stdin.buffer.read(), [args.schema])
     elif args.action == "running":
         verify_running(args.plan)
     elif args.action == "bind-db":
@@ -626,7 +647,9 @@ def execute(args):
         document = render(values, release, bind_directory=getattr(args, "bind_directory", None))
         if args.action == "admit":
             plan = json.loads(document)
-            plan["x-hookah-schema"] = 143
+            schema = getattr(args, "schema", 147)
+            require(schema in (143, 147), "unapproved admission schema")
+            plan["x-hookah-schema"] = schema
             document = json.dumps(plan).encode()
             if args.previous:
                 previous_sha = compare_update(args.previous, document)
@@ -635,7 +658,7 @@ def execute(args):
                 plan["x-hookah-transition"] = {"from": release_identity(json.loads(args.previous.read_bytes())),
                                               "to": release_identity(plan)}
                 document = json.dumps(plan).encode()
-                confirm_transition(args.previous, document)
+                confirm_transition(args.previous, document, offline=getattr(args, "offline", False))
             archive = getattr(args, "archive", None)
             if getattr(args, "candidate_zip", None):
                 require(args.candidate_zip.stat().st_size <= 4 * 1024**2, "candidate ZIP exceeds limit")
@@ -647,7 +670,7 @@ def execute(args):
                 host.image_space(host.plan_images(json.loads(args.previous.read_bytes())["services"]))
                 path, db, wal = host.database_space(verified_database(args.previous))
                 allocations.append((path, db + wal))
-            verify_images(values, release, args.image_sizes, allocations)
+            verify_images(values, release, args.image_sizes, allocations, schema=schema)
             if args.previous:
                 host.image_space(host.plan_images(json.loads(args.previous.read_bytes())["services"]))
             verify_bot(values)

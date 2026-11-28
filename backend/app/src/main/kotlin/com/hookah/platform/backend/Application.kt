@@ -256,11 +256,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -518,6 +520,11 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     val guestRateLimiter = InMemoryRateLimiter()
     val platformConfig = PlatformConfig.from(appConfig)
     val appMetrics = AppMetrics()
+    if (productionGate != null) {
+        appMetrics.registry.gauge("production_telegram_polling_degraded", productionGate) {
+            if (it.pollingState(telegramConfig.enabled) == "degraded") 1.0 else 0.0
+        }
+    }
 
     val httpClient =
         HttpClient(Java) {
@@ -703,11 +710,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             platformOwnerUserId = platformConfig.ownerUserId,
             json = json,
         )
-    val subscriptionBillingJob =
-        SubscriptionBillingJob(
-            engine = subscriptionBillingEngine,
-            intervalSeconds = subscriptionBillingConfig.intervalSeconds,
-        )
     val tableTokenResolver = overrides.tableTokenResolver ?: tableTokenRepository::resolve
 
     if (dataSource != null) {
@@ -758,38 +760,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         CoroutineScope(
             SupervisorJob() + Dispatchers.IO + CoroutineName("staff-chat-notifier"),
         )
-    val subscriptionBillingScope =
-        CoroutineScope(
-            SupervisorJob() + Dispatchers.IO + CoroutineName("subscription-billing"),
-        )
-    val tableSessionCleanupScope =
-        CoroutineScope(
-            SupervisorJob() + Dispatchers.IO + CoroutineName("table-session-cleanup"),
-        )
-    val bookingExpiryScope =
-        CoroutineScope(
-            SupervisorJob() + Dispatchers.IO + CoroutineName("booking-expiry"),
-        )
-    val bookingReminderScope =
-        CoroutineScope(
-            SupervisorJob() + Dispatchers.IO + CoroutineName("booking-reminders"),
-        )
-    val tableSessionCleanupWorker =
-        TableSessionCleanupWorker(
-            repository = tableSessionRepository,
-            intervalMillis = tableSessionConfig.cleanupInterval.toMillis(),
-            scope = tableSessionCleanupScope,
-        )
-    var tableSessionCleanupJob: Job? = null
-    val bookingExpiryWorker =
-        BookingExpiryWorker(
-            repository = guestBookingRepository,
-            interval = bookingExpiryWorkerConfig.interval,
-            batchSize = bookingExpiryWorkerConfig.batchSize,
-            scope = bookingExpiryScope,
-        )
-    var bookingExpiryJob: Job? = null
-    var bookingReminderJob: Job? = null
+    val databaseWriterScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineName("database-writers"))
     val staffChatLinkCodeRepository =
         StaffChatLinkCodeRepository(
             dataSource = dataSource,
@@ -842,18 +813,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
             staffPhotoStorage,
             { venueId -> guestVenueReadService.getTodayStaff(venueId).map { it.id }.toSet() },
             staffPhotoConfig.maxInputBytes,
-        )
-    val staffPhotoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineName("staff-photo-cleanup"))
-    var staffPhotoJob: Job? = null
-    val bookingReminderWorker =
-        BookingReminderWorker(
-            repository = guestBookingRepository,
-            outboxEnqueuer = telegramOutboxEnqueuer,
-            outboundClaimScope = telegramTrafficPolicy.outboundClaimScope,
-            venueSettingsRepository = venueSettingsRepository,
-            interval = bookingReminderWorkerConfig.interval,
-            batchSize = bookingReminderWorkerConfig.batchSize,
-            scope = bookingReminderScope,
         )
     val staffInviteRepository =
         StaffInviteRepository(
@@ -1004,8 +963,10 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                 val worker =
                     TelegramLongPollingWorker(
                         getUpdates = telegramApiClient::getUpdates,
+                        canLongPoll = { productionGate?.admitsHttp(true) != false },
                         canDispatch = { productionGate?.telegramDispatchAllowed() != false },
                         onPollingSuccess = { productionGate?.pollingSucceeded() },
+                        onProductionFailure = productionGate?.let { it::pollingFailed },
                         getWebhookUrl = { telegramApiClient.getWebhookInfo().url },
                         processUpdate = router::process,
                         trafficPolicy = telegramTrafficPolicy,
@@ -1080,41 +1041,65 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     monitor.subscribe(ApplicationStarted) {
         if (dataSource != null) {
             if (stagingMaintenancePolicy.allowsAutonomousWrites) {
-                fun startWriters() {
-                    if ((staffPhotoStorage.available || infoMediaStorage.available) && appEnv != "test") {
-                        staffPhotoJob =
-                            staffPhotoScope.launch {
-                                while (isActive) {
-                                    try {
-                                        staffPhotoService.cleanup()
-                                        infoMediaService.cleanup()
-                                    } catch (
-                                        e: CancellationException,
-                                    ) {
-                                        throw e
-                                    } catch (_: Exception) {
-                                        logger.warn("Staff photo cleanup deferred")
+                fun startWriters() =
+                    databaseWriterScope.launch {
+                        supervisorScope {
+                            if ((staffPhotoStorage.available || infoMediaStorage.available) && appEnv != "test") {
+                                launch {
+                                    while (isActive) {
+                                        try {
+                                            staffPhotoService.cleanup()
+                                            infoMediaService.cleanup()
+                                        } catch (
+                                            e: CancellationException,
+                                        ) {
+                                            throw e
+                                        } catch (_: Exception) {
+                                            logger.warn("Staff photo cleanup deferred")
+                                        }
+                                        delay(60_000)
                                     }
-                                    delay(60_000)
                                 }
                             }
+                            SubscriptionBillingJob(
+                                engine = subscriptionBillingEngine,
+                                intervalSeconds = subscriptionBillingConfig.intervalSeconds,
+                            ).start(this)
+                            if (overrides.isTableSessionCleanupEnabled(appEnv)) {
+                                TableSessionCleanupWorker(
+                                    repository = tableSessionRepository,
+                                    intervalMillis = tableSessionConfig.cleanupInterval.toMillis(),
+                                    scope = this,
+                                ).start()
+                            }
+                            if (bookingExpiryWorkerConfig.enabled) {
+                                BookingExpiryWorker(
+                                    repository = guestBookingRepository,
+                                    interval = bookingExpiryWorkerConfig.interval,
+                                    batchSize = bookingExpiryWorkerConfig.batchSize,
+                                    scope = this,
+                                ).start()
+                            } else {
+                                logger.info("Booking expiry worker disabled by config")
+                            }
+                            if (bookingReminderWorkerConfig.enabled) {
+                                BookingReminderWorker(
+                                    repository = guestBookingRepository,
+                                    outboxEnqueuer = telegramOutboxEnqueuer,
+                                    outboundClaimScope = telegramTrafficPolicy.outboundClaimScope,
+                                    venueSettingsRepository = venueSettingsRepository,
+                                    interval = bookingReminderWorkerConfig.interval,
+                                    batchSize = bookingReminderWorkerConfig.batchSize,
+                                    scope = this,
+                                ).start()
+                            } else {
+                                logger.info("Booking reminder worker disabled by config")
+                            }
+                            awaitCancellation()
+                        }
                     }
-                    subscriptionBillingJob.start(subscriptionBillingScope)
-                    if (overrides.isTableSessionCleanupEnabled(appEnv)) {
-                        tableSessionCleanupJob = tableSessionCleanupWorker.start()
-                    }
-                    if (bookingExpiryWorkerConfig.enabled) {
-                        bookingExpiryJob = bookingExpiryWorker.start()
-                    } else {
-                        logger.info("Booking expiry worker disabled by config")
-                    }
-                    if (bookingReminderWorkerConfig.enabled) {
-                        bookingReminderJob = bookingReminderWorker.start()
-                    } else {
-                        logger.info("Booking reminder worker disabled by config")
-                    }
-                }
-                productionGate?.startDatabaseWriters(this, telegramConfig.enabled, ::startWriters) ?: startWriters()
+                productionGate?.supervise(databaseWriterScope, botEnabled = telegramConfig.enabled) { startWriters() }
+                    ?: startWriters()
             } else {
                 logger.info("Autonomous application writers disabled by staging maintenance policy")
             }
@@ -1145,14 +1130,9 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
     }
     monitor.subscribe(ApplicationStopping) {
         logger.info("Application stopping, closing resources")
-        staffPhotoJob?.cancel()
-        staffPhotoScope.cancel()
+        databaseWriterScope.cancel()
         staffPhotoStorage.close()
         infoMediaStorage.close()
-        subscriptionBillingJob.stop()
-        tableSessionCleanupJob?.cancel()
-        bookingExpiryJob?.cancel()
-        bookingReminderJob?.cancel()
         httpClient.close()
         telegramApiClient?.close()
         telegramLongPollingWorkerJob?.cancel()
@@ -1162,10 +1142,6 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
         telegramOutboxWorkerJob?.cancel()
         telegramOutboxWorkerScope?.cancel()
         staffChatNotifierScope.cancel()
-        subscriptionBillingScope.cancel()
-        tableSessionCleanupScope.cancel()
-        bookingExpiryScope.cancel()
-        bookingReminderScope.cancel()
         DatabaseFactory.close(dataSource)
     }
     monitor.subscribe(ApplicationStopped) {
@@ -1413,7 +1389,7 @@ internal fun Application.moduleWithOverrides(overrides: ModuleOverrides) {
                     call.request.headers["X-Hookah-Recovery-Probe"] == "1"
                 ) {
                     val api = checkNotNull(telegramApiClient)
-                    productionGate.recordRecoveryPoll(api.recoveryPollingState())
+                    api.recoveryPollingState()
                 } else {
                     productionGate?.pollingState(telegramConfig.enabled)
                 }
