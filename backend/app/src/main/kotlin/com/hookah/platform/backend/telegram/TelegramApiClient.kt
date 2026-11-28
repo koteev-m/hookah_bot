@@ -81,13 +81,7 @@ class TelegramApiClient(
                 offset?.let { parameter("offset", it) }
                 parameter("timeout", timeoutSeconds)
             }
-        if (!httpResponse.status.isSuccess()) throw TelegramApiException("Telegram getUpdates failed")
-        val response: TelegramResponse<List<TelegramUpdate>> = httpResponse.safeBody()
-        if (response.ok.not()) {
-            logApiFailure("getUpdates", response.errorCode, response.parameters?.retryAfterSeconds)
-            throw TelegramApiException("Telegram getUpdates failed")
-        }
-        return response.result ?: throw TelegramApiException("Missing getUpdates result")
+        return httpResponse.pollingResult<List<TelegramUpdate>>("getUpdates")
     }
 
     suspend fun getWebhookInfo(): TelegramWebhookInfo {
@@ -96,13 +90,34 @@ class TelegramApiClient(
                 StagingMaintenancePolicy.BotGlobalOperation.GET_WEBHOOK_INFO,
             ),
         )
-        val response: TelegramResponse<TelegramWebhookInfo> =
-            client.get("$baseUrl/getWebhookInfo").safeBody()
-        if (response.ok.not()) {
-            logApiFailure("getWebhookInfo", response.errorCode, response.parameters?.retryAfterSeconds)
-            throw TelegramApiException("Telegram getWebhookInfo failed")
+        return client.get("$baseUrl/getWebhookInfo").pollingResult<TelegramWebhookInfo>("getWebhookInfo")
+    }
+
+    private suspend inline fun <reified T> HttpResponse.pollingResult(method: String): T {
+        if (!status.isSuccess()) {
+            val retryAfter =
+                if (status.value == 429) {
+                    headers[HttpHeaders.RetryAfter]?.toLongOrNull() ?: try {
+                        safeBody<TelegramResponse<JsonElement>>().parameters?.retryAfterSeconds?.toLong()
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
+                } else {
+                    null
+                }
+            throw TelegramApiException("Telegram $method failed", status.value, retryAfter)
         }
-        return response.result ?: throw TelegramApiException("Telegram getWebhookInfo returned no result")
+        val response = safeBody<TelegramResponse<T>>()
+        if (!response.ok || response.result == null) {
+            throw TelegramApiException(
+                "Telegram $method failed",
+                response.errorCode,
+                response.parameters?.retryAfterSeconds?.toLong(),
+            )
+        }
+        return response.result
     }
 
     internal suspend fun recoveryPollingState(): String {
@@ -537,7 +552,11 @@ class TelegramApiClient(
     }
 }
 
-class TelegramApiException(message: String) : RuntimeException(message)
+class TelegramApiException(
+    message: String,
+    val code: Int? = null,
+    val retryAfterSeconds: Long? = null,
+) : RuntimeException(message)
 
 @Serializable
 data class TelegramWebhookInfo(

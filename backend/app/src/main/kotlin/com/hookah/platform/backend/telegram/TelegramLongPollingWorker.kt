@@ -1,15 +1,21 @@
 package com.hookah.platform.backend.telegram
 
 import com.hookah.platform.backend.maintenance.StagingMaintenancePolicy
-import com.hookah.platform.backend.tools.retryWithBackoff
+import io.ktor.client.call.NoTransformationFoundException
+import io.ktor.serialization.ContentConvertException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.SerializationException
 import org.slf4j.LoggerFactory
+import java.io.IOException
+import java.nio.channels.UnresolvedAddressException
+import java.security.cert.CertificateException
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.ssl.SSLPeerUnverifiedException
 
 class TelegramLongPollingWorker(
     private val getUpdates: suspend (offset: Long?, timeoutSeconds: Int) -> List<TelegramUpdate>,
@@ -22,46 +28,54 @@ class TelegramLongPollingWorker(
     private val onPollingSuccess: () -> Unit = {},
     private val errorDelayMillis: Long = 1_000,
     private val canDispatch: () -> Boolean = { true },
+    private val canLongPoll: () -> Boolean = canDispatch,
+    private val onProductionFailure: ((PollingFailure) -> Unit)? = null,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramLongPollingWorker::class.java)
     private var offset: Long? = null
 
     suspend fun start(): Job {
-        check(pollerLease.compareAndSet(false, true)) {
-            "A Telegram long poller is already running in this process"
+        if (!pollerLease.compareAndSet(false, true)) {
+            onProductionFailure?.invoke(PollingFailure.CONFLICT)
+            error("A Telegram long poller is already running in this process")
         }
         return try {
-            verifyWebhookIsDisabled()
+            // Production can cancel the leased worker even during a network outage in preflight.
+            if (onProductionFailure == null) verifyWebhookIsDisabled()
             scope.launch {
+                var verified = onProductionFailure == null
+                var backoff = errorDelayMillis
                 while (isActive) {
-                    val dispatch = canDispatch()
+                    val longPoll = canLongPoll()
                     val updates =
                         try {
-                            retryWithBackoff(
-                                maxAttempts = 3,
-                                maxDelayMillis = 2_000,
-                                jitterRatio = 0.2,
-                                shouldRetry = { error -> error !is CancellationException },
-                            ) {
-                                if (dispatch && canDispatch()) {
-                                    getUpdates(offset, timeoutSeconds)
-                                } else {
-                                    getUpdates(null, 0)
-                                    emptyList()
-                                }
+                            if (!verified) {
+                                verifyWebhookIsDisabled()
+                                verified = true
+                            }
+                            if (longPoll && canLongPoll()) {
+                                getUpdates(offset, timeoutSeconds)
+                            } else {
+                                getUpdates(null, 0)
+                                emptyList()
                             }
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            logger.warn(
-                                "Telegram long polling request failed errorType={}",
-                                e::class.simpleName ?: "unknown",
-                            )
-                            delay(errorDelayMillis)
+                            val failure = classify(e)
+                            onProductionFailure?.invoke(failure)
+                            if (onProductionFailure != null && !failure.retryable) return@launch
+                            if (onProductionFailure == null) {
+                                logger.warn("Telegram long polling request failed errorType={}", e::class.simpleName)
+                            }
+                            val retryAfter = (e as? TelegramApiException)?.retryAfterSeconds ?: 0
+                            delay(maxOf(backoff, retryAfter.coerceIn(0, Int.MAX_VALUE.toLong()) * 1_000))
+                            backoff = (backoff * 2).coerceAtMost(30_000)
                             continue
                         }
+                    backoff = errorDelayMillis
                     onPollingSuccess()
-                    if (dispatch && canDispatch()) processBatch(updates) else delay(200)
+                    if (longPoll && canDispatch()) processBatch(updates) else delay(200)
                 }
             }.also { job ->
                 job.invokeOnCompletion { pollerLease.set(false) }
@@ -80,9 +94,7 @@ class TelegramLongPollingWorker(
     }
 
     internal suspend fun verifyWebhookIsDisabled() {
-        check(getWebhookUrl().isBlank()) {
-            "Telegram webhook must be disabled before long polling starts"
-        }
+        if (getWebhookUrl().isNotBlank()) throw TelegramApiException("Webhook configured", 409)
     }
 
     internal suspend fun processBatch(updates: List<TelegramUpdate>) {
@@ -129,6 +141,38 @@ class TelegramLongPollingWorker(
         } catch (_: ArithmeticException) {
             throw IllegalStateException("Telegram update ID cannot be advanced")
         }
+
+    enum class PollingFailure(val retryable: Boolean) {
+        NETWORK(true),
+        RATE_LIMIT(true),
+        UPSTREAM(true),
+        INVALID_RESPONSE(true),
+        AUTHORIZATION(false),
+        CONFLICT(false),
+        PROTOCOL(false),
+    }
+
+    private fun classify(error: Exception): PollingFailure {
+        val causes = generateSequence<Throwable>(error) { it.cause }
+        return when {
+            error is TelegramApiException ->
+                when (error.code) {
+                    null -> PollingFailure.INVALID_RESPONSE
+                    401, 403, 404 -> PollingFailure.AUTHORIZATION
+                    409 -> PollingFailure.CONFLICT
+                    429 -> PollingFailure.RATE_LIMIT
+                    408, in 500..599 -> PollingFailure.UPSTREAM
+                    else -> PollingFailure.PROTOCOL
+                }
+            causes.any { it is CertificateException || it is SSLPeerUnverifiedException } ->
+                PollingFailure.AUTHORIZATION
+            causes.any { it is IOException || it is UnresolvedAddressException } ->
+                PollingFailure.NETWORK
+            error is ContentConvertException || error is SerializationException -> PollingFailure.INVALID_RESPONSE
+            error is NoTransformationFoundException -> PollingFailure.INVALID_RESPONSE
+            else -> PollingFailure.PROTOCOL
+        }
+    }
 
     private companion object {
         val pollerLease = AtomicBoolean(false)

@@ -618,6 +618,22 @@ class TelegramOutboxRepository(
             }
         }
 
+    suspend fun releaseUnsent(message: TelegramOutboxMessage) {
+        val ds = dataSource ?: throw DatabaseUnavailableException()
+        withContext(Dispatchers.IO) {
+            ds.connection.use { connection ->
+                val sql =
+                    """UPDATE telegram_outbox SET status = 'NEW', attempts = attempts - 1, next_attempt_at = NULL
+                       WHERE id = ? AND status = 'SENDING' AND attempts = ?"""
+                connection.prepareStatement(sql).use { statement ->
+                    statement.setLong(1, message.id)
+                    statement.setInt(2, message.attempts)
+                    statement.executeUpdate()
+                }
+            }
+        }
+    }
+
     suspend fun markSent(
         id: Long,
         processedAt: Instant,

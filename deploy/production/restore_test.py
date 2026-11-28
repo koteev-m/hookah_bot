@@ -92,7 +92,7 @@ def verify_archive(point, image, pin=None):
     sums = []
     members = ["database.dump.age", "postgres-image"]
     if (point / "schema-version").exists():
-        require((point / "schema-version").read_text().strip() in ("142", "143"), "unknown backup schema")
+        require((point / "schema-version").read_text().strip() in ("142", "143", "147"), "unknown backup schema")
         members.append("schema-version")
     if (point / "media.tar.age").exists():
         members.append("media.tar.age")

@@ -144,15 +144,16 @@ def check_edge_closed():
             "local HTTPS edge did not confirm maintenance")
 
 
-def check_edge_open(sha, instance, polling):
+def check_edge_open(sha, instance, polling, *, allow_degraded=False):
     base = ["curl", "--silent", "--show-error", "--max-time", "5", "--noproxy", "*", "--resolve",
             "hookahtootah.club:443:127.0.0.1"]
     raw = subprocess.check_output(base + ["-w", "\n%{http_code}", "https://hookahtootah.club/version"], text=True)
     body, _, status = raw.rpartition("\n")
     require(status == "200", "public version endpoint unavailable")
     version = json.loads(body)
-    require((version.get("service"), version.get("env"), version.get("version"), version.get("instance"),
-             version.get("polling")) == ("backend", "prod", sha, instance, polling), "unexpected public backend")
+    allowed = ("running", "degraded") if allow_degraded and polling == "running" else (polling,)
+    require((version.get("service"), version.get("env"), version.get("version"), version.get("instance")) ==
+            ("backend", "prod", sha, instance) and version.get("polling") in allowed, "unexpected public backend")
     status = subprocess.check_output(base + ["-o", "/dev/null", "-w", "%{http_code}",
                                             "https://hookahtootah.club/api/guest/catalog"], text=True)
     require(status == "401", "public guest API did not enforce authentication")
@@ -282,6 +283,13 @@ def reconcile_backlog(args, hold):
     flush_dir()
 
 
+def recovery_inventory(plan):
+    sql = (PROFILE / "recovery-admission.sql").read_text().rstrip().removesuffix(";")
+    if plan_schema(json.loads(plan.read_bytes())) == 147:
+        sql += " AND NOT EXISTS (SELECT FROM bot_prepared_checkouts) AND NOT EXISTS (SELECT FROM guest_visit_generations)"
+    return sql + ";"
+
+
 def accept_recovery(args, hold):
     require(not os.path.lexists(GATE) and not os.path.lexists(GATE.with_name("activate")), "recovery requires closed ingress")
     check_edge_closed()
@@ -298,7 +306,7 @@ def accept_recovery(args, hold):
     cid = verified_database(args.plan)
     require(cluster_identity(args.plan) == record["target"], "replacement database changed")
     review = owner_review(args)
-    lsn = pg_query(cid, "postgres", (PROFILE / "recovery-admission.sql").read_text())
+    lsn = pg_query(cid, "postgres", recovery_inventory(args.plan))
     require(re.fullmatch(r"[0-9A-F]{1,8}/[0-9A-F]{1,8}", lsn), "existing media, publication, grants or tokens block recovery")
     require(isinstance(review, dict) and review.get("decision") == "ACCEPT_RECONCILED_REPLACEMENT"
             and review.get("challenge") == record["challenge"]
@@ -591,7 +599,7 @@ def install_closed(action, plan):
         require(not any(os.path.lexists(GATE.with_name(n)) for n in ("open", "activate")), "close production ingress first")
         check_edge_closed()
     if action == "install-successor":
-        require("x-hookah-transition" not in doc and plan_schema(doc) == 143, "new admitted V143 plan required")
+        require("x-hookah-transition" not in doc and plan_schema(doc) in (143, 147), "new admitted production plan required")
         check_retired_project()
     images = {identity["image"]: check_target_image(plan), pg["image"]: profile.check_postgres_image(pg["image"])}
     pending = GATE.with_name(".install-intent")
@@ -826,11 +834,11 @@ def operate(args):
             require(not enabled or not os.path.lexists(GATE.with_name("telegram-backlog")),
                     "recorded Telegram backlog requires owner reconciliation before another probe")
             require(not os.path.lexists(activation), "close incomplete recovery before retrying")
-            inventory_sql = (PROFILE / "recovery-admission.sql").read_text()
+            inventory_sql = recovery_inventory(args.plan)
             require(not first or pg_query(approval["target"]["container"], "postgres", inventory_sql) == approved_lsn,
                     "candidate changed after review; renew the recovery decision")
             expected = "empty" if enabled else "disabled"
-            instance = await_readiness(sha, assets, polling=expected, recovery=True)
+            instance = await_readiness(sha, assets, getattr(args, "expected_instance", None), polling=expected, recovery=True)
             decision = sha + " " + instance
             publish(activation, decision)
             if first:
@@ -859,7 +867,7 @@ def operate(args):
             await_readiness(sha, assets, instance, polling)
             check_edge_open(sha, instance, polling)
             return
-        instance = await_readiness(sha, assets)
+        instance = await_readiness(sha, assets, getattr(args, "expected_instance", None))
         decision = sha + " " + instance
         if os.path.lexists(activation) and activation.read_text().strip() != decision:
             decision = None
@@ -930,6 +938,11 @@ def main():
                 raise Refused(f"close could not acquire operator locks ({error}); traffic may still be open. "
                               "Retry close after lock release and confirm HTTPS 503.") from error
             raise
+        journal = GATE.parent.parent / "operator/ordinary-update.json"
+        if args.action not in ("inspect", "close") and journal.exists():
+            operation = json.loads(journal.read_bytes())
+            require(not operation.get("key", {}).get("maintenance") or operation["phase"] == "done",
+                    "use the in-progress participation maintenance operation")
         pending_close = (args.action == "close" and os.path.lexists(GATE.with_name(".install-intent")) and
                          not os.path.lexists(args.plan.parent / "postgres-binding.json"))
         if args.action in ("successor-target", "bind-successor"):

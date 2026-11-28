@@ -1,5 +1,6 @@
 package com.hookah.platform.backend
 
+import com.hookah.platform.backend.telegram.TelegramLongPollingWorker.PollingFailure
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -10,6 +11,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -23,6 +25,7 @@ internal class ProductionTrafficGate(
     private val pollingMaxAgeNanos: Long = 60_000_000_000L,
     private val nanoTime: () -> Long = System::nanoTime,
 ) {
+    private val logger = LoggerFactory.getLogger(ProductionTrafficGate::class.java)
     val instance: String = UUID.randomUUID().toString()
     private val decision = "$revision $instance"
 
@@ -41,37 +44,14 @@ internal class ProductionTrafficGate(
                     !Files.notExists(directory.resolve("telegram-backlog"), LinkOption.NOFOLLOW_LINKS)
             )
 
-    private fun pollingAllowed(): Boolean = !revoked && matches("activate") && !telegramRecoveryPending()
+    private fun pollingAllowed(): Boolean = revocation == null && matches("activate") && !telegramRecoveryPending()
 
-    fun telegramDispatchAllowed(): Boolean = pollingAllowed() && matches("open") && pollingState(true) == "running"
+    fun telegramDispatchAllowed(): Boolean = pollingState(true) == "running" && admitsHttp(true)
 
     fun recoveryProbeAllowed(
         method: String,
         path: String,
     ): Boolean = method == "GET" && (path in probePaths || recoveryAsset.matches(path))
-
-    @Volatile
-    private var recoveryPollReadyAt: Long? = null
-
-    fun recordRecoveryPoll(state: String): String {
-        recoveryPollReadyAt = if (state == "empty") nanoTime() else null
-        return state
-    }
-
-    fun startDatabaseWriters(
-        scope: CoroutineScope,
-        botEnabled: Boolean = false,
-        start: () -> Unit,
-    ) {
-        if (!recoveryInstallation()) {
-            start()
-            return
-        }
-        scope.launch {
-            while (!admitsHttp(botEnabled)) delay(200)
-            start()
-        }
-    }
 
     private fun matches(name: String): Boolean =
         try {
@@ -84,34 +64,62 @@ internal class ProductionTrafficGate(
     private var lastPoll: Long? = null
 
     @Volatile
-    private var revoked = false
+    private var revocation: String? = null
+
+    @Volatile
+    private var degradedSince: Long? = null
+
     private var databaseProbe: Deferred<Boolean>? = null
 
+    @Synchronized
+    private fun revoke(reason: String) {
+        if (revocation != null) return
+        revocation = reason
+        logger.error("Production admission revoked reason={}", reason)
+    }
+
+    fun pollingFailed(failure: PollingFailure) {
+        if (!failure.retryable) {
+            revoke("POLLING_${failure.name}")
+        } else if (degradedSince == null) {
+            degradedSince = nanoTime()
+            logger.warn("Production Telegram polling degraded reason={}", failure)
+        }
+    }
+
     fun pollingSucceeded() {
-        val now = nanoTime()
-        if (lastPoll?.let { now - it > pollingMaxAgeNanos } == true && matches("open")) revoked = true
-        lastPoll = now
+        lastPoll = nanoTime()
+        degradedSince?.let {
+            logger.info("Production Telegram polling recovered after {} ms", (nanoTime() - it) / 1_000_000)
+        }
+        degradedSince = null
     }
 
     fun pollingState(enabled: Boolean): String =
         when {
-            revoked -> "revoked"
+            revocation != null -> "revoked"
             !enabled -> "disabled"
-            poller?.isActive == true && lastPoll?.let { nanoTime() - it <= pollingMaxAgeNanos } == true -> "running"
-            else -> "standby"
+            poller?.isActive != true -> "standby"
+            degradedSince != null -> "degraded"
+            lastPoll == null -> "standby"
+            lastPoll?.let { nanoTime() - it <= pollingMaxAgeNanos } == true -> "running"
+            else -> "degraded"
         }
 
+    @Volatile
+    private var admittedPoller: Job? = null
+
+    // The operator requires a fresh poll to open. A later transport outage pauses Telegram
+    // dispatch, while the same admitted JVM continues to serve DB-checked HTTP.
     fun admitsHttp(enabled: Boolean): Boolean {
-        if (revoked || enabled && telegramRecoveryPending() || !matches("open") || !matches("activate")) return false
-        if (enabled && pollingState(true) != "running") {
-            // The recovery readiness probe never starts a worker. Give its first real poll
-            // the normal freshness window after the atomic handover, with HTTP still closed.
-            if (recoveryPollReadyAt?.let { nanoTime() - it <= pollingMaxAgeNanos } == true) return false
-            revoked = true
-        } else {
-            recoveryPollReadyAt = null
+        if (revocation != null || !matches("open") || !matches("activate") || enabled && telegramRecoveryPending()) {
+            admittedPoller = null
+            return false
         }
-        return !revoked
+        if (!enabled) return true
+        val current = poller?.takeIf { it.isActive } ?: return false
+        if (current !== admittedPoller && pollingState(true) == "running") admittedPoller = current
+        return current === admittedPoller
     }
 
     // Share only an in-flight JDBC round trip. Completed successes never admit a later request.
@@ -130,12 +138,12 @@ internal class ProductionTrafficGate(
                         } catch (_: Exception) {
                             false
                         }
-                    if (!ok && matches("activate")) revoked = true
+                    if (!ok && matches("activate")) revoke("DATABASE")
                     ok
                 }.also { databaseProbe = it }
             }
         return withTimeoutOrNull(2_500) { check.await() } ?: run {
-            if (matches("activate")) revoked = true
+            if (matches("activate")) revoke("DATABASE_TIMEOUT")
             false
         }
     }
@@ -147,13 +155,17 @@ internal class ProductionTrafficGate(
     fun supervise(
         scope: CoroutineScope,
         polling: Boolean = false,
+        botEnabled: Boolean = true,
         start: suspend () -> Job,
     ): Job =
         scope.launch {
             while (isActive) {
-                fun allowed() = if (polling) pollingAllowed() else telegramDispatchAllowed()
+                fun allowed() = if (polling) pollingAllowed() else admitsHttp(botEnabled)
                 while (!allowed()) delay(200)
-                if (polling) lastPoll = null
+                if (polling) {
+                    lastPoll = null
+                    degradedSince = null
+                }
                 val worker = start()
                 if (polling) poller = worker
                 try {

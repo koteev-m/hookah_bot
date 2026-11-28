@@ -1,0 +1,23 @@
+rule_files:
+  - telegram-polling.rules.yml
+evaluation_interval: 15s
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'production_telegram_polling_degraded{instance="fixture"}'
+        values: '0 1+0x20 0'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HookahProductionPollingDegraded
+        exp_alerts: []
+      - eval_time: 5m15s
+        alertname: HookahProductionPollingDegraded
+        exp_alerts:
+          - exp_labels:
+              instance: fixture
+              severity: warning
+            exp_annotations:
+              summary: "Hookah production polling has been degraded for five minutes"
+      - eval_time: 5m30s
+        alertname: HookahProductionPollingDegraded
+        exp_alerts: []

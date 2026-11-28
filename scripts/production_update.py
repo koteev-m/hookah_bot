@@ -100,7 +100,7 @@ def compatible_diff(old, new):
 def operator_digest():
     checksum = hashlib.sha256(media_backup.recovery_tools(ROOT).encode())
     for path in (Path(__file__), *(profile.PROFILE / name for name in
-                 ("compose.yaml", "init-app.sql", "traffic-gate.sh", "smoke.py", "browser-smoke.cjs", SERVICE, TIMER))):
+                 ("compose.yaml", "init-app.sql", "traffic-gate.sh", "participation-inventory.sql", "smoke.py", "browser-smoke.cjs", SERVICE, TIMER))):
         checksum.update(hashlib.sha256(path.read_bytes()).digest())
     return checksum.hexdigest()
 
@@ -210,7 +210,7 @@ def switch_backup(old, final):
 def ask(kind, **fields):
     # stdout is also used by the existing operators; prefix only our structured replies.
     print("HT-UPDATE " + json.dumps(dict(kind=kind, **fields)), flush=True)
-    require(select.select([sys.stdin], [], [], 7200 if kind == "backup" else 180)[0], "Mac operator response timed out")
+    require(select.select([sys.stdin], [], [], 7200 if kind in ("backup", "cold-restore") else 180)[0], "Mac operator response timed out")
     line = sys.stdin.buffer.readline(6 * 1024**2)
     require(line.endswith(b"\n"), "Mac operator disconnected")
     response = json.loads(line)
@@ -251,14 +251,20 @@ def existing_binds(plan):
     return parents.pop()
 
 
-def check_open(plan):
+def check_open(plan, *, accepted_instance=None):
     profile.verify_running(plan)
     sha = traffic.backend(plan)["environment"]["APP_VERSION"]
     tokens = profile.GATE.read_text().split()
     require(len(tokens) == 2 and tokens[0] == sha and profile.GATE.with_name("activate").read_text().split() == tokens,
             "live traffic decision does not match plan")
     polling = "running" if traffic.backend(plan)["environment"]["TELEGRAM_BOT_ENABLED"] == "true" else "disabled"
-    traffic.check_edge_open(sha, tokens[1], polling)
+    if accepted_instance is not None:
+        require(tokens[1] == accepted_instance and not os.path.lexists(profile.GATE.with_name("recovery-hold")),
+                "open decision differs from the accepted JVM or recovery is in progress")
+        profile.verified_database(plan)
+        traffic.check_edge_open(sha, accepted_instance, polling, allow_degraded=True)
+    else:
+        traffic.check_edge_open(sha, tokens[1], polling)
 
 
 def closed_smoke(plan):
@@ -279,6 +285,9 @@ class Update:
         self.journal = OPERATOR / "ordinary-update.json"
         self.new = OPERATOR / ("plan-" + release["revision"] + ".json")
         self.key = dict(candidate=release, attempt=args.attempt, predecessor=args.compatible_from)
+        self.offline = getattr(args, "participation_cutover", False)
+        if self.offline:
+            self.key["maintenance"] = "participation-143-147"
         self.record = private_json(self.journal) if self.journal.exists() else {}
         # Only restart_backups grants a catch-up snapshot. Never carry the grant into a later phase.
         self.record.pop("backup_plan", None)
@@ -307,7 +316,7 @@ class Update:
                 f.flush()
                 profile.execute(SimpleNamespace(action="admit", runtime=OPERATOR / "runtime.env", candidate=Path(f.name),
                     output=self.new, previous=self.old, bind_directory=existing_binds(self.old),
-                    archive=archive, attempt=self.args.attempt, image_sizes=None,
+                    offline=self.offline, archive=archive, attempt=self.args.attempt, image_sizes=None,
                     evidence=None, evidence_sha256=None))
         else:
             profile.verify_published(self.release, archive=archive, expected_attempt=self.args.attempt)
@@ -315,17 +324,25 @@ class Update:
         verify_backup(self.old, self.config)
         self.record = dict(key=self.key, old=str(self.old), old_pin=profile.admission_pin(self.old).read_text(),
                            new_pin=profile.admission_pin(self.new).read_text())
+        if self.offline:
+            self.record["point"] = points.datetime.now(points.timezone.utc).strftime(points.STAMP)
+            require(not os.path.lexists(self.point()), "maintenance point already exists")
+            self.record["writers"] = self.old_writers()
+            self.record["binding"] = hashlib.sha256((self.old.parent / "postgres-binding.json").read_bytes()).hexdigest()
         self.phase("closing")
 
     def plans(self):
         profile.verify_plan_pin(self.new)
         doc = json.loads(self.new.read_bytes())
-        profile.confirm_transition(self.old, self.new.read_bytes())
-        require(profile.plan_schema(json.loads(self.old.read_bytes())) == profile.plan_schema(doc)
+        profile.confirm_transition(self.old, self.new.read_bytes(), offline=self.offline)
+        require((self.offline or profile.plan_schema(json.loads(self.old.read_bytes())) == profile.plan_schema(doc))
                 and doc["x-hookah-release-evidence"]["candidate"] == self.release
                 and doc["x-hookah-release-evidence"]["attempt"] == self.args.attempt,
                 "strict update required: release or schema differs")
         if self.record:
+            if self.offline:
+                require(hashlib.sha256((self.old.parent / "postgres-binding.json").read_bytes()).hexdigest()
+                        == self.record["binding"], "database binding changed during maintenance")
             require(profile.admission_pin(self.old).read_text() == self.record["old_pin"]
                     and profile.admission_pin(self.new).read_text() == self.record["new_pin"], "admitted plans changed")
 
@@ -434,6 +451,249 @@ class Update:
         return "done"
 
 
+
+class ParticipationCutover(Update):
+    """One pinned predecessor, one migration start, separate acceptance of the actual JVM."""
+
+    def prepare(self):
+        old_doc = json.loads(self.old.read_bytes())
+        require(profile.release_identity(old_doc) == profile.PARTICIPATION_SOURCE and
+                profile.plan_schema(old_doc) == 143 and "pdf-worker" in old_doc["services"], "wrong media predecessor")
+        require(self.config["BACKUP_TOOL"] == profile.PROFILE / "backup_points.py",
+                "qualify and enroll this backup producer on V143 first")
+        values = profile.runtime(OPERATOR / "runtime.env")
+        profile.verify_images(values, profile.PARTICIPATION_SOURCE, schema=143)
+        if self.new.exists():
+            profile.verify_images(values, self.release)
+        check = json.loads(self.old.read_bytes())["x-hookah-release-evidence"]["candidate"]
+        require(all(check.get(k) == v for k, v in profile.PARTICIPATION_SOURCE.items()), "source receipt mismatch")
+        super().prepare()
+
+    def old_writers(self):
+        backend = traffic.compose(self.old, "ps", "--no-trunc", "-aq", "backend")
+        require(re.fullmatch("[a-f0-9]{64}", backend) and traffic.state(self.old, self.old, backend) == "OLD running",
+                "cannot identify old backend")
+        worker, _ = traffic.rollback_worker(self.old, self.old)
+        project = "label=com.docker.compose.project=" + profile.PRODUCTION_PROJECT
+        require(set(output("docker", "ps", "-aq", "--no-trunc", "--filter", project).splitlines()) ==
+                {backend, worker, traffic.compose(self.old, "ps", "--no-trunc", "-q", "postgres")},
+                "unexpected production container")
+        return [backend, worker]
+
+    def closed(self):
+        require(not any(os.path.lexists(profile.GATE.with_name(n)) for n in ("open", "activate", "recovery-hold")),
+                "closed ingress, inactive workers and authoritative database required")
+        traffic.check_edge_closed()
+
+    def quiet(self, *, migrating=False):
+        self.closed()
+        recipient = self.config["AGE_RECIPIENT_FILE"].read_text().strip()
+        cid = (profile.verified_database(self.new, recipient, transition_from=self.old) if migrating
+               else profile.verified_database(self.old, recipient))
+        network = json.loads(output("docker", "network", "inspect", profile.PRODUCTION_PROJECT + "_database"))[0]
+        require(set(network["Containers"]) == {cid}, "another database network attachment is active")
+        sql = """SELECT NOT pg_is_in_recovery() AND NOT EXISTS (SELECT FROM pg_subscription
+                 WHERE subdbid=(SELECT oid FROM pg_database WHERE datname=current_database()) AND subenabled)
+                 AND NOT EXISTS (SELECT FROM pg_stat_activity WHERE datname=current_database()
+                 AND backend_type='client backend' AND pid<>pg_backend_pid()) AND NOT EXISTS
+                 (SELECT FROM pg_prepared_xacts WHERE database=current_database())"""
+        require(profile.pg_query(cid, "postgres", sql) == "t", "database still has other clients or prepared transactions")
+        return cid
+
+    def inventory(self, cid):
+        checksum = hashlib.sha256()
+        cmd = ["docker", "exec", "-i", cid, "psql", "-XqAtw", "-v", "ON_ERROR_STOP=1",
+               "-U", "postgres", "-d", "hookah_prod"]
+        with (profile.PROFILE / "participation-inventory.sql").open("rb") as sql:
+            with subprocess.Popen(cmd, stdin=sql, stdout=subprocess.PIPE, **profile.host.lock_args()) as reader:
+                for chunk in iter(lambda: reader.stdout.read(65536), b""):
+                    checksum.update(chunk)
+                require(reader.wait() == 0, "production data inventory failed")
+        return checksum.hexdigest()
+
+    def fence(self):
+        schedule(False)
+        subprocess.run(["systemctl", "stop", TIMER], check=True)
+        schedule(False)
+        native("close", self.old)
+        ids = self.record["writers"]
+        require(traffic.stopped_backend(self.old, self.new) == ids[0] and
+                traffic.rollback_worker(self.old, self.old)[0] == ids[1], "old writer identity changed")
+        for cid in ids:
+            subprocess.run(["docker", "update", "--restart=no", cid], check=True, **profile.host.lock_args())
+            subprocess.run(["docker", "stop", cid], check=True, **profile.host.lock_args())
+            require(output("docker", "inspect", "--format", "{{.State.Running}}/{{.HostConfig.RestartPolicy.Name}}",
+                           cid) == "false/no", "old writer can restart")
+        self.record["inventory"] = self.inventory(self.quiet())
+        self.phase("cold-backup")
+
+    def point(self):
+        name = self.record["point"]
+        require(points.NAME.fullmatch(name), "invalid cold point name")
+        return self.config["BACKUP_SPOOL"] / "participation" / name
+
+    def backup(self):
+        cid = self.quiet()
+        point = self.point()
+        point.parent.mkdir(mode=0o750, exist_ok=True)
+        points.private_directory(point.parent)
+        require(point.parent.stat().st_gid == self.config["BACKUP_SPOOL"].stat().st_gid, "cold spool group differs")
+        point.parent.chmod(0o2750)
+        if not point.exists():
+            with tempfile.TemporaryDirectory(dir=point.parent) as tmp:
+                partial = Path(tmp) / "point"
+                media_backup.backup_locked(self.old, partial, self.config["AGE_RECIPIENT_FILE"].read_text().strip(), False)
+                points.verified(partial)
+                points.publish(partial, point, shared=True)
+        pin = points.verified(point)
+        source = profile.pg_query(cid, "postgres", "SELECT system_identifier, oid, timeline_id FROM pg_control_system(), "
+                                  "pg_database, pg_control_checkpoint() WHERE datname=current_database()")
+        expected = dict(point=point.name, pin=pin, source=source, schema="143",
+                        postgres=json.loads(self.old.read_bytes())["services"]["postgres"]["image"],
+                        tools=media_backup.recovery_tools(ROOT), result="PASS")
+        require(ask("cold-restore", point=point.name, pin=pin) == expected, "off-site cold restore did not match")
+        require(self.inventory(self.quiet()) == self.record["inventory"], "source changed during backup")
+        self.record["restore"] = expected
+        self.phase("replacement")
+
+    def replace(self):
+        require(self.inventory(self.quiet()) == self.record["inventory"], "source changed since backup")
+        require(points.verified(self.point(), self.record["restore"]["pin"]), "cold point missing")
+        profile.check_target_image(self.new)
+        # Create without starting. Compose may already have replaced one of the stopped containers.
+        traffic.compose(self.new, "up", "--no-start", "--no-deps", "--pull", "never", "pdf-worker", "backend")
+        cid = traffic.stopped_backend(self.old, self.new)
+        require(traffic.state(self.old, self.new, cid) == "NEW stopped" and
+                traffic.rollback_worker(self.old, self.new)[1] == self.new and
+                not set(self.record["writers"]).intersection(output("docker", "ps", "-aq", "--no-trunc").splitlines()),
+                "replacement incomplete or old writer still installed")
+        subprocess.run(["docker", "update", "--restart=no", cid], check=True, **profile.host.lock_args())
+        self.record["target_id"] = cid
+        self.phase("migration")
+
+    def migrate(self):
+        self.closed()
+        cid = traffic.compose(self.new, "ps", "--no-trunc", "-aq", "backend")
+        require(cid == self.record["target_id"], "replacement backend changed")
+        which = traffic.state(self.old, self.new, cid)
+        if which == "NEW stopped":
+            subprocess.run(["docker", "update", "--restart=no", cid], check=True, **profile.host.lock_args())
+            db = self.quiet(migrating=True)
+            require(self.inventory(db) == self.record["inventory"], "data changed before starting the target")
+            path, size, wal = profile.host.database_space(db)
+            profile.host.image_space(profile.host.plan_images(json.loads(self.new.read_bytes())["services"]),
+                                     allocations=[(path, size + wal)], reserve_release=True)
+            points.verified(self.point(), self.record["restore"]["pin"])
+            traffic.compose(self.new, "up", "-d", "--no-deps", "--pull", "never", "--wait", "pdf-worker")
+            subprocess.run(["docker", "start", cid], check=True, **profile.host.lock_args())
+        else:
+            require(which == "NEW running", "unknown migration outcome")
+        closed_smoke(self.new)
+        bound = profile.verified_database(self.new)
+        require(self.inventory(bound) == self.record["inventory"], "pre-cutover data or Flyway records changed")
+        require(profile.pg_query(bound, "postgres", "SELECT NOT EXISTS (SELECT FROM guest_visit_generations) "
+                "AND NOT EXISTS (SELECT FROM bot_prepared_checkouts) AND NOT EXISTS (SELECT FROM shift_extension_request_keys)") == "t",
+                "unexpected participation writes before acceptance")
+        self.phase("acceptance")
+
+    def arm_backups(self):
+        self.backup_settings()
+        schedule(False, allow_catchup=True)
+        _, backend, _ = media_backup.backup_target(
+            self.new, self.config["AGE_RECIPIENT_FILE"].read_text().strip(), online=True)
+        require(backend == self.record["target_id"], "backup backend differs from the accepted container")
+        switch_backup(self.old, self.new)
+        self.restart_backups(self.new)
+
+    def backup_settings(self):
+        config = settings()
+        require(config["BACKUP_TOOL"] == profile.PROFILE / "backup_points.py",
+                "restore the enrolled V147 backup producer before continuing")
+        return config
+
+    def scheduled(self):
+        require(self.backup_settings()["ADMITTED_PLAN"] == self.new, "backup plan does not follow serving release")
+        schedule(True, allow_catchup=True)
+
+    def reconcile_backups(self):
+        if private_json(self.journal).get("backup_plan") == str(self.new):
+            try:
+                self.scheduled()
+                return
+            except (Refused, OSError, ValueError, subprocess.SubprocessError) as exc:
+                print(f"V147 backup schedule needs repair: {exc}", file=sys.stderr, flush=True)
+        self.arm_backups()
+        self.scheduled()
+
+    def run(self):
+        if not self.record:
+            require(not self.args.accept_jvm, "start maintenance before accepting it")
+            self.prepare()
+        self.plans()
+        if self.record["phase"] == "closing":
+            self.fence()
+        if self.record["phase"] == "cold-backup":
+            self.backup()
+        if self.record["phase"] == "replacement":
+            self.replace()
+        if self.record["phase"] == "migration":
+            self.migrate()
+        if self.record["phase"] == "opening" and not profile.GATE.exists():
+            self.closed()
+            require(not self.args.accept_jvm,
+                    "ingress is closed; inspect without --accept-jvm and obtain a fresh manual acceptance")
+            self.phase("acceptance")
+        if self.record["phase"] == "acceptance":
+            self.closed()
+            if traffic.state(self.old, self.new, self.record["target_id"]) == "NEW stopped":
+                if "accepted_jvm" in self.record:
+                    # The owner may have closed an already serving release. Preserve its later writes.
+                    traffic.dispatch_locked(SimpleNamespace(action="start-closed", plan=self.new,
+                                                            backend_id=self.record["target_id"]))
+                else:
+                    self.phase("migration")
+                    self.migrate()
+            closed_smoke(self.new)
+            profile.verified_database(self.new)
+            instance = traffic.await_readiness(self.release["revision"], traffic.image_assets(self.new))
+            if not self.args.accept_jvm:
+                print("Closed technical acceptance. Manually review this JVM:", instance, flush=True)
+                return "acceptance"
+            require(self.args.accept_jvm == instance, "acceptance belongs to another JVM")
+            self.record["accepted_jvm"] = instance
+            cid = self.record["target_id"]
+            require(traffic.state(self.old, self.new, cid) == "NEW running", "accepted target changed")
+            try:
+                self.arm_backups()
+            except (Refused, OSError, ValueError, subprocess.SubprocessError) as exc:
+                raise Refused(f"V147 backup not ready; ingress remains closed. Repair the schedule and retry: {exc}") from exc
+            # Persist the timer's permission across a process stop on either side of the public ticket.
+            self.record["backup_plan"] = str(self.new)
+            self.phase("opening")
+            subprocess.run(["docker", "update", "--restart=unless-stopped", cid], check=True, **profile.host.lock_args())
+            traffic.dispatch_locked(SimpleNamespace(action="open", plan=self.new, expected_instance=instance))
+        if self.record["phase"] == "opening":
+            instance = self.record["accepted_jvm"]
+            require(self.args.accept_jvm in (None, instance), "owner decision differs from reviewed JVM")
+            check_open(self.new, accepted_instance=instance)
+            try:
+                self.reconcile_backups()
+            except (Refused, OSError, ValueError, subprocess.SubprocessError) as exc:
+                try:
+                    native("close", self.new)
+                except (Refused, OSError, ValueError, subprocess.SubprocessError) as close_error:
+                    raise Refused(f"V147 backup unavailable ({exc}); emergency close unverified ({close_error}). "
+                                  "Close production and verify HTTPS 503 immediately.") from close_error
+                raise Refused(f"V147 backup unavailable; ingress and writers closed. Repair the schedule, "
+                              f"then repeat closed acceptance: {exc}") from exc
+            self.record.pop("backup_plan", None)
+            self.phase("done")
+            return "done"
+        require(self.record["phase"] == "done", "unknown maintenance phase")
+        check_open(self.new, accepted_instance=self.record["accepted_jvm"])
+        self.scheduled()
+        return "done"
+
 def verify_backup(plan, config):
     points.status(config["BACKUP_SPOOL"], points.datetime.now(points.timezone.utc))
     version = points.producer(config["AGE_RECIPIENT_FILE"], config["BACKUP_TOOL"].parents[2])
@@ -462,13 +722,16 @@ def server(args):
             and re.fullmatch(SHA, ROOT.name) and hashlib.sha256(Path("/etc/machine-id").read_bytes()).hexdigest()
             == args.machine and not any(k.startswith(("DOCKER_", "COMPOSE_")) for k in os.environ if k != "DOCKER_HOST")
             and os.environ.get("DOCKER_HOST") == "unix:///var/run/docker.sock", "wrong production operator target")
+    if args.participation_cutover:
+        require(ROOT.name == args.approved_sha, "wrong participation operator release")
     require(args.operator_digest == operator_digest(), "STOP_PROJECT_CONTEXT_CONTAMINATION: operator checkout differs")
     with profile.host.operator_lock():
         require(not any(os.path.lexists(profile.GATE.with_name(n)) for n in ("recovery-hold", ".install-intent")),
                 "recovery or installation in progress")
-        result = Update(args, flags(args)).run()
+        controller = ParticipationCutover if args.participation_cutover else Update
+        result = controller(args, flags(args)).run()
     print("HT-RESULT " + result, flush=True)
-    return 0 if result == "done" else 2
+    return 0 if result in ("done", "acceptance") else 2
 
 
 def mac_backup(config, requested_tools):
@@ -494,6 +757,26 @@ def handle_request(message, config, args, port, release):
                                       cwd=ROOT, timeout=60, stderr=subprocess.DEVNULL)
         profile.check_archive(raw, artifact, release)
         return base64.b64encode(raw).decode()
+    if message["kind"] == "cold-restore":
+        name, pin = message["point"], message["pin"]
+        require(args.participation_cutover and points.NAME.fullmatch(name) and re.fullmatch(r"[0-9a-f]{64}", pin),
+                "unexpected maintenance point")
+        disk = points.external_disk(config["toshiba_uuid"])
+        directory = points.VOLUME / "Hookah-Production-Participation"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        state = Path(config["receipts"]) / "participation"
+        state.mkdir(mode=0o700, exist_ok=True)
+        with points.exclusive(state), points.exclusive(directory):
+            require(directory.stat().st_dev == os.stat(disk["DeviceNode"]).st_rdev, "external mount changed")
+            points.pull_point(points.SOURCE + "participation/", directory, state, name)
+            proof = points.external_point(directory, state, name)
+            require(proof["pin"] == pin and proof["schema"] == "143", "cold copy differs from source")
+            result = json.loads(subprocess.check_output([sys.executable, profile.PROFILE / "restore-scheduled.py",
+                                directory / name, pin, proof["postgres"]], timeout=7000))
+            require(result == dict(proof, tools=media_backup.recovery_tools(ROOT), result="PASS") and
+                    points.external_disk(config["toshiba_uuid"])["DeviceNode"] == disk["DeviceNode"],
+                    "isolated cold restore proof mismatch")
+            return result
     if message["kind"] == "backup":
         return mac_backup(config, message["tools"])
     require(message["kind"] == "browser" and message["sha"] in (args.approved_sha, args.compatible_from),
@@ -508,7 +791,13 @@ def handle_request(message, config, args, port, release):
 
 def mac(args, release):
     project_identity(args.task_id)
-    compatible_diff(args.compatible_from, args.approved_sha)
+    if getattr(args, "participation_cutover", False):
+        require(args.compatible_from == profile.PARTICIPATION_SOURCE["revision"] and
+                output("git", "--no-optional-locks", "rev-parse", "HEAD") == args.approved_sha,
+                "run maintenance from the exact approved production release")
+    else:
+        require(not getattr(args, "accept_jvm", None), "acceptance requires participation maintenance")
+        compatible_diff(args.compatible_from, args.approved_sha)
     points.private_file(args.config)
     config = private_json(args.config)
     checkout = config["checkout"]
@@ -533,6 +822,11 @@ def mac(args, release):
               "--approved-sha", args.approved_sha,
               "--compatible-from", args.compatible_from, "--digest", args.digest, "--run", str(args.run),
               "--attempt", str(args.attempt), "--task-id", args.task_id]
+    if getattr(args, "participation_cutover", False):
+        require(Path(checkout).name == args.approved_sha, "install the exact maintenance operator checkout")
+        remote.append("--participation-cutover")
+        if args.accept_jvm:
+            remote.extend(["--accept-jvm", args.accept_jvm])
     # No GH_TOKEN, ssh-agent forwarding, remote installation or shell-interpolated secrets.
     project_identity(args.task_id)
     proc = subprocess.Popen(ssh + ["cd " + shlex.quote(checkout) + " && exec " + shlex.join(remote)], cwd=ROOT,
@@ -559,6 +853,8 @@ def mac(args, release):
             pass
         proc.stdout.close()
         rc = proc.wait()
+    if getattr(args, "participation_cutover", False) and (rc, result) == (0, "acceptance"):
+        return 0
     if (rc, result) in ((0, "done"), (2, "rolled-back")):
         expected = args.approved_sha if result == "done" else args.compatible_from
         public_smoke(expected)
@@ -586,6 +882,8 @@ def main():
     parser.add_argument("--run", type=int, required=True)
     parser.add_argument("--attempt", type=int, required=True)
     parser.add_argument("--digest", required=True)
+    parser.add_argument("--participation-cutover", action="store_true", help="offline V143 to V147, stop for acceptance")
+    parser.add_argument("--accept-jvm", help="explicitly open this manually reviewed maintenance JVM")
     parser.add_argument("--config", type=Path, default=Path.home()/".config/hookah-tootah/private/production/update.json")
     parser.add_argument("--server", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--machine", help=argparse.SUPPRESS)

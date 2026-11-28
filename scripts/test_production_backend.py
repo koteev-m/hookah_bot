@@ -11,7 +11,11 @@ REQUIRED_GATE_CASES = (
     "confirmed update cannot be claimed again by a restarted router",
     "closed admission leaves queued outbox rows untouched even when the worker ticks",
     "prepared activation polls without dispatching booking commands or starting outbox",
-    "only a successful getUpdates from this worker admits and extended failure revokes",
+    "production ingress serves authenticated Mini App during outage and drains outbox after recovery",
+    "Telegram authorization denial and poller conflict revoke the admitted JVM without retry",
+    "failed database probe latches the instance until a fresh explicit admission",
+    "one final process owns polling and public admission",
+    "admitted HTTP survives extended Telegram outage and the same poller resumes its pending update",
 )
 CLASSES = [
     "ProductionTrafficGateTest",
