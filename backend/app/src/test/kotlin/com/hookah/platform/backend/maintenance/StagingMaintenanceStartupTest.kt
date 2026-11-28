@@ -15,9 +15,7 @@ import com.hookah.platform.backend.module
 import com.hookah.platform.backend.moduleWithOverrides
 import io.ktor.server.config.MapApplicationConfig
 import io.ktor.server.testing.testApplication
-import io.mockk.Runs
 import io.mockk.every
-import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkConstructor
 import io.mockk.unmockkConstructor
@@ -31,6 +29,8 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -157,6 +157,12 @@ class StagingMaintenanceStartupTest {
         val jdbcUrl = writerJdbcUrl()
         lateinit var fixture: DueWriterFixture
         val inertJob = mockk<Job>(relaxed = true)
+        val workerStarts = CountDownLatch(4)
+
+        fun startedJob(): Job {
+            workerStarts.countDown()
+            return inertJob
+        }
 
         mockkConstructor(
             SubscriptionBillingJob::class,
@@ -165,10 +171,10 @@ class StagingMaintenanceStartupTest {
             BookingReminderWorker::class,
         )
         try {
-            every { anyConstructed<SubscriptionBillingJob>().start(any()) } just Runs
-            every { anyConstructed<TableSessionCleanupWorker>().start() } returns inertJob
-            every { anyConstructed<BookingExpiryWorker>().start() } returns inertJob
-            every { anyConstructed<BookingReminderWorker>().start() } returns inertJob
+            every { anyConstructed<SubscriptionBillingJob>().start(any()) } answers { workerStarts.countDown() }
+            every { anyConstructed<TableSessionCleanupWorker>().start() } answers { startedJob() }
+            every { anyConstructed<BookingExpiryWorker>().start() } answers { startedJob() }
+            every { anyConstructed<BookingReminderWorker>().start() } answers { startedJob() }
 
             testApplication {
                 environment { config = autonomousWriterConfig(jdbcUrl, active = true) }
@@ -176,27 +182,26 @@ class StagingMaintenanceStartupTest {
                 startApplication()
 
                 fixture = seedDueWriterFixture(jdbcUrl)
-                val before = loadDueWriterState(jdbcUrl, fixture)
-                assertEquals(DueWriterState.unprocessed, before)
-
-                verify(exactly = 0) { anyConstructed<SubscriptionBillingJob>().start(any()) }
-                verify(exactly = 0) { anyConstructed<TableSessionCleanupWorker>().start() }
-                verify(exactly = 0) { anyConstructed<BookingExpiryWorker>().start() }
-                verify(exactly = 0) { anyConstructed<BookingReminderWorker>().start() }
-                assertEquals(before, loadDueWriterState(jdbcUrl, fixture))
+                assertEquals(DueWriterState.unprocessed, loadDueWriterState(jdbcUrl, fixture))
             }
+            verify(exactly = 0) { anyConstructed<SubscriptionBillingJob>().start(any()) }
+            verify(exactly = 0) { anyConstructed<TableSessionCleanupWorker>().start() }
+            verify(exactly = 0) { anyConstructed<BookingExpiryWorker>().start() }
+            verify(exactly = 0) { anyConstructed<BookingReminderWorker>().start() }
+            assertEquals(DueWriterState.unprocessed, loadDueWriterState(jdbcUrl, fixture))
 
             testApplication {
                 environment { config = autonomousWriterConfig(jdbcUrl, active = false) }
                 application { module() }
                 startApplication()
 
-                verify(exactly = 1) { anyConstructed<SubscriptionBillingJob>().start(any()) }
-                verify(exactly = 1) { anyConstructed<TableSessionCleanupWorker>().start() }
-                verify(exactly = 1) { anyConstructed<BookingExpiryWorker>().start() }
-                verify(exactly = 1) { anyConstructed<BookingReminderWorker>().start() }
+                assertTrue(workerStarts.await(5, TimeUnit.SECONDS), "Timed out waiting for database writers to start")
                 assertEquals(DueWriterState.unprocessed, loadDueWriterState(jdbcUrl, fixture))
             }
+            verify(exactly = 1) { anyConstructed<SubscriptionBillingJob>().start(any()) }
+            verify(exactly = 1) { anyConstructed<TableSessionCleanupWorker>().start() }
+            verify(exactly = 1) { anyConstructed<BookingExpiryWorker>().start() }
+            verify(exactly = 1) { anyConstructed<BookingReminderWorker>().start() }
         } finally {
             unmockkConstructor(
                 SubscriptionBillingJob::class,
